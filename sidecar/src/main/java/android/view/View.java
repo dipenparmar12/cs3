@@ -126,8 +126,47 @@ public class View {
         throw new UnsupportedAndroidApiException("android.view.View.setBackgroundColor");
     }
 
-    public void requestFocus() {
+    /**
+     * {@code boolean}, as on Android. This returned {@code void}, which is a
+     * different method to the JVM — present, and impossible for an extension to
+     * call ({@code FrameLayout.requestFocus()Z} in MovieLinkBDProvider). The
+     * sixth time this repository has made that near-miss; see ShimSignatureTest.
+     */
+    public boolean requestFocus() {
         throw new UnsupportedAndroidApiException("android.view.View.requestFocus");
+    }
+
+    public int getWidth() {
+        throw new UnsupportedAndroidApiException("android.view.View.getWidth");
+    }
+
+    public int getHeight() {
+        throw new UnsupportedAndroidApiException("android.view.View.getHeight");
+    }
+
+    public void setFocusable(boolean focusable) {
+        throw new UnsupportedAndroidApiException("android.view.View.setFocusable");
+    }
+
+    public void setFocusableInTouchMode(boolean focusable) {
+        throw new UnsupportedAndroidApiException("android.view.View.setFocusableInTouchMode");
+    }
+
+    public void setOnKeyListener(OnKeyListener listener) {
+        throw new UnsupportedAndroidApiException("android.view.View.setOnKeyListener");
+    }
+
+    public boolean dispatchTouchEvent(MotionEvent event) {
+        throw new UnsupportedAndroidApiException("android.view.View.dispatchTouchEvent");
+    }
+
+    public ViewTreeObserver getViewTreeObserver() {
+        throw new UnsupportedAndroidApiException("android.view.View.getViewTreeObserver");
+    }
+
+    /** Android's answer for a view attached to no window — and none ever is. */
+    public android.os.Handler getHandler() {
+        return null;
     }
 
     public void invalidate() {

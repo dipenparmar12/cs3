@@ -47,7 +47,9 @@
  * make.
  */
 
-import { HttpError, fetchJson } from '../torrent/http.ts';
+import { HttpError, fetchDocument, fetchJson } from '../torrent/http.ts';
+import { classifyVideoTitle, looksOfficial, orderVideos } from './videoTitles.ts';
+import { MetadataSource, type TitleVideo } from '../../src/types/metadata.ts';
 
 const OEMBED = 'https://www.youtube.com/oembed';
 
@@ -162,4 +164,105 @@ export async function describeYouTubeVideos(
   );
 
   return { facts, removed };
+}
+
+/**
+ * Parses YouTube duration strings ("2:35", "1:15:30", "45") into seconds.
+ */
+export function parseDurationSeconds(text?: string): number | undefined {
+  if (!text?.trim()) return undefined;
+  const parts = text.trim().split(':').map((p) => Number(p));
+  if (parts.some((n) => Number.isNaN(n) || n < 0)) return undefined;
+  if (parts.length === 1) return parts[0];
+  if (parts.length === 2) return parts[0] * 60 + parts[1];
+  if (parts.length === 3) return parts[0] * 3600 + parts[1] * 60 + parts[2];
+  return undefined;
+}
+
+export interface YouTubeSearchOptions {
+  signal?: AbortSignal;
+  maxResults?: number;
+  timeoutMs?: number;
+}
+
+/**
+ * Searches public YouTube for trailers and promo videos keylessly.
+ *
+ * Emits full `TitleVideo` items classified with kind, season, ordinal,
+ * publisher, official flag, and duration.
+ */
+export async function searchYouTubeTrailers(
+  query: string,
+  options: YouTubeSearchOptions = {}
+): Promise<TitleVideo[]> {
+  const clean = query.trim();
+  if (!clean) return [];
+  const max = options.maxResults ?? 6;
+  const timeoutMs = options.timeoutMs ?? 10_000;
+
+  const url = `https://www.youtube.com/results?search_query=${encodeURIComponent(clean)}`;
+  try {
+    const html = await fetchDocument(url, {
+      signal: options.signal,
+      timeoutMs,
+      retries: 0,
+    });
+    const match =
+      html.match(/ytInitialData\s*=\s*({.+?});<\/script>/s) ||
+      html.match(/var ytInitialData\s*=\s*({.+?});/s);
+    if (!match) return [];
+
+    const json = JSON.parse(match[1]);
+    const contents =
+      json.contents?.twoColumnSearchResultsRenderer?.primaryContents?.sectionListRenderer?.contents;
+    if (!Array.isArray(contents)) return [];
+
+    const videos: TitleVideo[] = [];
+    const seen = new Set<string>();
+
+    for (const section of contents) {
+      const items = section?.itemSectionRenderer?.contents;
+      if (!Array.isArray(items)) continue;
+      for (const item of items) {
+        const vr = item.videoRenderer;
+        if (!vr?.videoId || !/^[\w-]{11}$/.test(vr.videoId)) continue;
+        if (seen.has(vr.videoId)) continue;
+        seen.add(vr.videoId);
+
+        const title = vr.title?.runs?.[0]?.text?.trim() || '';
+        if (!title) continue;
+
+        const publisher = vr.ownerText?.runs?.[0]?.text?.trim() || undefined;
+        const lengthText = vr.lengthText?.simpleText || undefined;
+        const durationSeconds = parseDurationSeconds(lengthText);
+
+        // Filter out videos longer than 15 minutes (full films, walkthroughs, reviews)
+        if (durationSeconds && durationSeconds > 900) continue;
+
+        const id = vr.videoId;
+        const classification = classifyVideoTitle(title);
+        const official = looksOfficial(publisher);
+
+        videos.push({
+          id: `youtube:${id}`,
+          title,
+          url: `https://www.youtube.com/watch?v=${id}`,
+          host: 'youtube',
+          thumbnailUrl: youTubeThumbnail(id),
+          publisher,
+          official,
+          durationSeconds,
+          sources: [MetadataSource.YouTube],
+          ...classification,
+        });
+
+        if (videos.length >= max) break;
+      }
+      if (videos.length >= max) break;
+    }
+
+    return orderVideos(videos);
+  } catch {
+    return [];
+  }
 }

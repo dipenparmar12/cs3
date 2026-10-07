@@ -1,4 +1,4 @@
-import { fetchJson, fetchText } from '../http';
+import { fetchJson, fetchText } from '../http.ts';
 import {
   buildMagnet,
   infoHashFromMagnet,
@@ -9,8 +9,8 @@ import {
   withEpisodeTerms,
   type RawTorrent,
   type TorrentIndexer,
-} from './base';
-import type { IndexerQuery } from '../../../src/types/torrent';
+} from './base.ts';
+import type { IndexerQuery } from '../../../src/types/torrent.ts';
 
 /**
  * Built-in public indexers.

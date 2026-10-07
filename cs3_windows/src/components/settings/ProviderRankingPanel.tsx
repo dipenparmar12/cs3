@@ -19,6 +19,7 @@ import type {
   RankingCriterionInfo,
 } from '../../types/analytics';
 import { useReveal } from '../../utils/ExperienceModeContext';
+import { SettingGroup } from './SettingRow';
 
 /**
  * What every provider has actually done, and the score built from it.
@@ -65,7 +66,6 @@ export const ProviderRankingPanel: React.FC = () => {
   const [settings, setSettings] = useState<AnalyticsSettings | null>(null);
   const [recommendations, setRecommendations] = useState<ProviderRecommendation[]>([]);
   const [expanded, setExpanded] = useState<string | null>(null);
-  const [showWeights, setShowWeights] = useState(false);
   const { message: flashMessage, flash: setFlash } = useFlash<string>(4000);
 
   const load = useCallback(async () => {
@@ -117,10 +117,7 @@ export const ProviderRankingPanel: React.FC = () => {
       {flashMessage && <div className="settings__flash">{flashMessage}</div>}
 
       {/* --- what is collected, and the switch --------------------------- */}
-      <section className="setting-group">
-        <h3>
-          <BarChart3 size={15} /> Provider performance
-        </h3>
+      <SettingGroup title="Provider performance" icon={<BarChart3 size={15} />}>
 
         <label className="ranking__toggle">
           <input
@@ -198,14 +195,11 @@ export const ProviderRankingPanel: React.FC = () => {
             <Trash2 size={14} /> Erase all history
           </button>
         </div>
-      </section>
+      </SettingGroup>
 
       {/* --- recommendations --------------------------------------------- */}
       {recommendations.length > 0 && (
-        <section className="setting-group">
-          <h3>
-            <Sparkles size={15} /> Recommended providers
-          </h3>
+        <SettingGroup title="Recommended providers" icon={<Sparkles size={15} />}>
           <p className="ranking__note">
             Based on what has actually worked for you, not on popularity.
           </p>
@@ -229,74 +223,62 @@ export const ProviderRankingPanel: React.FC = () => {
               </li>
             ))}
           </ul>
-        </section>
+        </SettingGroup>
       )}
 
       {/* --- the criteria and their weights ------------------------------- */}
       {technical && (
-      <section className="setting-group">
-        <h3>
-          <button className="ranking__disclose" onClick={() => setShowWeights((open) => !open)}>
-            {showWeights ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
-            How the score is worked out
+        <SettingGroup title="How the score is worked out" level="advanced">
+          <p className="ranking__note">
+            Each criterion contributes in proportion to its weight. A criterion with no data is
+            left out of the average rather than counted as zero — a provider you have never
+            downloaded from is not ranked below one whose downloads always fail.
+          </p>
+          <ul className="ranking__criteria">
+            {criteria.map((criterion) => (
+              <li key={criterion.id} className={criterion.available ? '' : 'ranking__criterion--soon'}>
+                <div>
+                  <strong>{criterion.label}</strong>
+                  <em>{criterion.description}</em>
+                </div>
+                {criterion.available ? (
+                  <label>
+                    <input
+                      type="range"
+                      min={0}
+                      max={2}
+                      step={0.05}
+                      value={criterion.weight}
+                      onChange={async (event) => {
+                        const response = await window.cloudstream?.setRankingWeight?.(
+                          criterion.id,
+                          parseFloat(event.target.value)
+                        );
+                        if (response?.ok) setCriteria(response.criteria);
+                      }}
+                    />
+                    <span>{criterion.weight.toFixed(2)}</span>
+                  </label>
+                ) : (
+                  <span className="ranking__soon">not measured yet</span>
+                )}
+              </li>
+            ))}
+          </ul>
+          <button
+            className="btn btn-secondary"
+            onClick={async () => {
+              const response = await window.cloudstream?.resetRankingWeights?.();
+              if (response?.ok) setCriteria(response.criteria);
+            }}
+          >
+            <RotateCcw size={14} /> Reset weights
           </button>
-        </h3>
-
-        {showWeights && (
-          <>
-            <p className="ranking__note">
-              Each criterion contributes in proportion to its weight. A criterion with no data is
-              left out of the average rather than counted as zero — a provider you have never
-              downloaded from is not ranked below one whose downloads always fail.
-            </p>
-            <ul className="ranking__criteria">
-              {criteria.map((criterion) => (
-                <li key={criterion.id} className={criterion.available ? '' : 'ranking__criterion--soon'}>
-                  <div>
-                    <strong>{criterion.label}</strong>
-                    <em>{criterion.description}</em>
-                  </div>
-                  {criterion.available ? (
-                    <label>
-                      <input
-                        type="range"
-                        min={0}
-                        max={2}
-                        step={0.05}
-                        value={criterion.weight}
-                        onChange={async (event) => {
-                          const response = await window.cloudstream?.setRankingWeight?.(
-                            criterion.id,
-                            parseFloat(event.target.value)
-                          );
-                          if (response?.ok) setCriteria(response.criteria);
-                        }}
-                      />
-                      <span>{criterion.weight.toFixed(2)}</span>
-                    </label>
-                  ) : (
-                    <span className="ranking__soon">not measured yet</span>
-                  )}
-                </li>
-              ))}
-            </ul>
-            <button
-              className="btn btn-secondary"
-              onClick={async () => {
-                const response = await window.cloudstream?.resetRankingWeights?.();
-                if (response?.ok) setCriteria(response.criteria);
-              }}
-            >
-              <RotateCcw size={14} /> Reset weights
-            </button>
-          </>
-        )}
-      </section>
+        </SettingGroup>
       )}
 
       {/* --- the leaderboard ---------------------------------------------- */}
-      <section className="setting-group">
-        <h3>Every provider, ranked</h3>
+      <SettingGroup title="Every provider, ranked">
         {measured.length === 0 ? (
           <p className="ranking__note">
             Nothing measured yet. Run a few searches and play something; scores appear as evidence
@@ -402,7 +384,7 @@ export const ProviderRankingPanel: React.FC = () => {
             on.
           </p>
         )}
-      </section>
+      </SettingGroup>
     </div>
   );
 };

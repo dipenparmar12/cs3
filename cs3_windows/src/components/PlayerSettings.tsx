@@ -1,7 +1,8 @@
 import React, { useEffect, useState } from 'react';
 import { useFlash } from '../utils/useFlash';
-import { Tv, Play, Cpu, Download, Loader2, PictureInPicture2 } from 'lucide-react';
+import { Tv, Play, Cpu, Download, Loader2, PictureInPicture2, Keyboard } from 'lucide-react';
 import { SettingGroup, SettingRow } from './settings/SettingRow';
+import { PlayerShortcutsPanel } from './settings/PlayerShortcutsPanel';
 import { AspectRatioMode } from '../types/player';
 
 /**
@@ -383,6 +384,15 @@ export const PlayerSettings: React.FC = () => {
             <span>{showSpeedControl ? 'Enabled' : 'Disabled'}</span>
           </label>
         </SettingRow>
+      </SettingGroup>
+
+      <SettingGroup
+        title="Keyboard Shortcuts"
+        icon={<Keyboard size={15} />}
+        keywords="keyboard shortcuts keys hotkeys controls player space seek volume mute subtitles speed fullscreen episodes jump"
+        storageKey="player_shortcuts_group"
+      >
+        <PlayerShortcutsPanel />
       </SettingGroup>
 
       <SettingGroup title="Native Playback Engine" icon={<Cpu size={15} />}>

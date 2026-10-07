@@ -1,5 +1,5 @@
 import React, { useMemo, useState } from 'react';
-import { Film, Loader2, Play } from 'lucide-react';
+import { Film, Loader2, Play, Search } from 'lucide-react';
 
 import { Poster } from '../Poster';
 import type { TitleVideo } from '../../types/metadata';
@@ -53,6 +53,9 @@ interface TrailerGalleryProps {
   pending?: boolean;
   /** Opens the trailer popup on this video. Resolution happens in there. */
   onPlay: (video: TitleVideo) => void;
+  /** Allows finding more public trailers on demand. */
+  onSearchMore?: () => void;
+  searchingMore?: boolean;
 }
 
 const VideoCard: React.FC<{
@@ -108,7 +111,13 @@ const VideoCard: React.FC<{
   );
 };
 
-export const TrailerGallery: React.FC<TrailerGalleryProps> = ({ videos, pending, onPlay }) => {
+export const TrailerGallery: React.FC<TrailerGalleryProps> = ({
+  videos,
+  pending,
+  onPlay,
+  onSearchMore,
+  searchingMore,
+}) => {
   const grouped = useMemo(() => groupVideos(videos ?? []), [videos]);
   const state = videoSectionState({ videos, pending });
 
@@ -139,12 +148,26 @@ export const TrailerGallery: React.FC<TrailerGalleryProps> = ({ videos, pending,
 
   return (
     <section className="detail-facts">
-      <h2 className="detail-facts__heading">
-        Trailers &amp; videos
-        {/* The count, for the reason the cast rail states one: a scroll bar
-            cannot say whether it is showing three of three or three of nine. */}
-        <span className="detail-facts__count">{grouped.total}</span>
-      </h2>
+      <div className="detail-facts__head-row">
+        <h2 className="detail-facts__heading">
+          Trailers &amp; videos
+          {/* The count, for the reason the cast rail states one: a scroll bar
+              cannot say whether it is showing three of three or three of nine. */}
+          <span className="detail-facts__count">{grouped.total}</span>
+        </h2>
+        {onSearchMore && (
+          <button
+            type="button"
+            className="btn btn-ghost btn-sm trailer-gallery__more-btn"
+            onClick={onSearchMore}
+            disabled={searchingMore}
+            title="Search for more public trailers"
+          >
+            {searchingMore ? <Loader2 size={13} className="spin" /> : <Search size={13} />}
+            <span>Find more</span>
+          </button>
+        )}
+      </div>
 
       {grouped.trailerGroups.map((group) => (
         <div className="video-group" key={group.heading ?? 'all'}>

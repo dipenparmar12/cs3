@@ -29,6 +29,18 @@ const STATUS_RANK: Record<number, number> = { 1: 0, 3: 1, 2: 2 };
 export interface StarterPreferences {
   /** Language codes wanted, most wanted first. */
   languages: string[];
+  /**
+   * Keep every language, still ranking the wanted ones first. A repository
+   * matched through the viewer's own region (PRD-54) is theirs whatever its
+   * plugins' language tags say.
+   */
+  anyLanguage?: boolean;
+  /**
+   * Only plugins that name a wanted language. For another region's repository
+   * (PRD-54 cross-region), where an undeclared or "multi" plugin is far more
+   * likely to be in that region's language than in the viewer's.
+   */
+  strictLanguage?: boolean;
   allowAdult: boolean;
   limit: number;
 }
@@ -76,7 +88,9 @@ export function pickStarterPlugins(plugins: SitePlugin[], preferences: StarterPr
     const language = languageOf(plugin);
     const index = wanted.indexOf(language);
     if (index >= 0) return index;
-    return UNIVERSAL.has(language) ? wanted.length : -1;
+    if (preferences.strictLanguage) return -1;
+    if (UNIVERSAL.has(language)) return wanted.length;
+    return preferences.anyLanguage ? wanted.length + 1 : -1;
   };
 
   return plugins

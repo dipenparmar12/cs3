@@ -1,7 +1,14 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { mergePage, readHiddenRows, setRowVisible, writeHiddenRows } from './homeRows.ts';
+import {
+  mergePage,
+  readContinueWatchingCollapsed,
+  readHiddenRows,
+  setRowVisible,
+  writeContinueWatchingCollapsed,
+  writeHiddenRows,
+} from './homeRows.ts';
 import type { SearchResponse } from '../types/api.ts';
 
 function memoryStorage(initial: Record<string, string> = {}) {
@@ -21,6 +28,17 @@ test('a hidden row stays hidden across launches', () => {
   writeHiddenRows(storage, ['featured', 'native:iptv-org:news']);
   assert.deepEqual(readHiddenRows(storage), ['featured', 'native:iptv-org:news']);
 });
+
+test('continue watching collapsed state is preserved across launches and defaults to false', () => {
+  const storage = memoryStorage();
+  assert.equal(readContinueWatchingCollapsed(storage), false);
+  assert.equal(readContinueWatchingCollapsed(null), false);
+  writeContinueWatchingCollapsed(storage, true);
+  assert.equal(readContinueWatchingCollapsed(storage), true);
+  writeContinueWatchingCollapsed(storage, false);
+  assert.equal(readContinueWatchingCollapsed(storage), false);
+});
+
 
 test('the old anime switch is honoured the first time the picker is read', () => {
   assert.deepEqual(readHiddenRows(memoryStorage({ home_include_anime: 'false' })), ['trending-anime']);

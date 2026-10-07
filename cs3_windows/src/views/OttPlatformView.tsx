@@ -1,11 +1,16 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useTitleInteractions } from '../components/useTitleInteractions';
-import { Loader2, PlugZap, Search, SlidersHorizontal, Sparkles, X } from 'lucide-react';
-import type { ProviderCatalog, ProviderCatalogSection, SearchResponse } from '../types/api';
+import { ChevronRight, Loader2, PlugZap, Search, SlidersHorizontal, Sparkles, X } from 'lucide-react';
+import type { ProviderCatalog, ProviderCatalogPage, SearchResponse } from '../types/api';
+import type { HomeCategoryState } from './homeCategoryState';
+import { applyPage, itemsForRow, rowsFromCatalog, type CatalogueRow } from './ottRows';
+import { describeError } from '../utils/errors';
+import { CategoryGrid } from '../components/home/CategoryGrid';
 import { PosterCard } from '../components/PosterCard';
 import { EmptyState } from '../components/EmptyState';
 import { FixProvidersModal } from '../components/FixProvidersModal';
 import { useFlash } from '../utils/useFlash';
+import { acknowledgeAdult, isAdultAcknowledged } from '../utils/adultNotice';
 
 /**
  * One OTT platform, as a destination.
@@ -31,11 +36,10 @@ import { useFlash } from '../utils/useFlash';
  * addressed as `cs3ext://provider/handle`. The binding is the whole point, and
  * it is why this page can promise something the home screen cannot.
  *
- * ## Four states, and none of them is a blank page
+ * ## Three states, and none of them is a blank page
  *
- * `ready`, `disabled`, `aggregate`, `missing` each get their own answer,
- * because they need different actions from the user: nothing, a switch, an
- * explanation, or an install. Collapsing them into "no content" is the failure
+ * `ready`, `disabled`, `missing` each get their own answer, because they need
+ * different actions from the user: nothing, a switch, or an install. Collapsing them into "no content" is the failure
  * this component exists to avoid — a user who turned a provider off last week
  * being told the platform does not exist.
  */
@@ -45,11 +49,12 @@ export interface OttPlatformSummary {
   name: string;
   tagline: string;
   accent: string;
-  availability: 'ready' | 'disabled' | 'aggregate' | 'missing';
+  availability: 'ready' | 'disabled' | 'missing';
   providers: string[];
   disabledProviders: string[];
-  carriedBy: string[];
   suggestedRepositories: string[];
+  /** Declared adult (NSFW) by its provider: badged, and warned before loading. */
+  adult?: boolean;
 }
 
 interface OttPlatformViewProps {
@@ -67,16 +72,80 @@ interface OttPlatformViewProps {
   onOpenExtensions: () => void;
   /** Re-reads the platform list after an install, so the page can change state. */
   onInventoryChanged: () => void;
+  /**
+   * The row opened with "Show all", held by `App` for the reason home's is:
+   * opening a title unmounts this page, and Back should land in the same grid.
+   */
+  category: OttCategoryState | null;
+  onCategoryChange: (next: OttCategoryState | null) => void;
+  /** Leaves the page — the adult warning's "Go back". */
+  onLeave: () => void;
 }
 
-interface LoadedSection extends ProviderCatalogSection {
+/** One provider row opened as a full grid. */
+export interface OttCategoryState extends HomeCategoryState {
+  platformId: string;
   provider: string;
-  items: SearchResponse[];
-  page: number;
-  hasNext: boolean;
-  loading: boolean;
-  error?: string;
+  section: { name: string; data: string; horizontalImages?: boolean };
+  /** For a row split out of a multi-list answer: which list to page. */
+  list?: string;
 }
+
+/**
+ * Fires `onVisible` once, when the node comes within a screen of the viewport.
+ *
+ * A row fetches itself as it is scrolled to — no "Show this row" button to
+ * press — while a catalogue of forty rows still costs only the ones somebody
+ * actually scrolls past. Each fetch is a live scrape of someone's site, so the
+ * margin is about a screen, not the whole page.
+ */
+const RowTrigger: React.FC<{ onVisible: () => void }> = ({ onVisible }) => {
+  const node = useRef<HTMLDivElement>(null);
+  const callback = useRef(onVisible);
+  callback.current = onVisible;
+  useEffect(() => {
+    const element = node.current;
+    if (!element) return;
+    if (typeof IntersectionObserver === 'undefined') {
+      callback.current();
+      return;
+    }
+    const observer = new IntersectionObserver(
+      (entries) => {
+        if (entries.some((entry) => entry.isIntersecting)) {
+          observer.disconnect();
+          callback.current();
+        }
+      },
+      { rootMargin: '600px 0px' }
+    );
+    observer.observe(element);
+    return () => observer.disconnect();
+  }, []);
+  return <div ref={node} aria-hidden className="ott-view__row-trigger" />;
+};
+
+/** Lowercase words, punctuation folded away — "spider-man" finds "Spider Man". */
+function words(text: string): string[] {
+  return text
+    .toLowerCase()
+    .normalize('NFKD')
+    .replace(/[̀-ͯ]/g, '')
+    .split(/[^a-z0-9]+/)
+    .filter(Boolean);
+}
+
+/** Every query word is the start of some word in the text. */
+function matchesQuery(text: string, queryWords: string[]): boolean {
+  if (queryWords.length === 0) return true;
+  const haystack = words(text);
+  return queryWords.every((q) => haystack.some((w) => w.startsWith(q)));
+}
+
+/** How long a cached catalogue or row counts as fresh: inside it, nothing is re-fetched. */
+const FRESH_MS = 10 * 60 * 1000;
+/** How long the viewer stays on a page before stale rows are refreshed behind it. */
+const DWELL_MS = 3000;
 
 /**
  * The preload bridge, or nothing.
@@ -88,8 +157,6 @@ interface LoadedSection extends ProviderCatalogSection {
  */
 const api = () => window.cloudstream;
 
-/** How many rows are fetched before the rest wait for a scroll. */
-const INITIAL_ROWS = 4;
 
 export const OttPlatformView: React.FC<OttPlatformViewProps> = ({
   platform,
@@ -98,9 +165,34 @@ export const OttPlatformView: React.FC<OttPlatformViewProps> = ({
   onScopedSearch,
   onOpenExtensions,
   onInventoryChanged,
+  category,
+  onCategoryChange,
+  onLeave,
 }) => {
-  const [catalog, setCatalog] = useState<ProviderCatalog | null>(null);
-  const [sections, setSections] = useState<LoadedSection[]>([]);
+  /*
+   * An adult catalogue asks first, once per launch. Until it is answered the
+   * page fetches nothing — not the catalogue, not the listings — so declining
+   * contacts no adult site at all.
+   */
+  const [adultAccepted, setAdultAccepted] = useState(isAdultAcknowledged);
+  const ageCheckPending = Boolean(platform.adult) && !adultAccepted;
+  const [catalogs, setCatalogs] = useState<Array<ProviderCatalog & { fetchedAt?: number }>>([]);
+  /** Providers that matched the platform but publish nothing to browse. */
+  const [unbrowsable, setUnbrowsable] = useState<Array<{ provider: string; reason: string }>>([]);
+  /**
+   * Whose catalogue is on screen. One provider at a time, as Android's home
+   * screen does: two providers' rows interleaved is a list neither meant, and
+   * fetching every provider's rows at once is a burst of scrapes nobody asked for.
+   */
+  const [activeProvider, setActiveProvider] = useState<string | null>(null);
+  /** The provider whose catalogue is being read right now, for the progress line. */
+  const [pendingProvider, setPendingProvider] = useState<string | null>(null);
+  const [sections, setSections] = useState<CatalogueRow[]>([]);
+  /**
+   * 18+ lists removed from fetched pages (adult content off), per request, so
+   * the page can say how many rows it is not showing rather than shrink quietly.
+   */
+  const [pageHiddenAdult, setPageHiddenAdult] = useState<Record<string, number>>({});
   const [loading, setLoading] = useState(false);
   const [query, setQuery] = useState('');
   const [suggestions, setSuggestions] = useState<
@@ -138,45 +230,56 @@ export const OttPlatformView: React.FC<OttPlatformViewProps> = ({
     platformRef.current = platform.id;
   }, [platform.id]);
 
+  /**
+   * Fetches one page of a row and folds it in (`ottRows.applyPage`). Answered
+   * from the main process's cache when there is one, so a page opened before
+   * draws at once; `refresh` asks the provider and is `quiet` — it never blanks
+   * or errors a row that is already showing something.
+   */
   const loadRow = useCallback(
-    async (section: LoadedSection, page: number) => {
+    async (row: CatalogueRow, page: number, refresh = false) => {
       const forPlatform = platformRef.current;
       const bridge = api();
       if (!bridge) return;
-      const response = await bridge.getOttCatalogPage(
-        section.provider,
-        { name: section.name, data: section.data, horizontalImages: section.horizontalImages },
-        page
-      );
+      let answer: ProviderCatalogPage | { error: string };
+      try {
+        const response = await bridge.getOttCatalogPage(row.provider, row.request, page, { refresh });
+        answer =
+          response.ok && response.page
+            ? response.page
+            : { error: response.error ?? 'That row could not be loaded.' };
+      } catch (error) {
+        answer = { error: describeError(error) };
+      }
       if (platformRef.current !== forPlatform) return;
-
-      setSections((current) =>
-        current.map((row) => {
-          if (row.name !== section.name) return row;
-          if (!response.ok || !response.page) {
-            return { ...row, loading: false, error: response.error ?? 'That row could not be loaded.' };
-          }
-          return {
-            ...row,
-            loading: false,
-            error: undefined,
-            page: response.page.page,
-            hasNext: response.page.hasNext,
-            // Appended rather than replaced: paging a row is "more of this",
-            // and replacing would make the second page look like the first
-            // one vanished.
-            items: page > 1 ? [...row.items, ...response.page.items] : response.page.items,
-          };
-        })
+      const hidden = 'items' in answer ? (answer.hiddenAdultRows ?? 0) : 0;
+      const hiddenKey = row.parent ?? row.key;
+      setPageHiddenAdult((current) =>
+        (current[hiddenKey] ?? 0) === hidden ? current : { ...current, [hiddenKey]: hidden }
       );
+      setSections((current) => applyPage(current, row.key, page, answer, { quiet: refresh }));
     },
     []
   );
 
+  /*
+   * Rows fetch themselves when scrolled into view (`RowTrigger`), so there is
+   * no "first N rows" effect beside it — two triggers for one row is the same
+   * page scraped twice. `started` is the guard: an observer callback can land
+   * after the state that would have told it the row was already asked for.
+   */
+  const started = useRef(new Set<string>());
+  useEffect(() => {
+    started.current = new Set();
+  }, [platform.id]);
+
   useEffect(() => {
     let cancelled = false;
-    setCatalog(null);
+    setCatalogs([]);
+    setUnbrowsable([]);
+    setActiveProvider(null);
     setSections([]);
+    setPageHiddenAdult({});
     setQuery('');
 
     if (platform.availability === 'missing') {
@@ -189,16 +292,22 @@ export const OttPlatformView: React.FC<OttPlatformViewProps> = ({
     }
 
     setSuggestions([]);
+    setMetaSections([]);
+    setLoading(false);
+
+    // Adult catalogue not yet confirmed this launch: fetch nothing.
+    if (ageCheckPending) {
+      return () => {
+        cancelled = true;
+      };
+    }
 
     /*
-     * The metadata catalogue is fetched for every platform, including ones no
-     * provider serves. That is the case it exists for: "Netflix" with nothing
-     * installed used to be a search box and an apology, and the platform's own
-     * editorial is the thing a viewer came to the page for. Opening a row runs
-     * the ordinary search, so the answer to "can this app play it?" is given
-     * where it can actually be answered.
+     * Third-party listings are fetched at once, in parallel, and shown only
+     * until a provider's own rows arrive. Waiting for the providers first left
+     * the page blank for as long as the extension runtime took to load them —
+     * minutes, behind the background warm-up.
      */
-    setMetaSections([]);
     setMetaLoading(true);
     void api()
       ?.getOttMetadataCatalog(platform.id)
@@ -212,31 +321,142 @@ export const OttPlatformView: React.FC<OttPlatformViewProps> = ({
         if (!cancelled) setMetaLoading(false);
       });
 
-    if (platform.availability !== 'ready') return;
+    if (platform.availability !== 'ready') {
+      return () => {
+        cancelled = true;
+      };
+    }
 
-    setLoading(true);
-    void api()?.getOttCatalog(platform.id).then((response) => {
-      if (cancelled) return;
-      setLoading(false);
-      if (!response.ok || !response.catalog) return;
-
-      setCatalog(response.catalog);
-      const rows: LoadedSection[] = response.catalog.sections.map((section, index) => ({
-        ...section,
-        provider: response.catalog!.provider,
-        items: [],
-        page: 1,
-        hasNext: false,
-        loading: index < INITIAL_ROWS,
-      }));
-      setSections(rows);
-      for (const row of rows.slice(0, INITIAL_ROWS)) void loadRow(row, 1);
-    });
+    /*
+     * One provider at a time, each drawn the moment it answers. Serial because
+     * the JVM loads providers serially anyway (§5), and asking for all of them
+     * at once only queues the first one behind the rest. The first provider
+     * with a catalogue opens; the others join the tabs as they land.
+     */
+    const providers = platform.providers;
+    setLoading(providers.length > 0);
+    void (async () => {
+      for (const provider of providers) {
+        if (cancelled) return;
+        setPendingProvider(provider);
+        let response: Awaited<ReturnType<NonNullable<ReturnType<typeof api>>['getOttProviderCatalog']>> | null =
+          null;
+        try {
+          // Cached when this provider has been opened before — instant.
+          response = (await api()?.getOttProviderCatalog(platform.id, provider)) ?? null;
+        } catch {
+          response = null;
+        }
+        if (cancelled) return;
+        const catalog = response?.ok ? response.catalog : null;
+        if (catalog?.hasMainPage && catalog.sections.length > 0) {
+          setCatalogs((current) => [...current, catalog]);
+          setSections((current) => [...current, ...rowsFromCatalog(catalog)]);
+          setActiveProvider((current) => current ?? catalog.provider);
+        } else {
+          setUnbrowsable((current) => [
+            ...current,
+            {
+              provider,
+              reason:
+                catalog?.unavailableReason ??
+                response?.error ??
+                'Publishes no catalogue — search it instead.',
+            },
+          ]);
+        }
+      }
+      if (!cancelled) {
+        setLoading(false);
+        setPendingProvider(null);
+      }
+    })();
 
     return () => {
       cancelled = true;
     };
-  }, [platform.id, platform.availability, loadRow]);
+    // The provider list is compared by value: the platform object is rebuilt on
+    // every inventory refresh, and identity would restart the whole load.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [platform.id, platform.availability, platform.providers.join('\u0000'), ageCheckPending]);
+
+  const visibleSections = useMemo(
+    () => sections.filter((row) => row.provider === activeProvider),
+    [sections, activeProvider]
+  );
+  const providerHasItems = sections.some((row) => row.items.length > 0);
+  const hiddenAdultRows =
+    (catalogs.find((c) => c.provider === activeProvider)?.hiddenAdultRows ?? 0) +
+    Object.entries(pageHiddenAdult)
+      .filter(([key]) => key.startsWith(`${activeProvider}::`))
+      .reduce((sum, [, count]) => sum + count, 0);
+
+  /*
+   * Typing filters what is already on the page, instantly and with no network:
+   * titles from every loaded row of every provider, and rows whose name
+   * matches ("anime", "korean", "trending"). Enter still asks the providers
+   * themselves, for what no loaded row holds.
+   */
+  const queryWords = useMemo(() => words(query), [query]);
+  const filtering = queryWords.length > 0;
+
+  const titleMatches = useMemo(() => {
+    if (!filtering) return [];
+    const seen = new Set<string>();
+    const hits: Array<{ item: SearchResponse; provider: string; row: string }> = [];
+    const pools: Array<{ provider: string; row: string; items: SearchResponse[] }> = [
+      ...sections.map((s) => ({ provider: s.provider, row: s.name, items: s.items })),
+      ...metaSections.map((s) => ({ provider: '', row: s.title, items: s.items })),
+    ];
+    for (const pool of pools) {
+      for (const item of pool.items) {
+        if (seen.has(item.url) || !matchesQuery(item.name, queryWords)) continue;
+        seen.add(item.url);
+        hits.push({ item, provider: pool.provider, row: pool.row });
+      }
+    }
+    return hits;
+  }, [filtering, queryWords, sections, metaSections]);
+
+  /** Rows whose own name matches, from every provider, not only the open one. */
+  const rowMatches = useMemo(
+    () => (filtering ? sections.filter((row) => matchesQuery(row.name, queryWords)) : []),
+    [filtering, queryWords, sections]
+  );
+
+  const showAll = (section: CatalogueRow) =>
+    onCategoryChange({
+      platformId: platform.id,
+      provider: section.provider,
+      section: section.request,
+      list: section.list,
+      id: `ott:${platform.id}:${section.key}`,
+      title: section.name,
+      subtitle: `${platform.name} · ${section.provider}`,
+      items: section.items,
+      skip: section.items.length,
+      page: Math.max(1, section.page),
+      done: section.fetched && !section.hasNext && section.items.length > 0,
+      returnScroll: 0,
+    });
+
+  const loadCategoryPage = useCallback(async (current: OttCategoryState) => {
+    const response = await api()?.getOttCatalogPage(
+      current.provider,
+      current.section,
+      current.page + 1
+    );
+    if (!response?.ok || !response.page) {
+      return { ok: false, error: response?.error ?? 'More titles could not be loaded.' };
+    }
+    if (response.page.error) return { ok: false, error: response.page.error };
+    // A row split out of a multi-list answer pages its own list, not all of them.
+    return {
+      ok: true,
+      items: itemsForRow({ list: current.list }, response.page),
+      hasNext: response.page.hasNext,
+    };
+  }, []);
 
   const submitSearch = (event: React.FormEvent) => {
     event.preventDefault();
@@ -284,6 +504,218 @@ export const OttPlatformView: React.FC<OttPlatformViewProps> = ({
     )
   );
 
+  /** `retry` re-asks a row that failed; otherwise a row is fetched once. */
+  const fetchRow = (section: CatalogueRow, retry = false) => {
+    if (started.current.has(section.key) && !retry) return;
+    started.current.add(section.key);
+    setSections((current) =>
+      current.map((row) =>
+        row.key === section.key ? { ...row, loading: true, fetched: true, error: undefined } : row
+      )
+    );
+    void loadRow(section, 1);
+  };
+
+  /*
+   * Background refresh, once per visit and only after the viewer has stayed
+   * `DWELL_MS`: rows older than `FRESH_MS` are re-asked quietly, one request
+   * per provider answer (split rows share theirs), so what is on screen updates
+   * in place and nothing flashes back to a spinner. Paging through services or
+   * coming back from a title inside the fresh window fetches nothing at all.
+   */
+  const sectionsRef = useRef(sections);
+  sectionsRef.current = sections;
+  const catalogsRef = useRef(catalogs);
+  catalogsRef.current = catalogs;
+  useEffect(() => {
+    if (!activeProvider || ageCheckPending) return;
+    const timer = window.setTimeout(() => {
+      const now = Date.now();
+      const asked = new Set<string>();
+      const stale = sectionsRef.current.filter((row) => {
+        if (row.provider !== activeProvider || !row.fetchedAt || row.loading) return false;
+        if (now - row.fetchedAt < FRESH_MS) return false;
+        const request = row.parent ?? row.key;
+        if (asked.has(request)) return false;
+        asked.add(request);
+        return true;
+      });
+      const forPlatform = platformRef.current;
+      void (async () => {
+        // The row list itself: a provider that adds or drops a row is picked
+        // up, while rows that still exist keep what they are showing.
+        const known = catalogsRef.current.find((c) => c.provider === activeProvider);
+        if (known?.fetchedAt && now - known.fetchedAt >= FRESH_MS) {
+          const response = await api()
+            ?.getOttProviderCatalog(forPlatform, activeProvider, { refresh: true })
+            .catch(() => null);
+          const fresh = response?.ok ? response.catalog : null;
+          if (platformRef.current === forPlatform && fresh?.hasMainPage && fresh.sections.length > 0) {
+            const signature = (c: ProviderCatalog) => c.sections.map((s) => `${s.name}\u0000${s.data}`).join('\u0001');
+            setCatalogs((current) => current.map((c) => (c.provider === activeProvider ? fresh : c)));
+            if (signature(fresh) !== signature(known)) {
+              const next = rowsFromCatalog(fresh);
+              setSections((current) => {
+                const mine = current.filter((row) => row.provider === activeProvider);
+                const kept = next.flatMap((row) => {
+                  const existing = mine.filter((m) => m.key === row.key || m.parent === row.key);
+                  return existing.length > 0 ? existing : [row];
+                });
+                return [...current.filter((row) => row.provider !== activeProvider), ...kept];
+              });
+            }
+          }
+        }
+        // One at a time — this is background work against someone's site.
+        for (const row of stale) await loadRow(row, 1, true);
+      })();
+    }, DWELL_MS);
+    return () => window.clearTimeout(timer);
+  }, [activeProvider, ageCheckPending, loadRow]);
+
+  /**
+   * One provider row: a rail of its first page and "Show all", as on Home.
+   * "Show all" opens the row as a grid that pages as it is scrolled — the
+   * provider's own `getMainPage` paging, so the whole row is reachable.
+   */
+  const revealAdult = () => {
+    acknowledgeAdult();
+    setAdultAccepted(true);
+  };
+
+  const renderRow = (section: CatalogueRow, labelProvider: boolean) =>
+    section.sensitive && !adultAccepted ? (
+      /*
+       * An 18+ row inside a general catalogue (adult content is on, but not yet
+       * confirmed this launch). Covered and *not fetched* — no posters load
+       * behind a blur — until the viewer confirms, which reveals every such
+       * row for the rest of the launch.
+       */
+      <section className="home-row" key={section.key}>
+        <header>
+          <h3>
+            {section.name} <span className="adult-badge" title="Adult content (18+)">18+</span>
+          </h3>
+        </header>
+        <div className="ott-view__sensitive-cover">
+          <p>Adult content. Hidden until you confirm your age — asked once per launch.</p>
+          <button type="button" className="btn btn-sm btn-secondary" onClick={revealAdult}>
+            I am 18 or older — show 18+ rows
+          </button>
+        </div>
+      </section>
+    ) : (
+    <section className="home-row" key={section.key}>
+      <header>
+        <h3>
+          {section.name}
+          {section.sensitive && (
+            <>
+              {' '}
+              <span className="adult-badge" title="Adult content (18+)">18+</span>
+            </>
+          )}
+          {labelProvider && <span className="ott-view__row-provider"> · {section.provider}</span>}
+        </h3>
+        {section.loading && <Loader2 size={12} className="spin" />}
+        {section.error && <span className="ott-view__row-error">{section.error}</span>}
+        {section.items.length > 0 && (
+          <button type="button" className="home-row__more" onClick={() => showAll(section)}>
+            Show all <ChevronRight size={14} aria-hidden />
+          </button>
+        )}
+      </header>
+      <div className="home-rail">
+        {section.items.map((item, index) => (
+          <PosterCard
+            key={`${item.url}-${index}`}
+            item={item}
+            onSelectMedia={onSelectMedia}
+            onPlayDirectly={onPlayDirectly}
+            interaction={interactionFor(item)}
+          />
+        ))}
+        {section.items.length > 0 && (
+          <button
+            type="button"
+            className="home-rail__all"
+            onClick={() => showAll(section)}
+            aria-label={`Show all of ${section.name}`}
+          >
+            <span>Show all</span>
+            <ChevronRight size={20} aria-hidden />
+          </button>
+        )}
+        {/* Placeholders while the row's first page is on its way, so a row
+            that is loading never reads as an empty one. */}
+        {section.items.length === 0 &&
+          !section.error &&
+          (!section.fetched || section.loading) &&
+          Array.from({ length: 6 }, (_, index) => (
+            <div key={index} className="ott-view__placeholder" aria-hidden />
+          ))}
+        {section.items.length === 0 && section.fetched && !section.loading && !section.error && (
+          <p className="ott-view__row-empty">Nothing in this row right now.</p>
+        )}
+        {section.error && (
+          <button type="button" className="ott-view__more" onClick={() => fetchRow(section, true)}>
+            Try again
+          </button>
+        )}
+      </div>
+      {!section.fetched && <RowTrigger onVisible={() => fetchRow(section)} />}
+    </section>
+  );
+
+  if (ageCheckPending) {
+    return (
+      <div className="ott-view">
+        <div className="ott-view__age-gate" role="alertdialog" aria-labelledby="ott-age-title" aria-describedby="ott-age-body">
+          <span className="ott-view__age-badge" aria-hidden>18+</span>
+          <h2 id="ott-age-title">{platform.name} contains adult content</h2>
+          <p id="ott-age-body">
+            Its provider declares this catalogue as adult (18+) material, which may include explicit
+            sexual content. Continue only if you are 18 or older and it is legal to view where you
+            are. Nothing from it has been loaded yet.
+          </p>
+          <p className="ott-view__age-note">
+            You will be asked again the next time CloudStream starts. Adult content can be turned off
+            entirely in Settings.
+          </p>
+          <div className="ott-view__age-actions">
+            <button type="button" className="btn btn-secondary" onClick={onLeave} autoFocus>
+              Go back
+            </button>
+            <button
+              type="button"
+              className="btn btn-primary"
+              onClick={() => {
+                acknowledgeAdult();
+                setAdultAccepted(true);
+              }}
+            >
+              I am 18 or older — show it
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  if (category && category.platformId === platform.id) {
+    return (
+      <CategoryGrid<OttCategoryState>
+        category={category}
+        onChange={onCategoryChange}
+        onBack={() => onCategoryChange(null)}
+        onOpen={onSelectMedia}
+        onPlayDirectly={onPlayDirectly}
+        loadPage={loadCategoryPage}
+        backLabel={platform.name}
+      />
+    );
+  }
+
   return (
     <div className="ott-view">
       <header
@@ -306,7 +738,7 @@ export const OttPlatformView: React.FC<OttPlatformViewProps> = ({
             <input
               value={query}
               onChange={(event) => setQuery(event.target.value)}
-              placeholder={`Search ${platform.name}`}
+              placeholder={`Filter ${platform.name} — Enter searches every provider`}
               aria-label={`Search ${platform.name}`}
             />
             {query && (
@@ -375,20 +807,6 @@ export const OttPlatformView: React.FC<OttPlatformViewProps> = ({
         />
       )}
 
-      {platform.availability === 'aggregate' && (
-        <EmptyState
-          icon={Sparkles}
-          title={`${platform.name} is covered by ${platform.carriedBy.join(' and ')}`}
-          description={
-            <>
-              No extension publishes a provider named after {platform.name}, so there is no
-              catalogue to browse here. {platform.carriedBy.join(' and ')} carries its titles,
-              and the search box above asks it directly.
-            </>
-          }
-        />
-      )}
-
       {platform.availability === 'missing' && (
         <div className="ott-view__setup">
           <EmptyState
@@ -429,43 +847,87 @@ export const OttPlatformView: React.FC<OttPlatformViewProps> = ({
       )}
 
       {loading && (
-        <p className="ott-view__loading">
-          <Loader2 size={14} className="spin" aria-hidden /> Reading {platform.name}'s catalogue…
+        <p className="ott-view__loading" role="status">
+          <Loader2 size={14} className="spin" aria-hidden />
+          {pendingProvider
+            ? ` Reading ${pendingProvider}'s catalogue (${
+                catalogs.length + unbrowsable.length + 1
+              } of ${platform.providers.length})…`
+            : ` Reading ${platform.name}'s catalogue…`}
+          {catalogs.length === 0 &&
+            ' The first time, an extension has to be loaded before it can answer.'}
+        </p>
+      )}
+
+      {/*
+        Whose catalogue is showing, and the others to switch to. Every provider
+        that is this platform is offered — a NetMirror Netflix and CNC Verse's
+        NetflixM are different libraries — with its row count so the fuller one
+        is obvious before it is opened.
+      */}
+      {catalogs.length > 1 && (
+        <div className="ott-view__providers" role="tablist" aria-label={`${platform.name} catalogues`}>
+          {catalogs.map((entry) => (
+            <button
+              key={entry.provider}
+              type="button"
+              role="tab"
+              aria-selected={entry.provider === activeProvider}
+              className="ott-view__provider-tab"
+              onClick={() => setActiveProvider(entry.provider)}
+            >
+              {entry.provider}
+              <span className="ott-view__provider-count">{entry.sections.length} rows</span>
+            </button>
+          ))}
+        </div>
+      )}
+
+      {catalogs.length === 1 && (
+        <p className="ott-view__provider-single">Catalogue from {catalogs[0].provider}</p>
+      )}
+
+      {/* Rows removed for being 18+ are counted, not silently dropped. */}
+      {hiddenAdultRows > 0 && !filtering && (
+        <p className="ott-view__adult-note">
+          <span className="adult-badge" aria-hidden>18+</span>
+          {hiddenAdultRows} adult row{hiddenAdultRows === 1 ? '' : 's'} hidden — this provider also
+          carries 18+ content, and adult content is off in Settings.
         </p>
       )}
 
       {platform.availability === 'ready' &&
         !loading &&
-        sections.length === 0 &&
+        catalogs.length === 0 &&
         metaSections.length === 0 &&
         !metaLoading && (
           <EmptyState
             icon={Search}
             title={`${platform.name} has no catalogue to browse`}
             description={
-              catalog?.unavailableReason ??
-              'This provider only answers searches. Use the box above to find a title.'
+              unbrowsable[0]?.reason ??
+              'These providers only answer searches. Use the box above to find a title.'
             }
           />
         )}
 
       {/*
-        * What is on the service, when no installed provider publishes a
-        * catalogue. Shown *below* the provider's own rows when both exist,
-        * because a provider row is something this app can play and one of these
-        * is only something that exists — and the heading says which is which.
-        * A grid of posters that silently cannot play is the failure this
-        * codebase keeps having to fix, so it is labelled rather than blended.
+        * What is on the service, until an installed provider's own rows have
+        * something in them — so the page is never blank while extensions load.
+        * A provider row is something this app can play and one of these is
+        * only something that exists, so it is labelled, not blended.
         */}
-      {metaSections.length > 0 && (
+      {!filtering && !providerHasItems && metaSections.length > 0 && (
         <div className="ott-view__meta">
           <div className="ott-view__meta-head">
             <Sparkles size={13} aria-hidden />
             <p>
               Popular on {platform.name} right now.{' '}
-              {sections.length === 0 && platform.availability !== 'ready'
+              {platform.availability !== 'ready'
                 ? 'Nothing installed can play these yet — opening one searches every source you have.'
-                : 'These come from a listings service, not from an installed extension: opening one searches every source you have for it.'}
+                : loading
+                  ? 'Shown while the installed providers load their own catalogues; opening one searches every source you have.'
+                  : 'These come from a listings service, not from an installed extension: opening one searches every source you have for it.'}
             </p>
           </div>
           {metaSections.map((section) => (
@@ -496,66 +958,44 @@ export const OttPlatformView: React.FC<OttPlatformViewProps> = ({
         </p>
       )}
 
-      {sections.map((section) => (
-        <section className="home-row" key={`${section.provider}:${section.name}`}>
-          <header>
-            <h3>{section.name}</h3>
-            {section.loading && <Loader2 size={12} className="spin" />}
-            {section.error && <span className="ott-view__row-error">{section.error}</span>}
-          </header>
-          <div className="home-rail">
-            {section.items.map((item, index) => (
-              <PosterCard
-                key={`${item.url}-${index}`}
-                item={item}
-                onSelectMedia={onSelectMedia}
-                onPlayDirectly={onPlayDirectly}
-                interaction={interactionFor(item)}
-              />
-            ))}
-            {/*
-              Paging is a button rather than an infinite scroll. Each page is a
-              live scrape of a third-party site, and a rail that fetches
-              whenever it drifts past the edge of the viewport turns idle
-              scrolling into sustained traffic against someone else's server.
-            */}
-            {section.hasNext && !section.loading && (
+      {filtering && (
+        <div className="ott-view__filter">
+          <div className="ott-view__filter-head">
+            <p>
+              {titleMatches.length > 0
+                ? `${titleMatches.length} title${titleMatches.length === 1 ? '' : 's'} on this page match “${query.trim()}”`
+                : `Nothing loaded on this page matches “${query.trim()}”`}
+              {rowMatches.length > 0 &&
+                ` · ${rowMatches.length} row${rowMatches.length === 1 ? '' : 's'} named like it`}
+            </p>
+            {platform.providers.length > 0 && (
               <button
                 type="button"
-                className="ott-view__more"
-                onClick={() => {
-                  setSections((current) =>
-                    current.map((row) =>
-                      row.name === section.name ? { ...row, loading: true } : row
-                    )
-                  );
-                  void loadRow(section, section.page + 1);
-                }}
+                className={titleMatches.length === 0 ? 'btn btn-sm btn-primary' : 'btn btn-sm btn-secondary'}
+                onClick={() => onScopedSearch(query.trim(), platform.providers)}
               >
-                Load more
-              </button>
-            )}
-            {/* An unfetched row is announced, so a rail below the fold does not
-                read as an empty one. */}
-            {!section.loading && section.items.length === 0 && !section.error && (
-              <button
-                type="button"
-                className="ott-view__more"
-                onClick={() => {
-                  setSections((current) =>
-                    current.map((row) =>
-                      row.name === section.name ? { ...row, loading: true } : row
-                    )
-                  );
-                  void loadRow(section, 1);
-                }}
-              >
-                Show {section.name}
+                <Search size={12} aria-hidden /> Search all of {platform.name}
               </button>
             )}
           </div>
-        </section>
-      ))}
+          {titleMatches.length > 0 && (
+            <div className="poster-grid">
+              {titleMatches.map(({ item }, index) => (
+                <PosterCard
+                  key={`${item.url}-${index}`}
+                  item={item}
+                  onSelectMedia={onSelectMedia}
+                  onPlayDirectly={onPlayDirectly}
+                  interaction={interactionFor(item)}
+                />
+              ))}
+            </div>
+          )}
+          {rowMatches.map((section) => renderRow(section, catalogs.length > 1))}
+        </div>
+      )}
+
+      {!filtering && visibleSections.map((section) => renderRow(section, false))}
     </div>
   );
 };

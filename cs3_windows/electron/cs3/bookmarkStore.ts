@@ -1,6 +1,7 @@
 import type { DatastoreManager } from '../datastore';
 import type { TvType } from '../../src/types/api';
 import { prune } from '../util/prune.ts';
+import { isPrivateSession, allowsExplicitSaves } from './privacyMode.ts';
 
 /**
  * Saved detail pages, with enough origin to reopen the same one.
@@ -135,6 +136,16 @@ export class BookmarkStore {
    */
   public save(input: Omit<Bookmark, 'id' | 'savedAt' | 'openCount'>): Bookmark {
     const existing = this.bookmarks.find((entry) => entry.mediaUrl === input.mediaUrl);
+    if (isPrivateSession() && !allowsExplicitSaves()) {
+      return (
+        existing ?? {
+          ...input,
+          id: input.mediaUrl,
+          savedAt: Date.now(),
+          openCount: 0,
+        }
+      );
+    }
     if (existing) {
       Object.assign(existing, {
         ...input,
@@ -160,6 +171,24 @@ export class BookmarkStore {
     return bookmark;
   }
 
+  /**
+   * Stores the whole list a backup restore decided on. Rows keep their own
+   * `savedAt` and `openCount`: they are the record of when the page was saved,
+   * not of when it was restored.
+   */
+  public replaceAll(rows: Bookmark[]): void {
+    const seen = new Set<string>();
+    this.bookmarks = rows
+      .filter((row) => {
+        if (!row || typeof row.mediaUrl !== 'string' || !row.mediaUrl || seen.has(row.mediaUrl)) return false;
+        seen.add(row.mediaUrl);
+        return true;
+      })
+      .map((row) => ({ ...row, id: row.id || row.mediaUrl, openCount: row.openCount ?? 0 }))
+      .sort((a, b) => b.savedAt - a.savedAt);
+    this.persist();
+  }
+
   /** Empties the list, so a Replace restore can make it match the file. */
   public clearAll(): number {
     const count = this.list().length;
@@ -179,6 +208,9 @@ export class BookmarkStore {
     saved: boolean;
     bookmark: Bookmark | null;
   } {
+    if (isPrivateSession() && !allowsExplicitSaves()) {
+      return { saved: false, bookmark: null };
+    }
     if (this.isSaved(input.mediaUrl)) {
       this.remove(input.mediaUrl);
       return { saved: false, bookmark: null };
@@ -188,6 +220,7 @@ export class BookmarkStore {
 
   /** Records a reopen, which is what makes "most used" orderings possible later. */
   public markOpened(mediaUrl: string): void {
+    if (isPrivateSession()) return;
     const entry = this.bookmarks.find((bookmark) => bookmark.mediaUrl === mediaUrl);
     if (!entry) return;
     entry.lastOpenedAt = Date.now();
@@ -196,6 +229,7 @@ export class BookmarkStore {
   }
 
   public setNote(mediaUrl: string, note: string | undefined): Bookmark | null {
+    if (isPrivateSession() && !allowsExplicitSaves()) return null;
     const entry = this.bookmarks.find((bookmark) => bookmark.mediaUrl === mediaUrl);
     if (!entry) return null;
     entry.note = note?.trim() || undefined;

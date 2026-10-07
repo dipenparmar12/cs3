@@ -2,8 +2,11 @@ import type { PluginManager } from '../pluginManager';
 import type { ProviderCatalog, ProviderCatalogPage } from '../../src/types/api';
 import { OFFICIAL_REPOSITORIES } from '../officialRepositories';
 import type { DatastoreManager } from '../datastore';
+import type { CatalogueCache, CatalogueReadOptions } from './catalogueCache';
+import { isSensitiveRow, screenLists, screenSections } from '../../src/utils/adultContent';
 import {
   buildOttPlatformViews,
+  DISCOVERED_PREFIX,
   ottPlatformById,
   OTT_PLATFORMS,
   type OttPlatformView,
@@ -43,32 +46,41 @@ import {
  */
 const SETTINGS_KEY_OTT_ENABLED = 'ott_enabled_platforms';
 
+/** Platform ids the viewer pinned, in their chosen order — top of the sidebar. */
+const SETTINGS_KEY_OTT_PINNED = 'ott_pinned_platforms';
+
 export class OttService {
   private plugins: PluginManager;
   private datastore: DatastoreManager;
+  private cache: CatalogueCache | null;
 
-  constructor(plugins: PluginManager, datastore: DatastoreManager) {
+  constructor(plugins: PluginManager, datastore: DatastoreManager, cache: CatalogueCache | null = null) {
     this.plugins = plugins;
     this.datastore = datastore;
+    this.cache = cache;
   }
 
   /**
    * The platforms shown in the sidebar.
    *
    * Absent from the stored map means "as shipped", not "off" — see the key's
-   * comment. The four with a provider named after them are on; the three that
-   * exist only behind aggregate scrapers are off, because their pages open onto
-   * a search box rather than a catalogue and a sidebar of those reads as four
-   * working entries and three broken ones.
+   * comment. The three listed platforms are on as shipped; discovered ones are
+   * off until picked.
    */
   public getEnabledPlatformIds(): string[] {
     const stored = this.datastore.getObject<Record<string, boolean>>(
       SETTINGS_KEY_OTT_ENABLED,
       {}
     );
-    return OTT_PLATFORMS.filter((platform) =>
+    const listed = OTT_PLATFORMS.filter((platform) =>
       typeof stored?.[platform.id] === 'boolean' ? stored[platform.id] : platform.defaultEnabled
     ).map((platform) => platform.id);
+    // Discovered platforms are off until picked, as on Android's home screen
+    // where the viewer chooses which provider's catalogue to see.
+    const picked = Object.entries(stored ?? {})
+      .filter(([id, on]) => id.startsWith(DISCOVERED_PREFIX) && on === true)
+      .map(([id]) => id);
+    return [...listed, ...picked];
   }
 
   public setPlatformEnabled(platformId: string, enabled: boolean): string[] {
@@ -80,23 +92,57 @@ export class OttService {
     return this.getEnabledPlatformIds();
   }
 
+  public getPinnedPlatformIds(): string[] {
+    const stored = this.datastore.getObject<string[]>(SETTINGS_KEY_OTT_PINNED, []);
+    return Array.isArray(stored) ? stored.filter((id) => typeof id === 'string') : [];
+  }
+
+  /**
+   * The whole pinned list, in order — pin, unpin and reorder are all this one
+   * write, so the order and the set cannot disagree.
+   */
+  public setPinnedPlatformIds(ids: string[]): string[] {
+    const clean = [...new Set((Array.isArray(ids) ? ids : []).filter((id) => typeof id === 'string' && id))];
+    this.datastore.setObject(SETTINGS_KEY_OTT_PINNED, clean);
+    return clean;
+  }
+
+  /**
+   * Many at once — the picker's Select all / Select none. One write and one
+   * answer, so a bulk change cannot land half-applied.
+   */
+  public setPlatformsEnabled(changes: Record<string, boolean>): string[] {
+    const stored = this.datastore.getObject<Record<string, boolean>>(
+      SETTINGS_KEY_OTT_ENABLED,
+      {}
+    );
+    const next = { ...(stored ?? {}) };
+    for (const [id, on] of Object.entries(changes)) {
+      if (id && typeof on === 'boolean') next[id] = on;
+    }
+    this.datastore.setObject(SETTINGS_KEY_OTT_ENABLED, next);
+    return this.getEnabledPlatformIds();
+  }
+
   /**
    * Every platform, with what is installed behind it.
    *
-   * Always returns the full list, including platforms nothing can serve.
-   * Hiding those would answer the wrong question: a user looking for Sony LIV
-   * needs to be told it is reachable and how, not shown a sidebar that silently
-   * omits it and leaves them to conclude the app does not do that.
+   * The three listed platforms always appear, installed or not, so their pages
+   * can offer the extension; everything else is discovered from what is
+   * installed.
    */
   public async listPlatforms(includeHidden = false): Promise<OttPlatformView[]> {
     const enabledProviders = await this.plugins.listEnabledProviders();
-    const shown = new Set(this.getEnabledPlatformIds());
     const views = buildOttPlatformViews({
       allProviders: this.plugins.getProvidersList(),
       enabledProviders,
-      installedExtensions: this.plugins
-        .getInstalledPlugins()
-        .map((plugin) => plugin.internalName),
+      providerDetails: this.plugins.getProviders().map((provider) => ({
+        name: provider.name,
+        pluginName: provider.pluginName || provider.pluginInternalName,
+        hasMainPage: provider.hasMainPage,
+        supportedTypes: provider.supportedTypes ?? [],
+        lang: provider.lang,
+      })),
     });
     /*
      * `includeHidden` is for the settings screen, which has to list what is
@@ -104,7 +150,39 @@ export class OttService {
      * user's chosen set — a sidebar that showed the hidden ones would make the
      * setting look broken.
      */
-    return includeHidden ? views : views.filter((view) => shown.has(view.id));
+    // Pinned first, in the viewer's order; everything else keeps its own order.
+    const pinned = this.getPinnedPlatformIds();
+    const rank = new Map(pinned.map((id, index) => [id, index]));
+    const ordered = views
+      .map((view, index) => ({ view: { ...view, pinned: rank.has(view.id) }, index }))
+      .sort((a, b) => {
+        const ra = rank.get(a.view.id) ?? Number.MAX_SAFE_INTEGER;
+        const rb = rank.get(b.view.id) ?? Number.MAX_SAFE_INTEGER;
+        return ra - rb || a.index - b.index;
+      })
+      .map((entry) => entry.view);
+    if (includeHidden) return ordered;
+    const shown = new Set(this.shownPlatformIds(ordered));
+    return ordered.filter((view) => shown.has(view.id));
+  }
+
+  /**
+   * Which of these views the sidebar shows. A stored choice always wins; with
+   * none, a discovered platform from an enabled provider is shown — new
+   * extensions' services appear without a trip to the picker — except an
+   * adult one, which needs an explicit pick even with the adult gate open.
+   * Removing a service stores `false`, so it stays removed across refreshes.
+   */
+  public shownPlatformIds(views: OttPlatformView[]): string[] {
+    const stored = this.datastore.getObject<Record<string, boolean>>(SETTINGS_KEY_OTT_ENABLED, {}) ?? {};
+    const listed = new Set(this.getEnabledPlatformIds());
+    return views
+      .filter((view) => {
+        if (typeof stored[view.id] === 'boolean') return stored[view.id];
+        if (listed.has(view.id)) return true;
+        return view.id.startsWith(DISCOVERED_PREFIX) && view.availability === 'ready' && !view.adult;
+      })
+      .map((view) => view.id);
   }
 
   public async getPlatform(platformId: string): Promise<OttPlatformView | null> {
@@ -122,32 +200,13 @@ export class OttService {
    * must not be turned into a global search somewhere downstream, which is
    * exactly what `SearchScopeStore.override` refuses to do.
    *
-   * The aggregate fallback is what makes Sony LIV, ZEE5 and JioCinema more than
-   * decoration. No CloudStream provider is *named* after any of them, but the
-   * MovieBox and CNC Verse extensions carry their catalogues, and the platform
-   * table records which. So when no provider matches the platform directly, the
-   * scope becomes the providers those extensions registered — which is a real
-   * search of the right content rather than an empty page under a heading the
-   * user recognised.
-   *
-   * It is a fallback and not a merge: a platform with a provider of its own is
-   * better served by that provider alone, and adding an aggregate beside it
-   * would put a general scraper's results under a specific platform's name.
+   * Only providers that *are* the platform. There is no fallback to some other
+   * extension said to "carry" it: that was a hardcoded claim about third-party
+   * scrapers, and it put a general scraper's results under a brand heading.
    */
   public async providersFor(platformId: string): Promise<string[]> {
     const view = await this.getPlatform(platformId);
-    if (!view) return [];
-    if (view.providers.length > 0) return view.providers;
-    if (view.carriedBy.length === 0) return [];
-
-    const carrying = new Set(view.carriedBy);
-    const enabled = new Set(await this.plugins.listEnabledProviders());
-    return this.plugins
-      .getProviders()
-      .filter(
-        (provider) => carrying.has(provider.pluginInternalName) && enabled.has(provider.name)
-      )
-      .map((provider) => provider.name);
+    return view?.providers ?? [];
   }
 
   /**
@@ -181,12 +240,94 @@ export class OttService {
     };
   }
 
+  /**
+   * Every provider's catalogue for this platform, richest first.
+   *
+   * `getCatalog` stops at the first provider that answers, and on a Netflix page
+   * that is often a thin mirror while `NetflixM` beside it publishes a dozen
+   * rows — so the page showed the weak one and fell back to third-party
+   * listings. Each catalogue stays whole and labelled with its provider rather
+   * than being interleaved: two providers' "Trending" are different lists.
+   *
+   * Asked one at a time on purpose — provider loading cannot overlap (§5), and
+   * reading section names is cheap once the plugin is loaded.
+   */
+  public async getCatalogs(platformId: string): Promise<{
+    catalogs: ProviderCatalog[];
+    unavailable: Array<{ provider: string; reason: string }>;
+  }> {
+    const providers = await this.providersFor(platformId);
+    const catalogs: ProviderCatalog[] = [];
+    const unavailable: Array<{ provider: string; reason: string }> = [];
+    for (const provider of providers) {
+      try {
+        const catalog = await this.plugins.loadCatalog(provider);
+        if (catalog.hasMainPage && catalog.sections.length > 0) catalogs.push(catalog);
+        else
+          unavailable.push({
+            provider,
+            reason: catalog.unavailableReason ?? 'Publishes no catalogue — search it instead.',
+          });
+      } catch (error) {
+        unavailable.push({ provider, reason: error instanceof Error ? error.message : String(error) });
+      }
+    }
+    catalogs.sort((a, b) => b.sections.length - a.sections.length);
+    return { catalogs, unavailable };
+  }
+
+  /**
+   * One provider's catalogue, for a page that draws each provider as it lands.
+   *
+   * `getCatalogs` answers only once every provider has loaded, and loading is
+   * serial in the JVM — on an install with four Netflix providers behind a
+   * background warm-up that was minutes of a blank page. The renderer asks one
+   * provider at a time instead and shows the first catalogue the moment it
+   * exists. The provider must belong to the platform: this channel is not a way
+   * to browse arbitrary providers by name.
+   */
+  public async getProviderCatalog(
+    platformId: string,
+    provider: string,
+    options: CatalogueReadOptions = {}
+  ): Promise<(ProviderCatalog & { fetchedAt?: number }) | null> {
+    const providers = await this.providersFor(platformId);
+    if (!providers.includes(provider)) return null;
+    const fetch = () => this.plugins.loadCatalog(provider);
+    const catalog = this.cache ? await this.cache.catalog(provider, options, fetch) : await fetch();
+    // Screened after the cache, so the cache holds the provider's full answer
+    // and turning adult content on later needs no re-fetch.
+    const screened = screenSections(
+      catalog.sections,
+      this.plugins.providerAdultKind(provider),
+      this.plugins.adultContentAllowed()
+    );
+    return { ...catalog, sections: screened.sections, hiddenAdultRows: screened.hidden };
+  }
+
   public async getCatalogPage(
     provider: string,
     section: { name: string; data: string; horizontalImages?: boolean },
-    page: number
+    page: number,
+    options: CatalogueReadOptions = {}
   ): Promise<ProviderCatalogPage> {
-    return this.plugins.loadCatalogPage(provider, section, page);
+    const fetch = () => this.plugins.loadCatalogPage(provider, section, page);
+    const answer = this.cache
+      ? await this.cache.page(provider, section, page, options, fetch)
+      : await fetch();
+    const screened = screenLists(
+      answer.lists ?? [],
+      this.plugins.providerAdultKind(provider),
+      this.plugins.adultContentAllowed(),
+      isSensitiveRow(section)
+    );
+    if (screened.lists === answer.lists) return answer;
+    return {
+      ...answer,
+      lists: screened.lists,
+      items: screened.lists.flatMap((list) => list.items),
+      hiddenAdultRows: screened.hidden,
+    };
   }
 
   /**

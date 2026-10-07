@@ -39,7 +39,12 @@ const PRESET_ALIASES = {
   'experience-mode': ['src/utils/experienceMode.test.mts'],
   'share-link': ['src/utils/shareLink.test.mts'],
   address: ['electron/cs3/extensionAddress.test.mts'],
-  backup: ['electron/cs3/backupService.test.mts'],
+  backup: [
+    'electron/cs3/backupService.test.mts',
+    'electron/cs3/backupSections.test.mts',
+    'electron/download/restoredTask.test.mts',
+    'src/components/settings/restoreReview.test.mts',
+  ],
   recovery: ['electron/cs3/providerRecovery.test.mts'],
   media: [
     'electron/media/decisionEngine.test.mts',
@@ -104,6 +109,7 @@ const PRESET_ALIASES = {
   jobs: ['electron/cs3/extensionJobs.test.mts'],
   'saved-searches': ['electron/savedSearches.test.mts'],
   'settings-search': ['src/components/settings/settingsSearch.test.mts'],
+  'related-media': ['electron/metadata/relatedMedia.test.mts'],
 };
 
 // Colors for terminal output

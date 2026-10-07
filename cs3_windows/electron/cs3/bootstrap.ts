@@ -1,6 +1,15 @@
 import type { DatastoreManager } from '../datastore';
-import type { PluginManager } from '../pluginManager';
-import { pickStarterPlugins, preferredLanguages, repositorySpeaks } from './starterPlugins';
+import { findOfficialRepository, type PluginManager } from '../pluginManager';
+import { pickStarterPlugins } from './starterPlugins';
+import {
+  REGIONS,
+  affectedByRemoval,
+  normaliseSelection,
+  planRegionalSetup,
+  suggestRegions,
+  type Region,
+  type RegionId,
+} from './regions';
 import { OFFICIAL_REPOSITORIES, type OfficialRepository } from '../officialRepositories';
 import { describeError } from '../../src/utils/errors.ts';
 
@@ -14,7 +23,9 @@ import { describeError } from '../../src/utils/errors.ts';
  * shipped a product, it has shipped a construction kit.
  *
  * So the repositories that were verified end-to-end (`tools/e2e/provider-e2e.mjs`)
- * are installed on first launch, in the background, with progress. Every
+ * are installed on first launch, in the background, with progress — once the
+ * viewer has said which regions their content is from (PRD-54, `regions.ts`),
+ * which decides the repositories added and the extensions installed. Every
  * provider they register is enabled by default — the enable list is a
  * *disable* list, so registering is enough.
  *
@@ -32,6 +43,10 @@ import { describeError } from '../../src/utils/errors.ts';
 const KEY_BOOTSTRAP_DONE = 'cs3_bootstrap_completed_version';
 const KEY_ADULT_ENABLED = 'cs3_adult_content_enabled';
 const KEY_ADULT_MODE = 'cs3_adult_content_mode';
+/** The viewer's content regions (PRD-54), a JSON array. A datastore key, so backups carry it. */
+const KEY_REGIONS = 'cs3_content_regions';
+/** Also look in other regions' repositories for extensions in the viewer's languages. Default on. */
+const KEY_CROSS_REGION = 'cs3_content_regions_cross';
 
 /**
  * Bumped when the bundled set changes, so an existing install gets the addition.
@@ -66,7 +81,8 @@ const PLUGINS_PER_REPOSITORY = 16;
 const REPOSITORY_CONCURRENCY = 2;
 
 export interface BootstrapProgress {
-  phase: 'idle' | 'running' | 'done';
+  /** `needs-regions`: nothing is installed until the viewer has said where their content is from. */
+  phase: 'idle' | 'needs-regions' | 'running' | 'done';
   /** Repository currently being worked on. */
   repository?: string;
   installed: number;
@@ -76,6 +92,24 @@ export interface BootstrapProgress {
   message?: string;
 }
 
+export interface RegionState {
+  selected: RegionId[];
+  /** No selection stored yet: the renderer asks before anything is installed. */
+  needsSelection: boolean;
+  /** Offered pre-ticked, from the system locale. */
+  suggested: RegionId[];
+  regions: Region[];
+  /** Other regions' repositories are searched for extensions in the selection's languages. */
+  crossRegion: boolean;
+}
+
+/** An installed catalogue repository that matched only through a region just removed. */
+export interface RegionAffectedRepository {
+  /** The installed (resolved) URL — the id `setRepositoriesEnabled` takes. */
+  url: string;
+  name: string;
+}
+
 export class BootstrapService {
   private datastore: DatastoreManager;
   /**
@@ -83,6 +117,13 @@ export class BootstrapService {
    * restart would make `ask` into `on` with extra steps.
    */
   private adultUnlockedThisSession = false;
+
+  /**
+   * Everything that shows or hides adult content must hear about a change the
+   * moment it happens, from whichever surface made it — otherwise each screen
+   * holds its own copy of one decision and they drift apart.
+   */
+  private adultListeners = new Set<() => void>();
   private plugins: PluginManager;
   private notifier: ((progress: BootstrapProgress) => void) | null = null;
   private progress: BootstrapProgress = { phase: 'idle', installed: 0, failed: 0, total: 0 };
@@ -109,6 +150,21 @@ export class BootstrapService {
    * reveals them. Default false, and read fresh every time rather than cached:
    * turning it off must take effect immediately, everywhere.
    */
+  public onAdultChange(listener: () => void): () => void {
+    this.adultListeners.add(listener);
+    return () => this.adultListeners.delete(listener);
+  }
+
+  private notifyAdultChange(): void {
+    for (const listener of this.adultListeners) {
+      try {
+        listener();
+      } catch {
+        // One broken subscriber must not stop the others hearing about it.
+      }
+    }
+  }
+
   public isAdultAllowed(): boolean {
     const mode = this.adultMode();
     if (mode === 'on') return true;
@@ -149,6 +205,7 @@ export class BootstrapService {
     this.datastore.setBool(KEY_ADULT_ENABLED, mode === 'on');
     // Switching away from `ask` ends any unlock; switching *to* it starts locked.
     this.adultUnlockedThisSession = false;
+    this.notifyAdultChange();
     return mode;
   }
 
@@ -163,11 +220,13 @@ export class BootstrapService {
   public unlockAdultForSession(): boolean {
     if (this.adultMode() !== 'ask') return this.isAdultAllowed();
     this.adultUnlockedThisSession = true;
+    this.notifyAdultChange();
     return true;
   }
 
   public lockAdultForSession(): void {
     this.adultUnlockedThisSession = false;
+    this.notifyAdultChange();
   }
 
   public setAdultAllowed(enabled: boolean): boolean {
@@ -193,13 +252,86 @@ export class BootstrapService {
     if (this.running) return;
     this.locale = locale;
 
+    // Nothing is installed before the viewer has said where their content is
+    // from — existing installs included, for whom the answer is purely
+    // additive because `run()` skips every repository already installed.
+    if (this.storedRegions() === null) {
+      this.progress = { phase: 'needs-regions', installed: 0, failed: 0, total: 0 };
+      this.emit();
+      return;
+    }
+
     const completed = this.datastore.getInt(KEY_BOOTSTRAP_DONE, 0);
     if (completed >= BOOTSTRAP_VERSION) {
       this.progress = { phase: 'done', installed: 0, failed: 0, total: 0 };
       return;
     }
+    this.launch();
+  }
 
-    this.running = this.run()
+  // --- regions (PRD-54) ----------------------------------------------------
+
+  private storedRegions(): RegionId[] | null {
+    const raw = this.datastore.getString(KEY_REGIONS, '');
+    if (!raw) return null;
+    try {
+      const parsed: unknown = JSON.parse(raw);
+      return Array.isArray(parsed) ? normaliseSelection(parsed.map(String)) : null;
+    } catch {
+      return null;
+    }
+  }
+
+  public getRegionState(): RegionState {
+    const stored = this.storedRegions();
+    const suggested = suggestRegions(this.locale);
+    return {
+      selected: stored ?? suggested,
+      needsSelection: stored === null,
+      suggested,
+      regions: REGIONS,
+      crossRegion: this.datastore.getBool(KEY_CROSS_REGION, true),
+    };
+  }
+
+  /**
+   * Stores a selection and adds what it newly calls for, in the background.
+   *
+   * Only ever adds: a repository already installed is skipped, so nothing the
+   * viewer switched off is switched back on. What a removed region leaves
+   * behind is *returned* for review, never disabled here.
+   */
+  public setRegions(
+    selection: readonly string[],
+    options: { crossRegion?: boolean } = {}
+  ): {
+    state: RegionState;
+    affected: RegionAffectedRepository[];
+  } {
+    const next = normaliseSelection(selection);
+    if (next.length === 0) throw new Error('Choose at least one region.');
+    const before = this.storedRegions() ?? [];
+    this.datastore.setString(KEY_REGIONS, JSON.stringify(next));
+    if (typeof options.crossRegion === 'boolean') this.datastore.setBool(KEY_CROSS_REGION, options.crossRegion);
+
+    const installed = this.plugins.getInstalledRepositories().flatMap((url) => {
+      const entry = findOfficialRepository(url);
+      return entry ? [{ ...entry, installedUrl: url }] : [];
+    });
+    const affected = affectedByRemoval(installed, before, next).map((repo) => ({
+      url: repo.installedUrl,
+      name: repo.name,
+    }));
+
+    this.launch();
+    return { state: this.getRegionState(), affected };
+  }
+
+  /** One run at a time; a change made while one is in flight runs after it. */
+  private launch(): void {
+    const previous = this.running ?? Promise.resolve();
+    const current: Promise<void> = previous
+      .then(() => this.run())
       .catch((error) => {
         // Bootstrap failing is a degraded first run, never a failed launch.
         this.progress.message = describeError(error);
@@ -224,8 +356,9 @@ export class BootstrapService {
         }
         this.progress.phase = 'done';
         this.emit();
-        this.running = null;
+        if (this.running === current) this.running = null;
       });
+    this.running = current;
   }
 
   private emit(): void {
@@ -233,24 +366,44 @@ export class BootstrapService {
   }
 
   private async run(): Promise<void> {
-    const already = new Set(this.plugins.getInstalledRepositories());
-    const languages = preferredLanguages(this.locale);
-    const targets = OFFICIAL_REPOSITORIES.filter(
-      // `bundled` is the verified set. `adult` is excluded unconditionally —
-      // not because of the flag below, but because bootstrapping content the
-      // user has not asked for is the one thing that must never happen here.
-      // A repository in a language the viewer does not use is left to the
-      // catalogue too: German Providers is all German, and an English install
-      // started with it registered and empty.
-      (repo) =>
-        repo.bundled &&
-        !repo.adult &&
-        !already.has(repo.rawRepoUrl) &&
-        repositorySpeaks(repo.language, languages)
-    );
+    const regions = this.storedRegions();
+    if (!regions) return;
+    // Installed under a resolved URL, catalogued under the raw one: skip both.
+    const already = new Set<string>();
+    for (const url of this.plugins.getInstalledRepositories()) {
+      already.add(url);
+      const entry = findOfficialRepository(url);
+      if (entry) already.add(entry.rawRepoUrl);
+    }
+    const allowAdult = this.isAdultAllowed();
+    /**
+     * PRD-54 §5: which repositories the viewer's regions call for, and which
+     * of those to install starter extensions from rather than only add. Adult
+     * repositories are added only once adult content is allowed and are never
+     * installed from — bootstrapping content nobody asked for is the one thing
+     * that must never happen here.
+     */
+    const plan = planRegionalSetup(OFFICIAL_REPOSITORIES, regions, {
+      adultAllowed: allowAdult,
+      crossRegion: this.datastore.getBool(KEY_CROSS_REGION, true),
+      skip: already,
+    });
+    const targets = plan.filter((entry) => entry.install);
 
     this.progress = { phase: 'running', installed: 0, failed: 0, total: 0 };
     this.emit();
+
+    // Added, not installed: the whole catalogue one click away in Extensions.
+    for (const entry of plan) {
+      if (entry.install) continue;
+      this.progress.repository = entry.repo.name;
+      this.emit();
+      const added = await this.plugins
+        .addRepository(entry.repo.rawRepoUrl)
+        .catch((error: unknown) => ({ ok: false, message: describeError(error) }));
+      if (!added.ok) this.progress.message = `${entry.repo.name}: ${added.message}`;
+    }
+    this.progress.repository = undefined;
     if (targets.length === 0) return;
 
     // Lists first, so `total` is a real denominator from the first update
@@ -267,9 +420,7 @@ export class BootstrapService {
       plugins: Awaited<ReturnType<PluginManager['fetchRepository']>>['plugins'];
     }> = [];
 
-    const allowAdult = this.isAdultAllowed();
-
-    for (const repo of targets) {
+    for (const { repo, languages, reason } of targets) {
       try {
         const fetched = await this.plugins.fetchRepository(repo.rawRepoUrl);
         /**
@@ -283,13 +434,25 @@ export class BootstrapService {
          * archives the user has given no indication of wanting.
          */
         const usable = pickStarterPlugins(fetched.plugins, {
-          languages,
+          languages: languages ?? [],
+          anyLanguage: languages === null,
+          strictLanguage: reason === 'language',
           allowAdult,
           limit: PLUGINS_PER_REPOSITORY,
         });
+        // Another region's repository is kept only for what it had in the
+        // viewer's languages. `fetchRepository` has already recorded it, and
+        // nothing was installed from it before this run (installed ones are
+        // skipped), so removing it touches nothing of the viewer's.
+        if (reason === 'language' && usable.length === 0) {
+          this.plugins.removeRepository(fetched.repositoryUrl);
+          continue;
+        }
         plans.push({ repo, repositoryUrl: fetched.repositoryUrl, plugins: usable });
         this.progress.total += usable.length;
       } catch (error) {
+        // A repository only being searched in passing is not a failure of the run.
+        if (reason === 'language') continue;
         this.progress.failed += 1;
         this.progress.message = `${repo.name}: ${describeError(error)}`;
       }

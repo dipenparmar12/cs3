@@ -109,7 +109,7 @@ export function subtitleMpvProperties(style: SubtitleStyle): Record<string, unkn
     'sub-bold': style.weight === 'bold',
     'sub-border-size': style.background === 'outline' ? 3 : style.background === 'shadow' ? 1 : 0,
     'sub-shadow-offset': style.background === 'shadow' ? 2 : 0,
-    'sub-back-color': style.background === 'box' ? '#000000BF' : '#00000000',
+    'sub-back-color': style.background === 'box' ? '#BF000000' : '#00000000',
     // mpv measures from the bottom in the same direction the CSS lift does, so
     // one number drives both without a sign flip to get wrong.
     'sub-pos': Math.round(100 - style.position),

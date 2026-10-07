@@ -4,6 +4,7 @@ import {
   AlertTriangle,
   ChevronLeft,
   ChevronRight,
+  ExternalLink,
   Loader2,
   Maximize2,
   Minimize2,
@@ -49,7 +50,11 @@ type Stage =
       subtitles?: Array<{ name: string; url: string }>;
       sessionId?: string;
     }
-  | { phase: 'error'; message: string; needsComponents?: boolean };
+  | {
+      phase: 'error';
+      message: string;
+      needsComponents?: boolean;
+    };
 
 const AUTOPLAY_SECONDS = 5;
 
@@ -165,11 +170,12 @@ export const TrailerPopup: React.FC<{
     return () => document.removeEventListener('fullscreenchange', onFsChange);
   }, []);
 
-  /** Resolve, then classify. Nothing is attached until both have answered. */
+  /** Resolve, then prepare direct stream. */
   useEffect(() => {
     if (!video) return;
     let cancelled = false;
     let opened = '';
+
     setStage({ phase: 'resolving' });
     setCountdown(null);
     setPlaybackOffset(0);
@@ -185,8 +191,8 @@ export const TrailerPopup: React.FC<{
           setStage({
             phase: 'error',
             message: resolved?.needsComponents
-              ? 'Playing trailers needs yt-dlp, which Settings → Components can install.'
-              : (resolved?.error ?? 'That trailer could not be opened.'),
+              ? 'Direct streaming needs yt-dlp. Settings → Components can install it.'
+              : (resolved?.error ?? 'That trailer could not be opened in the player.'),
             needsComponents: resolved?.needsComponents,
           });
           return;
@@ -232,7 +238,9 @@ export const TrailerPopup: React.FC<{
           sessionId: opened,
         });
       } catch (error) {
-        if (!cancelled) setStage({ phase: 'error', message: describeError(error) });
+        if (!cancelled) {
+          setStage({ phase: 'error', message: describeError(error) });
+        }
       }
     })();
 
@@ -504,15 +512,26 @@ export const TrailerPopup: React.FC<{
             </strong>
             {context && <span className="trailer-popup__context">{context}</span>}
           </div>
-          <button
-            type="button"
-            className="btn btn-secondary btn-icon"
-            onClick={onClose}
-            title="Close (Esc)"
-            aria-label="Close trailer"
-          >
-            <X size={15} />
-          </button>
+          <div className="trailer-popup__actions-group">
+            <button
+              type="button"
+              className="btn btn-secondary btn-icon"
+              onClick={() => void window.cloudstream?.openExternalLink?.(video.url)}
+              title={`Open video in external browser (${video.url})`}
+              aria-label={`Open video in external browser: ${video.url}`}
+            >
+              <ExternalLink size={14} />
+            </button>
+            <button
+              type="button"
+              className="btn btn-secondary btn-icon"
+              onClick={onClose}
+              title="Close (Esc)"
+              aria-label="Close trailer"
+            >
+              <X size={15} />
+            </button>
+          </div>
         </header>
 
         <div
@@ -535,13 +554,12 @@ export const TrailerPopup: React.FC<{
             onEnded={handleEnded}
             onClick={togglePlay}
             onDoubleClick={toggleFullscreen}
-            onError={() =>
-              setStage((held) =>
-                held.phase === 'ready'
-                  ? { phase: 'error', message: 'This trailer would not play.' }
-                  : held
-              )
-            }
+            onError={() => {
+              setStage({
+                phase: 'error',
+                message: 'This trailer could not be played in the player.',
+              });
+            }}
           >
             {stage.phase === 'ready' &&
               stage.subtitles?.map((sub, i) => (
@@ -695,17 +713,33 @@ export const TrailerPopup: React.FC<{
 
           {stage.phase === 'error' && (
             <div className="trailer-popup__overlay trailer-popup__overlay--error" role="alert">
-              <AlertTriangle size={20} />
+              <AlertTriangle size={24} />
               <span>{stage.message}</span>
-              {!stage.needsComponents && (
+              <div className="trailer-popup__error-actions">
                 <button
                   type="button"
-                  className="btn btn-secondary btn-sm"
-                  onClick={() => setAttempt((count) => count + 1)}
+                  className="btn btn-primary"
+                  onClick={() => void window.cloudstream?.openExternalLink?.(video.url)}
+                  title={`Open ${video.url} in external browser`}
                 >
-                  <RotateCcw size={13} /> Try again
+                  <ExternalLink size={15} />
+                  <span>Open in external browser</span>
                 </button>
-              )}
+                {!stage.needsComponents && (
+                  <button
+                    type="button"
+                    className="btn btn-secondary btn-sm"
+                    onClick={() => setAttempt((count) => count + 1)}
+                    title="Retry loading this trailer"
+                  >
+                    <RotateCcw size={13} />
+                    <span>Try again</span>
+                  </button>
+                )}
+              </div>
+              <span className="trailer-popup__error-url" title={video.url}>
+                {video.url}
+              </span>
             </div>
           )}
 

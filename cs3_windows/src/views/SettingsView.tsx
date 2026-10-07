@@ -15,6 +15,7 @@ import {
   Search,
   SearchX,
   ShieldAlert,
+  Globe2,
   Sliders,
   Sparkles,
   Trash2,
@@ -27,10 +28,12 @@ import { UnifiedComponentManager } from '../components/UnifiedComponentManager';
 import { SourceSettings } from '../components/SourceSettings';
 import { HomeSettings } from '../components/settings/HomeSettings';
 import { SubtitleSettings } from '../components/settings/SubtitleSettings';
+import { PrivacySettings } from '../components/settings/PrivacySettings';
 import { PlayerSettings } from '../components/PlayerSettings';
 import { ProviderRankingPanel } from '../components/settings/ProviderRankingPanel';
 import { NetworkSettings } from '../components/NetworkSettings';
 import { AdultContentSetting } from '../components/AdultContentSetting';
+import { RegionSettings } from '../components/regions/RegionSettings';
 import { SettingGroup, SettingRow, SettingsSection } from '../components/settings/SettingRow';
 import { settingsLevelFor } from '../utils/experienceMode';
 import { useExperienceMode, useSetExperienceMode } from '../utils/ExperienceModeContext';
@@ -129,6 +132,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ initialTab }) => {
   const [confirmDownloads, setConfirmDownloads] = useState<'ask' | 'immediate'>('immediate');
   const [useLiveStreams, setUseLiveStreams] = useState(true);
   const [torrentMirrors, setTorrentMirrors] = useState(true);
+  const [showTorrentAttachment, setShowTorrentAttachment] = useState(false);
   const { message: statusMessage, flash } = useFlash<string>(3000);
   const [missingComponentCount, setMissingComponentCount] = useState<number>(0);
   const [concurrency, setConcurrency] = useState<{
@@ -163,6 +167,9 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ initialTab }) => {
     window.cloudstream
       ?.getSetting('torrent_http_metadata_cache', 'true')
       .then((value) => setTorrentMirrors(value !== 'false'));
+    window.cloudstream
+      ?.getSetting('show_torrent_attachment', 'false')
+      .then((value) => setShowTorrentAttachment(value === 'true'));
     window.cloudstream?.getSearchConcurrency?.().then(setConcurrency);
     void checkComponentStatus();
   }, [checkComponentStatus]);
@@ -183,6 +190,21 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ initialTab }) => {
       enabled
         ? 'Torrent details may be fetched from public mirrors.'
         : 'Torrent details will come from the swarm only.'
+    );
+  };
+
+  const handleToggleTorrentAttachment = async (enabled: boolean) => {
+    setShowTorrentAttachment(enabled);
+    await window.cloudstream?.setSetting('show_torrent_attachment', enabled);
+    window.dispatchEvent(
+      new CustomEvent('cs3:settings-changed', {
+        detail: { key: 'show_torrent_attachment', value: enabled },
+      })
+    );
+    flash(
+      enabled
+        ? 'Torrent attachment button will appear when the search bar is empty.'
+        : 'Torrent attachment button hidden from search bar.'
     );
   };
 
@@ -251,7 +273,38 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ initialTab }) => {
   const [query, setQuery] = useState('');
   const searching = query.trim() !== '';
   const content = useRef<HTMLDivElement | null>(null);
+  const searchInputRef = useRef<HTMLInputElement | null>(null);
   const [nothingFound, setNothingFound] = useState(false);
+
+  useEffect(() => {
+    const focusSearch = () => {
+      searchInputRef.current?.focus();
+      searchInputRef.current?.select();
+    };
+    window.addEventListener('cs3:focus-settings-search', focusSearch);
+    return () => window.removeEventListener('cs3:focus-settings-search', focusSearch);
+  }, []);
+
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'f') {
+        e.preventDefault();
+        searchInputRef.current?.focus();
+        searchInputRef.current?.select();
+      } else if (
+        e.key === '/' &&
+        document.activeElement?.tagName !== 'INPUT' &&
+        document.activeElement?.tagName !== 'TEXTAREA'
+      ) {
+        e.preventDefault();
+        searchInputRef.current?.focus();
+        searchInputRef.current?.select();
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, []);
+
   // Read from the DOM after the rows have filtered themselves: which rows are
   // left is decided inside each row, so this is the one place that sees all of it.
   useLayoutEffect(() => {
@@ -278,7 +331,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ initialTab }) => {
   const tabs: Array<{ id: TabId; label: string; icon: React.ReactNode; badge?: React.ReactNode }> = [
     { id: 'general', label: 'General', icon: <Sliders size={15} /> },
     { id: 'player', label: 'Playback', icon: <Play size={15} /> },
-    { id: 'sources', label: 'Where films come from', icon: <Layers size={15} /> },
+    { id: 'sources', label: 'Torrent & Indexer Sources', icon: <Layers size={15} /> },
     { id: 'downloads', label: 'Downloads', icon: <Download size={15} /> },
     { id: 'network', label: 'Connection', icon: <Globe size={15} /> },
     {
@@ -349,12 +402,13 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ initialTab }) => {
           Sticky, so it is there however far down a section goes.
         */}
         <nav className="settings__nav" aria-label="Settings sections">
-          <label className="settings__find">
+          <div className="settings__find" onClick={() => searchInputRef.current?.focus()}>
             <Search size={14} aria-hidden />
             <input
+              ref={searchInputRef}
               type="search"
               value={query}
-              placeholder="Find a setting"
+              placeholder="Find a setting (Ctrl+F)"
               aria-label="Find a setting"
               onChange={(event) => setQuery(event.target.value)}
               onKeyDown={(event) => {
@@ -369,12 +423,16 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ initialTab }) => {
                 type="button"
                 className="settings__find-clear"
                 aria-label="Clear search"
-                onClick={() => setQuery('')}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setQuery('');
+                  searchInputRef.current?.focus();
+                }}
               >
                 <X size={13} />
               </button>
             ) : null}
-          </label>
+          </div>
 
           <div role="tablist" aria-orientation="vertical" className="settings__nav-list">
             {tabs.map((entry) => (
@@ -519,9 +577,19 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ initialTab }) => {
             <HomeSettings />
           </SettingGroup>
 
+          <SettingGroup
+            title="Regions"
+            icon={<Globe2 size={15} />}
+            keywords="region country language india global asia europe repositories extensions providers onboarding"
+          >
+            <RegionSettings />
+          </SettingGroup>
+
           <SettingsSection keywords="adult nsfw 18 content mature hide show">
             <AdultContentSetting />
           </SettingsSection>
+
+          <PrivacySettings />
         </>
       )}
 
@@ -546,7 +614,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ initialTab }) => {
 
       {shows('sources') && (
         <>
-          {sectionTitle('sources', 'Where films come from')}
+          {sectionTitle('sources', 'Torrent & Indexer Sources')}
           <SettingsSection keywords="sources indexers torrent torrents jackett prowlarr torznab stremio addon quality resolution 4k 1080p seeders filters hdr h264 hevc cam screener">
             <SourceSettings />
           </SettingsSection>
@@ -699,6 +767,22 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ initialTab }) => {
                   onChange={(event) => handleToggleTorrentMirrors(event.target.checked)}
                 />
                 <span>{torrentMirrors ? 'On' : 'Off'}</span>
+              </label>
+            </SettingRow>
+
+            <SettingRow
+              label="Show torrent file attachment button in search bar"
+              level="basic"
+              note={showTorrentAttachment ? 'Visible when search is empty' : 'Hidden'}
+              hint="Displays a paperclip icon in the search bar to pick and open .torrent files from disk when the search bar is empty. When disabled, you can still open torrents by dragging and dropping them into the app window."
+            >
+              <label className="settings__switch">
+                <input
+                  type="checkbox"
+                  checked={showTorrentAttachment}
+                  onChange={(event) => handleToggleTorrentAttachment(event.target.checked)}
+                />
+                <span>{showTorrentAttachment ? 'On' : 'Off'}</span>
               </label>
             </SettingRow>
           </SettingGroup>

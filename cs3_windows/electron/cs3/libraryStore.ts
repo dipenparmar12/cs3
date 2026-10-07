@@ -11,6 +11,7 @@ import type {
 import type { TorrentResult } from '../../src/types/torrent';
 import { deadlineFromUrl } from '../sourceCache.ts';
 import { looksLikeLinksHandle, parseExtensionUrl } from './extensionAddress.ts';
+import { isPrivateSession, allowsExplicitSaves } from './privacyMode.ts';
 
 export { WatchStatus };
 
@@ -336,7 +337,14 @@ export class LibraryStore {
     status?: WatchStatus;
     sources?: StoredSource[];
     metadata?: LibraryItemMetadata;
-  }): LibraryEntry {
+  }): LibraryEntry | null {
+    if (isPrivateSession()) {
+      // Automatic add (no status provided, e.g. on playback) is never persisted in Incognito.
+      if (!input.status) return null;
+      // Explicit bucket selection is gated by allowExplicitSaves.
+      if (!allowsExplicitSaves()) return null;
+    }
+
     const key = canonicalKey(input.title, input.year);
     const now = Date.now();
     const existing = this.entries.get(key);
@@ -389,6 +397,7 @@ export class LibraryStore {
   }
 
   public setStatus(key: string, status: WatchStatus): LibraryEntry | null {
+    if (isPrivateSession() && !allowsExplicitSaves()) return null;
     const entry = this.entries.get(key);
     if (!entry) return null;
     entry.status = status;
@@ -398,6 +407,7 @@ export class LibraryStore {
   }
 
   public setUserRating(key: string, rating: number | undefined): LibraryEntry | null {
+    if (isPrivateSession() && !allowsExplicitSaves()) return null;
     const entry = this.entries.get(key);
     if (!entry) return null;
     entry.userRating = rating;
@@ -407,6 +417,7 @@ export class LibraryStore {
   }
 
   public removeEntry(key: string): boolean {
+    if (isPrivateSession() && !allowsExplicitSaves()) return false;
     const removed = this.entries.delete(key);
     if (removed) {
       for (const [id, p] of this.progress) if (p.key === key) this.progress.delete(id);
@@ -436,6 +447,7 @@ export class LibraryStore {
   // --- source persistence --------------------------------------------------
 
   public setSources(key: string, sources: StoredSource[]): StoredSource[] {
+    if (isPrivateSession()) return sources;
     const entry = this.entries.get(key);
     if (!entry) return sources;
     entry.sources = sources;
@@ -454,6 +466,7 @@ export class LibraryStore {
    * the first title that claims it and is never linked to two.
    */
   public linkSourceAddress(key: string, address: string): void {
+    if (isPrivateSession()) return;
     const entry = this.entries.get(key);
     if (!entry || !address) return;
     const wanted = addressKey(address);
@@ -488,6 +501,7 @@ export class LibraryStore {
     season?: number,
     episode?: number
   ): string | null {
+    if (isPrivateSession()) return null;
     if (!pageUrl || results.length === 0) return null;
     const address = addressKey(pageUrl);
     const entry = [...this.entries.values()].find((candidate) =>
@@ -514,6 +528,7 @@ export class LibraryStore {
     status: SourceStatus,
     failureReason?: string
   ): void {
+    if (isPrivateSession()) return;
     const entry = this.entries.get(key);
     if (!entry || !entry.sources) return;
 
@@ -582,6 +597,8 @@ export class LibraryStore {
       playCount: (existing?.playCount ?? 0) + 1,
     };
 
+    // Incognito: a source learned privately must not steer normal mode.
+    if (isPrivateSession()) return record;
     played.set(slot, record);
     this.persistPlayedSources(played);
     return record;
@@ -651,6 +668,7 @@ export class LibraryStore {
     season?: number,
     episode?: number
   ): PlayedSource | null {
+    if (isPrivateSession()) return null;
     const played = this.loadPlayedSources();
     const slot = LibraryStore.playedSlot(key, season, episode);
     const record = played.get(slot);
@@ -682,6 +700,7 @@ export class LibraryStore {
     season?: number,
     episode?: number
   ): void {
+    if (isPrivateSession()) return;
     const played = this.loadPlayedSources();
     const slot = LibraryStore.playedSlot(key, season, episode);
     const record = played.get(slot);
@@ -749,6 +768,8 @@ export class LibraryStore {
     durationSeconds: number;
     type?: TvType;
   }): WatchProgress | null {
+    // Incognito: no Continue Watching, no resume point.
+    if (isPrivateSession()) return null;
     if (!Number.isFinite(input.positionSeconds) || !Number.isFinite(input.durationSeconds)) {
       return null;
     }
@@ -891,6 +912,7 @@ export class LibraryStore {
   // --- source memory -------------------------------------------------------
 
   public rememberSource(input: Omit<SourceMemory, 'chosenAt'>): void {
+    if (isPrivateSession()) return;
     this.sources.set(progressId(input), { ...input, chosenAt: Date.now() });
     this.persistSources();
   }
@@ -934,6 +956,41 @@ export class LibraryStore {
       progress: [...this.progress.values()],
       sources: [...this.sources.values()],
     };
+  }
+
+  /*
+   * Whole-collection writes for a backup restore. The restore has already
+   * decided row by row what each collection should hold; these only store it,
+   * in one write each, so an interrupted restore never leaves half a merge.
+   */
+
+  public replaceEntries(rows: LibraryEntry[]): void {
+    this.entries = new Map(rows.filter((row) => row?.key).map((row) => [row.key, row]));
+    this.persistEntries();
+  }
+
+  public replaceProgress(rows: WatchProgress[]): void {
+    this.progress = new Map(rows.filter((row) => row?.key).map((row) => [progressId(row), row]));
+    this.persistProgress();
+  }
+
+  public replaceSourceMemory(rows: SourceMemory[]): void {
+    this.sources = new Map(rows.filter((row) => row?.key).map((row) => [progressId(row), row]));
+    this.persistSources();
+  }
+
+  /** Every played source, unbounded by the list limit, for a backup. */
+  public exportPlayedSources(): PlayedSource[] {
+    return [...this.loadPlayedSources().values()];
+  }
+
+  public replacePlayedSources(rows: PlayedSource[]): void {
+    const map = new Map<string, PlayedSource>();
+    for (const row of rows) {
+      if (!row?.key || !row.source) continue;
+      map.set(LibraryStore.playedSlot(row.key, row.season, row.episode), row);
+    }
+    this.persistPlayedSources(map);
   }
 
   public importAll(payload: {

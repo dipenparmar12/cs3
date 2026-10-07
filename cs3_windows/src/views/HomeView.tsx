@@ -2,7 +2,7 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useTitleInteractions } from '../components/useTitleInteractions';
 import type { SearchResponse } from '../types/api';
 import { matchesTab, tabsFor } from '../utils/contentTypes';
-import { Play, History, Loader2, RefreshCw, Sparkles, X, Trash2 } from 'lucide-react';
+import { Play, History, Loader2, RefreshCw, Sparkles, X, Trash2, ChevronDown, ChevronRight } from 'lucide-react';
 import type { WatchProgress } from '../../electron/cs3/libraryStore';
 import type { DiscoverySection } from '../../electron/cs3/discovery';
 import { TvType } from '../types/api';
@@ -12,7 +12,13 @@ import { CategoryGrid } from '../components/home/CategoryGrid';
 import { HomeRow } from '../components/home/HomeRow';
 import { RowPicker } from '../components/home/RowPicker';
 import { describeError } from '../utils/errors';
-import { RAIL_LIMIT, readHiddenRows, writeHiddenRows } from '../utils/homeRows';
+import {
+  RAIL_LIMIT,
+  readContinueWatchingCollapsed,
+  readHiddenRows,
+  writeContinueWatchingCollapsed,
+  writeHiddenRows,
+} from '../utils/homeRows';
 import type { HomeCategoryState } from './homeCategoryState';
 
 /** Anime is a row like any other now; this id is also how the old switch is read. */
@@ -80,9 +86,20 @@ export const HomeView: React.FC<HomeViewProps> = ({
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [continueWatching, setContinueWatching] = useState<WatchProgress[]>([]);
+  const [continueWatchingCollapsed, setContinueWatchingCollapsed] = useState<boolean>(() =>
+    readContinueWatchingCollapsed(storage())
+  );
   const [typeTab, setTypeTab] = useState<string>('all');
   const [confirmClear, setConfirmClear] = useState(false);
   const topRef = useRef<HTMLDivElement>(null);
+
+  const toggleContinueWatchingCollapsed = useCallback(() => {
+    setContinueWatchingCollapsed((prev) => {
+      const next = !prev;
+      writeContinueWatchingCollapsed(storage(), next);
+      return next;
+    });
+  }, []);
   /**
    * The rows switched off in the row picker.
    *
@@ -349,6 +366,24 @@ export const HomeView: React.FC<HomeViewProps> = ({
           <header>
             <History size={17} />
             <h3>Continue watching</h3>
+            <button
+              type="button"
+              className="home-row__action"
+              style={{ marginLeft: 0 }}
+              onClick={toggleContinueWatchingCollapsed}
+              title={continueWatchingCollapsed ? 'Expand Continue watching' : 'Collapse Continue watching'}
+              aria-label={continueWatchingCollapsed ? 'Expand Continue watching' : 'Collapse Continue watching'}
+            >
+              {continueWatchingCollapsed ? (
+                <>
+                  <ChevronRight size={13} /> Expand ({continueWatching.length})
+                </>
+              ) : (
+                <>
+                  <ChevronDown size={13} /> Collapse
+                </>
+              )}
+            </button>
             {/*
               Inline rather than a modal. A modal over the home screen to
               confirm tidying a row is a heavier interruption than the action
@@ -387,7 +422,8 @@ export const HomeView: React.FC<HomeViewProps> = ({
               </button>
             )}
           </header>
-          <div className="home-rail">
+          {!continueWatchingCollapsed && (
+            <div className="home-rail">
             {continueWatching.map((row) => {
               const percent = row.durationSeconds
                 ? (row.positionSeconds / row.durationSeconds) * 100
@@ -466,6 +502,7 @@ export const HomeView: React.FC<HomeViewProps> = ({
               );
             })}
           </div>
+          )}
         </section>
       )}
 

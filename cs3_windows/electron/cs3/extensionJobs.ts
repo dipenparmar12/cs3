@@ -64,6 +64,8 @@ export interface ExtensionJob {
   enqueuedAt: number;
   startedAt?: number;
   finishedAt?: number;
+  /** Repository URL this job belongs to, if known. */
+  repositoryUrl?: string;
 }
 
 export interface ExtensionJobsSnapshot {
@@ -165,6 +167,12 @@ export class ExtensionJobQueue {
         continue;
       }
       const id = `job-${++this.sequence}`;
+      const repoUrl =
+        request.kind === 'install'
+          ? request.repositoryUrl
+          : request.kind === 'addRepository' || request.kind === 'installRepository'
+            ? request.url
+            : undefined;
       this.jobs.push({
         id,
         kind: request.kind,
@@ -172,6 +180,7 @@ export class ExtensionJobQueue {
         label: labelOf(request),
         state: 'queued',
         enqueuedAt: this.now(),
+        repositoryUrl: repoUrl,
       });
       this.requests.set(id, request);
       ids.push(id);

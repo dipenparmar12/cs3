@@ -1,5 +1,6 @@
 import type { SearchHistoryEntry } from '../src/types/api';
 import type { DatastoreManager } from './datastore';
+import { isPrivateSession } from './cs3/privacyMode.ts';
 
 /**
  * Past searches, so watching something again tomorrow costs one click.
@@ -42,7 +43,7 @@ export class SearchHistoryStore {
    */
   public record(query: string, resultCount?: number): SearchHistoryEntry[] {
     const trimmed = query.trim();
-    if (!trimmed) return this.list();
+    if (!trimmed || isPrivateSession()) return this.list();
 
     // Pasted magnets and URLs are not things anyone wants to re-run from a
     // history list, and they push real searches out of it.
@@ -70,6 +71,7 @@ export class SearchHistoryStore {
    * a faster one the user ran afterwards.
    */
   public setResultCount(query: string, resultCount: number): SearchHistoryEntry[] {
+    if (isPrivateSession()) return this.list();
     const trimmed = query.trim().toLowerCase();
     const entries = this.list(MAX_ENTRIES);
     const next = entries.map((entry) =>
@@ -85,6 +87,15 @@ export class SearchHistoryStore {
     );
     this.datastore.setObject(KEY, next);
     return next;
+  }
+
+  /** Stores the list a backup restore decided on, newest first, within the cap. */
+  public replaceAll(rows: SearchHistoryEntry[]): void {
+    const next = rows
+      .filter((entry) => entry && typeof entry.query === 'string' && entry.query.trim())
+      .sort((a, b) => (b.at ?? 0) - (a.at ?? 0))
+      .slice(0, MAX_ENTRIES);
+    this.datastore.setObject(KEY, next);
   }
 
   public clear(): SearchHistoryEntry[] {

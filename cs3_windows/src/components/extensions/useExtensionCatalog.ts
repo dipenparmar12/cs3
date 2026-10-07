@@ -13,6 +13,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import type { ProviderTreeRepository, SitePlugin } from '../../types/plugin';
 import type { OfficialRepository } from '../../../electron/officialRepositories';
 import { describeError } from '../../utils/errors';
+import { useAdultState } from '../../utils/useAdultMode';
 
 /**
  * The catalogue entry, re-exported from where it is defined.
@@ -31,7 +32,6 @@ export interface CatalogState {
   installedRepositories: string[];
   installedPlugins: SitePlugin[];
   official: OfficialRepository[];
-  adultAllowed: boolean;
   loading: boolean;
   error: string | null;
 }
@@ -41,7 +41,6 @@ const EMPTY: CatalogState = {
   installedRepositories: [],
   installedPlugins: [],
   official: [],
-  adultAllowed: false,
   loading: true,
   error: null,
 };
@@ -67,12 +66,11 @@ export function useExtensionCatalog() {
     }
 
     try {
-      const [treeResponse, repositories, plugins, official, adultAllowed] = await Promise.all([
+      const [treeResponse, repositories, plugins, official] = await Promise.all([
         api.getProviderTree(),
         api.getInstalledRepositories(),
         api.getInstalledPlugins(),
         api.getOfficialRepositories(),
-        api.getAdultAllowed(),
       ]);
 
       if (!alive.current) return;
@@ -81,7 +79,6 @@ export function useExtensionCatalog() {
         installedRepositories: repositories ?? [],
         installedPlugins: plugins ?? [],
         official: official ?? [],
-        adultAllowed: Boolean(adultAllowed),
         loading: false,
         error: treeResponse?.ok === false ? (treeResponse.error ?? null) : null,
       });
@@ -95,9 +92,12 @@ export function useExtensionCatalog() {
     }
   }, []);
 
+  // The catalogue and tree are filtered by the adult gate in the main process,
+  // so a change made anywhere has to re-read them.
+  const adultAllowed = useAdultState().allowed;
   useEffect(() => {
     void refresh();
-  }, [refresh]);
+  }, [refresh, adultAllowed]);
 
   /**
    * Runs one quick mutation, then re-reads. See the note at the top of this file.
@@ -149,8 +149,6 @@ export function useExtensionCatalog() {
      */
     removeRepository: (url: string) =>
       run(`remove:${url}`, () => window.cloudstream!.removeRepository(url)),
-    setAdultAllowed: (enabled: boolean) =>
-      run('adult', () => window.cloudstream!.setAdultAllowed(enabled)),
   };
 
   /**
@@ -173,5 +171,11 @@ export function useExtensionCatalog() {
     return response.repository;
   }, []);
 
-  return { state, busy, refresh, actions, browseRepository };
+  /** The stored listing, or null if this repository has never been read. Instant. */
+  const peekRepository = useCallback(async (url: string) => {
+    const response = await window.cloudstream?.peekRepository?.(url);
+    return response?.ok ? response.repository : null;
+  }, []);
+
+  return { state, busy, refresh, actions, browseRepository, peekRepository };
 }

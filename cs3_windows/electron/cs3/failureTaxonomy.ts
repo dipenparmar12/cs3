@@ -104,7 +104,7 @@ const RULES: Rule[] = [
    * author for a method we failed to provide.
    */
   { kind: 'runtime-unavailable', test: /\b(?:NoSuchMethodError|NoSuchFieldError|IncompatibleClassChangeError|AbstractMethodError|VerifyError|IllegalAccessError)\b/ },
-  { kind: 'timeout', test: /timeout|timed out|deadline|ETIMEDOUT/i },
+  { kind: 'timeout', test: /timeout|timed out|deadline|ETIMEDOUT|ERR_(?:CONNECTION_)?TIMED_OUT/i },
 
   { kind: 'expired', test: /expired|link has expired|token.*(expired|invalid)|signature.*(expired|mismatch)/i },
   { kind: 'not-found', test: /\b404\b|not found|no longer (has|exists)|gone\b|\b410\b/i },
@@ -121,6 +121,11 @@ const RULES: Rule[] = [
    */
   { kind: 'network', test: /ENOTFOUND|ECONNREFUSED|ECONNRESET|EAI_AGAIN|UnknownHost|fetch failed|network|SSL|TLS|handshake|certificate/i },
   { kind: 'network', test: /\b(?:Connection (?:reset|refused|closed)|Socket(?:Exception|closed)|NoRouteToHost|PortUnreachable|Network is unreachable|Broken pipe)\b/i },
+
+  // Chromium's dialect, from `net.fetch` and the WebView host. `net::ERR_*`
+  // carries no word the rules above match, so 2,454 DNS failures in one
+  // install's log landed in `unknown` and never grouped.
+  { kind: 'network', test: /\bERR_(?:NAME_NOT_RESOLVED|NAME_RESOLUTION_FAILED|CONNECTION_(?:RESET|REFUSED|CLOSED|FAILED|ABORTED)|ADDRESS_UNREACHABLE|INTERNET_DISCONNECTED|NETWORK_CHANGED|EMPTY_RESPONSE|SSL_[A-Z_]+|CERT_[A-Z_]+|TUNNEL_CONNECTION_FAILED|PROXY_CONNECTION_FAILED)\b/ },
 
   { kind: 'unsupported-operation', test: /does not implement|unsupported operation|NotImplemented|UnsupportedAndroidApiException/i },
 

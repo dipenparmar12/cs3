@@ -1,5 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useFlash } from '../utils/useFlash';
+import { usePrivacy } from '../utils/usePrivacy';
+import { EyeOff } from 'lucide-react';
 import { historyEventForTask } from '../utils/historyEvent';
 import Hls from 'hls.js';
 import { NativeEngineStage, trackLabel } from './player/NativeEngineStage';
@@ -27,7 +29,7 @@ import { HoverMenu } from './player/HoverMenu';
 import { EpisodePanel } from './player/EpisodePanel';
 import { SourcePanel } from './player/SourcePanel';
 import { SourceResolveOverlay } from './player/SourceResolveOverlay';
-import { SubtitlePanel } from './player/SubtitlePanel';
+import { SubtitlePanel, getLanguageFlag, getLanguageName } from './player/SubtitlePanel';
 import { PlayerDownloadPanel } from './player/PlayerDownloadPanel';
 import type { PlaybackStreamResponse, SourceCapabilityModel } from '../types/media';
 import { attachClearKey, type ClearKeyAttachment } from '../utils/clearKeySession';
@@ -57,6 +59,9 @@ import {
   subtitleMpvProperties,
   type SubtitleStyle,
 } from '../utils/subtitleStyle';
+import { durationCloseness, subtitleFitsMedia } from '../utils/subtitleDuration';
+import { durableAddress } from '../utils/durableAddress';
+import { formatBufferAhead, formatDeltaSeconds, loadTimeDisplayMode, rightHandSeconds, saveTimeDisplayMode, type TimeDisplayMode } from './player/timeDisplay';
 import { describeError } from '../utils/errors';
 import { useIsDeveloper } from '../utils/ExperienceModeContext';
 
@@ -338,6 +343,17 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
   const [currentTime, setCurrentTime] = useState(0);
   const [duration, setDuration] = useState(0);
   const [buffered, setBuffered] = useState(0);
+  const [timeMode, setTimeMode] = useState<TimeDisplayMode>(loadTimeDisplayMode);
+  const toggleTimeMode = useCallback(() => {
+    setTimeMode((prev) => {
+      const next = prev === 'total' ? 'remaining' : 'total';
+      saveTimeDisplayMode(next);
+      return next;
+    });
+  }, []);
+  const rightHand = rightHandSeconds(timeMode, currentTime, duration);
+  const rightHandLabel = `${rightHand.negative ? '-' : ''}${formatTimecode(rightHand.seconds)}`;
+  const bufferAhead = formatBufferAhead(buffered, currentTime);
   const [volume, setVolume] = useState(1);
   /** Current volume/mute, readable from effects that must not depend on them. */
   const audioSettings = useRef({ volume: 1, muted: false });
@@ -397,6 +413,20 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
   const [showSubtitlesControl, setShowSubtitlesControl] = useState(showSubtitlesControlProp ?? true);
   const [controlsVisible, setControlsVisible] = useState(true);
   const [isHoveringControls, setIsHoveringControls] = useState(false);
+  const [isInteracting, setIsInteracting] = useState(false);
+  const [scrubbingTime, setScrubbingTime] = useState<number | null>(null);
+  const [activeMenuCount, setActiveMenuCount] = useState(0);
+  const onMenuOpenChange = useCallback((open: boolean) => {
+    setActiveMenuCount((c) => Math.max(0, c + (open ? 1 : -1)));
+  }, []);
+
+  const pendingSeekTargetRef = useRef<number | null>(null);
+  const seekDebounceTimerRef = useRef<any>(null);
+  const seekSettlingTimerRef = useRef<any>(null);
+  const currentPositionRef = useRef<number>(0);
+  const durationRef = useRef<number>(0);
+  const clickTimerRef = useRef<any>(null);
+
   const [error, setError] = useState<string | null>(null);
   /** A forced second attempt at this source is running; see `forceTranscodeRef`. */
   const [converting, setConverting] = useState(false);
@@ -409,6 +439,15 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
   const [panelOpen, setPanelOpen] = useState(false);
   const [sourcePanelOpen, setSourcePanelOpen] = useState(false);
   const [subtitlePanelOpen, setSubtitlePanelOpen] = useState(false);
+
+  // `s` in mpv's own window asks for the subtitle search, which lives here.
+  useEffect(
+    () =>
+      window.cloudstream?.onMpvAction?.((action) => {
+        if (action === 'subtitles') setSubtitlePanelOpen(true);
+      }),
+    []
+  );
   const [downloadPanelOpen, setDownloadPanelOpen] = useState(false);
   const [downloadQueue, setDownloadQueue] = useState<DownloadTask[]>([]);
 
@@ -526,7 +565,16 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
             setShowAspectControl(resizeEnabled === 'true' || customAspect === 'true');
           }
           if (showSubtitlesControlProp === undefined) {
-            setShowSubtitlesControl(subsEnabled !== 'false' && customSubs !== 'false');
+            const isAllowed = (val: unknown) => {
+              if (val === undefined || val === null) return true;
+              if (typeof val === 'boolean') return val;
+              if (typeof val === 'string') {
+                const lower = val.trim().toLowerCase();
+                return lower !== 'false' && lower !== '0' && lower !== 'off';
+              }
+              return true;
+            };
+            setShowSubtitlesControl(isAllowed(subsEnabled) && isAllowed(customSubs));
           }
           if (savedAspect && Object.values(AspectRatioMode).includes(savedAspect as AspectRatioMode)) {
             setAspect(savedAspect as AspectRatioMode);
@@ -917,7 +965,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
   }, [downloadQueue]);
   /** Subtitles fetched from the online search, as blob-backed WebVTT tracks. */
   const [fetchedSubtitles, setFetchedSubtitles] = useState<
-    Array<{ name: string; url: string }>
+    Array<{ name: string; url: string; detail?: string }>
   >([]);
   /** Source the viewer just picked, so the row shows a spinner while it starts. */
   const [pendingSourceHash, setPendingSourceHash] = useState<string | null>(null);
@@ -971,7 +1019,12 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
   useEffect(() => {
     if (!isNativeEngine) return;
 
+    let lastState: MpvSnapshot['state'] | null = null;
     const dispose = window.cloudstream?.onMpvUpdate((snapshot: MpvSnapshot) => {
+      // Leaving `loading` means the file is open: the moment subtitle
+      // properties stop being discarded by the next `loadfile`.
+      if (lastState === 'loading' && snapshot.state !== 'loading') setMpvOpenCount((n) => n + 1);
+      lastState = snapshot.state;
       if (snapshot.state === 'playing') {
         setIsPlaying(true);
         setHasStartedPlayback(true);
@@ -1037,6 +1090,18 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
           setActiveAudioTrack(snapshot.selectedAudioId);
         }
       }
+      if (snapshot.videoTracks && snapshot.videoTracks.length > 0) {
+        setQualities(
+          snapshot.videoTracks.map((t, idx) => ({
+            level: t.id,
+            label: t.title || (t.codec ? `${t.codec.toUpperCase()} (${idx + 1})` : `Track ${idx + 1}`),
+            detail: t.codec,
+          }))
+        );
+        if (snapshot.selectedVideoId != null) {
+          setQuality(snapshot.selectedVideoId);
+        }
+      }
       if (snapshot.state === 'error' && snapshot.error) {
         setError(snapshot.error);
       }
@@ -1056,6 +1121,31 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
         if (s.positionSeconds >= 0) setCurrentTime(s.positionSeconds);
         if (s.durationSeconds > 0) setDuration(s.durationSeconds);
         if (s.bufferedSeconds >= 0) setBuffered(s.bufferedSeconds);
+        if (s.videoTracks && s.videoTracks.length > 0) {
+          setQualities(
+            s.videoTracks.map((t, idx) => ({
+              level: t.id,
+              label: t.title || (t.codec ? `${t.codec.toUpperCase()} (${idx + 1})` : `Track ${idx + 1}`),
+              detail: t.codec,
+            }))
+          );
+          if (s.selectedVideoId != null) {
+            setQuality(s.selectedVideoId);
+          }
+        }
+        if (s.audioTracks && s.audioTracks.length > 0) {
+          setAudioTracks(
+            s.audioTracks.map((t, idx) => ({
+              id: t.id,
+              label: trackLabel(t, idx),
+              language: t.language,
+              active: t.selected || t.id === s.selectedAudioId,
+            }))
+          );
+          if (s.selectedAudioId != null) {
+            setActiveAudioTrack(s.selectedAudioId);
+          }
+        }
       }
     });
 
@@ -1416,8 +1506,8 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
             year: progress?.year || series?.year,
             type: progress?.season !== undefined || series ? 'series' : 'movie',
             posterUrl: progress?.posterUrl || series?.posterUrl,
-            mediaUrl: progress?.mediaUrl || streamUrl,
-            parentMediaUrl: progress?.mediaUrl || series?.currentEpisodeUrl,
+            mediaUrl: durableAddress(progress?.mediaUrl, series?.currentEpisodeUrl, series?.pageUrl, streamUrl),
+            parentMediaUrl: series?.pageUrl || progress?.mediaUrl || series?.currentEpisodeUrl,
             episodeTitle,
             season: progress?.season,
             episode: progress?.episode,
@@ -1446,8 +1536,8 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
               year: progress?.year || series?.year,
               type: progress?.season !== undefined || series ? 'series' : 'movie',
               posterUrl: progress?.posterUrl || series?.posterUrl,
-              mediaUrl: progress?.mediaUrl || streamUrl,
-              parentMediaUrl: progress?.mediaUrl || series?.currentEpisodeUrl,
+              mediaUrl: durableAddress(progress?.mediaUrl, series?.currentEpisodeUrl, series?.pageUrl, streamUrl),
+              parentMediaUrl: series?.pageUrl || progress?.mediaUrl || series?.currentEpisodeUrl,
               episodeTitle,
               season: progress?.season,
               episode: progress?.episode,
@@ -1519,12 +1609,30 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
 
   useEffect(() => {
     const hls = hlsRef.current;
-    if (hls) hls.currentLevel = quality;
+    const video = videoRef.current;
+    if (hls) {
+      if (quality === AUTO_QUALITY) {
+        hls.currentLevel = -1;
+        hls.nextLevel = -1;
+        hls.loadLevel = -1;
+      } else {
+        hls.currentLevel = quality;
+        hls.nextLevel = quality;
+        hls.loadLevel = quality;
+        if (video && !video.paused && Number.isFinite(video.currentTime)) {
+          const current = video.currentTime;
+          video.currentTime = current;
+        }
+      }
+    }
     // Shaka calls the same thing a "variant track", and selecting one turns its
     // adaptive switching off — so `AUTO_QUALITY` has to turn it back on rather
     // than simply selecting nothing, or the menu becomes a one-way door.
     shakaRef.current?.selectQuality(quality);
-  }, [quality]);
+    if (isNativeEngine) {
+      void window.cloudstream?.mpvSetVideoTrack?.(quality === AUTO_QUALITY ? 'auto' : quality);
+    }
+  }, [quality, isNativeEngine]);
 
   // --- audio tracks (multi-audio & audio volume sync) ---------------------
 
@@ -1605,15 +1713,15 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
         for (let i = 0; i < nativeList.length; i++) {
           const t = nativeList[i];
           const currentId = t.id !== undefined && t.id !== '' ? t.id : i;
-          const match = String(currentId) === String(trackId);
+          const match = String(currentId) === String(trackId) || i === Number(trackId);
           t.enabled = match;
         }
       }
 
       // 2. HLS.js audioTrack
       const hls = hlsRef.current;
-      if (hls && typeof trackId === 'number') {
-        hls.audioTrack = trackId;
+      if (hls && (typeof trackId === 'number' || !isNaN(Number(trackId)))) {
+        hls.audioTrack = Number(trackId);
       }
 
       setActiveAudioTrack(trackId);
@@ -1761,9 +1869,13 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
     if (!video) return;
 
     const onTime = () => {
+      const realPos = offsetRef.current + video.currentTime;
+      currentPositionRef.current = realPos;
       // A remuxed stream always starts at zero regardless of where the viewer
       // seeked to, so the offset is what makes the scrubber tell the truth.
-      setCurrentTime(offsetRef.current + video.currentTime);
+      if (pendingSeekTargetRef.current === null) {
+        setCurrentTime(realPos);
+      }
       if (video.buffered.length > 0) {
         setBuffered(offsetRef.current + video.buffered.end(video.buffered.length - 1));
       }
@@ -1776,7 +1888,9 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
       // ffmpeg reports the remaining duration from the seek point, not the
       // whole file; the probe knows the real length.
       const probed = probedDurationRef.current;
-      setDuration(probed && probed > 0 ? probed : video.duration);
+      const dur = probed && probed > 0 ? probed : video.duration;
+      setDuration(dur);
+      durationRef.current = dur;
     };
     const onPlay = () => setIsPlaying(true);
     const onPause = () => {
@@ -1832,6 +1946,8 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
     };
 
     const onSeeked = () => {
+      currentPositionRef.current = offsetRef.current + video.currentTime;
+      pendingSeekTargetRef.current = null;
       setIsWaitingForBuffer(false);
     };
 
@@ -1957,51 +2073,81 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
    * remux at the target time and remembering the offset, which is what keeps
    * the scrubber honest — the element always believes it is at zero.
    */
+  const commitSeek = useCallback(
+    (target: number) => {
+      currentPositionRef.current = target;
+      if (externalControl?.capability === 'full') {
+        void window.cloudstream?.externalSeek(target);
+      } else if (isNativeEngine) {
+        void window.cloudstream?.mpvSeek(target);
+      } else {
+        const video = videoRef.current;
+        if (video) {
+          if (isConverted && prepared) {
+            offsetRef.current = target;
+            setPlaybackOffset(target);
+            const wasPlaying = !video.paused;
+            video.src = atTime(prepared.playbackUrl, target);
+            video.load();
+            if (wasPlaying) void video.play().catch(() => undefined);
+          } else {
+            video.currentTime = target;
+          }
+        }
+      }
+
+      if (seekSettlingTimerRef.current) clearTimeout(seekSettlingTimerRef.current);
+      seekSettlingTimerRef.current = setTimeout(() => {
+        pendingSeekTargetRef.current = null;
+      }, 400);
+    },
+    [externalControl?.capability, isNativeEngine, isConverted, prepared]
+  );
+
   const seekTo = useCallback(
     (time: number) => {
-      const target = Math.max(0, time);
+      const maxDur = durationRef.current > 0 ? durationRef.current : Infinity;
+      const target = Math.max(0, Math.min(time, maxDur));
 
-      // The external player owns the playhead; seeking the empty local element
-      // would move a timeline nobody is watching.
-      if (externalControl?.capability === 'full') {
-        setCurrentTime(target);
-        void window.cloudstream?.externalSeek(target);
-        return;
-      }
-      if (isNativeEngine) {
-        setCurrentTime(target);
-        void window.cloudstream?.mpvSeek(target);
-        return;
-      }
+      pendingSeekTargetRef.current = target;
+      setCurrentTime(target);
 
-      const video = videoRef.current;
-      if (!video) return;
+      if (seekDebounceTimerRef.current) clearTimeout(seekDebounceTimerRef.current);
+      if (seekSettlingTimerRef.current) clearTimeout(seekSettlingTimerRef.current);
 
-      if (isConverted && prepared) {
-        setPlaybackOffset(target);
-        const wasPlaying = !video.paused;
-        video.src = atTime(prepared.playbackUrl, target);
-        video.load();
-        if (wasPlaying) void video.play().catch(() => undefined);
-        return;
-      }
-      video.currentTime = target;
+      seekDebounceTimerRef.current = setTimeout(() => {
+        commitSeek(target);
+      }, 120);
     },
-    [isConverted, prepared, externalControl?.capability, isNativeEngine]
+    [commitSeek]
   );
 
   const seekBy = useCallback(
     (delta: number) => {
-      if (externalControl?.capability === 'full' || isNativeEngine) {
-        seekTo(currentTime + delta);
-        return;
-      }
-      const video = videoRef.current;
-      if (!video) return;
-      seekTo((isConverted ? playbackOffset : 0) + video.currentTime + delta);
+      const base = pendingSeekTargetRef.current ?? currentPositionRef.current;
+      const maxDur = durationRef.current > 0 ? durationRef.current : Infinity;
+      const target = Math.max(0, Math.min(base + delta, maxDur));
+
+      pendingSeekTargetRef.current = target;
+      setCurrentTime(target);
+
+      if (seekDebounceTimerRef.current) clearTimeout(seekDebounceTimerRef.current);
+      if (seekSettlingTimerRef.current) clearTimeout(seekSettlingTimerRef.current);
+
+      seekDebounceTimerRef.current = setTimeout(() => {
+        commitSeek(target);
+      }, 120);
     },
-    [seekTo, isConverted, playbackOffset, externalControl?.capability, isNativeEngine, currentTime]
+    [commitSeek]
   );
+
+  useEffect(() => {
+    return () => {
+      if (seekDebounceTimerRef.current) clearTimeout(seekDebounceTimerRef.current);
+      if (seekSettlingTimerRef.current) clearTimeout(seekSettlingTimerRef.current);
+      if (clickTimerRef.current) clearTimeout(clickTimerRef.current);
+    };
+  }, []);
 
   /**
    * Floating playback: native Picture-in-Picture, the window pin, and the
@@ -2065,49 +2211,6 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
     return () => document.removeEventListener('fullscreenchange', onFullscreenChange);
   }, []);
 
-  useEffect(() => {
-    // Still mounted, but the viewer is looking at another screen. Leaving this
-    // bound would make typing in a search box seek the film.
-    //
-    // The mini player is disarmed for the same reason and it matters more
-    // there: it is *visible*, so it looks like it has focus, and the whole
-    // point of it is that the viewer is typing somewhere else. A space bar in
-    // the search box must not pause the film.
-    if (hidden || mini) return;
-
-    const onKey = (e: KeyboardEvent) => {
-      switch (e.key) {
-        case ' ': case 'k': e.preventDefault(); togglePlay(); break;
-        case 'ArrowRight': seekBy(SKIP_SECONDS); break;
-        case 'ArrowLeft': seekBy(-SKIP_SECONDS); break;
-        case 'l': seekBy(30); break;
-        case 'j': seekBy(-30); break;
-        case 'f': toggleFullscreen(); break;
-        case 'm': setIsMuted((v) => !v); break;
-        case 'e': if (series) setPanelOpen((v) => !v); break;
-        case 'n': if (nextEpisode && onSelectEpisode) onSelectEpisode(nextEpisode); break;
-        case 'p': if (previousEpisode && onSelectEpisode) onSelectEpisode(previousEpisode); break;
-        case 'Escape':
-          if (panelOpen || sourcePanelOpen || subtitlePanelOpen || downloadPanelOpen) {
-            setPanelOpen(false);
-            setSourcePanelOpen(false);
-            setSubtitlePanelOpen(false);
-            setDownloadPanelOpen(false);
-          } else if (!document.fullscreenElement) {
-            onBack();
-          }
-          break;
-        default: break;
-      }
-    };
-    window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
-  }, [
-    togglePlay, seekBy, toggleFullscreen, onBack, series, nextEpisode, previousEpisode,
-    onSelectEpisode, panelOpen, sourcePanelOpen, subtitlePanelOpen, downloadPanelOpen,
-    hidden, mini,
-  ]);
-
   /**
    * Volume, mute and speed, remembered across media and across restarts.
    *
@@ -2134,6 +2237,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
    * properties off the player root.
    */
   const [subtitleStyle, setSubtitleStyle] = useState<SubtitleStyle>(DEFAULT_SUBTITLE_STYLE);
+  const [mpvOpenCount, setMpvOpenCount] = useState(0);
 
   /**
    * The native engine gets the same appearance as the element does.
@@ -2141,12 +2245,69 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
    * Without this, routing a 4K HEVC file to mpv — which the engine does on its
    * own, without the viewer asking — would silently discard every subtitle
    * setting and show mpv's defaults instead. Re-applied on each open because
-   * properties do not survive a `loadfile`.
+   * properties do not survive a `loadfile`. `streamUrl` alone fired before
+   * the open resolved and was then wiped by it, so the open itself re-arms it.
    */
   useEffect(() => {
     if (!isNativeEngine) return;
     void window.cloudstream?.mpvSetSubtitleStyle?.(subtitleMpvProperties(subtitleStyle));
-  }, [isNativeEngine, subtitleStyle, streamUrl]);
+  }, [isNativeEngine, subtitleStyle, streamUrl, mpvOpenCount]);
+
+  /**
+   * Chromium resolves `video::cue` custom properties against the document,
+   * not reliably against the player root, so the tokens are mirrored onto
+   * `:root` while a player is mounted and withdrawn when it goes.
+   */
+  useEffect(() => {
+    const root = document.documentElement.style;
+    const vars = subtitleCssVariables(subtitleStyle);
+    for (const [name, value] of Object.entries(vars)) root.setProperty(name, value);
+
+    let styleTag = document.getElementById('cs3-cue-dynamic-style') as HTMLStyleElement | null;
+    if (!styleTag) {
+      styleTag = document.createElement('style');
+      styleTag.id = 'cs3-cue-dynamic-style';
+      document.head.appendChild(styleTag);
+    }
+
+    const shadow =
+      subtitleStyle.background === 'outline'
+        ? '-1px -1px 2px #000, 1px -1px 2px #000, -1px 1px 2px #000, 1px 1px 2px #000'
+        : subtitleStyle.background === 'shadow'
+          ? '0 2px 4px rgba(0, 0, 0, 0.9)'
+          : 'none';
+    const bgColor =
+      subtitleStyle.background === 'box'
+        ? 'rgba(0, 0, 0, 0.85)'
+        : 'transparent';
+
+    styleTag.textContent = `
+      .player video::cue,
+      video::cue {
+        font-size: calc(1.35rem * ${subtitleStyle.scale}) !important;
+        color: ${subtitleStyle.color} !important;
+        background-color: ${bgColor} !important;
+        background: ${bgColor} !important;
+        text-shadow: ${shadow} !important;
+        font-weight: ${subtitleStyle.weight === 'bold' ? '700' : '400'} !important;
+        line-height: 1.18 !important;
+        white-space: normal !important;
+        padding: 0.1em 0.35em !important;
+      }
+      .player video::-webkit-media-text-track-container {
+        transform: translateY(-${subtitleStyle.position}%) !important;
+      }
+      .player video::-webkit-media-text-track-display {
+        line-height: 1.18 !important;
+      }
+    `;
+
+    return () => {
+      for (const name of Object.keys(vars)) root.removeProperty(name);
+      const tag = document.getElementById('cs3-cue-dynamic-style');
+      if (tag) tag.remove();
+    };
+  }, [subtitleStyle]);
 
   useEffect(() => {
     let cancelled = false;
@@ -2165,6 +2326,8 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
       setIsMuted(preferences.muted);
       setSpeed(preferences.speed);
       if (preferences.subtitleLanguage) preferredSubtitleLanguage.current = preferences.subtitleLanguage;
+      // An empty stored language is an explicit "Off", not an absence of choice.
+      subtitlesOff.current = preferences.subtitleLanguage === '';
       if (preferences.audioLanguage) preferredAudioLanguage.current = preferences.audioLanguage;
       setFloatingMode(preferences.floatingMode ?? 'mini');
       setBackgroundPlayback(preferences.backgroundPlayback ?? 'continue');
@@ -2180,6 +2343,31 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
     })();
     return () => {
       cancelled = true;
+    };
+  }, []);
+
+  useEffect(() => {
+    const unsubscribe = window.cloudstream?.onPlayerPreferencesChanged?.((prefs) => {
+      setSubtitleStyle({
+        scale: prefs.subtitleScale ?? DEFAULT_SUBTITLE_STYLE.scale,
+        color: prefs.subtitleColor ?? DEFAULT_SUBTITLE_STYLE.color,
+        background: prefs.subtitleBackground ?? DEFAULT_SUBTITLE_STYLE.background,
+        weight: prefs.subtitleWeight ?? DEFAULT_SUBTITLE_STYLE.weight,
+        position: prefs.subtitlePosition ?? DEFAULT_SUBTITLE_STYLE.position,
+      });
+      if (prefs.floatingMode) setFloatingMode(prefs.floatingMode);
+      if (prefs.backgroundPlayback) setBackgroundPlayback(prefs.backgroundPlayback);
+      if (typeof prefs.alwaysOnTop === 'boolean') setAlwaysOnTop(prefs.alwaysOnTop);
+      if (prefs.audioLanguage) preferredAudioLanguage.current = prefs.audioLanguage;
+      if (prefs.subtitleLanguage) {
+        preferredSubtitleLanguage.current = prefs.subtitleLanguage;
+        subtitlesOff.current = false;
+      } else if (prefs.subtitleLanguage === '') {
+        subtitlesOff.current = true;
+      }
+    });
+    return () => {
+      unsubscribe?.();
     };
   }, []);
 
@@ -2205,6 +2393,8 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
    */
   const preferredAudioLanguage = useRef<string | null>(null);
   const preferredSubtitleLanguage = useRef<string | null>(null);
+  const subtitlesOff = useRef(false);
+  const { active: incognito } = usePrivacy();
 
   /**
    * A record of the *previous* engine says nothing about the next one.
@@ -2300,8 +2490,9 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
    * the hide timer is scheduled once and must read the value at fire time, not
    * the value captured when it was created.
    *
-   * In windowed (non-fullscreen) mode, controls are kept visible. In fullscreen
-   * mode, controls auto-hide after inactivity and appear on mouse movement.
+   * Controls stay visible when playback is paused or in error, when side panels
+   * or menus are open, or when the user is hovering/interacting with controls.
+   * Otherwise, controls auto-hide after inactivity across all player modes.
    */
   const keepControls =
     panelOpen ||
@@ -2311,7 +2502,8 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
     !isPlaying ||
     Boolean(error) ||
     isHoveringControls ||
-    (!isFullscreen && !mini);
+    isInteracting ||
+    activeMenuCount > 0;
   const keepControlsRef = useRef(keepControls);
   useEffect(() => {
     keepControlsRef.current = keepControls;
@@ -2336,12 +2528,12 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
       const native = ((event as React.MouseEvent).nativeEvent ?? event) as MouseEvent;
       const real = isRealMove(native);
       lastPointer.current = { x: native.clientX, y: native.clientY };
-      if (!real) return;
+      if (!real && controlsVisible) return;
     }
     pointerInside.current = true;
     lastActivity.current = Date.now();
     setControlsVisible(true);
-  }, []);
+  }, [controlsVisible]);
 
   /**
    * The single place the controls are allowed to hide.
@@ -2357,7 +2549,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
       // the chrome is just covering the picture.
       const idle = Date.now() - lastActivity.current > CONTROLS_IDLE_MS;
       if (!pointerInside.current || idle) setControlsVisible(false);
-    }, 250);
+    }, 200);
     return () => window.clearInterval(timer);
   }, []);
 
@@ -2372,6 +2564,48 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
     lastPointer.current = null;
     setIsHoveringControls(false);
   }, []);
+
+  const handleSurfaceClick = useCallback((_e: React.MouseEvent) => {
+    if (panelOpen || sourcePanelOpen || subtitlePanelOpen || downloadPanelOpen) {
+      setPanelOpen(false);
+      setSourcePanelOpen(false);
+      setSubtitlePanelOpen(false);
+      setDownloadPanelOpen(false);
+      return;
+    }
+
+    if (clickTimerRef.current) {
+      clearTimeout(clickTimerRef.current);
+      clickTimerRef.current = null;
+      return;
+    }
+
+    clickTimerRef.current = setTimeout(() => {
+      clickTimerRef.current = null;
+      if (document.activeElement && document.activeElement !== containerRef.current) {
+        if (
+          document.activeElement.tagName === 'BUTTON' ||
+          (document.activeElement.tagName === 'INPUT' && (document.activeElement as HTMLInputElement).type === 'range')
+        ) {
+          (document.activeElement as HTMLElement).blur();
+        }
+      }
+      containerRef.current?.focus();
+      togglePlay();
+      revealControls();
+    }, 220);
+  }, [panelOpen, sourcePanelOpen, subtitlePanelOpen, downloadPanelOpen, togglePlay, revealControls]);
+
+  const handleSurfaceDoubleClick = useCallback((e: React.MouseEvent) => {
+    e.preventDefault();
+    if (clickTimerRef.current) {
+      clearTimeout(clickTimerRef.current);
+      clickTimerRef.current = null;
+    }
+    containerRef.current?.focus();
+    toggleFullscreen();
+    revealControls();
+  }, [toggleFullscreen, revealControls]);
 
   // --- seek bar interaction ------------------------------------------------
 
@@ -2502,7 +2736,8 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
     }
   }, [sourceSession?.phase, sourceSession?.activeInfoHash]);
 
-  const progressPercent = duration ? (currentTime / duration) * 100 : 0;
+  const effectiveTime = scrubbingTime !== null ? scrubbingTime : currentTime;
+  const progressPercent = duration ? (effectiveTime / duration) * 100 : 0;
 
   /**
    * Inspects the stream and opens whatever it needs, before anything plays.
@@ -2735,17 +2970,71 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
         preferredAudioLanguage.current = language;
         void window.cloudstream?.setPlayerPreferences({ audioLanguage: language });
       }
-      if (!prepared?.sessionId) return;
+
+      if (isNativeEngine) {
+        const match =
+          audioTracks[index] ??
+          audioTracks.find((t) => t.language === language) ??
+          audioTracks.find((t) => Number(t.id) === index + 1);
+        if (match) {
+          void window.cloudstream?.mpvSetAudioTrack(Number(match.id));
+          setActiveAudioTrack(match.id);
+          setAudioTracks((prev) =>
+            prev.map((t) => ({ ...t, active: String(t.id) === String(match.id) }))
+          );
+        }
+        return;
+      }
 
       const video = videoRef.current;
-      const at = playbackOffset + (video?.currentTime ?? 0);
-      const result = await window.cloudstream?.switchAudioTrack(prepared.sessionId, index, at);
-      if (!result?.ok || !result.url) return;
+      const at = (isConverted ? playbackOffset : 0) + (video?.currentTime ?? 0);
 
-      setPlaybackOffset(at);
-      setPrepared({ ...prepared, playbackUrl: result.url });
+      if (prepared?.sessionId) {
+        const result = await window.cloudstream?.switchAudioTrack(prepared.sessionId, index, at);
+        if (result?.ok && result.url) {
+          setPlaybackOffset(at);
+          setPrepared({ ...prepared, playbackUrl: result.url });
+          return;
+        }
+      }
+
+      selectAudioTrack(index);
+
+      const hasNativeAudioSwitching = Boolean((video as any)?.audioTracks?.length > 1 || hlsRef.current);
+      if (!hasNativeAudioSwitching && streamUrl && window.cloudstream?.preparePlaybackStream) {
+        setConverting(true);
+        try {
+          const response = await window.cloudstream.preparePlaybackStream({
+            url: streamUrl,
+            headers: activeSource?.directHeaders,
+            provider: providerProvenance?.provider,
+            preferredAudioLanguage: language,
+            refresh: true,
+            force: true,
+          });
+          if (response?.ok && response.playbackUrl) {
+            const previous = prepared?.sessionId;
+            if (previous) void window.cloudstream?.closePlaybackStream(previous);
+            setError(null);
+            setPlaybackOffset(at);
+            setPrepared({ ...response, playbackUrl: atTime(response.playbackUrl, at) });
+          }
+        } finally {
+          setConverting(false);
+        }
+      }
     },
-    [prepared, playbackOffset]
+    [
+      prepared,
+      isConverted,
+      playbackOffset,
+      isNativeEngine,
+      audioTracks,
+      selectAudioTrack,
+      streamUrl,
+      activeSource?.directHeaders,
+      providerProvenance?.provider,
+    ]
   );
 
   /** Audio tracks as the inspection reported them, labelled for the picker. */
@@ -2786,9 +3075,40 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
     const embedded = (prepared?.subtitles ?? []).map((track) => ({
       name: track.label,
       url: track.url,
+      detail: 'in stream',
     }));
-    const combined = [...subtitles, ...embedded, ...fetchedSubtitles];
-    const englishFirst = combined.sort((a, b) => {
+    const combined = [
+      ...subtitles.map((s) => ({ ...s, detail: (s as { name: string; url: string; detail?: string }).detail ?? 'stream' })),
+      ...embedded,
+      ...fetchedSubtitles,
+    ];
+
+    // Disambiguate identical subtitle names (e.g. multiple "English" tracks)
+    const counts = new Map<string, number>();
+    for (const sub of combined) {
+      counts.set(sub.name, (counts.get(sub.name) ?? 0) + 1);
+    }
+    const occurrences = new Map<string, number>();
+    const enriched = combined.map((sub) => {
+      const total = counts.get(sub.name) ?? 0;
+      if (total > 1) {
+        const curr = (occurrences.get(sub.name) ?? 0) + 1;
+        occurrences.set(sub.name, curr);
+        const extra = sub.detail ? ` (${sub.detail})` : ` #${curr}`;
+        return {
+          ...sub,
+          displayName: `${sub.name}${extra}`,
+          detail: sub.detail ?? `#${curr}`,
+        };
+      }
+      return {
+        ...sub,
+        displayName: sub.name,
+        detail: sub.detail,
+      };
+    });
+
+    const englishFirst = enriched.sort((a, b) => {
       const aIsEnglish = /english|eng/i.test(a.name);
       const bIsEnglish = /english|eng/i.test(b.name);
       if (aIsEnglish && !bIsEnglish) return -1;
@@ -2812,11 +3132,49 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
     if (!video) return;
 
     const apply = () => {
+      const selectedSub = allSubtitles.find((s) => s.url === activeSubtitle);
+      let applied = false;
+
+      // 1. DOM <track> elements
+      const elements = Array.from(video.querySelectorAll('track'));
+      const handledTracks = new Set<TextTrack>();
+
+      for (const el of elements) {
+        if (!el.track) continue;
+        handledTracks.add(el.track);
+        const isUrlMatch = Boolean(
+          activeSubtitle &&
+            (el.getAttribute('src') === activeSubtitle || el.src === activeSubtitle)
+        );
+        const match = !applied && isUrlMatch;
+        if (match) {
+          el.track.mode = 'showing';
+          applied = true;
+        } else {
+          el.track.mode = 'disabled';
+        }
+      }
+
+      // 2. Embedded in-stream text tracks not represented by <track> elements
       const tracks = video.textTracks;
       for (let i = 0; i < tracks.length; i++) {
         const track = tracks[i];
-        const source = allSubtitles[i];
-        track.mode = source && source.url === activeSubtitle ? 'showing' : 'disabled';
+        if (handledTracks.has(track)) continue;
+        const match =
+          !applied &&
+          Boolean(
+            activeSubtitle &&
+              selectedSub &&
+              (track.label === selectedSub.name ||
+                track.label === activeSubtitle ||
+                (track.language && selectedSub.name.toLowerCase() === track.language.toLowerCase()))
+          );
+        if (match) {
+          track.mode = 'showing';
+          applied = true;
+        } else {
+          track.mode = 'disabled';
+        }
       }
     };
 
@@ -2825,6 +3183,149 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
     video.textTracks.addEventListener?.('addtrack', apply);
     return () => video.textTracks.removeEventListener?.('addtrack', apply);
   }, [activeSubtitle, allSubtitles]);
+
+  /**
+   * Subtitle timing. `TextTrack` has no delay property, so every cue is moved,
+   * measured from its original times (kept in a WeakMap so repeated nudges do
+   * not accumulate drift). Cues arrive only once a `<track>` loads, hence the
+   * `load` listeners. mpv has `sub-delay` and is simply told.
+   */
+  const [subtitleDelay, setSubtitleDelay] = useState(0);
+  const cueOrigins = useRef(new WeakMap<TextTrackCue, [number, number]>());
+  useEffect(() => {
+    if (isNativeEngine) {
+      void window.cloudstream?.mpvSetSubtitleDelay(subtitleDelay);
+      return;
+    }
+    const video = videoRef.current;
+    if (!video) return;
+    const shift = () => {
+      const tracks = video.textTracks;
+      for (let i = 0; i < tracks.length; i++) {
+        const cues = tracks[i].cues;
+        if (!cues) continue;
+        for (let j = 0; j < cues.length; j++) {
+          const cue = cues[j];
+          let origin = cueOrigins.current.get(cue);
+          if (!origin) {
+            origin = [cue.startTime, cue.endTime];
+            cueOrigins.current.set(cue, origin);
+          }
+          cue.startTime = Math.max(0, origin[0] + subtitleDelay);
+          cue.endTime = Math.max(0, origin[1] + subtitleDelay);
+        }
+      }
+    };
+    shift();
+    const elements = Array.from(video.querySelectorAll('track'));
+    elements.forEach((el) => el.addEventListener('load', shift));
+    return () => elements.forEach((el) => el.removeEventListener('load', shift));
+  }, [subtitleDelay, activeSubtitle, allSubtitles, isNativeEngine]);
+
+  // A new film or episode starts in sync; an offset is a property of one file.
+  useEffect(() => {
+    setSubtitleDelay(0);
+  }, [title, subtitleContext?.season, subtitleContext?.episode]);
+
+  /**
+   * Picks a subtitle on its own when nothing has been chosen: the stream's own
+   * track in the preferred language first, then one saved on disk for this
+   * title, then an online search. English unless the viewer chose otherwise;
+   * a viewer who turned subtitles off is left alone. Runs once per title and
+   * episode, and a failure only means no subtitle — playback never waits on it.
+   */
+  const autoSubtitleKey = useRef<string | null>(null);
+  // Read at check time, not effect time: the online search lands after the
+  // duration is known even when `prepared` arrives before it.
+  const subtitleDurationRef = useRef(0);
+  subtitleDurationRef.current = duration;
+  useEffect(() => {
+    if (!prepared || activeSubtitle || subtitlesOff.current || !title) return;
+    const key = `${title}|${subtitleContext?.season ?? ''}|${subtitleContext?.episode ?? ''}`;
+    if (autoSubtitleKey.current === key) return;
+    autoSubtitleKey.current = key;
+
+    const wanted = (preferredSubtitleLanguage.current || 'English').toLowerCase();
+    const matches = (label: string) => {
+      const l = label.toLowerCase();
+      return l.startsWith(wanted) || (wanted === 'english' && /\b(eng|english|en)\b/.test(l));
+    };
+    const pick = (url: string, label: string) => {
+      setFetchedSubtitles((prev) => (prev.some((s) => s.url === url) ? prev : [...prev, { name: label, url }]));
+      setActiveSubtitle(url);
+      if (isNativeEngine) void window.cloudstream?.mpvAddSubtitle(url, label);
+    };
+
+    const inStream = allSubtitles.find((s) => matches(s.name));
+    if (inStream) {
+      setActiveSubtitle(inStream.url);
+      if (isNativeEngine) void window.cloudstream?.mpvAddSubtitle(inStream.url, inStream.name);
+      return;
+    }
+
+    let cancelled = false;
+    void (async () => {
+      const api = window.cloudstream;
+      if (!api) return;
+      const { season, episode, imdbId } = subtitleContext ?? {};
+      const saved = await api.listSavedSubtitles(title, progress?.year, season, episode).catch(() => null);
+      const local = saved?.entries.find((e) => matches(e.langName));
+      if (local) {
+        const read = await api.readSavedSubtitle(local.id);
+        if (!cancelled && read.ok && read.vtt) {
+          pick(URL.createObjectURL(new Blob([read.vtt], { type: 'text/vtt' })), local.langName);
+        }
+        return;
+      }
+      /**
+       * One ranked search: the playing release's name, the year and the
+       * language go with it, so the file timed to *this* release comes first
+       * (`subtitleMatch.ts`). It used to search by IMDb id or bare title and
+       * take the first three English files in feed order — on a bad draw all
+       * three were another cut, the duration check refused them, and English
+       * simply did not appear.
+       */
+      const found = await api
+        .findSubtitles({
+          imdbId,
+          title,
+          year: progress?.year,
+          season,
+          episode,
+          mediaUrl: progress?.mediaUrl,
+          languages: wanted === 'english' ? ['eng'] : [],
+          releaseName: activeSource?.title,
+        })
+        .catch(() => null);
+      const candidates = (found?.results ?? []).filter((r) => matches(r.langName)).slice(0, 5);
+      // The first that fits closely wins; failing that, the closest that fits
+      // at all. A refused file can still be picked by hand from the panel.
+      let fallback: { vtt: string; label: string; closeness: number } | null = null;
+      for (const best of candidates) {
+        if (cancelled) return;
+        const fetched = await api.fetchSubtitle(best.url).catch(() => null);
+        if (cancelled || !fetched?.ok || !fetched.vtt) continue;
+        if (!subtitleFitsMedia(fetched.vtt, subtitleDurationRef.current)) continue;
+        const closeness = durationCloseness(fetched.vtt, subtitleDurationRef.current);
+        if (closeness >= 0.9 || subtitleDurationRef.current <= 0) {
+          pick(URL.createObjectURL(new Blob([fetched.vtt], { type: 'text/vtt' })), best.langName);
+          return;
+        }
+        if (!fallback || closeness > fallback.closeness) {
+          fallback = { vtt: fetched.vtt, label: best.langName, closeness };
+        }
+      }
+      if (fallback && !cancelled) {
+        pick(URL.createObjectURL(new Blob([fallback.vtt], { type: 'text/vtt' })), fallback.label);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+    // allSubtitles is read once at the moment the stream is prepared; later
+    // additions are the viewer's own choices and must not re-trigger this.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [prepared, title, subtitleContext?.season, subtitleContext?.episode]);
 
   // Blob URLs from the subtitle search are owned by this component; leaking
   // them would pin every subtitle a viewer auditioned for the session's life.
@@ -2835,10 +3336,367 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
     [fetchedSubtitles]
   );
 
+  const lastSelectedSubtitleRef = useRef<string | null>(null);
+
+  const toggleSubtitles = useCallback(() => {
+    if (allSubtitles.length === 0) {
+      notify('No subtitles available');
+      return;
+    }
+    if (activeSubtitle) {
+      lastSelectedSubtitleRef.current = activeSubtitle;
+      setActiveSubtitle(null);
+      if (isNativeEngine) void window.cloudstream?.mpvSetSubtitleTrack(null);
+      notify('Subtitles: Off');
+    } else {
+      const target =
+        (lastSelectedSubtitleRef.current &&
+          allSubtitles.find((s) => s.url === lastSelectedSubtitleRef.current)) ||
+        allSubtitles[0];
+      setActiveSubtitle(target.url);
+      if (isNativeEngine) void window.cloudstream?.mpvAddSubtitle(target.url, target.name);
+      notify(`Subtitles: ${target.name}`);
+    }
+  }, [activeSubtitle, allSubtitles, isNativeEngine, notify]);
+
+  const cycleSubtitles = useCallback(() => {
+    if (allSubtitles.length === 0) {
+      notify('No subtitles available');
+      return;
+    }
+    const currentIndex = allSubtitles.findIndex((s) => s.url === activeSubtitle);
+    if (currentIndex === -1) {
+      const first = allSubtitles[0];
+      setActiveSubtitle(first.url);
+      if (isNativeEngine) void window.cloudstream?.mpvAddSubtitle(first.url, first.name);
+      notify(`Subtitles: ${first.name}`);
+    } else if (currentIndex === allSubtitles.length - 1) {
+      lastSelectedSubtitleRef.current = activeSubtitle;
+      setActiveSubtitle(null);
+      if (isNativeEngine) void window.cloudstream?.mpvSetSubtitleTrack(null);
+      notify('Subtitles: Off');
+    } else {
+      const next = allSubtitles[currentIndex + 1];
+      setActiveSubtitle(next.url);
+      if (isNativeEngine) void window.cloudstream?.mpvAddSubtitle(next.url, next.name);
+      notify(`Subtitles: ${next.name}`);
+    }
+  }, [activeSubtitle, allSubtitles, isNativeEngine, notify]);
+
+  const toggleMute = useCallback(() => {
+    setIsMuted((prev) => {
+      const next = !prev;
+      notify(next ? 'Muted' : `Volume: ${Math.round(volume * 100)}%`);
+      return next;
+    });
+  }, [notify, volume]);
+
+  const keyboardStateRef = useRef({
+    togglePlay,
+    seekBy,
+    seekTo,
+    toggleFullscreen,
+    toggleMute,
+    toggleSubtitles,
+    cycleSubtitles,
+    onBack,
+    series,
+    nextEpisode,
+    previousEpisode,
+    onSelectEpisode,
+    panelOpen,
+    sourcePanelOpen,
+    subtitlePanelOpen,
+    downloadPanelOpen,
+    setPanelOpen,
+    setSourcePanelOpen,
+    setSubtitlePanelOpen,
+    setDownloadPanelOpen,
+    volume,
+    setVolume,
+    isMuted,
+    setIsMuted,
+    speed,
+    setSpeed,
+    duration,
+    activeSubtitle,
+    setActiveSubtitle,
+    allSubtitles,
+    isNativeEngine,
+    notify,
+    revealControls,
+  });
+
+  keyboardStateRef.current = {
+    togglePlay,
+    seekBy,
+    seekTo,
+    toggleFullscreen,
+    toggleMute,
+    toggleSubtitles,
+    cycleSubtitles,
+    onBack,
+    series,
+    nextEpisode,
+    previousEpisode,
+    onSelectEpisode,
+    panelOpen,
+    sourcePanelOpen,
+    subtitlePanelOpen,
+    downloadPanelOpen,
+    setPanelOpen,
+    setSourcePanelOpen,
+    setSubtitlePanelOpen,
+    setDownloadPanelOpen,
+    volume,
+    setVolume,
+    isMuted,
+    setIsMuted,
+    speed,
+    setSpeed,
+    duration,
+    activeSubtitle,
+    setActiveSubtitle,
+    allSubtitles,
+    isNativeEngine,
+    notify,
+    revealControls,
+  };
+
+  useEffect(() => {
+    // Still mounted, but the viewer is looking at another screen. Leaving this
+    // bound would make typing in a search box seek the film.
+    //
+    // The mini player is disarmed for the same reason and it matters more
+    // there: it is *visible*, so it looks like it has focus, and the whole
+    // point of it is that the viewer is typing somewhere else. A space bar in
+    // the search box must not pause the film.
+    if (hidden || mini) return;
+
+    const onKey = (e: KeyboardEvent) => {
+      const state = keyboardStateRef.current;
+      const target = e.target as HTMLElement | null;
+
+      // True text input detection: range sliders, checkboxes, radios, and buttons are NOT text input fields.
+      const isTextInput = (el: HTMLElement | null): boolean => {
+        if (!el) return false;
+        if (el.isContentEditable) return true;
+        const tag = el.tagName;
+        if (tag === 'TEXTAREA' || tag === 'SELECT') return true;
+        if (tag === 'INPUT') {
+          const type = (el as HTMLInputElement).type?.toLowerCase();
+          return type !== 'range' && type !== 'checkbox' && type !== 'radio' && type !== 'button';
+        }
+        return false;
+      };
+
+      if (isTextInput(target)) {
+        if (e.key === 'Escape') {
+          target?.blur();
+        }
+        return;
+      }
+
+      // If a button or range slider currently has focus, blur it so browser default doesn't hijack player shortcuts
+      if (
+        target &&
+        (target.tagName === 'BUTTON' ||
+          (target.tagName === 'INPUT' && (target as HTMLInputElement).type === 'range'))
+      ) {
+        target.blur();
+        containerRef.current?.focus();
+      }
+
+      switch (e.key) {
+        case ' ':
+        case 'k':
+        case 'K':
+          e.preventDefault();
+          state.togglePlay();
+          state.revealControls();
+          break;
+        case 'ArrowRight':
+        case 'l':
+        case 'L':
+          e.preventDefault();
+          state.seekBy(SKIP_SECONDS);
+          state.revealControls();
+          break;
+        case 'ArrowLeft':
+        case 'j':
+        case 'J':
+          e.preventDefault();
+          state.seekBy(-SKIP_SECONDS);
+          state.revealControls();
+          break;
+        case 'ArrowUp': {
+          e.preventDefault();
+          const next = Math.min(1, Math.round((state.volume + 0.05) * 100) / 100);
+          state.setVolume(next);
+          if (state.isMuted) state.setIsMuted(false);
+          state.notify(`Volume: ${Math.round(next * 100)}%`);
+          state.revealControls();
+          break;
+        }
+        case 'ArrowDown': {
+          e.preventDefault();
+          const next = Math.max(0, Math.round((state.volume - 0.05) * 100) / 100);
+          state.setVolume(next);
+          if (next === 0) state.setIsMuted(true);
+          state.notify(next === 0 ? 'Muted' : `Volume: ${Math.round(next * 100)}%`);
+          state.revealControls();
+          break;
+        }
+        case 'm':
+        case 'M':
+          e.preventDefault();
+          state.toggleMute();
+          state.revealControls();
+          break;
+        case 'f':
+        case 'F':
+          e.preventDefault();
+          state.toggleFullscreen();
+          state.revealControls();
+          break;
+        case 'c':
+        case 'C':
+          e.preventDefault();
+          state.toggleSubtitles();
+          state.revealControls();
+          break;
+        case 'v':
+        case 'V':
+          e.preventDefault();
+          state.cycleSubtitles();
+          state.revealControls();
+          break;
+        case '0':
+        case '1':
+        case '2':
+        case '3':
+        case '4':
+        case '5':
+        case '6':
+        case '7':
+        case '8':
+        case '9': {
+          e.preventDefault();
+          const pct = Number(e.key) / 10;
+          const targetTime = state.duration * pct;
+          state.seekTo(targetTime);
+          state.notify(`${Math.round(pct * 100)}%`);
+          state.revealControls();
+          break;
+        }
+        case 'Home':
+          e.preventDefault();
+          state.seekTo(0);
+          state.notify('0:00');
+          state.revealControls();
+          break;
+        case 'End':
+          e.preventDefault();
+          if (state.duration > 0) {
+            state.seekTo(Math.max(0, state.duration - 1));
+          }
+          state.revealControls();
+          break;
+        case '>':
+        case '.':
+        case ']': {
+          e.preventDefault();
+          const currentIndex = SPEEDS.findIndex((s) => Math.abs(s - state.speed) < 0.05);
+          const nextIndex = currentIndex >= 0 && currentIndex < SPEEDS.length - 1 ? currentIndex + 1 : currentIndex;
+          const nextSpeed = SPEEDS[nextIndex] ?? state.speed;
+          state.setSpeed(nextSpeed);
+          state.notify(`Speed: ${nextSpeed}×`);
+          state.revealControls();
+          break;
+        }
+        case '<':
+        case ',':
+        case '[': {
+          e.preventDefault();
+          const currentIndex = SPEEDS.findIndex((s) => Math.abs(s - state.speed) < 0.05);
+          const prevIndex = currentIndex > 0 ? currentIndex - 1 : 0;
+          const prevSpeed = SPEEDS[prevIndex] ?? state.speed;
+          state.setSpeed(prevSpeed);
+          state.notify(`Speed: ${prevSpeed}×`);
+          state.revealControls();
+          break;
+        }
+        case 's':
+        case 'S':
+          e.preventDefault();
+          state.setSubtitlePanelOpen((v) => !v);
+          state.revealControls();
+          break;
+        case 'e':
+        case 'E':
+          if (state.series) {
+            e.preventDefault();
+            state.setPanelOpen((v) => !v);
+            state.revealControls();
+          }
+          break;
+        case 'n':
+        case 'N':
+          if (state.nextEpisode && state.onSelectEpisode) {
+            e.preventDefault();
+            state.onSelectEpisode(state.nextEpisode);
+          }
+          break;
+        case 'p':
+        case 'P':
+          if (state.previousEpisode && state.onSelectEpisode) {
+            e.preventDefault();
+            state.onSelectEpisode(state.previousEpisode);
+          }
+          break;
+        case 'Escape':
+          if (state.panelOpen || state.sourcePanelOpen || state.subtitlePanelOpen || state.downloadPanelOpen) {
+            state.setPanelOpen(false);
+            state.setSourcePanelOpen(false);
+            state.setSubtitlePanelOpen(false);
+            state.setDownloadPanelOpen(false);
+          } else if (document.fullscreenElement) {
+            void document.exitFullscreen().catch(() => {});
+          } else {
+            state.onBack();
+          }
+          break;
+        default:
+          break;
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [hidden, mini]);
+
+  useEffect(() => {
+    if (!hidden && !mini) {
+      containerRef.current?.focus();
+    }
+  }, [hidden, mini]);
+
   // Close any open side-panel when the user clicks outside it on the player, and reveal controls.
   const handlePlayerPointerDown = useCallback(
     (e: React.PointerEvent<HTMLDivElement>) => {
       revealControls(e);
+      if (
+        document.activeElement &&
+        document.activeElement !== containerRef.current &&
+        !document.activeElement.closest('.player-panel')
+      ) {
+        if (
+          document.activeElement.tagName === 'BUTTON' ||
+          (document.activeElement.tagName === 'INPUT' && (document.activeElement as HTMLInputElement).type === 'range')
+        ) {
+          (document.activeElement as HTMLElement).blur();
+        }
+        containerRef.current?.focus();
+      }
       if (!panelOpen && !sourcePanelOpen && !subtitlePanelOpen && !downloadPanelOpen) return;
       const target = e.target as HTMLElement;
       // If the click is inside a .player-panel element, leave it open.
@@ -2875,6 +3733,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
   return (
     <div
       ref={containerRef}
+      tabIndex={-1}
       className={
         `player${controlsVisible || keepControls ? '' : ' player--idle'}` +
         (mini ? ' player--mini' : '') +
@@ -2888,7 +3747,10 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
           dropped.
         */
         (mini && floatingMode === 'background' ? ' player--audio-only' : '') +
-        (mini && miniFrame.isDragging ? ' player--dragging' : '')
+        (mini && miniFrame.isDragging ? ' player--dragging' : '') +
+        (mini && miniFrame.isResizing && miniFrame.resizeDirection
+          ? ` player--resizing player--resizing-${miniFrame.resizeDirection}`
+          : '')
       }
       // `display: none` rather than unmounting: see the `hidden` prop. The
       // element keeps its buffer, its position and its decoder.
@@ -3046,9 +3908,15 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
               onPointerDown={(e) => e.stopPropagation()}
               aria-label="Volume"
             />
-            <span className="player-mini__time">
-              {formatTimecode(currentTime)} / {formatTimecode(duration)}
-            </span>
+            <button
+              type="button"
+              className="player-mini__time player__time-toggle"
+              onClick={toggleTimeMode}
+              onPointerDown={(e) => e.stopPropagation()}
+              title={timeMode === 'total' ? 'Show remaining time' : 'Show total time'}
+            >
+              {formatTimecode(currentTime)} / {rightHandLabel}
+            </button>
             <div className="player-mini__spacer" />
             {floating.isPipSupported && (
               <button
@@ -3078,12 +3946,53 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
             )}
           </div>
 
-          {/* Top-left resize handle: a window parked in the corner
-              of the screen has its bottom-right corner against the edge. */}
+          {/* Windows-style resizable corners and edges for mini player */}
           <div
-            className="player-mini__resize"
-            onPointerDown={miniFrame.startResize}
-            title="Drag to resize"
+            className="player-mini__resize player-mini__resize--nw"
+            onPointerDown={miniFrame.startResize('nw')}
+            title="Resize (Top-Left)"
+            role="presentation"
+          />
+          <div
+            className="player-mini__resize player-mini__resize--ne"
+            onPointerDown={miniFrame.startResize('ne')}
+            title="Resize (Top-Right)"
+            role="presentation"
+          />
+          <div
+            className="player-mini__resize player-mini__resize--sw"
+            onPointerDown={miniFrame.startResize('sw')}
+            title="Resize (Bottom-Left)"
+            role="presentation"
+          />
+          <div
+            className="player-mini__resize player-mini__resize--se"
+            onPointerDown={miniFrame.startResize('se')}
+            title="Resize (Bottom-Right)"
+            role="presentation"
+          />
+          <div
+            className="player-mini__resize-edge player-mini__resize-edge--n"
+            onPointerDown={miniFrame.startResize('n')}
+            title="Resize (Top)"
+            role="presentation"
+          />
+          <div
+            className="player-mini__resize-edge player-mini__resize-edge--s"
+            onPointerDown={miniFrame.startResize('s')}
+            title="Resize (Bottom)"
+            role="presentation"
+          />
+          <div
+            className="player-mini__resize-edge player-mini__resize-edge--w"
+            onPointerDown={miniFrame.startResize('w')}
+            title="Resize (Left)"
+            role="presentation"
+          />
+          <div
+            className="player-mini__resize-edge player-mini__resize-edge--e"
+            onPointerDown={miniFrame.startResize('e')}
+            title="Resize (Right)"
             role="presentation"
           />
         </>
@@ -3092,8 +4001,6 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
         ref={videoRef}
         className={`player__video player__video--${aspect}`}
         playsInline
-        onClick={togglePlay}
-        onDoubleClick={toggleFullscreen}
         crossOrigin="anonymous"
       >
         {/* Selection is driven by TextTrack.mode in the effect above, not by
@@ -3102,6 +4009,16 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
           <track key={sub.url} kind="subtitles" label={sub.name} src={sub.url} />
         ))}
       </video>
+
+      {/* Full-bleed click surface that cleanly delegates single-click play/pause and double-click fullscreen */}
+      {!mini && (
+        <div
+          className="player__click-surface"
+          onClick={handleSurfaceClick}
+          onDoubleClick={handleSurfaceDoubleClick}
+          role="presentation"
+        />
+      )}
 
       {/*
         One stack per anchor, laid out in flow.
@@ -3172,8 +4089,14 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
             // Feeds the same state the `<video>` path writes, so the existing
             // save interval, the resume point and the up-next card all work
             // without knowing which engine produced the numbers.
-            setCurrentTime(position);
-            if (total > 0) setDuration(total);
+            currentPositionRef.current = position;
+            if (pendingSeekTargetRef.current === null) {
+              setCurrentTime(position);
+            }
+            if (total > 0) {
+              setDuration(total);
+              durationRef.current = total;
+            }
           }}
           /* The player's control bar is the only transport for this engine, and
              it has no element to learn from — so the engine tells it. Without
@@ -3184,6 +4107,10 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
             if (nextEpisode && onSelectEpisode && !upNextDismissed) onSelectEpisode(nextEpisode);
           }}
           onFallbackToBuiltIn={() => forceTranscodeRef.current?.()}
+          onFindSubtitles={() => {
+            setSubtitlePanelOpen(true);
+            revealControls();
+          }}
           onError={(message) => setError(message)}
           /* The engine is playing. Whatever raised the panel — this engine's own
              earlier attempt, or the rung of the ladder that handed the source
@@ -3395,10 +4322,19 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
 
       <header
         className={`player__top${controlsVisible || keepControls ? '' : ' hidden'}`}
+        onPointerDown={(e) => e.stopPropagation()}
+        onClick={(e) => e.stopPropagation()}
         onMouseEnter={() => setIsHoveringControls(true)}
         onMouseLeave={() => setIsHoveringControls(false)}
       >
-        <button className="icon-button" onClick={onBack} aria-label="Back">
+        <button
+          className="icon-button"
+          onClick={(e) => {
+            e.stopPropagation();
+            onBack();
+          }}
+          aria-label="Back"
+        >
           <ArrowLeft size={22} />
         </button>
         {/*
@@ -3411,7 +4347,8 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
         {onMinimize && (
           <button
             className="icon-button"
-            onClick={() => {
+            onClick={(e) => {
+              e.stopPropagation();
               /**
                * Minimise means whatever the preference says it means.
                *
@@ -3451,7 +4388,10 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
         {floating.isPipSupported && (
           <button
             className={`icon-button${floating.isPip ? ' icon-button--on' : ''}`}
-            onClick={() => void floating.togglePip()}
+            onClick={(e) => {
+              e.stopPropagation();
+              void floating.togglePip();
+            }}
             aria-label={floating.isPip ? 'Close the floating window' : 'Open in a floating window'}
             title={
               floating.isPip
@@ -3612,17 +4552,28 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
             </div>
           )}
         </div>
-        {stats && (
-          <div className="player__stats">
-            {isDeveloper && (
-              <span title="Peers"><Users size={14} /> {stats.peers}</span>
-            )}
-            {/* The rate stays in both modes: it is how fast the film is
-                arriving, which is a fact about their evening rather than about
-                our swarm. */}
-            <span title="Download speed"><Gauge size={14} /> {formatTransferRate(stats.downloadSpeed)}</span>
-          </div>
-        )}
+        <div className="player__top-right">
+          {incognito && (
+            <div
+              className="player__incognito-badge"
+              title="Incognito Mode: Playback progress and history are not saved"
+            >
+              <EyeOff size={13} />
+              <span>Incognito</span>
+            </div>
+          )}
+          {stats && (
+            <div className="player__stats">
+              {isDeveloper && (
+                <span title="Peers"><Users size={14} /> {stats.peers}</span>
+              )}
+              {/* The rate stays in both modes: it is how fast the film is
+                  arriving, which is a fact about their evening rather than about
+                  our swarm. */}
+              <span title="Download speed"><Gauge size={14} /> {formatTransferRate(stats.downloadSpeed)}</span>
+            </div>
+          )}
+        </div>
       </header>
 
       {showUpNext && nextEpisode && (
@@ -3691,9 +4642,9 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
         embedded={subtitles}
         activeUrl={activeSubtitle}
         onClose={() => setSubtitlePanelOpen(false)}
-        onSelect={(url, label) => {
+        onSelect={(url, label, detail) => {
           if (url && !allSubtitles.some((s) => s.url === url)) {
-            setFetchedSubtitles((prev) => [...prev, { name: label, url }]);
+            setFetchedSubtitles((prev) => [...prev, { name: label, url, detail }]);
           }
           setActiveSubtitle(url);
 
@@ -3713,7 +4664,12 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
           const language = url ? label?.split(/[^A-Za-z]+/)[0] ?? '' : '';
           void window.cloudstream?.setPlayerPreferences({ subtitleLanguage: language });
           preferredSubtitleLanguage.current = language || null;
+          subtitlesOff.current = !url;
         }}
+        year={progress?.year}
+        releaseName={activeSource?.title}
+        delay={subtitleDelay}
+        onDelayChange={setSubtitleDelay}
       />
 
       <PlayerDownloadPanel
@@ -3736,6 +4692,8 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
 
       <footer
         className={`player__controls${controlsVisible || keepControls ? '' : ' hidden'}`}
+        onPointerDown={(e) => e.stopPropagation()}
+        onClick={(e) => e.stopPropagation()}
         onMouseEnter={() => setIsHoveringControls(true)}
         onMouseLeave={() => setIsHoveringControls(false)}
       >
@@ -3745,6 +4703,11 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
           onMouseMove={onSeekHover}
           onMouseLeave={onSeekLeave}
           onClick={onSeekClick}
+          onPointerDown={() => {
+            setIsInteracting(true);
+            revealControls();
+          }}
+          onPointerUp={() => setIsInteracting(false)}
         >
           {/* The full timeline, so the ungathered part of the film is still
               represented on screen rather than simply absent. */}
@@ -3775,6 +4738,17 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
                 </div>
               )}
               <span>{formatTimecode(hoverTime)}</span>
+              {Math.abs(hoverTime - currentTime) >= 2 && (
+                <span className="player__preview-delta">
+                  {formatDeltaSeconds(hoverTime - currentTime)}
+                </span>
+              )}
+              {/* Whether a seek here lands in what is already banked (PRD-051 §31). */}
+              {hoverTime >= currentTime && buffered > currentTime && (
+                <span className="player__preview-buffer">
+                  {hoverTime <= buffered ? 'Buffered' : `Buffered to ${formatTimecode(buffered)}`}
+                </span>
+              )}
             </div>
           )}
 
@@ -3784,8 +4758,30 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
             min={0}
             max={duration || 0}
             step={0.1}
-            value={currentTime}
-            onChange={(e) => seekTo(Number(e.target.value))}
+            value={effectiveTime}
+            onPointerDown={(e) => {
+              e.stopPropagation();
+              setIsInteracting(true);
+              setScrubbingTime(Number((e.target as HTMLInputElement).value));
+              revealControls();
+            }}
+            onInput={(e) => {
+              const val = Number((e.target as HTMLInputElement).value);
+              setScrubbingTime(val);
+              revealControls();
+            }}
+            onPointerUp={(e) => {
+              setIsInteracting(false);
+              const val = Number((e.target as HTMLInputElement).value);
+              seekTo(val);
+              setScrubbingTime(null);
+            }}
+            onChange={(e) => {
+              const val = Number(e.target.value);
+              seekTo(val);
+              setScrubbingTime(null);
+              revealControls();
+            }}
             aria-label="Seek"
           />
         </div>
@@ -3794,7 +4790,11 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
           {series && (
             <button
               className="icon-button"
-              onClick={() => previousEpisode && onSelectEpisode?.(previousEpisode)}
+              onClick={(e) => {
+                e.stopPropagation();
+                if (previousEpisode && onSelectEpisode) onSelectEpisode(previousEpisode);
+                revealControls();
+              }}
               disabled={!previousEpisode}
               aria-label="Previous episode"
               title="Previous episode (P)"
@@ -3805,7 +4805,11 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
 
           <button
             className="icon-button"
-            onClick={() => seekBy(-SKIP_SECONDS)}
+            onClick={(e) => {
+              e.stopPropagation();
+              seekBy(-SKIP_SECONDS);
+              revealControls();
+            }}
             aria-label={`Back ${SKIP_SECONDS} seconds`}
             title={`Back ${SKIP_SECONDS}s (←)`}
           >
@@ -3813,13 +4817,25 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
             <span className="icon-button__badge">{SKIP_SECONDS}</span>
           </button>
 
-          <button className="icon-button" onClick={togglePlay} aria-label={isPlaying ? 'Pause' : 'Play'}>
+          <button
+            className="icon-button"
+            onClick={(e) => {
+              e.stopPropagation();
+              togglePlay();
+              revealControls();
+            }}
+            aria-label={isPlaying ? 'Pause' : 'Play'}
+          >
             {isPlaying ? <Pause size={20} /> : <Play size={20} />}
           </button>
 
           <button
             className="icon-button"
-            onClick={() => seekBy(SKIP_SECONDS)}
+            onClick={(e) => {
+              e.stopPropagation();
+              seekBy(SKIP_SECONDS);
+              revealControls();
+            }}
             aria-label={`Forward ${SKIP_SECONDS} seconds`}
             title={`Forward ${SKIP_SECONDS}s (→)`}
           >
@@ -3830,7 +4846,11 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
           {series && (
             <button
               className="icon-button"
-              onClick={() => nextEpisode && onSelectEpisode?.(nextEpisode)}
+              onClick={(e) => {
+                e.stopPropagation();
+                if (nextEpisode && onSelectEpisode) onSelectEpisode(nextEpisode);
+                revealControls();
+              }}
               disabled={!nextEpisode}
               aria-label="Next episode"
               title="Next episode (N)"
@@ -3839,11 +4859,29 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
             </button>
           )}
 
-          <span className="player__time">
-            {formatTimecode(currentTime)} / {formatTimecode(duration)}
-          </span>
+          <button
+            type="button"
+            className="player__time player__time-toggle"
+            onClick={toggleTimeMode}
+            title={timeMode === 'total' ? 'Show remaining time' : 'Show total time'}
+          >
+            {formatTimecode(currentTime)} / {rightHandLabel}
+          </button>
+          {bufferAhead && (
+            <span className="player__buffer-ahead" title="Buffered ahead of the playhead">
+              {bufferAhead}
+            </span>
+          )}
 
-          <button className="icon-button" onClick={() => setIsMuted((v) => !v)} aria-label="Mute">
+          <button
+            className="icon-button"
+            onClick={(e) => {
+              e.stopPropagation();
+              setIsMuted((v) => !v);
+              revealControls();
+            }}
+            aria-label="Mute"
+          >
             {isMuted || volume === 0 ? <VolumeX size={18} /> : <Volume2 size={18} />}
           </button>
           <input
@@ -3853,9 +4891,16 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
             max={1}
             step={0.05}
             value={isMuted ? 0 : volume}
+            onPointerDown={(e) => {
+              e.stopPropagation();
+              setIsInteracting(true);
+              revealControls();
+            }}
+            onPointerUp={() => setIsInteracting(false)}
             onChange={(e) => {
               setVolume(Number(e.target.value));
               setIsMuted(false);
+              revealControls();
             }}
             aria-label="Volume"
           />
@@ -3866,7 +4911,11 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
             <button
               className="icon-button"
               data-panel-toggle
-              onClick={() => setPanelOpen((v) => !v)}
+              onClick={(e) => {
+                e.stopPropagation();
+                setPanelOpen((v) => !v);
+                revealControls();
+              }}
               aria-label="Episodes"
               title="Episodes (E)"
             >
@@ -3878,7 +4927,11 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
             <button
               className="icon-button"
               data-panel-toggle
-              onClick={() => setSourcePanelOpen((v) => !v)}
+              onClick={(e) => {
+                e.stopPropagation();
+                setSourcePanelOpen((v) => !v);
+                revealControls();
+              }}
               aria-label="Sources"
               title="Change source"
             >
@@ -3889,26 +4942,14 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
             </button>
           )}
 
-          {/* Subtitle search sits next to the track picker rather than inside
-              it: finding a subtitle and choosing one are different actions, and
-              a hover menu is the wrong shape for a search result list.
-              Optional control: enabled by default, can be hidden via Player Settings. */}
-          {showSubtitlesControl && (
-            <button
-              className="icon-button"
-              data-panel-toggle
-              onClick={() => setSubtitlePanelOpen((v) => !v)}
-              aria-label="Search subtitles"
-              title="Search subtitles online"
-            >
-              <Subtitles size={18} />
-            </button>
-          )}
-
           {/* Button 1: Download Current Media Action Button */}
           <button
             className={`icon-button ${currentDownload ? 'active' : ''}`}
-            onClick={handleDownloadCurrentMedia}
+            onClick={(e) => {
+              e.stopPropagation();
+              void handleDownloadCurrentMedia();
+              revealControls();
+            }}
             aria-label="Download current media"
             title={
               currentDownload
@@ -3960,7 +5001,10 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
               {currentDownload.state === DownloadState.Downloading && (
                 <button
                   style={{ background: 'none', border: 'none', color: '#60a5fa', cursor: 'pointer', display: 'flex', padding: 0 }}
-                  onClick={() => window.cloudstream?.pauseDownload(currentDownload.id)}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    window.cloudstream?.pauseDownload(currentDownload.id);
+                  }}
                   title="Pause Download"
                 >
                   <Pause size={12} />
@@ -3969,7 +5013,10 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
               {(currentDownload.state === DownloadState.Paused || currentDownload.state === DownloadState.Failed) && (
                 <button
                   style={{ background: 'none', border: 'none', color: '#60a5fa', cursor: 'pointer', display: 'flex', padding: 0 }}
-                  onClick={() => window.cloudstream?.resumeDownload(currentDownload.id)}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    window.cloudstream?.resumeDownload(currentDownload.id);
+                  }}
                   title="Resume / Retry Download"
                 >
                   <Play size={12} />
@@ -3982,7 +5029,11 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
           <button
             className={`icon-button ${downloadPanelOpen ? 'active' : ''}`}
             data-panel-toggle
-            onClick={() => setDownloadPanelOpen((v) => !v)}
+            onClick={(e) => {
+              e.stopPropagation();
+              setDownloadPanelOpen((v) => !v);
+              revealControls();
+            }}
             aria-label="Downloads Manager Panel"
             title={
               activeDownloadsCount > 0
@@ -4012,12 +5063,31 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
             )}
           </button>
 
+          {/* Subtitle search sits immediately to the right side of the download panel.
+              Optional control: enabled by default, can be toggled via Player Settings. */}
+          {showSubtitlesControl && (
+            <button
+              className={`icon-button ${subtitlePanelOpen ? 'active' : ''}`}
+              data-panel-toggle
+              onClick={(e) => {
+                e.stopPropagation();
+                setSubtitlePanelOpen((v) => !v);
+                revealControls();
+              }}
+              aria-label="Search subtitles"
+              title="Search subtitles online"
+            >
+              <Subtitles size={18} />
+            </button>
+          )}
+
           {qualities.length > 1 && (
             <HoverMenu
               icon={<Settings2 size={16} />}
               label="Quality"
               value={quality}
               onChange={setQuality}
+              onOpenChange={onMenuOpenChange}
               options={[
                 { value: AUTO_QUALITY, label: 'Auto' },
                 ...qualities.map((q) => ({ value: q.level, label: q.label, detail: q.detail })),
@@ -4030,28 +5100,96 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
               icon={<Subtitles size={16} />}
               label="Subtitles"
               value={activeSubtitle ?? ''}
-              onChange={(next) => setActiveSubtitle(next === '' ? null : String(next))}
-              triggerText={
-                activeSubtitle
-                  ? (allSubtitles.find((s) => s.url === activeSubtitle)?.name ?? 'On')
-                  : 'Off'
-              }
+              onOpenChange={onMenuOpenChange}
+              onChange={(next) => {
+                const url = next === '' ? null : String(next);
+                setActiveSubtitle(url);
+                if (isNativeEngine) {
+                  if (!url) {
+                    void window.cloudstream?.mpvSetSubtitleTrack(null);
+                  } else {
+                    const sub = allSubtitles.find((s) => s.url === url);
+                    void window.cloudstream?.mpvAddSubtitle(url, sub?.name);
+                  }
+                }
+                const label = allSubtitles.find((s) => s.url === url)?.name;
+                const language = url
+                  ? getLanguageName('', label) || (label?.split(/[^A-Za-z]+/)[0] ?? '')
+                  : '';
+                void window.cloudstream?.setPlayerPreferences({ subtitleLanguage: language });
+                preferredSubtitleLanguage.current = language || null;
+                subtitlesOff.current = !url;
+              }}
+              triggerText={(() => {
+                if (!activeSubtitle) return 'Off';
+                const found = allSubtitles.find((s) => s.url === activeSubtitle);
+                if (!found) return 'On';
+                const langName = getLanguageName('', found.name);
+                const flag = getLanguageFlag('', found.name);
+                if (langName) {
+                  const sameLang = allSubtitles.filter(
+                    (s) => getLanguageName('', s.name) === langName
+                  );
+                  const suffix =
+                    sameLang.length > 1 ? ` #${sameLang.indexOf(found) + 1}` : '';
+                  return flag && flag !== '🌐'
+                    ? `${flag} ${langName}${suffix}`
+                    : `${langName}${suffix}`;
+                }
+                const rawName =
+                  (found as { displayName?: string; name: string }).displayName || found.name;
+                const clean = (rawName || '')
+                  .replace(/\.(srt|vtt|sub|ass|ssa|idx)$/i, '')
+                  .replace(/[._]+/g, ' ')
+                  .trim();
+                const shortLabel = clean.length > 18 ? `${clean.slice(0, 16)}…` : clean || 'On';
+                return flag && flag !== '🌐' ? `${flag} ${shortLabel}` : shortLabel;
+              })()}
               options={[
                 { value: '', label: 'Off' },
-                ...allSubtitles.map((sub) => ({ value: sub.url, label: sub.name })),
+                ...allSubtitles.map((sub) => {
+                  const rawName =
+                    (sub as { displayName?: string; name: string }).displayName || sub.name;
+                  const flag = getLanguageFlag('', sub.name || rawName);
+                  return {
+                    value: sub.url,
+                    label: flag && flag !== '🌐' ? `${flag} ${rawName}` : rawName,
+                    detail: (sub as { detail?: string }).detail,
+                  };
+                }),
               ]}
             />
           )}
 
           {/* Probed tracks take precedence over the element's own list: a
               `<video>` does not expose tracks it cannot decode at all, so the
-              AC-3 Japanese dub simply would not appear without the probe. */}
-          {probedAudioTracks.length > 1 ? (
+              AC-3 Japanese dub simply would not appear without the probe.
+              Under the native engine, mpv's own live track list is used directly. */}
+          {isNativeEngine ? (
+            audioTracks.length > 1 && (
+              <HoverMenu
+                icon={<Volume2 size={16} />}
+                label="Audio"
+                value={activeAudioTrack}
+                onChange={(val) => selectAudioTrack(val)}
+                onOpenChange={onMenuOpenChange}
+                triggerText={
+                  audioTracks.find((a) => String(a.id) === String(activeAudioTrack))?.label ?? 'Audio'
+                }
+                options={audioTracks.map((track) => ({
+                  value: track.id,
+                  label: track.label,
+                  detail: track.language ? track.language.toUpperCase() : undefined,
+                }))}
+              />
+            )
+          ) : probedAudioTracks.length > 1 ? (
             <HoverMenu
               icon={<Volume2 size={16} />}
               label="Audio"
               value={selectedAudioIndex}
               onChange={(val) => void selectProbedAudio(Number(val))}
+              onOpenChange={onMenuOpenChange}
               triggerText={
                 probedAudioTracks.find((t) => t.index === selectedAudioIndex)?.label ?? 'Audio'
               }
@@ -4068,6 +5206,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
                 label="Audio"
                 value={activeAudioTrack}
                 onChange={(val) => selectAudioTrack(val)}
+                onOpenChange={onMenuOpenChange}
                 triggerText={
                   audioTracks.find((a) => String(a.id) === String(activeAudioTrack))?.label ?? 'Audio'
                 }
@@ -4085,6 +5224,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
               label="Speed"
               value={speed}
               onChange={setSpeed}
+              onOpenChange={onMenuOpenChange}
               options={SPEEDS.map((s) => ({ value: s, label: `${s}×` }))}
               triggerText={`${speed}×`}
             />
@@ -4095,6 +5235,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
               label="Aspect ratio"
               value={aspect}
               onChange={setAspect}
+              onOpenChange={onMenuOpenChange}
               options={Object.values(AspectRatioMode).map((mode) => ({ value: mode, label: mode }))}
             />
           )}
@@ -4105,6 +5246,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
               label="Native Player"
               value=""
               onChange={(val) => void handleOpenExternalPlayer(String(val))}
+              onOpenChange={onMenuOpenChange}
               options={externalPlayers.map((p) => ({
                 value: p.id,
                 label: p.name,
@@ -4125,6 +5267,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
             activeSource={activeSource}
             allSources={sourceSession?.sources}
             download={currentDownload ?? null}
+            onOpenChange={onMenuOpenChange}
             playerState={() => ({
               position: `${Math.floor(currentTime)}s`,
               duration: duration ? `${Math.floor(duration)}s` : undefined,
@@ -4149,7 +5292,16 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
             }}
           />
 
-          <button className="icon-button" onClick={toggleFullscreen} aria-label="Fullscreen">
+          <button
+            className="icon-button"
+            onClick={(e) => {
+              e.stopPropagation();
+              toggleFullscreen();
+              revealControls();
+            }}
+            aria-label="Fullscreen"
+            title={isFullscreen ? 'Exit Fullscreen (F)' : 'Fullscreen (F)'}
+          >
             {isFullscreen ? <Minimize size={18} /> : <Maximize size={18} />}
           </button>
         </div>

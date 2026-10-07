@@ -171,6 +171,8 @@ export function useExtensionFilters(
     const categoryCounts = new Map<string, number>();
 
     for (const repo of tree) {
+      if (repo.category) bump(categoryCounts, repo.category);
+      if (repo.language) bump(languageCounts, repo.language.toLowerCase());
       for (const extension of repo.extensions) {
         for (const tag of extension.tvTypes ?? []) bump(tagCounts, tag.toUpperCase());
         bump(languageCounts, extension.language?.toLowerCase());
@@ -181,7 +183,10 @@ export function useExtensionFilters(
       for (const tag of plugin.tvTypes ?? []) bump(tagCounts, String(tag).toUpperCase());
       bump(languageCounts, plugin.language?.toLowerCase());
     }
-    for (const repo of officialRepos) bump(categoryCounts, repo.category);
+    for (const repo of officialRepos) {
+      if (repo.category) bump(categoryCounts, repo.category);
+      if (repo.language) bump(languageCounts, repo.language.toLowerCase());
+    }
 
     return {
       tags: toOptions(tagCounts, tagLabel),
@@ -240,6 +245,7 @@ export function useExtensionFilters(
     languages,
     toggleLanguage: (value: string) => toggleIn(languages, setLanguages, value),
     categories,
+    setCategories,
     toggleCategory: (value: string) => toggleIn(categories, setCategories, value),
     facets,
     activeCount,

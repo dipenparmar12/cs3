@@ -241,6 +241,33 @@ async function download(mirrors, target, archiveName) {
       log(`cached ${(fs.statSync(target).size / 1048576).toFixed(1)} MB — ${url}`);
       return true;
     }
+
+    // If no exact mirror URL was found in cache, check if ANY valid cached archive exists for this component
+    if (fs.existsSync(CACHE_DIR)) {
+      const cachedFiles = fs
+        .readdirSync(CACHE_DIR)
+        .filter(
+          (file) =>
+            file.endsWith(`-${archiveName}`) &&
+            fs.statSync(path.join(CACHE_DIR, file)).size > 1024 * 1024
+        )
+        .map((file) => ({
+          path: path.join(CACHE_DIR, file),
+          mtime: fs.statSync(path.join(CACHE_DIR, file)).mtimeMs,
+          size: fs.statSync(path.join(CACHE_DIR, file)).size,
+        }))
+        .sort((a, b) => b.mtime - a.mtime);
+
+      if (cachedFiles.length > 0) {
+        const fallback = cachedFiles[0];
+        fs.mkdirSync(path.dirname(target), { recursive: true });
+        fs.copyFileSync(fallback.path, target);
+        log(
+          `cached ${(fallback.size / 1048576).toFixed(1)} MB — ${path.basename(fallback.path)} (using cached archive)`
+        );
+        return true;
+      }
+    }
   }
 
   for (const url of mirrors) {
@@ -316,6 +343,27 @@ async function download(mirrors, target, archiveName) {
       log(`  ${error instanceof Error ? error.message : String(error)}`);
     }
   }
+
+  // If every mirror failed (network down / mirrors unreachable / rate-limited),
+  // fall back to any valid cached archive for this component.
+  if (!REFRESH && fs.existsSync(CACHE_DIR)) {
+    const cachedFiles = fs.readdirSync(CACHE_DIR)
+      .filter((file) => file.endsWith(`-${archiveName}`) && fs.statSync(path.join(CACHE_DIR, file)).size > 0)
+      .map((file) => ({
+        path: path.join(CACHE_DIR, file),
+        mtime: fs.statSync(path.join(CACHE_DIR, file)).mtimeMs,
+      }))
+      .sort((a, b) => b.mtime - a.mtime);
+
+    if (cachedFiles.length > 0) {
+      const fallback = cachedFiles[0];
+      fs.mkdirSync(path.dirname(target), { recursive: true });
+      fs.copyFileSync(fallback.path, target);
+      log(`reusing previously cached ${(fs.statSync(target).size / 1048576).toFixed(1)} MB archive from ${path.basename(fallback.path)} (all mirrors unreachable)`);
+      return true;
+    }
+  }
+
   return false;
 }
 
@@ -326,6 +374,21 @@ async function download(mirrors, target, archiveName) {
  */
 async function resolveMirrors(component) {
   if (!component.release) return component.mirrors;
+  // If we already have a valid cached archive for this component, reuse it rather than
+  // querying GitHub API for continuously rolling git tags.
+  if (!REFRESH && fs.existsSync(CACHE_DIR)) {
+    const hasCached = fs
+      .readdirSync(CACHE_DIR)
+      .some(
+        (file) =>
+          file.endsWith(`-${component.archive}`) &&
+          fs.statSync(path.join(CACHE_DIR, file)).size > 1024 * 1024
+      );
+    if (hasCached) {
+      return component.mirrors;
+    }
+  }
+
   try {
     const response = await fetch(component.release, {
       headers: { Accept: 'application/vnd.github+json', 'User-Agent': 'cloudstream-desktop-packager' },
@@ -472,7 +535,6 @@ function verify(entries) {
 // --- main ------------------------------------------------------------------
 
 console.log(`\nStaging the media runtime for ${key} into cs3_windows/media-runtime/\n`);
-fs.rmSync(OUT_DIR, { recursive: true, force: true });
 fs.mkdirSync(OUT_DIR, { recursive: true });
 fs.mkdirSync(WORK_DIR, { recursive: true });
 
@@ -516,4 +578,17 @@ if (problems.length > 0) {
   console.warn('  Continuing anyway because --allow-missing was passed.\n');
 } else {
   log('media runtime complete\n');
+  const stampFile = path.join(OUT_DIR, '.staged');
+  fs.writeFileSync(
+    stampFile,
+    JSON.stringify(
+      {
+        stagedAt: new Date().toISOString(),
+        platform: key,
+        files: results.flatMap((result) => result.staged ?? []),
+      },
+      null,
+      2
+    )
+  );
 }

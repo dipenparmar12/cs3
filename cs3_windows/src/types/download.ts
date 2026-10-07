@@ -50,6 +50,8 @@ export interface DownloadTask {
   resolution?: number;
   quality?: string;
   retryCount?: number;
+  /** True when enqueued during an Incognito session so activity history and telemetry are suppressed. */
+  isPrivate?: boolean;
 
   /**
    * Which downloadable variant of the media this is — see

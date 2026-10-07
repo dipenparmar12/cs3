@@ -189,6 +189,11 @@ const compiled = run('java', [
 ]);
 if (compiled.status !== 0) die('Kotlin compilation failed');
 
+// `src/main/resources` — the `META-INF/services` entries the Maven build
+// copies by convention. Without them coroutines never finds `Dispatchers.Main`.
+const resourcesDir = path.join(root, 'sidecar', 'bridge', 'src', 'main', 'resources');
+if (fs.existsSync(resourcesDir)) fs.cpSync(resourcesDir, classesDir, { recursive: true });
+
 const jarred = run('jar', ['--create', '--file', jarPath, '-C', classesDir, '.']);
 if (jarred.status !== 0) die('jar failed');
 

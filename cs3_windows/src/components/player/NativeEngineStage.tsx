@@ -1,7 +1,8 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { Captions, Cpu, Loader2, Maximize, RotateCcw, Volume2 } from 'lucide-react';
+import { Captions, Cpu, Loader2, Maximize, RotateCcw, Video, Volume2 } from 'lucide-react';
 import type { MpvSnapshot, MpvTrack } from '../../types/mpv';
 import type { SourceCapabilityModel } from '../../types/media';
+import { getLanguageFlag } from '../../utils/languageFlag';
 
 /**
  * The player surface for a stream the browser cannot decode.
@@ -50,6 +51,8 @@ interface NativeEngineStageProps {
   onEnded?: () => void;
   /** "Play it here instead" — the ffmpeg ladder, forced. */
   onFallbackToBuiltIn?: () => void;
+  /** Opens the player's online subtitle search. */
+  onFindSubtitles?: () => void;
   onError?: (message: string) => void;
   /**
    * The engine started playing after having reported a failure.
@@ -86,6 +89,7 @@ export const NativeEngineStage: React.FC<NativeEngineStageProps> = ({
   onPausedChange,
   onEnded,
   onFallbackToBuiltIn,
+  onFindSubtitles,
   onError,
   onRecovered,
 }) => {
@@ -276,6 +280,26 @@ export const NativeEngineStage: React.FC<NativeEngineStageProps> = ({
         */}
         {!loading && (
           <div className="native-stage__tracks">
+            {(snapshot?.videoTracks?.length ?? 0) > 1 && (
+              <label className="native-stage__field">
+                <Video size={13} />
+                <select
+                  className="native-stage__select"
+                  value={snapshot?.selectedVideoId ?? ''}
+                  onChange={(event) =>
+                    void window.cloudstream?.mpvSetVideoTrack(Number(event.target.value))
+                  }
+                  aria-label="Video track"
+                >
+                  {snapshot?.videoTracks.map((track, index) => (
+                    <option key={track.id} value={track.id}>
+                      {trackLabel(track, index)}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            )}
+
             {(snapshot?.audioTracks.length ?? 0) > 1 && (
               <label className="native-stage__field">
                 <Volume2 size={13} />
@@ -310,14 +334,36 @@ export const NativeEngineStage: React.FC<NativeEngineStageProps> = ({
                   aria-label="Subtitles"
                 >
                   <option value="">Subtitles off</option>
-                  {snapshot?.subtitleTracks.map((track, index) => (
-                    <option key={track.id} value={track.id}>
-                      {trackLabel(track, index)}
-                      {track.external ? ' (added)' : ''}
-                    </option>
-                  ))}
+                  {snapshot?.subtitleTracks.map((track, index) => {
+                    const label = trackLabel(track, index);
+                    const flag = getLanguageFlag(track.language || '', track.title || label);
+                    const display = flag && flag !== '🌐' ? `${flag} ${label}` : label;
+                    return (
+                      <option key={track.id} value={track.id}>
+                        {display}
+                        {track.external ? ' (added)' : ''}
+                      </option>
+                    );
+                  })}
                 </select>
               </label>
+            )}
+
+            {/*
+              Always offered, not only when the stream carries a track: a stream
+              with no subtitles is exactly when someone needs to search for one,
+              and that search lives in this window, not mpv's. The same panel is
+              reachable from mpv's window with `s`.
+            */}
+            {onFindSubtitles && (
+              <button
+                type="button"
+                className="btn btn-secondary btn-sm"
+                onClick={onFindSubtitles}
+                title="Search subtitles online and load one into the native engine (S in its window)"
+              >
+                <Captions size={14} /> Find subtitles
+              </button>
             )}
 
             <button

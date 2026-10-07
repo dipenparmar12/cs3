@@ -106,8 +106,8 @@ cs3/
 | Build | `cs3_windows/` | `bun run build` (`tsc && vite build`) |
 | Typecheck | `cs3_windows/` | `bun run typecheck` — **`tsc -b`**, see trap below |
 | Lint | `cs3_windows/` | `bunx oxlint` (devDependency; deliberately no `lint` script) |
-| All main-process tests | `cs3_windows/` | `bun run test` / `test:electron` (57 suites) |
-| Fast tests | `cs3_windows/` | `bun run test --fast` (56 suites, ~10s; skips real ffmpeg/mpv) |
+| All main-process tests | `cs3_windows/` | `bun run test` / `test:electron` (suite count: `bun run test --list`) |
+| Fast tests | `cs3_windows/` | `bun run test --fast` (skips real ffmpeg/mpv) |
 | One suite | `cs3_windows/` | `bun run test <name>` — see alias list in `scripts/test-runner.mjs` |
 | Sidecar build | `sidecar/` | `mvn package` → `target/cs3-sidecar.jar` + `lib/` + android shim → `runtime/` |
 | Sidecar tests | `sidecar/` | `mvn test` (50 tests) |
@@ -120,6 +120,8 @@ cs3/
 | Provider end-to-end | root | `node tools/e2e/provider-e2e.mjs` — §5.6 |
 | Vendor stream matrix | root | `node --experimental-strip-types tools/e2e/native-engine-matrix.mjs` — §6.9 |
 | Corpus liveness | root | `node tools/research/survey-repositories.mjs` (PRD-43) |
+| Provider catalogues (`getMainPage`) | root | `node tools/e2e/catalogue-e2e.mjs --installed netflix,prime` — every row of the installed providers via the sidecar, classified OK/MULTI/EMPTY/DROPPED/ERROR; tells provider-side from app-side |
+| Fresh links for a reported title | root | `node tools/e2e/links-e2e.mjs --case "Hindmoviez=Dune Part Two" --out l.json`, then `cs3_windows/node_modules/electron/dist/electron tools/e2e/links-play.cjs l.json` — re-resolves through the installed providers and fetches each link via Electron `net.fetch` (HLS down to a segment), also under the default referrer policy. Issue-file links expire within hours; re-resolve before judging |
 
 Test suites are **auto-discovered** (`*.test.mts`); `PRESET_ALIASES` in `scripts/test-runner.mjs` are just shortcuts. Run `bun run test --list` for the current set rather than trusting a count written here.
 
@@ -177,7 +179,7 @@ It once asked `findRuntimeDir()` where to copy *from* — which answers with the
 2. Provisioning reads from **build locations only** (`findSourceComponents`) and picks **newest, not first** — `sidecar/dist/` is generated *from* `sidecar/runtime/` and goes stale the moment Maven runs again.
 3. Translations drop when the sidecar changes; an absent stamp counts as changed.
 
-**Bump `RUNTIME_GENERATION`** whenever the shim/bridge/translator changes in a way an already-provisioned copy would get wrong (currently **14**; one paragraph per generation in `runtimeProvisioner.ts`). Debugging "a class that should exist doesn't"? Compare `%APPDATA%/<app>/cs3-runtime/runtime/` against `sidecar/runtime/` first.
+**Bump `RUNTIME_GENERATION`** whenever the shim/bridge/translator changes in a way an already-provisioned copy would get wrong (currently **16**; one paragraph per generation in `runtimeProvisioner.ts`). Debugging "a class that should exist doesn't"? Compare `%APPDATA%/<app>/cs3-runtime/runtime/` against `sidecar/runtime/` first.
 
 ---
 
@@ -191,7 +193,7 @@ It once asked `findRuntimeDir()` where to copy *from* — which answers with the
           contextBridge, allow-listed, typed (electron/preload.ts)
 ┌───────────────────────────┴───────────────────────────────┐
 │                MAIN PROCESS (electron/main.ts)            │
-│  wires every service as a singleton, ~70 ipcMain.handle   │
+│  wires every service as a singleton, 334 ipcMain.handle   │
 └─┬────────┬──────────┬───────────┬──────────┬──────────────┘
 Datastore Content   Plugin     Torrent   Download   Library
           Service   Manager    Engine    Service    Store
@@ -205,7 +207,7 @@ Datastore Content   Plugin     Torrent   Download   Library
 
 ### The IPC contract
 
-`electron/preload.ts` is the **only** bridge. `contextIsolation: true`, `nodeIntegration: false`. Namespaces: `api: torrent: playback: search: indexer: sources: download: extension: library: datastore: binary: dialog: pages: natives: ott: issues: profiles: media: mpv: external: player: analytics: bookmarks: discover: subtitles: log: runtime:`.
+`electron/preload.ts` is the **only** bridge. `contextIsolation: true`, `nodeIntegration: false`. 334 channels in 42 namespaces (counted 2026-10-07; full generated table in `docs/docs_cs3/architecture/api-services.md`): `api: torrent: playback: search: indexer: sources: download: extension: library: datastore: binary: dialog: pages: natives: ott: issues: profiles: media: mpv: external: player: analytics: bookmarks: discover: subtitles: log: runtime: history: home: backup: network: ratings: metadata: regions: privacy: interactions: diagnostics: components: videos: window: app: shell:`.
 
 **Four things change together when crossing the boundary:** 1) service in `electron/`, 2) `ipcMain.handle('ns:name', …)` in `main.ts`, 3) method + type in `CloudStreamElectronAPI` in `preload.ts`, 4) caller in `src/`. Shared types live in `src/types/{api,plugin,torrent,download,player,media,mpv}.ts` and are imported by both sides — intentional, not a layering mistake.
 
@@ -220,11 +222,12 @@ Fallible handlers return an **envelope** `{ ok, error?, …payload }` and never 
 | `media:*` | `inspect` classifies without starting; **`prepare` is the only source of a playable URL**; `switchAudio/closeStream` drive a live session; `setCapabilities/getCodecProbes` carry renderer-measured decoder support; `getPlaybackDiagnostics` returns per-attempt telemetry. **No channel hands back an unclassified URL.** Provider-declared `isDash`/`drm` outrank the probe; DRM skips the probe entirely. |
 | `mpv:*` | `open` (prepared URL only), transport/track controls, `mpv:update` snapshots, `get/setPolicy`. No raw-link channel, same reason as `media:*`. |
 | `natives:*` | Built-in provider roster: `list/setEnabled/addAddon/removeAddon` (Stremio addons by manifest URL), `addServer/removeServer` (Jellyfin/Emby — `addServer` takes a key, never returns one). Separate from `extension:*` (an inventory of *downloaded* things) because a compiled-in provider has no repository. |
-| `ott:*` | `listPlatforms/getCatalog/getCatalogPage/getSearchScope/getSuggestions/installSuggestion`. **`installSuggestion` takes a repository id, never a URL** — a URL would let "set up Netflix" install arbitrary code. |
+| `ott:*` | `listPlatforms/getCatalog/getCatalogPage/getSearchScope/getSuggestions/installSuggestion`, plus `getProviderCatalog(platformId, provider, {refresh})` (one provider at a time so the page draws progressively), `listAllPlatforms`, `setPlatformEnabled/setPlatformsEnabled`, `setPinnedPlatforms(ids)` (whole ordered list). **Sidebar visibility:** a stored choice wins; with none, the three listed platforms and every discovered non-adult `ready` platform are shown (`OttService.shownPlatformIds`) — adult ones need an explicit pick. Right-click → Remove stores `false` (hides only; provider stays enabled). Enabled/pinned state lives in the datastore, so the `settings` backup section carries it. `getCatalogPage`/`getProviderCatalog` answer from `CatalogueCache` unless `refresh`. **`installSuggestion` takes a repository id, never a URL** — a URL would let "set up Netflix" install arbitrary code. Only Netflix/Prime Video/Disney+ are hand-listed; every other platform is discovered (`provider:<name>`) from enabled providers with `hasMainPage`, flagged `adult` from the provider's `NSFW` type. |
 | `profiles:*` | `list/activate/create/rename/duplicate/delete`. Every one answers with the **whole** state (list + active id + unnamed draft) — those three must agree and rebuilding from a delta is how they stop agreeing. Profiles sit **above** `SearchScopeStore`; each change resolves to a `SearchScope` and writes it through, so nothing downstream learns profiles exist. `search:setScope` routes through the same layer. |
 | `extension:*` | `addRepository` and `installRepository` are deliberately two actions (fetch+persist vs. tens of downloads/translations). `rollback` restores a replaced archive. **The screen does not call them directly any more**: `enqueueJobs(requests)` queues install/update/add/install-repository and returns the whole queue; `extension:jobsUpdate` pushes it (≤ every 120ms); `cancelJob/cancelQueuedJobs/retryJob/clearFinishedJobs/getJobs`. One job per target — a second press joins it. The direct handlers stay for callers that await one result (OTT setup, bootstrap). |
 | saved searches | `search:saveResults({query, results, providers, indexers})` → `{ok, saved}`; `search:listSaved` (summaries, no rows); `search:getSaved(id)` (re-teaches `ContentService` the rows' alternate routes); `search:removeSaved`. The renderer draws a saved search as a finished `SearchSnapshot` with `savedView` set, so the screen always says it is saved and when. |
-| adult gate | `get/setAdultMode`, `unlock/lockAdultForSession`. `mode` is the setting; `allowed` is whether adult providers are offered *now* (they differ under `ask`). **The unlock is in-memory only and never persisted**; `unlockAdultForSession` refuses unless mode is already `ask`, so a renderer cannot use it to change the setting. |
+| `regions:*` | `get` → `{selected, needsSelection, suggested, regions}`; `set(selection, {crossRegion?})` stores and sets up what it newly calls for in the background (`extension:bootstrapProgress`), returning `affected` — repositories a removed region leaves behind, **for review only, never disabled here** (PRD-54). |
+| adult gate | `get/setAdultMode`, `unlock/lockAdultForSession`. `mode` is the setting; `allowed` is whether adult providers are offered *now* (they differ under `ask`). **The unlock is in-memory only and never persisted**; `unlockAdultForSession` refuses unless mode is already `ask`, so a renderer cannot use it to change the setting. **One source of truth:** `BootstrapService` owns it and `onAdultChange` fires on every mutation (set, unlock, lock, backup restore) → `adult:changed` push → `src/utils/useAdultMode.ts` is the renderer's only copy. Every surface (Settings, Extensions footer, onboarding) uses that hook or `AdultContentSetting`; never keep a local copy or write a boolean (`setAdultAllowed` flattens `ask`). |
 | `download:*` | **`request`** = a button press (reads task state, resumes/recovers/refuses, reports which) vs **`enqueue`** = "create this task". `preview` answers where a file would land, read-only — the renderer cannot compute the path (folder layout, variant segment and collision suffix come from the whole queue). `get/setConfirmPreference` (`ask`\|`immediate`, default `immediate`). |
 | `issues:*` | `list/annotate/report/clear` — the extension issue ledger; a third surface beside `log:*` and `diagnostics:*` (§5.5). |
 | `interactions:*` | **Batched read.** `summarise(queries)` answers one screen's worth of card states in a single call — a join over the library, the outcome ledger, the download queue and the source cache, not a sixth store. `visit(title, year)` records that a details page opened; `clearVisits` is the only control over that ledger. Keyed on the *title* for everything about the work and on the *address* for everything about one source of it — see `cs3/titleInteractions.ts`. |
@@ -339,6 +342,8 @@ rather than omitting the ones nothing serves.
 | `sourceCache.ts` | Per-source expiry: magnets never expire; provider links take a deadline from the URL (`Expires`/`exp`/JWT) or a short TTL. |
 | `subtitleService.ts` | Keyless OpenSubtitles v3 Stremio addon by IMDb id. SubRip→WebVTT is mandatory (`<track>` rejects `.srt` silently). |
 | `subtitles/convert.ts` | SubRip/ASS/SSA → WebVTT + charset detection. |
+| `subtitles/subtitleLibrary.ts` | Subtitles saved for reuse, in `Downloads/CloudStream/Subtitles` as `.vtt`, indexed by work (title+year+season+episode), never by stream URL. Same source twice = reuse unless `refresh`. IPC `subtitles:download/listSaved/readSaved/removeSaved`. The player auto-loads the preferred language (English default; an explicit Off is respected): stream track → saved file → online search, never blocking playback. Timing offset moves cues (element) or sets `sub-delay` (mpv). |
+| `cs3/privacyMode.ts` | Incognito (PRD-52). `isPrivateSession()` is checked **at write time** by every automatic-activity store (history, progress, played source, discovered-source merge, search history, title outcomes, visits, provider analytics) — never a renderer copy. `SourceCache.setVolatileMode` keeps private discovery in memory. Active flag persisted only with `rememberPreference`. IPC `privacy:getState/setActive/updateSettings` + push `privacy:changed` (whole state); File menu + Ctrl+Shift+N. Explicit actions (bookmarks, downloads, subtitle Download) are not gated. |
 | `mediaProxy.ts` | Loopback HTTP with provider headers applied; HLS/DASH manifest rewriting; range handling. |
 | `mediaTranscoder.ts` | Executes a `TransformationPlan` as live fragmented-MP4 on loopback; embedded-subtitle extraction. |
 | `media/mediaInspector.ts` | ffprobe → `MediaMetadata`; transport and DRM from the manifest **body**, never the URL. |
@@ -358,6 +363,7 @@ rather than omitting the ones nothing serves.
 | `cs3/extensionAddress.ts` | `looksLikeLinksHandle` / `looksLikePageAddress` — a links handle is not a page address. |
 | `cs3/webViewHost.ts` | Hidden `BrowserWindow` per resolve; `webRequest` watching; cookies harvested for `CloudflareKiller`. |
 | `cs3/webViewMatch.ts` | What a page's subrequests mean. Pure, tested. |
+| `cs3/clearance.ts` + `clearanceRelay.ts` | Bot-wall clearances owned by the app: the webview partition's cookie jar is the store, one solve per host (single-flight), 10-min cooldown after a failed solve, Chrome-shaped UA. Serves the JVM (`clearance.get/invalidate/fetch`) and the indexer client alike. Pure, tested (`bun run test clearance`). See §5.15. |
 | `cs3/hostDeadline.ts` | How long the host may work on a call the sidecar is waiting on. Pure, tested; **the worker stops before the waiter does**. |
 | `cs3/providerRegistry.ts` | What each archive registered, keyed `size:mtime:generation`; hydrates the provider list without starting the JVM (67s → 8ms). |
 | `cs3/providerRecovery.ts` | `planRecovery` (pure) — ordered steps to make a saved page's provider answer again; never adds an unknown repository. |
@@ -365,6 +371,7 @@ rather than omitting the ones nothing serves.
 | `cs3/archivePlacement.ts` | Replacing an archive Windows still holds: retry the rename, then place beside it and sweep the held copy later. Pure, tested with an injected filesystem. |
 | `cs3/extensionJobs.ts` | The background queue behind the extensions screen: install, update, add repository, install repository (expanded into one install job per extension). 3 at once, one job per target, failures kept with a reason and a retry, whole-state snapshots. Pure apart from the injected runner. |
 | `cs3/starterPlugins.ts` | Which extensions a new install starts with: the viewer's languages, working before beta before slow. Pure, tested. |
+| `cs3/regions.ts` | PRD-54: region table, catalogue `regions`/`languages` (fallback derived from `language` text), selection → add/install plan, removal review, locale suggestion. Pure, tested (`bun run test regions`). |
 | `cs3/rpcResult.ts` | `RpcResult` + `isTransportFailure` — "the runtime never answered" vs "the answer was no". Pure, tested. |
 | `cs3/bootstrap.ts` | First-run bundled-repo install + adult opt-in. |
 | `cs3/diagnostics.ts` | Provider failures with reproducible context (the tuple, not a message). |
@@ -378,7 +385,8 @@ rather than omitting the ones nothing serves.
 | `cs3/titleEnricher.ts` | Messy release titles → canonical works; conservative (a disagreeing year disqualifies). |
 | `cs3/discovery.ts` | Home catalogues: stale-while-revalidate Cinemeta (`top/year/imdbRating`, 19 genres) + AniList. Finds nothing playable. |
 | `cs3/ottPlatforms.ts` | OTT platform table + name-matching rule. Pure, tested. |
-| `cs3/ottService.ts` | Platform table × what's installed: availability, search scope, install offers. |
+| `cs3/ottService.ts` | Platform table × what's installed: availability, search scope, install offers, discovered platforms, pins. |
+| `cs3/catalogueCache.ts` | Provider `getMainPage` answers on disk (`cs3-catalogue-cache.json`), stale-while-revalidate: reads answer from cache, `refresh` re-asks; only successes stored, a failed/empty refresh returns the cached copy, identical in-flight requests shared. Flushed on `before-quit`. |
 | `cs3/nativeProviderRegistry.ts` | Compiled-in provider roster; mirrors `enabledProviderNames` (adult gate + disable cascade). |
 | `cs3/nativeProviders/*` | `types.ts` (`NativeProvider`, `cs3native://`), `internetArchive.ts`, `peerTube.ts`, `iptvOrg.ts`, `stremioAddon.ts`, `jellyfin.ts`. |
 | `cs3/libraryStore.ts` | Watch state, resume progress, library buckets, remembered source choices. |
@@ -451,6 +459,7 @@ rather than omitting the ones nothing serves.
 | `src/views/searchUiState.ts` | `SearchUiState` + `EMPTY_SEARCH_UI`. Its own module because `App` holds the value, and a value import of `SearchView` would have pinned that screen into the first paint. |
 | `src/views/homeCategoryState.ts` | The row opened with "Show all", held by `App` for `searchUiState`'s reason: a title opened from the grid comes back to the same place. |
 | `src/components/home/HomeRow.tsx`, `CategoryGrid.tsx`, `RowPicker.tsx` | A rail capped at `RAIL_LIMIT` (20) that draws only near the viewport; the infinite "Show all" grid; the per-row visibility picker (a hidden row is not fetched). |
+| `src/views/ottRows.ts` | A streaming-service page's rows and what each `getMainPage` answer does to them. Pure, tested. **A provider declaring one unnamed row answers it with its whole home page** (NetMirror/CNC Verse/OttSource: 4–18 named lists, up to 340 items) — each list is its own row, as on Android. Catalogue items may have an empty `name` (poster-only); `mapProviderResults(..., { allowUnnamed })` keeps them for catalogues only. |
 | `src/utils/homeRows.ts` | Hidden-row persistence (reads the old anime switch once) and page merging. Pure, tested. |
 | `src/utils/releaseName.ts` | A file name tidied into a title — strict: cuts only at tokens no real title contains. Shown for rows the catalogues cannot place, and asked of other providers when a search widens. Pure, tested. |
 | `src/components/Poster.tsx`, `EmptyState.tsx` | Shared primitives with per-call-site fallbacks. |
@@ -488,21 +497,22 @@ registered) · `cs3/webViewHost.ts` (Cloudflare challenges) · `cs3/extensionIss
 **Rules:**
 - **Call `ensureProviderActive(name)` before using a provider.** Loading is lazy and per-archive, deduped by an in-flight map.
 - **Provider loading cannot be parallelised** — providers self-register into a global, and overlapping loads steal each other's providers (measured: 176 mis-attributed).
-- **Bump `RUNTIME_GENERATION`** whenever the shim, bridge or translator changes (currently **14**). The app runs a *copy* in `%APPDATA%`, not what you just built.
+- **Bump `RUNTIME_GENERATION`** whenever the shim, bridge or translator changes (currently **16**). The app runs a *copy* in `%APPDATA%`, not what you just built.
 - **`cs3-provider-bridge.jar` must live in `sidecar/runtime/`** — same loader as `library-jvm.jar`, or `BasePlugin` resolves as two different classes.
 - **The sidecar's stdout carries RPC frames and nothing else.** A stray `println` desyncs the channel; logs go to stderr.
 - **Shim rule: concede the type, refuse the operation.** Never widen a parameter or return type to `Object` (it renames the method — `ShimSignatureTest` enforces this); never forge the package name; never fake a platform number.
 - **`PluginHost.call` must catch `LinkageError`, not just `ReflectiveOperationException`** — `Class.getMethod` resolves every public method's types, so one missing class kills a whole extension after it registered.
 - **A provider that works until you press Play** → check `KotlinNameRepair` first (dex2jar corrupts Kotlin mangled names).
 - **Never reintroduce a synthetic or placeholder source.** Empty result plus a reason, always.
-- **The adult gate is `PluginManager.enabledProviderNames`** — the single funnel search, scope, discovery, playback and downloads all pass through.
+- **The adult gate is `PluginManager.enabledProviderNames`** — the single funnel search, scope, discovery, playback and downloads all pass through. It removes only **adult-only** providers (`NSFW` with no general type; `NSFW, Others` counts as adult-only). A **mixed** provider (9kMovies, Mp4Moviez: `Movie, TvSeries, NSFW` — 5 of 22 NSFW providers measured) stays available with adult off; its 18+ rows and explicit titles are screened instead (`src/utils/adultContent.ts`: `screenSections`/`screenLists` in `OttService` *after* the cache, `withoutAdultTitles` on search and recommendations). Upstream publishes no per-row flag — every title in 9kMovies' "18+ Movies" is typed `Movie` — so rows are classified from their own name/handle/titles; patterns are pinned against measured row names. With adult on, such rows are flagged `sensitive` and covered (not fetched) until the once-per-launch confirmation.
 - **Built-in providers use `cs3native://`, never `cs3ext://`** (wrong-attribution failures).
+- **Clearances are the host's, not the interceptor's** (`cs3/clearance.ts`, §5.15). Never keep `cf_clearance` per caller or re-solve without asking `clearance.get` first; never relay (`clearance.fetch`) for a host the jar holds no clearance for.
 - **The WebView host must finish before the sidecar stops waiting** (`cs3/hostDeadline.ts`) — the reverse channel carries one deadline and both ends used to spend it.
 - **A failed `load()` closes its class loader, and `unload` withdraws what the plugin registered.** A leaked loader holds a Windows handle on the `.cs3`, and every later update of that extension fails its rename with `EPERM` (measured: Ultima, which fails at `load()` on every launch, could never be updated). `unload` removes the plugin's entries from `APIHolder.apis`/`allProviders` and `extractorApis` by `sourcePlugin`, as upstream's `unloadPlugin` does. `PluginUnloadTest` pins both and fails on the old code.
 - **Installs and updates from the screen are background jobs** (`cs3/extensionJobs.ts`). Downloads overlap; everything after the verified download in `installPlugin` — rename, translate, load — runs through `PluginManager.oneAtATime`, because overlapping loads mis-attribute providers. Any new install path must go through `installPlugin` or take that lock.
 - **Replacing an archive goes through `cs3/archivePlacement.ts`.** Retry the rename for ~1.5s, then place the update beside the held file (`Name.hash.<sha12>.cs3`) and point the record at it; the held copy goes on `extension_displaced_archives` and is swept once released. Read an extension's archive from `record.filePath` (`archivePathFor`), never from the canonical path.
 - **Extension updates install automatically on every launch by default** — Android parity; see "Updates install automatically" in §5 detail.
-- **New installs start with the viewer's languages** (`cs3/starterPlugins.ts`): own locale + English, working before beta before slow, nothing marked down, 16 per bundled repository; a bundled repository in another language is skipped.
+- **Nothing installs until the viewer picks regions** (PRD-54, `cs3/regions.ts`; first-run modal pre-ticked from the locale; existing installs asked once). Every matching verified repository is *added*; starter extensions (≤16, working before beta before slow, nothing marked down — `starterPlugins.ts`) are *installed* from repositories matched through a named region (any language) and from **bundled** global ones (filtered to the selection's languages). Unbundled global repos are added only; adult repos added only when allowed, never installed from. **Cross-region** (default on, `cs3_content_regions_cross`): every unmatched non-adult repo is searched for plugins whose `language` is *exactly* a selected one (`strictLanguage`) and removed again if none were found. The region system only adds — an installed repository is skipped, so a manual off is never undone; removal returns a list to review.
 - The upstream jar lane exists but only **1.9%** of the corpus publishes one — don't plan work assuming it.
 
 ---
@@ -547,7 +557,7 @@ derived from their own measured latency. Scope decides which sources a search ma
 
 **Rules:**
 - **A scope selection is a strict filter, not a preference.** An unresolvable selection is *reported*, never silently widened back to everything. Providers selected ⇒ exactly those, no catalogues.
-- **Discovery defaults to `origin` scope** (only the providers that produced the row), widening to `all` automatically when nothing is found. A failed escalation leaves the narrow answer standing.
+- **Discovery defaults to `origin` scope** (only the providers that produced the row), widening to `all` automatically when nothing is found. A failed escalation leaves the narrow answer standing. **A self-widened result is offered, never auto-started** (`playbackSession.discover`): it was found by title, and a title match can be a different work (errors audit 2026-10-050, Part 2 §4).
 - **`searchOrder` falls back to the original order** if the ranking returns anything that is not the same set. Silently searching fewer sources and calling it "no results" is the worst failure this app has.
 - **`empty` ≠ `failure`.** An anime provider with nothing for *Dune* is correct.
 - **An unscored failure is not recorded at all** (`UNSCORED_FAILURE_KINDS`) — recording it in `attempts` alone still moves the success rate.
@@ -4444,7 +4454,7 @@ question was asked from — the scroll position, the filter chips, and the neigh
 repositories being compared against. Comparing two catalogues cost three tab switches. It is
 now a full-width panel under the repository's own card (`grid-column: 1 / -1`, so a
 twenty-extension list does not render inside one 290px column and read as belonging to the
-card's neighbours), and the tab is gone. Two tabs remain: **Installed** and **Browse**.
+card's neighbours), and the tab is gone. Four tabs remain (`ExtensionsScreen.tsx` `TABS`, verified 2026-10-07): **Installed**, **Browse**, **Built-in Sources**, **Updates**.
 
 **Search reaches through a repository.** The query matched a repository's own name,
 description, language and shortcode and nothing else — so looking for a provider you know you
@@ -4738,6 +4748,8 @@ screen groups by subject and filters by *level*. All teardown happens on `before
 - **Nothing is decided from a URL string.** Transport, codec, DRM and container all come from the body or the provider's own declaration. (Violated historically in `mediaInspector`, `ytdlpSources`, `providerLinks` — all fixed.)
 - **A capability check ends in an allowlist, not a denylist.** `!UNSUPPORTED.has(x)` answers *yes* for everything it has never heard of, which is how an unknown codec was reported directly playable and failed in the element (§6.16). Absent information is not the same as unrecognised information: no codec means "do not block", a named unknown means "assume not". Same rule as `canPlayContainer`, which got it right first.
 - **Anything reaching a third-party host goes through `electron/torrent/http.ts`**, which swaps in Electron's `net.fetch` (honouring `app.configureHostResolver` and the system proxy). **Node's `fetch` honours neither** — 5 call sites used global `fetch` and the DNS-over-HTTPS setting silently did nothing for them. `externalPlayerControl` keeps global `fetch` deliberately (loopback VLC control, no DNS or proxy involved).
+- **DNS defaults to `automatic` DoH (Cloudflare, Google) with system fallback** (`networkSettings.ts`); an explicit choice is kept. 2,454 `ERR_NAME_NOT_RESOLVED` for raw.githubusercontent.com in one install's logs — an ISP DNS block that stopped every repository fetch.
+- **`net.fetch` runs with `referrerPolicy: 'unsafe-url'`** (`resilientFetch.primary` in `main.ts`). Under Chromium's default policy a full-path `Referer` on a *cross-site* request is refused with `ERR_BLOCKED_BY_CLIENT`, not trimmed — 159 blocked requests in 36 logs (workers.dev/Hindmoviez 117, freecdn34/NetMirror 37). aria2 never goes through Chromium, which is why those sources "downloaded but would not stream".
 - **Timeout ≠ cancellation.** `AbortSignal.timeout()` → `TimeoutError`; the caller's own controller → `AbortError`. Conflating them scores a provider for the app's own decision to stop waiting.
 - **`describeError` always** (`src/utils/errors.ts`), never `x instanceof Error ? x.message : String(x)` — that idiom (82 copies across 37 files) collapsed every DNS/refused/TLS failure into `fetch failed`, and `groupingForm` then merged the whole network family into **one row** in the issue ledger, defeating its purpose. The real reason is in `error.cause`.
 - **A GraphQL 200 can be a failure.** AniList returns bad-query/rate-limit/server-fault as **HTTP 200** with `errors` and null `data`, so `response.ok` was true and every caller rendered "no results". Check `errors`.

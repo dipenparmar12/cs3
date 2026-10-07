@@ -58,11 +58,14 @@
  * settle it — that is what the harness is for.
  */
 
+import { createHash } from 'node:crypto';
 import { fetchJson } from '../torrent/http.ts';
 import {
   CreditRole,
   MetadataSource,
   type CreditPerson,
+  type Franchise,
+  type FranchiseEntry,
   type Organisation,
 } from '../../src/types/metadata.ts';
 import { classifyJob } from './merge.ts';
@@ -105,6 +108,19 @@ const value = (row: Record<string, SparqlBinding>, key: string): string | undefi
 /**
  * A Commons file reference as a URL the renderer can afford to load.
  *
+ * Addressed straight at `upload.wikimedia.org`, never through
+ * `commons.wikimedia.org/wiki/Special:FilePath`. The redirect host is the one
+ * some networks refuse: measured on a user's connection, `commons.wikimedia.org`
+ * had its TLS handshake reset while `upload.wikimedia.org` and `wikidata.org`
+ * answered normally — so every Wikidata headshot failed to load and every cast
+ * card fell back to initials, with the photograph's URL sitting in the record.
+ * The thumbnail path is not a guess: Commons files a thumbnail under the first
+ * one and two hex digits of the MD5 of its file name, the same rule MediaWiki
+ * uses to write it. Skipping the redirect also saves a round trip per face.
+ *
+ * Formats whose thumbnails are not simply `<width>px-<name>` (multi-page TIFF
+ * and PDF) keep the redirect form, which is still right where it is reachable.
+ *
  * Also normalises the scheme: Wikidata publishes `http://` URIs in its data and
  * the app's CSP and proxy both expect https, so an unrewritten one fails to
  * load with nothing on screen saying why.
@@ -112,8 +128,39 @@ const value = (row: Record<string, SparqlBinding>, key: string): string | undefi
 export function commonsThumbnail(raw: string | undefined, width = IMAGE_WIDTH): string | undefined {
   if (!raw) return undefined;
   const https = raw.replace(/^http:\/\//i, 'https://');
-  if (!/Special:FilePath/i.test(https)) return https;
-  return `${https}${https.includes('?') ? '&' : '?'}width=${width}`;
+  const match = /Special:FilePath\/([^?#]+)/i.exec(https);
+  if (!match) return https;
+  const direct = uploadThumbnail(match[1], width);
+  if (direct) return direct;
+  return `${https.replace(/[?&]width=\d+/i, '')}${https.includes('?') ? '&' : '?'}width=${width}`;
+}
+
+/**
+ * Widths Wikimedia renders ahead of time. An arbitrary width is generated on
+ * demand and throttled; one of these is served from cache.
+ */
+const STANDARD_THUMB_WIDTHS = [120, 250, 330, 500, 960];
+
+function uploadThumbnail(encodedName: string, width: number): string | undefined {
+  let name: string;
+  try {
+    name = decodeURIComponent(encodedName);
+  } catch {
+    return undefined;
+  }
+  // MediaWiki's canonical file name: underscores, first letter upper-cased.
+  name = name.trim().replace(/ /g, '_');
+  if (!name) return undefined;
+  name = name.charAt(0).toUpperCase() + name.slice(1);
+  const extension = name.split('.').pop()?.toLowerCase() ?? '';
+  if (['tif', 'tiff', 'pdf', 'djvu', 'webm', 'ogv'].includes(extension)) return undefined;
+
+  const step = STANDARD_THUMB_WIDTHS.find((w) => w >= width) ?? STANDARD_THUMB_WIDTHS.at(-1)!;
+  const hash = createHash('md5').update(name).digest('hex');
+  const file = encodeURIComponent(name);
+  // An SVG thumbnail is rasterised and carries a `.png` suffix of its own.
+  const thumbName = extension === 'svg' ? `${step}px-${file}.png` : `${step}px-${file}`;
+  return `https://upload.wikimedia.org/wikipedia/commons/thumb/${hash[0]}/${hash.slice(0, 2)}/${file}/${thumbName}`;
 }
 
 /** `http://www.wikidata.org/entity/Q38111` → a page a person can actually open. */
@@ -392,6 +439,98 @@ async function runQuery(query: string, signal?: AbortSignal): Promise<SparqlResp
 export interface WikidataResult {
   credits: CreditPerson[];
   facts: WikidataFacts | null;
+  franchise?: Franchise | null;
+}
+
+/**
+ * Every work sharing a "part of the series" (P179) with this one, with its own
+ * IMDb id so each opens as an ordinary catalogue item. Keyless, like the rest.
+ */
+function franchiseQuery(imdbId: string): string {
+  return `
+SELECT ?series ?seriesLabel ?member ?memberLabel ?imdb ?date ?ordinal WHERE {
+  ?item wdt:P345 "${imdbId}" ; wdt:P179 ?series .
+  ?member p:P179 ?membership .
+  ?membership ps:P179 ?series .
+  ?member wdt:P345 ?imdb .
+  OPTIONAL { ?membership pq:P1545 ?ordinal . }
+  OPTIONAL {
+    ?member wdt:P577 ?date .
+    FILTER NOT EXISTS { ?member wdt:P577 ?earlier . FILTER(?earlier < ?date) }
+  }
+  SERVICE wikibase:label {
+    bd:serviceParam wikibase:language "en" .
+    ?series rdfs:label ?seriesLabel .
+    ?member rdfs:label ?memberLabel .
+  }
+}
+LIMIT 1500`;
+}
+
+/** Past this, a "series" is a universe or an episode list, not a rail. */
+const MAX_FRANCHISE_ENTRIES = 30;
+
+/**
+ * Pure. A title in several series (a trilogy *and* a cinematic universe) shows
+ * the smallest one with at least two members: the most specific answer to
+ * "what comes before and after this". Release order, then the stated ordinal;
+ * a member with several release dates (festival, then theatrical) takes the
+ * earliest.
+ */
+export function parseFranchise(response: SparqlResponse, imdbId: string): Franchise | null {
+  const bySeries = new Map<string, { name: string; members: Map<string, FranchiseEntry & { date?: string }> }>();
+  for (const row of response.results?.bindings ?? []) {
+    const series = value(row, 'series');
+    const imdb = value(row, 'imdb');
+    const title = value(row, 'memberLabel');
+    if (!series || !imdb || !/^tt\d+$/.test(imdb)) continue;
+    // Measured on Avengers: Endgame, the label service can answer no label
+    // for the very title asked about. That one is kept — the page already
+    // knows its own name — and any other unlabelled member is dropped.
+    const labelled = title && !/^Q\d+$/.test(title) ? title : undefined;
+    if (!labelled && imdb !== imdbId) continue;
+    let group = bySeries.get(series);
+    if (!group) {
+      group = { name: value(row, 'seriesLabel') ?? '', members: new Map() };
+      bySeries.set(series, group);
+    }
+    const date = value(row, 'date');
+    const ordinal = Number.parseInt(value(row, 'ordinal') ?? '', 10);
+    const existing = group.members.get(imdb);
+    if (existing) {
+      if (date && (!existing.date || date < existing.date)) existing.date = date;
+      if (existing.ordinal === undefined && Number.isFinite(ordinal)) existing.ordinal = ordinal;
+      if (!existing.title && labelled) existing.title = labelled;
+      continue;
+    }
+    group.members.set(imdb, {
+      imdbId: imdb,
+      title: labelled ?? '',
+      current: imdb === imdbId,
+      date,
+      ordinal: Number.isFinite(ordinal) ? ordinal : undefined,
+    });
+  }
+
+  // The query keeps only each member's earliest date: one per country used
+  // to multiply a universe's rows past the limit and cut the current title
+  // out of its own series. The current title must be in the answer.
+  const candidates = [...bySeries.values()]
+    .filter((g) => g.members.has(imdbId))
+    .filter((g) => g.members.size >= 2 && g.members.size <= MAX_FRANCHISE_ENTRIES && g.name && !/^Q\d+$/.test(g.name))
+    .sort((a, b) => a.members.size - b.members.size);
+  const chosen = candidates[0];
+  if (!chosen) return null;
+
+  const entries = [...chosen.members.values()]
+    .map(({ date, ...entry }) => ({ ...entry, year: date ? Number(date.slice(0, 4)) || undefined : undefined, date }))
+    .sort((a, b) =>
+      (a.date ?? '9999').localeCompare(b.date ?? '9999') ||
+      (a.ordinal ?? Infinity) - (b.ordinal ?? Infinity) ||
+      a.title.localeCompare(b.title)
+    )
+    .map(({ date: _date, ...entry }) => entry);
+  return { name: chosen.name, entries };
 }
 
 /**
@@ -427,9 +566,10 @@ export async function fetchWikidata(
     throw new Error(`Not an IMDb id: ${imdbId}`);
   }
 
-  const [credits, facts] = await Promise.allSettled([
+  const [credits, facts, franchise] = await Promise.allSettled([
     runQuery(creditsQuery(imdbId), signal),
     runQuery(factsQuery(imdbId), signal),
+    runQuery(franchiseQuery(imdbId), signal),
   ]);
 
   if (credits.status === 'rejected' && facts.status === 'rejected') {
@@ -441,5 +581,7 @@ export async function fetchWikidata(
   return {
     credits: credits.status === 'fulfilled' ? parseCredits(credits.value) : [],
     facts: facts.status === 'fulfilled' ? parseFacts(facts.value) : null,
+    // Optional by nature: a failed franchise query costs only the rail.
+    franchise: franchise.status === 'fulfilled' ? parseFranchise(franchise.value, imdbId) : null,
   };
 }

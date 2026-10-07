@@ -457,3 +457,55 @@ test('a republish says what happened rather than "from v6 to v6"', async () => {
   assert.doesNotMatch(outcome.message, /from v6 to v6/);
   assert.match(outcome.message, /latest build/);
 });
+
+test('failed updates are auto-ignored so update-all does not hammer them', async () => {
+  const ds = fakeDatastore();
+  const { plugins, calls } = fakePlugins({
+    repositories: [RAW],
+    catalogue: { [RAW]: [remote({ version: 7 })] },
+    installed: [local({ version: 6 })],
+    verify: () => ({ ok: false, message: 'syntax error in bytecode', tier: 'T4_BLOCKED' }),
+  });
+
+  const updater = new ExtensionUpdater(ds, plugins);
+
+  // First manual update fails
+  const outcome = await updater.updatePlugin('ShowBox');
+  assert.equal(outcome.ok, false);
+
+  // Extension is now in ignored updates
+  const ignored = updater.getIgnoredUpdates();
+  assert.ok(ignored.ShowBox, 'ShowBox should be auto-ignored on failure');
+  assert.equal(ignored.ShowBox.isAutoIgnored, true);
+  assert.match(ignored.ShowBox.reason, /syntax error/);
+
+  // Subsequent check annotates it as ignored
+  const check = await updater.checkForUpdates();
+  assert.equal(check.updates[0].ignored, true);
+
+  // A subsequent updateAll skips it!
+  const prevInstalledCount = calls.installed.length;
+  const outcomes = await updater.updateAll();
+  assert.equal(outcomes.length, 0, 'ignored update should be skipped by updateAll');
+  assert.equal(calls.installed.length, prevInstalledCount, 'no install should have been attempted');
+});
+
+test('ignored updates can be manually ignored and unignored', async () => {
+  const ds = fakeDatastore();
+  const { plugins } = fakePlugins({
+    repositories: [RAW],
+    catalogue: { [RAW]: [remote({ version: 7 })] },
+    installed: [local({ version: 6 })],
+  });
+
+  const updater = new ExtensionUpdater(ds, plugins);
+  updater.ignoreUpdate('ShowBox', 'Manual ignore');
+
+  let ignored = updater.getIgnoredUpdates();
+  assert.ok(ignored.ShowBox);
+  assert.equal(ignored.ShowBox.isAutoIgnored, false);
+
+  updater.unignoreUpdate('ShowBox');
+  ignored = updater.getIgnoredUpdates();
+  assert.equal(ignored.ShowBox, undefined);
+});

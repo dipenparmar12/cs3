@@ -138,7 +138,17 @@ export const DNS_PRESETS: DnsPreset[] = [
   },
 ];
 
-const DEFAULTS: NetworkSettings = { dnsMode: 'system', dnsServers: [] };
+/**
+ * Encrypted DNS with fallback, until the viewer chooses otherwise. Measured on
+ * 2026-10-03: 2,454 `ERR_NAME_NOT_RESOLVED` for raw.githubusercontent.com in
+ * one install's logs — an ISP-level DNS block that stopped every repository
+ * fetch and extension update. `automatic` asks these servers first and falls
+ * back to the system resolver, so a network that blocks DoH loses nothing.
+ */
+const DEFAULTS: NetworkSettings = {
+  dnsMode: 'automatic',
+  dnsServers: ['https://cloudflare-dns.com/dns-query', 'https://dns.google/dns-query'],
+};
 
 export class NetworkSettingsStore {
   private datastore: DatastoreManager;

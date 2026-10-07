@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useState } from 'react';
 import { useFlash } from '../utils/useFlash';
 import {
   Plus, Trash2, Loader2, CheckCircle2, XCircle, Radio, Save, RotateCcw,
+  Activity, CheckSquare, Square, ChevronDown,
 } from 'lucide-react';
 import type {
   IndexerConfig, IndexerHealth, SourcePreferences,
@@ -9,6 +10,7 @@ import type {
 import { IndexerKind, Resolution } from '../types/torrent';
 import { useReveal } from '../utils/ExperienceModeContext';
 import { InfoHint } from './settings/InfoHint';
+import { useSettingCollapse } from './settings/useSettingCollapse';
 
 /**
  * Settings → Sources.
@@ -88,6 +90,92 @@ export const SourceSettings: React.FC = () => {
     refresh();
   };
 
+  const [placesCollapsed, togglePlaces] = useSettingCollapse('sources-places-searched');
+  const [filtersCollapsed, toggleFilters] = useSettingCollapse('sources-quality-filters');
+
+  const [testingAll, setTestingAll] = useState(false);
+  const [testingProgress, setTestingProgress] = useState<{ done: number; total: number } | null>(null);
+
+  const enabledCount = configs.filter((c) => c.enabled).length;
+  const allEnabled = configs.length > 0 && enabledCount === configs.length;
+  const noneEnabled = enabledCount === 0;
+
+  const toggleAll = async (enabled: boolean) => {
+    const api = window.cloudstream;
+    if (!api || configs.length === 0) return;
+    const next = configs.map((c) => ({ ...c, enabled }));
+    setConfigs(next);
+    if (api.saveIndexerConfigs) {
+      await api.saveIndexerConfigs(next);
+    } else {
+      for (const c of next) {
+        await api.saveIndexerConfig(c);
+      }
+    }
+    flash(enabled ? `Enabled all ${configs.length} providers.` : `Disabled all ${configs.length} providers.`);
+  };
+
+  const testAllIndexers = async () => {
+    const api = window.cloudstream;
+    if (!api || configs.length === 0 || testingAll) return;
+    setTestingAll(true);
+    setTestingProgress({ done: 0, total: configs.length });
+
+    setTests((prev) => {
+      const next = { ...prev };
+      for (const c of configs) {
+        next[c.id] = { running: true };
+      }
+      return next;
+    });
+
+    let okCount = 0;
+    let failCount = 0;
+    let completed = 0;
+
+    const queue = [...configs];
+    const worker = async () => {
+      while (queue.length > 0) {
+        const config = queue.shift();
+        if (!config) break;
+        try {
+          const result = await api.testIndexer(config);
+          if (result.ok) okCount++;
+          else failCount++;
+          setTests((t) => ({
+            ...t,
+            [config.id]: { running: false, ok: result.ok, message: result.message },
+          }));
+        } catch (err) {
+          failCount++;
+          setTests((t) => ({
+            ...t,
+            [config.id]: {
+              running: false,
+              ok: false,
+              message: (err as Error).message || 'Test failed',
+            },
+          }));
+        }
+        completed++;
+        setTestingProgress({ done: completed, total: configs.length });
+      }
+    };
+
+    const concurrency = Math.min(3, configs.length);
+    await Promise.all(Array.from({ length: concurrency }, () => worker()));
+
+    setTestingAll(false);
+    setTestingProgress(null);
+    await refresh();
+
+    if (failCount === 0) {
+      flash(`All ${okCount} providers responded successfully.`);
+    } else {
+      flash(`Tested ${completed} providers: ${okCount} online, ${failCount} unreachable.`);
+    }
+  };
+
   const removeIndexer = async (id: string) => {
     if (!window.cloudstream) return;
     setConfigs(await window.cloudstream.removeIndexerConfig(id));
@@ -152,29 +240,106 @@ export const SourceSettings: React.FC = () => {
         they are for — someone who already runs one is not helped by being told
         that some places are blocked.
       */}
-      <h3 className="settings-section__title">
-        <Radio size={17} /> Places searched
-        <InfoHint label="About these places">
-        {technical ? (
-          <>
-            Indexers are searched in parallel and their results are merged and deduplicated.
-            The ones enabled by default answer on stable hosts and work on most networks;
-            per-site indexers (1337x, BitSearch, TheRARBG, YTS, EZTV, Nyaa) rotate domains and
-            are blocked by many ISPs, so they ship disabled — enable them if your connection is
-            unfiltered. For full control, run <strong>Jackett</strong> or{' '}
-            <strong>Prowlarr</strong> locally and add it below.
-          </>
-        ) : (
-          <>
-            These are the places searched when an add-on has nothing. The ones switched on
-            work on most connections; the rest are blocked by many internet providers, so
-            they start off — turn them on if searches keep coming back empty.
-          </>
-        )}
-        </InfoHint>
+      <h3
+        className="settings-section__title settings-section__title--collapsible"
+        onClick={togglePlaces}
+        role="button"
+        tabIndex={0}
+        aria-expanded={!placesCollapsed}
+        onKeyDown={(e) => {
+          if (e.key === 'Enter' || e.key === ' ') {
+            e.preventDefault();
+            togglePlaces();
+          }
+        }}
+      >
+        <div className="settings-section__title-wrap">
+          <Radio size={17} /> Places searched
+          <span onClick={(e) => e.stopPropagation()}>
+            <InfoHint label="About these places">
+              {technical ? (
+                <>
+                  Indexers are searched in parallel and their results are merged and deduplicated.
+                  The ones enabled by default answer on stable hosts and work on most networks;
+                  per-site indexers (1337x, BitSearch, TheRARBG, YTS, EZTV, Nyaa) rotate domains and
+                  are blocked by many ISPs, so they ship disabled — enable them if your connection is
+                  unfiltered. For full control, run <strong>Jackett</strong> or{' '}
+                  <strong>Prowlarr</strong> locally and add it below.
+                </>
+              ) : (
+                <>
+                  These are the places searched when an add-on has nothing. The ones switched on
+                  work on most connections; the rest are blocked by many internet providers, so
+                  they start off — turn them on if searches keep coming back empty.
+                </>
+              )}
+            </InfoHint>
+          </span>
+        </div>
+        <span
+          className={`settings-section__collapse-icon${
+            placesCollapsed ? ' settings-section__collapse-icon--collapsed' : ''
+          }`}
+          aria-hidden="true"
+        >
+          <ChevronDown size={15} />
+        </span>
       </h3>
 
-      <ul className="indexer-list">
+      {!placesCollapsed && (
+        <>
+          <div className="indexer-toolbar">
+            <div className="indexer-toolbar__stats">
+              <span className="indexer-toolbar__count">
+                <strong>{enabledCount}</strong> of {configs.length} active
+              </span>
+              {testingAll && testingProgress && (
+                <span className="indexer-toolbar__progress">
+                  <Loader2 className="spin" size={13} />
+                  Testing {testingProgress.done}/{testingProgress.total}...
+                </span>
+              )}
+            </div>
+            <div className="indexer-toolbar__actions">
+              <button
+                type="button"
+                className="btn btn-sm"
+                onClick={() => toggleAll(true)}
+                disabled={configs.length === 0 || allEnabled}
+                title="Enable all providers"
+              >
+                <CheckSquare size={13} /> Enable all
+              </button>
+              <button
+                type="button"
+                className="btn btn-sm"
+                onClick={() => toggleAll(false)}
+                disabled={configs.length === 0 || noneEnabled}
+                title="Disable all providers"
+              >
+                <Square size={13} /> Disable all
+              </button>
+              <button
+                type="button"
+                className="btn btn-sm btn-primary"
+                onClick={testAllIndexers}
+                disabled={configs.length === 0 || testingAll}
+                title="Test all providers in parallel"
+              >
+                {testingAll ? (
+                  <>
+                    <Loader2 className="spin" size={13} /> Testing...
+                  </>
+                ) : (
+                  <>
+                    <Activity size={13} /> Test all providers
+                  </>
+                )}
+              </button>
+            </div>
+          </div>
+
+          <ul className="indexer-list">
         {configs.map((config) => {
           const h = healthFor(config.id);
           const test = tests[config.id];
@@ -307,116 +472,147 @@ export const SourceSettings: React.FC = () => {
           </div>
         </div>
       </details>
+        </>
+      )}
 
       {prefs && (
         <>
-          <h3 className="settings-section__title" style={{ marginTop: '1.75rem' }}>
-            Quality &amp; filters
-            <InfoHint label="About quality and filters">
-              These decide which sources survive and in what order. If searches come back
-              empty, loosen the minimum seeders or resolution first.
-            </InfoHint>
+          <h3
+            className="settings-section__title settings-section__title--collapsible"
+            style={{ marginTop: '1.75rem' }}
+            onClick={toggleFilters}
+            role="button"
+            tabIndex={0}
+            aria-expanded={!filtersCollapsed}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter' || e.key === ' ') {
+                e.preventDefault();
+                toggleFilters();
+              }
+            }}
+          >
+            <div className="settings-section__title-wrap">
+              Quality &amp; filters
+              <span onClick={(e) => e.stopPropagation()}>
+                <InfoHint label="About quality and filters">
+                  These decide which sources survive and in what order. If searches come back
+                  empty, loosen the minimum seeders or resolution first.
+                </InfoHint>
+              </span>
+            </div>
+            <span
+              className={`settings-section__collapse-icon${
+                filtersCollapsed ? ' settings-section__collapse-icon--collapsed' : ''
+              }`}
+              aria-hidden="true"
+            >
+              <ChevronDown size={15} />
+            </span>
           </h3>
 
-          <div className="pref-grid">
-            <label>
-              <span>Preferred quality</span>
-              <select
-                value={prefs.preferredResolution}
-                onChange={(e) =>
-                  updatePrefs({ preferredResolution: Number(e.target.value) as Resolution })
-                }
-              >
-                {RESOLUTION_OPTIONS.filter((o) => o.value > 0).map((o) => (
-                  <option key={o.value} value={o.value} style={{ backgroundColor: '#161b26', color: '#f3f4f6' }}>
-                    {o.label}
-                  </option>
-                ))}
-              </select>
-            </label>
+          {!filtersCollapsed && (
+            <>
+              <div className="pref-grid">
+                <label>
+                  <span>Preferred quality</span>
+                  <select
+                    value={prefs.preferredResolution}
+                    onChange={(e) =>
+                      updatePrefs({ preferredResolution: Number(e.target.value) as Resolution })
+                    }
+                  >
+                    {RESOLUTION_OPTIONS.filter((o) => o.value > 0).map((o) => (
+                      <option key={o.value} value={o.value} style={{ backgroundColor: '#161b26', color: '#f3f4f6' }}>
+                        {o.label}
+                      </option>
+                    ))}
+                  </select>
+                </label>
 
-            <label>
-              <span>Minimum quality</span>
-              <select
-                value={prefs.minResolution}
-                onChange={(e) =>
-                  updatePrefs({ minResolution: Number(e.target.value) as Resolution })
-                }
-              >
-                {RESOLUTION_OPTIONS.map((o) => (
-                  <option key={o.value} value={o.value} style={{ backgroundColor: '#161b26', color: '#f3f4f6' }}>
-                    {o.label}
-                  </option>
-                ))}
-              </select>
-            </label>
+                <label>
+                  <span>Minimum quality</span>
+                  <select
+                    value={prefs.minResolution}
+                    onChange={(e) =>
+                      updatePrefs({ minResolution: Number(e.target.value) as Resolution })
+                    }
+                  >
+                    {RESOLUTION_OPTIONS.map((o) => (
+                      <option key={o.value} value={o.value} style={{ backgroundColor: '#161b26', color: '#f3f4f6' }}>
+                        {o.label}
+                      </option>
+                    ))}
+                  </select>
+                </label>
 
-            <label>
-              <span>Minimum seeders</span>
-              <input
-                type="number"
-                min={0}
-                value={prefs.minSeeders}
-                onChange={(e) => updatePrefs({ minSeeders: Math.max(0, Number(e.target.value)) })}
-              />
-            </label>
+                <label>
+                  <span>Minimum seeders</span>
+                  <input
+                    type="number"
+                    min={0}
+                    value={prefs.minSeeders}
+                    onChange={(e) => updatePrefs({ minSeeders: Math.max(0, Number(e.target.value)) })}
+                  />
+                </label>
 
-            <label className="pref-grid__check">
-              <input
-                type="checkbox"
-                checked={prefs.excludeLowQualitySources}
-                onChange={(e) => updatePrefs({ excludeLowQualitySources: e.target.checked })}
-              />
-              <span>
-                Hide CAM / TS / screener rips
-                <small>Recorded in cinemas — usually unwatchable.</small>
-              </span>
-            </label>
+                <label className="pref-grid__check">
+                  <input
+                    type="checkbox"
+                    checked={prefs.excludeLowQualitySources}
+                    onChange={(e) => updatePrefs({ excludeLowQualitySources: e.target.checked })}
+                  />
+                  <span>
+                    Hide CAM / TS / screener rips
+                    <small>Recorded in cinemas — usually unwatchable.</small>
+                  </span>
+                </label>
 
-            <label className="pref-grid__check">
-              <input
-                type="checkbox"
-                checked={prefs.preferH264}
-                onChange={(e) => updatePrefs({ preferH264: e.target.checked })}
-              />
-              <span>
-                Prefer H.264 for compatibility
-                <small>Enable if HEVC/x265 files fail to play.</small>
-              </span>
-            </label>
+                <label className="pref-grid__check">
+                  <input
+                    type="checkbox"
+                    checked={prefs.preferH264}
+                    onChange={(e) => updatePrefs({ preferH264: e.target.checked })}
+                  />
+                  <span>
+                    Prefer H.264 for compatibility
+                    <small>Enable if HEVC/x265 files fail to play.</small>
+                  </span>
+                </label>
 
-            <label className="pref-grid__check">
-              <input
-                type="checkbox"
-                checked={prefs.preferHDR}
-                onChange={(e) => updatePrefs({ preferHDR: e.target.checked })}
-              />
-              <span>
-                Prefer HDR
-                <small>Only useful on an HDR-capable display.</small>
-              </span>
-            </label>
-          </div>
+                <label className="pref-grid__check">
+                  <input
+                    type="checkbox"
+                    checked={prefs.preferHDR}
+                    onChange={(e) => updatePrefs({ preferHDR: e.target.checked })}
+                  />
+                  <span>
+                    Prefer HDR
+                    <small>Only useful on an HDR-capable display.</small>
+                  </span>
+                </label>
+              </div>
 
-          <div className="pref-actions">
-            <button
-              className="btn"
-              onClick={async () => {
-                await updatePrefs({
-                  minSeeders: 0,
-                  minResolution: Resolution.Unknown,
-                  excludeLowQualitySources: false,
-                });
-                flash('Filters loosened — search again.');
-              }}
-              title="Widen filters when searches return nothing"
-            >
-              <RotateCcw size={15} /> Loosen all filters
-            </button>
-            <button className="btn" onClick={refresh}>
-              <Save size={15} /> Refresh status
-            </button>
-          </div>
+              <div className="pref-actions">
+                <button
+                  className="btn"
+                  onClick={async () => {
+                    await updatePrefs({
+                      minSeeders: 0,
+                      minResolution: Resolution.Unknown,
+                      excludeLowQualitySources: false,
+                    });
+                    flash('Filters loosened — search again.');
+                  }}
+                  title="Widen filters when searches return nothing"
+                >
+                  <RotateCcw size={15} /> Loosen all filters
+                </button>
+                <button className="btn" onClick={refresh}>
+                  <Save size={15} /> Refresh status
+                </button>
+              </div>
+            </>
+          )}
         </>
       )}
 

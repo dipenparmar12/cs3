@@ -33,6 +33,13 @@ const test = (name: string, fn: () => void) => tests.push([name, fn]);
  * failed search. Four permanent penalties per query against providers working
  * exactly as designed.
  */
+test("Chromium's net::ERR_* codes are network failures, not unknown", () => {
+  assert.equal(classifyFailure('net::ERR_NAME_NOT_RESOLVED'), 'network');
+  assert.equal(classifyFailure('net::ERR_CERT_AUTHORITY_INVALID'), 'network');
+  assert.equal(classifyFailure('net::ERR_CONNECTION_RESET'), 'network');
+  assert.equal(classifyFailure('net::ERR_TIMED_OUT'), 'timeout');
+});
+
 test('a provider that does not implement search is not scored for it', () => {
   const kind = classifyFailure('This provider does not implement that operation.');
   assert.equal(kind, 'unsupported-operation');

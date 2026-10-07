@@ -10,8 +10,10 @@ import type { SavedSearchSummary } from '../../electron/savedSearches';
  *
  * Both lists live in one surface because they answer the same question at
  * different stages of typing — an empty box is a recall problem, a half-typed
- * box is a spelling problem. Splitting them into two controls would make the
- * user decide which one they need before they have typed anything.
+ * box is a spelling problem.
+ *
+ * Saved searches are integrated directly into recent history items with clear
+ * visual highlighting rather than pinned in a separate section at the top.
  */
 
 interface SearchSuggestionsProps {
@@ -25,11 +27,13 @@ interface SearchSuggestionsProps {
   onHighlight: (index: number) => void;
   onPickSuggestion: (suggestion: SearchSuggestion) => void;
   onPickHistory: (entry: SearchHistoryEntry) => void;
-  onRemoveHistory: (query: string) => void;
+  onRemoveHistory: (entry: SearchHistoryEntry) => void;
   onClearHistory: () => void;
-  /** Searches kept with Save results; offered while the box is empty. */
+  /** Searches kept with Save results; preserved in props for backwards compatibility. */
   saved?: SavedSearchSummary[];
   onPickSaved?: (id: string) => void;
+  /** Optional handler to run live search for a query */
+  onRunFreshSearch?: (query: string) => void;
 }
 
 function relativeTime(at: number): string {
@@ -56,19 +60,14 @@ export const SearchSuggestions: React.FC<SearchSuggestionsProps> = ({
   onPickHistory,
   onRemoveHistory,
   onClearHistory,
-  saved = [],
-  onPickSaved,
+  onRunFreshSearch,
 }) => {
   if (!open) return null;
 
   const hasQuery = query.trim().length >= 2;
   const showHistory = history.length > 0;
 
-  // Saved searches are a place to go back to, so they are offered only before
-  // anything is typed; once a query is being written they would be noise.
-  const showSaved = !hasQuery && saved.length > 0 && Boolean(onPickSaved);
-
-  if (!loading && suggestions.length === 0 && !showHistory && !showSaved) return null;
+  if (!loading && suggestions.length === 0 && !showHistory) return null;
 
   // History is offered first while the box is empty and demoted once the user
   // is typing, because at that point they are naming something new.
@@ -92,17 +91,26 @@ export const SearchSuggestions: React.FC<SearchSuggestionsProps> = ({
 
       {history.map((entry, index) => {
         const combinedIndex = historyFirst ? index : suggestions.length + index;
+        const isSaved = Boolean(entry.isSaved);
+        const isActive = combinedIndex === highlightedIndex;
+        const rowClass = `search-suggest__row search-suggest__row--history${
+          isSaved ? ' search-suggest__row--saved' : ''
+        }${isActive ? ' search-suggest__row--active' : ''}`;
+
         return (
           <div
-            key={entry.query}
-            className={`search-suggest__row search-suggest__row--history${
-              combinedIndex === highlightedIndex ? ' search-suggest__row--active' : ''
-            }`}
+            key={`${entry.query}-${entry.savedId ?? entry.at}`}
+            className={rowClass}
             onMouseEnter={() => onHighlight(combinedIndex)}
           >
             <button
               type="button"
               className="search-suggest__hit"
+              title={
+                isSaved
+                  ? `Open saved results for "${entry.query}"`
+                  : `Search for "${entry.query}"`
+              }
               // Committing on mousedown beats the input's blur, which would
               // otherwise close the panel before the click ever lands.
               onMouseDown={(e) => {
@@ -110,20 +118,48 @@ export const SearchSuggestions: React.FC<SearchSuggestionsProps> = ({
                 onPickHistory(entry);
               }}
             >
-              <Search size={14} className="search-suggest__icon" />
+              {isSaved ? (
+                <BookmarkCheck size={14} className="search-suggest__icon search-suggest__icon--saved" />
+              ) : (
+                <Search size={14} className="search-suggest__icon" />
+              )}
               <span className="search-suggest__label">{entry.query}</span>
+              {isSaved && (
+                <span className="search-suggest__saved-badge" title="Results saved for this search">
+                  <BookmarkCheck size={10} />
+                  <span>Saved</span>
+                </span>
+              )}
               <span className="search-suggest__meta">
-                {entry.resultCount !== undefined && `${entry.resultCount} results · `}
-                {relativeTime(entry.at)}
+                {isSaved
+                  ? `${entry.savedResultCount ?? entry.resultCount ?? 0} saved · ${relativeTime(entry.savedAt ?? entry.at)}`
+                  : `${entry.resultCount !== undefined ? `${entry.resultCount} results · ` : ''}${relativeTime(entry.at)}`}
               </span>
             </button>
+            {isSaved && onRunFreshSearch && (
+              <button
+                type="button"
+                className="search-suggest__action-btn"
+                title={`Run live search for "${entry.query}"`}
+                aria-label={`Run live search for ${entry.query}`}
+                onMouseDown={(e) => {
+                  e.preventDefault();
+                  e.stopPropagation();
+                  onRunFreshSearch(entry.query);
+                }}
+              >
+                <Search size={12} />
+              </button>
+            )}
             <button
               type="button"
               className="search-suggest__remove"
               aria-label={`Remove ${entry.query} from history`}
+              title={`Remove ${entry.query}`}
               onMouseDown={(e) => {
                 e.preventDefault();
-                onRemoveHistory(entry.query);
+                e.stopPropagation();
+                onRemoveHistory(entry);
               }}
             >
               <X size={12} />
@@ -219,39 +255,10 @@ export const SearchSuggestions: React.FC<SearchSuggestionsProps> = ({
     </div>
   );
 
-  const savedBlock = showSaved && (
-    <div className="search-suggest__group">
-      <div className="search-suggest__heading">
-        <span>
-          <BookmarkCheck size={12} /> Saved searches
-        </span>
-      </div>
-      {saved.slice(0, 5).map((entry) => (
-        <div key={entry.id} className="search-suggest__row search-suggest__row--history">
-          <button
-            type="button"
-            className="search-suggest__hit"
-            onMouseDown={(e) => {
-              e.preventDefault();
-              onPickSaved?.(entry.id);
-            }}
-          >
-            <BookmarkCheck size={14} className="search-suggest__icon" />
-            <span className="search-suggest__label">{entry.query}</span>
-            <span className="search-suggest__meta">
-              {entry.resultCount} saved · {relativeTime(entry.savedAt)}
-            </span>
-          </button>
-        </div>
-      ))}
-    </div>
-  );
-
   return (
     <div className="search-suggest" role="listbox" aria-label="Search suggestions">
       {historyFirst ? (
         <>
-          {savedBlock}
           {historyBlock}
           {suggestionBlock}
         </>

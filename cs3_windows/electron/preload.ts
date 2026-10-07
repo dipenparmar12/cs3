@@ -31,6 +31,7 @@ export interface SourceProfileSnapshot {
 }
 import type { NativeProviderSummary } from './cs3/nativeProviderRegistry';
 import type { DownloadRequestResult, DownloadTask } from '../src/types/download';
+import type { BackupAnalysis, RestorePlan, RestoreSummary } from '../src/types/backup';
 import type { SwarmReport } from '../src/types/torrent';
 import type { TorrentContents } from './torrent/torrentContents';
 import type { TorrentImportRecord } from './torrent/torrentImport';
@@ -47,7 +48,9 @@ import type { OfficialRepository } from './officialRepositories';
 import type { ExtensionJobRequest, ExtensionJobsSnapshot } from './cs3/extensionJobs';
 import type { SaveSearchInput, SavedSearch, SavedSearchSummary } from './savedSearches';
 import type { MetadataDetail } from './metadataProvider';
-import type { ExtendedMetadata, PromoResolution } from '../src/types/metadata';
+import type { ExtendedMetadata, PromoResolution, TitleVideo } from '../src/types/metadata';
+import type { RelatedMediaResult, RelatedMediaSearchRequest } from '../src/types/relatedMedia';
+import type { CanonicalMediaIdentity, MediaRating } from '../src/types/ratings';
 import type {
   TitleInteraction,
   TitleInteractionQuery,
@@ -83,12 +86,13 @@ import type {
 } from '../src/types/analytics';
 import type {
   AvailableUpdate,
+  IgnoredExtensionUpdate,
   UpdateCheckResult,
   UpdateOutcome,
   UpdateSettings,
 } from './cs3/extensionUpdater';
 import type { BatchDownloadRequest, BatchProgress } from './cs3/batchDownloader';
-import type { BootstrapProgress } from './cs3/bootstrap';
+import type { BootstrapProgress, RegionAffectedRepository, RegionState } from './cs3/bootstrap';
 import type { TitleOutcome, TitleOutcomeKind } from './cs3/titleOutcomes';
 import type { StoredSource, PlayedSource } from '../src/types/library';
 import type {
@@ -100,7 +104,7 @@ import type {
 import type { DiagnosticRecord, DiagnosticStage } from './cs3/diagnostics';
 import type { ExtensionIssue, IssueSummary } from './cs3/extensionIssues';
 import type { ExternalPlayer } from './externalPlayer';
-import type { ExternalPlaybackSnapshot } from '../src/types/player';
+import type { ExternalPlaybackSnapshot, StoredPlayerPreferences } from '../src/types/player';
 import type {
   LibraryEntry,
   SourceMemory,
@@ -109,7 +113,12 @@ import type {
 } from './cs3/libraryStore';
 import type { StreamHandle } from './torrent/torrentEngine';
 import type { PlaybackSnapshot } from './playbackSession';
-import type { SubtitleSearchResult } from './subtitleService';
+import type { SubtitleFindResult, SubtitleQuery, SubtitleSearchResult } from './subtitleService';
+import type { SavedSubtitle, SaveRequest as SubtitleSaveRequest } from './subtitles/subtitleLibrary';
+export type { SavedSubtitle };
+import type { PrivacyState, IncognitoSettings } from './cs3/privacyMode';
+export type { PrivacyState, IncognitoSettings };
+export type SubtitleDownloadRequest = Omit<SubtitleSaveRequest, 'vtt'> & { vtt?: string };
 import type {
   PlaybackDiagnosticEvent,
   PlaybackStreamRequest,
@@ -274,6 +283,20 @@ export interface CloudStreamElectronAPI {
   clearTitleVisits: () => Promise<Envelope & { cleared: number }>;
   /** Drops every cached record. Returns how many there were. */
   clearExtendedMetadata: () => Promise<Envelope & { cleared: number }>;
+  /** Searches public repositories (YouTube) keylessly for trailers and promos of any content. */
+  findTrailers: (title: string, year?: number) => Promise<Envelope & { videos: TitleVideo[] }>;
+  /** Discovers on-demand reviews, explanations, recaps, and related media from public sources. */
+  findRelatedMedia: (
+    request: RelatedMediaSearchRequest
+  ) => Promise<Envelope & { results: RelatedMediaResult[]; cached?: boolean }>;
+  /** Fetches consolidated media ratings across IMDb, Rotten Tomatoes, Metacritic, and TMDB. */
+  getMediaRatings: (
+    identity: CanonicalMediaIdentity
+  ) => Promise<Envelope & { ratings: MediaRating[]; cached?: boolean }>;
+  /** Forces a fresh fetch of media ratings, bypassing the cache. */
+  refreshMediaRatings: (
+    identity: CanonicalMediaIdentity
+  ) => Promise<Envelope & { ratings: MediaRating[] }>;
   /**
    * Turns a trailer's page address into a stream the player can open.
    *
@@ -324,27 +347,33 @@ export interface CloudStreamElectronAPI {
    * it published with the stream, which is often the only set that exists for
    * content the catalogues have never heard of.
    */
-  searchSubtitles: (
-    imdbId: string,
-    season?: number,
-    episode?: number,
-    mediaUrl?: string
-  ) => Promise<Envelope & { results: SubtitleSearchResult[] }>;
-  /** Searches subtitles with a custom title or IMDb id query. */
-  searchSubtitlesByTitle: (
-    query: string,
-    season?: number,
-    episode?: number,
-    mediaUrl?: string
-  ) => Promise<
-    Envelope & {
-      results: SubtitleSearchResult[];
-      imdbId?: string;
-      matchedTitle?: string;
-    }
-  >;
+  /**
+   * Every subtitle worth offering, ranked, with the best per language marked.
+   * `sources` says which catalogue failed, so a failure never reads as "none".
+   */
+  findSubtitles: (
+    query: SubtitleQuery & { mediaUrl?: string }
+  ) => Promise<Envelope & Partial<SubtitleFindResult> & { results: SubtitleSearchResult[] }>;
   /** Downloads one subtitle, already converted from SubRip to WebVTT. */
   fetchSubtitle: (url: string) => Promise<Envelope & { vtt: string }>;
+  /** Incognito (PRD-52): whole state on every call and every push. */
+  getPrivacyState: () => Promise<PrivacyState>;
+  setIncognito: (active: boolean) => Promise<PrivacyState>;
+  updatePrivacySettings: (partial: Partial<IncognitoSettings>) => Promise<PrivacyState>;
+  onPrivacyChanged: (callback: (state: PrivacyState) => void) => () => void;
+  /** The adult gate changed, from any screen, the backup restore or the session unlock. */
+  onAdultChanged: (callback: (state: { mode: 'off' | 'ask' | 'on'; allowed: boolean }) => void) => () => void;
+  /** Saves a subtitle to the subtitle folder; reuses an existing copy unless `refresh`. */
+  downloadSubtitle: (request: SubtitleDownloadRequest) => Promise<Envelope & { entry: SavedSubtitle | null; reused: boolean }>;
+  /** Subtitles saved for one title (and episode). */
+  listSavedSubtitles: (
+    title: string,
+    year?: number,
+    season?: number,
+    episode?: number
+  ) => Promise<Envelope & { entries: SavedSubtitle[] }>;
+  readSavedSubtitle: (id: string) => Promise<Envelope & { vtt: string }>;
+  removeSavedSubtitle: (id: string) => Promise<{ ok: boolean }>;
 
   getSearchHistory: () => Promise<SearchHistoryEntry[]>;
   removeSearchHistory: (query: string) => Promise<SearchHistoryEntry[]>;
@@ -402,7 +431,7 @@ export interface CloudStreamElectronAPI {
      * `persistent`: keep trying on its own — every source in turn, then every
      * provider and indexer — instead of stopping to ask. Standard mode.
      */
-    options?: { persistent?: boolean }
+    options?: { persistent?: boolean; resumeKey?: string }
   ) => Promise<Envelope & { snapshot: PlaybackSnapshot | null }>;
   /** Starts the best source found so far instead of waiting for every indexer. */
   /** Abandons a source that started but will not play, and tries the next. */
@@ -489,6 +518,16 @@ export interface CloudStreamElectronAPI {
    * someone sharing a machine chooses it for.
    */
   getAdultMode: () => Promise<Envelope & { mode: 'off' | 'ask' | 'on'; allowed: boolean }>;
+  /** PRD-54: the viewer's content regions, and whether they have been asked yet. */
+  getRegions: () => Promise<RegionState>;
+  /**
+   * Stores a selection; additions run in the background (bootstrap progress).
+   * `affected` lists what a removed region leaves behind, for review only.
+   */
+  setRegions: (
+    selection: string[],
+    options?: { crossRegion?: boolean }
+  ) => Promise<Envelope & { state: RegionState; affected: RegionAffectedRepository[] }>;
   setAdultMode: (
     mode: 'off' | 'ask' | 'on'
   ) => Promise<Envelope & { mode: 'off' | 'ask' | 'on'; allowed?: boolean; providers?: string[] }>;
@@ -740,6 +779,7 @@ export interface CloudStreamElectronAPI {
   mpvSetSpeed: (speed: number) => Promise<MpvCommandResult>;
   mpvSetFullscreen: (fullscreen: boolean) => Promise<MpvCommandResult>;
   /** mpv track ids, which are 1-based and per type — not ffprobe ordinals. */
+  mpvSetVideoTrack: (id: number | 'auto' | 'no') => Promise<MpvCommandResult>;
   mpvSetAudioTrack: (id: number | null) => Promise<MpvCommandResult>;
   mpvSetSubtitleTrack: (id: number | null) => Promise<MpvCommandResult>;
   mpvAddSubtitle: (url: string, title?: string, language?: string) => Promise<MpvCommandResult>;
@@ -750,6 +790,8 @@ export interface CloudStreamElectronAPI {
   /** A pull, for a player that mounted while something was already playing. */
   getMpvSnapshot: () => Promise<Envelope & { snapshot: MpvSnapshot }>;
   onMpvUpdate: (callback: (snapshot: MpvSnapshot) => void) => () => void;
+  /** A key pressed in mpv's own window asking the app to do something (`mpvEngine.NATIVE_APP_ACTIONS`). */
+  onMpvAction: (callback: (action: 'subtitles') => void) => () => void;
   getNativeEnginePolicy: () => Promise<
     Envelope & { policy: 'off' | 'auto' | 'aggressive'; available: boolean }
   >;
@@ -873,6 +915,7 @@ export interface CloudStreamElectronAPI {
   // Indexers and ranking preferences
   getIndexerConfigs: () => Promise<IndexerConfig[]>;
   saveIndexerConfig: (config: IndexerConfig) => Promise<IndexerConfig[]>;
+  saveIndexerConfigs: (configs: IndexerConfig[]) => Promise<IndexerConfig[]>;
   removeIndexerConfig: (id: string) => Promise<IndexerConfig[]>;
   testIndexer: (config: IndexerConfig) => Promise<{ ok: boolean; message: string }>;
   getIndexerHealth: () => Promise<IndexerHealth[]>;
@@ -948,6 +991,9 @@ export interface CloudStreamElectronAPI {
     backgroundPlayback?: 'continue' | 'audio-only' | 'pause';
     alwaysOnTop?: boolean;
   }) => Promise<Envelope>;
+  onPlayerPreferencesChanged: (
+    callback: (preferences: StoredPlayerPreferences) => void
+  ) => () => void;
   /**
    * Pins the application window above everything else.
    *
@@ -1352,6 +1398,10 @@ export interface CloudStreamElectronAPI {
   fetchRepository: (
     repoUrl: string
   ) => Promise<Envelope & { repository: RepositoryFetchResult | null }>;
+  /** The stored listing for a repository, if one has been read before. Fetches nothing. */
+  peekRepository: (
+    repoUrl: string
+  ) => Promise<Envelope & { repository: RepositoryFetchResult | null; fetchedAt: number | null }>;
   analyzePlugin: (plugin: SitePlugin) => Promise<PluginCompatibilityReport>;
   installPlugin: (
     plugin: SitePlugin,
@@ -1431,6 +1481,24 @@ export interface CloudStreamElectronAPI {
   getOttCatalog: (
     platformId: string
   ) => Promise<{ ok: boolean; error?: string; catalog: ProviderCatalog | null }>;
+  /** One provider's catalogue, so a page can draw each provider as it lands. */
+  /** Answered from cache when there is one; `refresh` asks the provider. */
+  getOttProviderCatalog: (
+    platformId: string,
+    provider: string,
+    options?: { refresh?: boolean }
+  ) => Promise<{
+    ok: boolean;
+    error?: string;
+    catalog: (ProviderCatalog & { fetchedAt?: number }) | null;
+  }>;
+  /** Every matching provider's own catalogue, richest first. */
+  getOttCatalogs: (platformId: string) => Promise<{
+    ok: boolean;
+    error?: string;
+    catalogs: ProviderCatalog[];
+    unavailable: Array<{ provider: string; reason: string }>;
+  }>;
   /**
    * One page of one catalogue row.
    *
@@ -1438,10 +1506,12 @@ export interface CloudStreamElectronAPI {
    * opaque handle for the row and is not a URL. Rebuilding it here — or
    * "cleaning" it — is how a browse request stops matching the row it names.
    */
+  /** Answered from cache when there is one; `refresh` asks the provider. */
   getOttCatalogPage: (
     provider: string,
     section: { name: string; data: string; horizontalImages?: boolean },
-    page: number
+    page: number,
+    options?: { refresh?: boolean }
   ) => Promise<{ ok: boolean; error?: string; page: ProviderCatalogPage | null }>;
   /**
    * The providers a search from this platform's page should be scoped to.
@@ -1550,6 +1620,9 @@ export interface CloudStreamElectronAPI {
   // Extension updates (over-the-air; independent of app updates)
   checkExtensionUpdates: () => Promise<Envelope & { result: UpdateCheckResult | null }>;
   getCachedExtensionUpdates: () => Promise<AvailableUpdate[]>;
+  getIgnoredExtensionUpdates: () => Promise<Record<string, IgnoredExtensionUpdate>>;
+  ignoreExtensionUpdate: (internalName: string, reason?: string) => Promise<{ ok: boolean }>;
+  unignoreExtensionUpdate: (internalName: string) => Promise<{ ok: boolean }>;
   updateExtension: (internalName: string) => Promise<UpdateOutcome>;
   updateAllExtensions: (internalNames?: string[]) => Promise<UpdateOutcome[]>;
   getUpdateSettings: () => Promise<UpdateSettings>;
@@ -1574,7 +1647,7 @@ export interface CloudStreamElectronAPI {
      * page — the episode on screen — so the sources found for it are saved too.
      */
     sourceQuery?: { mediaUrl: string; season?: number; episode?: number };
-  }) => Promise<LibraryEntry>;
+  }) => Promise<LibraryEntry | null>;
   setLibraryStatus: (key: string, status: WatchStatus) => Promise<LibraryEntry | null>;
   setLibraryUserRating: (key: string, rating?: number) => Promise<LibraryEntry | null>;
   removeLibraryEntry: (key: string) => Promise<boolean>;
@@ -1606,6 +1679,8 @@ export interface CloudStreamElectronAPI {
         genres: number;
         selectable: boolean;
         active: boolean;
+        accent?: string;
+        category?: 'general' | 'streaming' | 'anime';
         health: {
           status: 'healthy' | 'degraded' | 'unavailable' | 'unchecked';
           latencyMs?: number;
@@ -1757,40 +1832,18 @@ export interface CloudStreamElectronAPI {
    * which extensions are off, indexer configuration — so a new machine can be
    * made into this one.
    *
-   * `inspectBackup` reads a file and describes it without changing anything, so
-   * a restore can be confirmed against what is actually in the file rather than
-   * against its filename.
+   * `inspectBackup` asks for a file and compares it with this installation
+   * without changing anything: what each category holds, what each restore
+   * mode would do, and the conflicts only the reader can settle.
+   * `restoreUserData` applies a plan built from that; `undoRestore` puts back
+   * what the last restore changed.
    */
   exportUserData: (
     only?: string[]
   ) => Promise<Envelope & { path?: string; bytes?: number; cancelled?: boolean }>;
-  inspectBackup: () => Promise<
-    Envelope & {
-      cancelled?: boolean;
-      path?: string;
-      envelope?: {
-        formatVersion: number;
-        createdAt: number;
-        app: { version: string; platform: string };
-        summary: Record<string, number>;
-      };
-    }
-  >;
-  restoreUserData: (
-    filePath: string,
-    options?: { only?: string[]; mode?: 'merge' | 'replace' }
-  ) => Promise<
-    Envelope & {
-      sections?: Array<{
-        name: string;
-        restored: number;
-        note?: string;
-        mode?: 'merge' | 'replace';
-      }>;
-    }
-  >;
-  /** Puts the key/value store back as it was immediately before a restore. */
-  undoRestore: () => Promise<Envelope>;
+  inspectBackup: () => Promise<Envelope & { cancelled?: boolean; analysis?: BackupAnalysis }>;
+  restoreUserData: (filePath: string, plan: RestorePlan) => Promise<RestoreSummary>;
+  undoRestore: () => Promise<RestoreSummary>;
 
   /**
    * Making a provider a saved page names answer again.
@@ -1837,6 +1890,12 @@ export interface CloudStreamElectronAPI {
   setOttPlatformEnabled: (
     platformId: string,
     enabled: boolean
+  ) => Promise<Envelope & { enabled?: string[] }>;
+  /** Replaces the pinned services, in order; answers the whole pinned list. */
+  setOttPinnedPlatforms: (ids: string[]) => Promise<Envelope & { pinned?: string[] }>;
+  /** Bulk form of `setOttPlatformEnabled`; answers the whole enabled set. */
+  setOttPlatformsEnabled: (
+    changes: Record<string, boolean>
   ) => Promise<Envelope & { enabled?: string[] }>;
   planProviderRecovery: (provider: string) => Promise<
     Envelope & {
@@ -1896,6 +1955,7 @@ export interface CloudStreamElectronAPI {
    */
   onToggleInspector: (callback: () => void) => () => void;
   onShowLicences: (callback: () => void) => () => void;
+  onOpenSettings: (callback: () => void) => () => void;
   /** A file the user picked from File → Open, to be prepared and played. */
   onOpenLocalFile: (callback: (filePath: string) => void) => () => void;
   /** A `cloudstream://` link the app was opened with, or handed while running. */
@@ -1945,17 +2005,28 @@ const api: CloudStreamElectronAPI = {
   recordTitleVisit: (title, year) => ipcRenderer.invoke('interactions:visit', title, year),
   clearTitleVisits: () => ipcRenderer.invoke('interactions:clearVisits'),
   clearExtendedMetadata: () => ipcRenderer.invoke('metadata:clearCache'),
+  findTrailers: (title, year) => ipcRenderer.invoke('metadata:findTrailers', title, year),
+  findRelatedMedia: (request) => ipcRenderer.invoke('metadata:findRelatedMedia', request),
+  getMediaRatings: (identity) => ipcRenderer.invoke('ratings:get', identity),
+  refreshMediaRatings: (identity) => ipcRenderer.invoke('ratings:refresh', identity),
   resolvePromoVideo: (pageUrl) => ipcRenderer.invoke('videos:resolve', pageUrl),
   getSources: (request) => ipcRenderer.invoke('api:getSources', request),
   getPluginRuntimeStatus: () => ipcRenderer.invoke('api:getPluginRuntimeStatus'),
 
   suggestTitles: (query) => ipcRenderer.invoke('api:suggest', query),
   onSuggestionUpdate: (callback) => subscribe('search:suggestUpdate', callback),
-  searchSubtitles: (imdbId, season, episode, mediaUrl) =>
-    ipcRenderer.invoke('subtitles:search', imdbId, season, episode, mediaUrl),
-  searchSubtitlesByTitle: (query, season, episode, mediaUrl) =>
-    ipcRenderer.invoke('subtitles:searchByTitle', query, season, episode, mediaUrl),
+  findSubtitles: (query) => ipcRenderer.invoke('subtitles:find', query),
   fetchSubtitle: (url) => ipcRenderer.invoke('subtitles:fetch', url),
+  getPrivacyState: () => ipcRenderer.invoke('privacy:getState'),
+  setIncognito: (active) => ipcRenderer.invoke('privacy:setActive', active),
+  updatePrivacySettings: (partial) => ipcRenderer.invoke('privacy:updateSettings', partial),
+  onPrivacyChanged: (callback) => subscribe('privacy:changed', callback),
+  onAdultChanged: (callback) => subscribe('adult:changed', callback),
+  downloadSubtitle: (request) => ipcRenderer.invoke('subtitles:download', request),
+  listSavedSubtitles: (title, year, season, episode) =>
+    ipcRenderer.invoke('subtitles:listSaved', title, year, season, episode),
+  readSavedSubtitle: (id) => ipcRenderer.invoke('subtitles:readSaved', id),
+  removeSavedSubtitle: (id) => ipcRenderer.invoke('subtitles:removeSaved', id),
 
   getSearchHistory: () => ipcRenderer.invoke('api:getSearchHistory'),
   removeSearchHistory: (query) => ipcRenderer.invoke('api:removeSearchHistory', query),
@@ -1999,6 +2070,8 @@ const api: CloudStreamElectronAPI = {
   getAdultAllowed: () => ipcRenderer.invoke('extension:getAdultAllowed'),
   setAdultAllowed: (enabled) => ipcRenderer.invoke('extension:setAdultAllowed', enabled),
   getAdultMode: () => ipcRenderer.invoke('extension:getAdultMode'),
+  getRegions: () => ipcRenderer.invoke('regions:get'),
+  setRegions: (selection, options) => ipcRenderer.invoke('regions:set', selection, options),
   setAdultMode: (mode) => ipcRenderer.invoke('extension:setAdultMode', mode),
   unlockAdultForSession: () => ipcRenderer.invoke('extension:unlockAdultForSession'),
   lockAdultForSession: () => ipcRenderer.invoke('extension:lockAdultForSession'),
@@ -2066,15 +2139,27 @@ const api: CloudStreamElectronAPI = {
   mpvSetMuted: (muted) => ipcRenderer.invoke('mpv:setMuted', muted),
   mpvSetSpeed: (speed) => ipcRenderer.invoke('mpv:setSpeed', speed),
   mpvSetFullscreen: (fullscreen) => ipcRenderer.invoke('mpv:setFullscreen', fullscreen),
+  mpvSetVideoTrack: (id) => ipcRenderer.invoke('mpv:setVideoTrack', id),
   mpvSetAudioTrack: (id) => ipcRenderer.invoke('mpv:setAudioTrack', id),
   mpvSetSubtitleTrack: (id) => ipcRenderer.invoke('mpv:setSubtitleTrack', id),
-  mpvAddSubtitle: (url, title, language) =>
-    ipcRenderer.invoke('mpv:addSubtitle', url, title, language),
+  mpvAddSubtitle: async (url, title, language) => {
+    let target = url;
+    if (url && typeof url === 'string' && url.startsWith('blob:')) {
+      try {
+        const response = await fetch(url);
+        target = await response.text();
+      } catch {
+        // Fall back to url
+      }
+    }
+    return ipcRenderer.invoke('mpv:addSubtitle', target, title, language);
+  },
   mpvSetSubtitleDelay: (seconds) => ipcRenderer.invoke('mpv:setSubtitleDelay', seconds),
   mpvSetSubtitleStyle: (properties) => ipcRenderer.invoke('mpv:setSubtitleStyle', properties),
   mpvStop: () => ipcRenderer.invoke('mpv:stop'),
   getMpvSnapshot: () => ipcRenderer.invoke('mpv:snapshot'),
   onMpvUpdate: (callback) => subscribe('mpv:update', callback),
+  onMpvAction: (callback) => subscribe('mpv:action', callback),
   getNativeEnginePolicy: () => ipcRenderer.invoke('mpv:getPolicy'),
   setNativeEnginePolicy: (policy) => ipcRenderer.invoke('mpv:setPolicy', policy),
   setupMpv: () => ipcRenderer.invoke('binary:setupMpv'),
@@ -2114,6 +2199,7 @@ const api: CloudStreamElectronAPI = {
 
   getIndexerConfigs: () => ipcRenderer.invoke('indexer:getConfigs'),
   saveIndexerConfig: (config) => ipcRenderer.invoke('indexer:saveConfig', config),
+  saveIndexerConfigs: (configs) => ipcRenderer.invoke('indexer:saveConfigs', configs),
   removeIndexerConfig: (id) => ipcRenderer.invoke('indexer:removeConfig', id),
   testIndexer: (config) => ipcRenderer.invoke('indexer:test', config),
   getIndexerHealth: () => ipcRenderer.invoke('indexer:getHealth'),
@@ -2127,6 +2213,7 @@ const api: CloudStreamElectronAPI = {
   removeDownload: (id, deleteFile) => ipcRenderer.invoke('download:remove', id, deleteFile),
   getPlayerPreferences: () => ipcRenderer.invoke('player:getPreferences'),
   setPlayerPreferences: (patch) => ipcRenderer.invoke('player:setPreferences', patch),
+  onPlayerPreferencesChanged: (callback) => subscribe('player:preferencesChanged', callback),
   setWindowAlwaysOnTop: (onTop) => ipcRenderer.invoke('window:setAlwaysOnTop', onTop),
   getWindowAlwaysOnTop: () => ipcRenderer.invoke('window:getAlwaysOnTop'),
   setMpvOnTop: (onTop) => ipcRenderer.invoke('mpv:setOnTop', onTop),
@@ -2232,6 +2319,7 @@ const api: CloudStreamElectronAPI = {
 
   getOfficialRepositories: () => ipcRenderer.invoke('extension:getOfficialRepositories'),
   fetchRepository: (repoUrl) => ipcRenderer.invoke('extension:fetchRepository', repoUrl),
+  peekRepository: (repoUrl) => ipcRenderer.invoke('extension:peekRepository', repoUrl),
   analyzePlugin: (plugin) => ipcRenderer.invoke('extension:analyzePlugin', plugin),
   installPlugin: (plugin, repoUrl) =>
     ipcRenderer.invoke('extension:installPlugin', plugin, repoUrl),
@@ -2248,8 +2336,11 @@ const api: CloudStreamElectronAPI = {
   removeMediaServer: (localId: string) => ipcRenderer.invoke('natives:removeServer', localId),
   listOttPlatforms: () => ipcRenderer.invoke('ott:listPlatforms'),
   getOttCatalog: (platformId) => ipcRenderer.invoke('ott:getCatalog', platformId),
-  getOttCatalogPage: (provider, section, page) =>
-    ipcRenderer.invoke('ott:getCatalogPage', provider, section, page),
+  getOttCatalogs: (platformId) => ipcRenderer.invoke('ott:getCatalogs', platformId),
+  getOttProviderCatalog: (platformId, provider, options) =>
+    ipcRenderer.invoke('ott:getProviderCatalog', platformId, provider, options),
+  getOttCatalogPage: (provider, section, page, options) =>
+    ipcRenderer.invoke('ott:getCatalogPage', provider, section, page, options),
   getOttSearchScope: (platformId) => ipcRenderer.invoke('ott:getSearchScope', platformId),
   getOttSuggestions: (platformId) => ipcRenderer.invoke('ott:getSuggestions', platformId),
   installOttSuggestion: (platformId, repositoryId) =>
@@ -2259,6 +2350,8 @@ const api: CloudStreamElectronAPI = {
     ipcRenderer.invoke('ott:getMetadataCatalog', platformId),
   setOttPlatformEnabled: (platformId, enabled) =>
     ipcRenderer.invoke('ott:setPlatformEnabled', platformId, enabled),
+  setOttPlatformsEnabled: (changes) => ipcRenderer.invoke('ott:setPlatformsEnabled', changes),
+  setOttPinnedPlatforms: (ids) => ipcRenderer.invoke('ott:setPinnedPlatforms', ids),
   addRepository: (url) => ipcRenderer.invoke('extension:addRepository', url),
   installRepository: (url, options) => ipcRenderer.invoke('extension:installRepository', url, options),
   removeRepository: (repoUrl) => ipcRenderer.invoke('extension:removeRepository', repoUrl),
@@ -2276,6 +2369,11 @@ const api: CloudStreamElectronAPI = {
 
   checkExtensionUpdates: () => ipcRenderer.invoke('extension:checkUpdates'),
   getCachedExtensionUpdates: () => ipcRenderer.invoke('extension:getCachedUpdates'),
+  getIgnoredExtensionUpdates: () => ipcRenderer.invoke('extension:getIgnoredUpdates'),
+  ignoreExtensionUpdate: (internalName, reason) =>
+    ipcRenderer.invoke('extension:ignoreUpdate', internalName, reason),
+  unignoreExtensionUpdate: (internalName) =>
+    ipcRenderer.invoke('extension:unignoreUpdate', internalName),
   updateExtension: (internalName) => ipcRenderer.invoke('extension:update', internalName),
   updateAllExtensions: (internalNames) =>
     ipcRenderer.invoke('extension:updateAll', internalNames),
@@ -2356,8 +2454,7 @@ const api: CloudStreamElectronAPI = {
   getStartupProfile: () => ipcRenderer.invoke('app:getStartupProfile'),
   exportUserData: (only) => ipcRenderer.invoke('backup:export', only),
   inspectBackup: () => ipcRenderer.invoke('backup:inspect'),
-  restoreUserData: (filePath, options) =>
-    ipcRenderer.invoke('backup:restore', filePath, options),
+  restoreUserData: (filePath, plan) => ipcRenderer.invoke('backup:restore', filePath, plan),
   undoRestore: () => ipcRenderer.invoke('backup:undoRestore'),
   planProviderRecovery: (provider) =>
     ipcRenderer.invoke('extension:planProviderRecovery', provider),
@@ -2368,6 +2465,7 @@ const api: CloudStreamElectronAPI = {
     ipcRenderer.invoke('extension:recoverProviders', providers),
   onToggleInspector: (callback) => subscribe('app:toggleInspector', callback),
   onShowLicences: (callback) => subscribe('app:showLicences', callback),
+  onOpenSettings: (callback) => subscribe('app:openSettings', callback),
   onOpenLocalFile: (callback) => subscribe('app:openLocalFile', callback),
   onOpenShareLink: (callback) => subscribe('app:openShareLink', callback),
 };

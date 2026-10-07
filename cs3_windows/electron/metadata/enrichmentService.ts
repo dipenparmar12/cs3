@@ -71,7 +71,7 @@ import {
   orderCredits,
   preferPreciseDate,
 } from './merge.ts';
-import { fetchWikidata, type WikidataResult } from './wikidata.ts';
+import { commonsThumbnail, fetchWikidata, type WikidataResult } from './wikidata.ts';
 import {
   fetchCredits as fetchTvMazeCredits,
   fetchShowFacts,
@@ -86,7 +86,7 @@ import {
 import type { TitleEnricher } from '../cs3/titleEnricher.ts';
 import { fetchWikipediaNotes, type WikipediaNotes } from './wikipedia.ts';
 import { parseCinemetaExtras, type CinemetaExtras } from './cinemetaExtras.ts';
-import { describeYouTubeVideos, type YouTubeVideoFacts } from './youtube.ts';
+import { describeYouTubeVideos, searchYouTubeTrailers, type YouTubeVideoFacts } from './youtube.ts';
 import { classifyVideoTitle, looksOfficial, orderVideos } from './videoTitles.ts';
 import type { TitleVideo } from '../../src/types/metadata.ts';
 import { fetchJson } from '../torrent/http.ts';
@@ -121,6 +121,8 @@ export interface EnrichmentRequest {
   type?: TvType;
   title?: string;
   year?: number;
+  /** Promotional trailers supplied by the provider or scraper. */
+  providerVideos?: TitleVideo[];
 }
 
 /** Called with a fuller record each time a source lands. */
@@ -222,6 +224,28 @@ function describeVideos(
   return orderVideos(out);
 }
 
+/**
+ * Records cached before `commonsThumbnail` addressed `upload.wikimedia.org`
+ * directly still hold the `Special:FilePath` redirect, which some networks
+ * refuse. Rewritten on load so a cached page shows its faces without waiting a
+ * week for the entry to expire.
+ */
+function directCommonsImages(metadata: ExtendedMetadata): ExtendedMetadata {
+  const rewrite = (url: string | undefined) =>
+    url && /Special:FilePath/i.test(url) ? commonsThumbnail(url) : url;
+  if (!metadata.people?.some((p) => /Special:FilePath/i.test(p.imageUrl ?? ''))) {
+    return metadata;
+  }
+  return {
+    ...metadata,
+    people: metadata.people.map((person) => ({
+      ...person,
+      imageUrl: rewrite(person.imageUrl),
+      characterImageUrl: rewrite(person.characterImageUrl),
+    })),
+  };
+}
+
 /** A thrown value to one line a person can read. */
 function describe(error: unknown): string {
   if (error instanceof Error) return error.message;
@@ -283,7 +307,7 @@ export class MetadataEnrichmentService {
     for (const row of rows) {
       if (!row?.url || !row.entry?.metadata) continue;
       if (now - row.entry.at > MAX_AGE_MS) continue;
-      this.entries.set(row.url, row.entry);
+      this.entries.set(row.url, { ...row.entry, metadata: directCommonsImages(row.entry.metadata) });
     }
   }
 
@@ -410,6 +434,7 @@ export class MetadataEnrichmentService {
     let wikipedia: WikipediaNotes | null = null;
     /** What YouTube said each collected trailer is. Filled in phase two. */
     let videoFacts: Awaited<ReturnType<typeof describeYouTubeVideos>> | null = null;
+    let discoveredVideos: TitleVideo[] = [];
 
     /**
      * What the catalogues believe this is, when the provider had no id.
@@ -453,7 +478,7 @@ export class MetadataEnrichmentService {
       const snapshot = this.assemble(
         request,
         ids,
-        { cinemeta, wikidata, anilist, tvmaze, tvmazeFacts, wikipedia, videoFacts },
+        { cinemeta, wikidata, anilist, tvmaze, tvmazeFacts, wikipedia, videoFacts, discoveredVideos },
         outcomes,
         partial
       );
@@ -640,6 +665,7 @@ export class MetadataEnrichmentService {
     const collected = mergeVideos([
       (cinemeta as CinemetaExtras | null)?.videos ?? [],
       (anilist as AniListCredits | null)?.videos ?? [],
+      request.providerVideos ?? [],
     ]);
     if (collected.length > 0) {
       const startedAt = Date.now();
@@ -663,6 +689,24 @@ export class MetadataEnrichmentService {
       // Published before Wikipedia rather than after it: the gallery is the
       // fastest half of phase two and has no reason to wait for prose.
       publish(true);
+    } else if (request.title) {
+      // Automatic fallback: when catalogues had no trailers, search public YouTube keylessly!
+      const startedAt = Date.now();
+      try {
+        const query = `${request.title} ${request.year ? request.year : ''} official trailer`.trim();
+        const found = await searchYouTubeTrailers(query, { signal, maxResults: 5 });
+        if (found.length > 0) {
+          discoveredVideos = found;
+          outcomes.push(outcome(MetadataSource.YouTube, 'ok', startedAt));
+          publish(true);
+        } else {
+          outcomes.push(
+            outcome(MetadataSource.YouTube, 'empty', startedAt, 'no trailers found on YouTube')
+          );
+        }
+      } catch (error) {
+        outcomes.push(outcome(MetadataSource.YouTube, 'failed', startedAt, describe(error)));
+      }
     }
 
     // Phase two, second half. The article URL is a sitelink from Wikidata,
@@ -718,11 +762,12 @@ export class MetadataEnrichmentService {
       tvmazeFacts: TvMazeShowFacts | null;
       wikipedia: WikipediaNotes | null;
       videoFacts: Awaited<ReturnType<typeof describeYouTubeVideos>> | null;
+      discoveredVideos?: TitleVideo[];
     },
     outcomes: MetadataSourceOutcome[],
     partial: boolean
   ): ExtendedMetadata {
-    const { cinemeta, wikidata, anilist, tvmaze, tvmazeFacts, wikipedia, videoFacts } = parts;
+    const { cinemeta, wikidata, anilist, tvmaze, tvmazeFacts, wikipedia, videoFacts, discoveredVideos } = parts;
 
     const people = orderCredits(
       mergeCredits([
@@ -744,6 +789,7 @@ export class MetadataEnrichmentService {
     return {
       url: request.url,
       ids,
+      franchise: wikidata?.franchise ?? undefined,
       originalTitle: anilist?.originalTitle ?? facts?.originalTitle,
       alternateTitles: mergeStrings([anilist?.alternateTitles]),
       // The provider's own synopsis stays on the page; this is the floor under
@@ -807,7 +853,12 @@ export class MetadataEnrichmentService {
       production: mergeNotes([wikipedia?.production ?? []]),
       trivia: mergeNotes([wikipedia?.trivia ?? [], anilist?.trivia ?? []]),
       videos: describeVideos(
-        mergeVideos([cinemeta?.videos ?? [], anilist?.videos ?? []]),
+        mergeVideos([
+          cinemeta?.videos ?? [],
+          anilist?.videos ?? [],
+          request.providerVideos ?? [],
+          discoveredVideos ?? [],
+        ]),
         videoFacts
       ),
       backdropUrl: cinemeta?.backdropUrl ?? anilist?.backdropUrl,

@@ -1,5 +1,6 @@
-import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { Search, Bug, Loader2, Paperclip } from 'lucide-react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { Search, Bug, Loader2, Paperclip, EyeOff, X, Square, Trash2 } from 'lucide-react';
+import { usePrivacy } from '../utils/usePrivacy';
 import { DeveloperOnly } from '../utils/ExperienceModeContext';
 import { SearchScopePicker } from './SearchScopePicker';
 import type {
@@ -10,9 +11,18 @@ import type {
 } from '../types/api';
 import { SearchSuggestions } from './SearchSuggestions';
 import type { SavedSearchSummary } from '../../electron/savedSearches';
+import { mergeHistoryAndSaved } from '../utils/searchHistoryMerge';
 
 interface NavbarProps {
   onSearch: (query: string, options?: SearchOptions) => void;
+  /** Stops the active search fan-out. */
+  onCancelSearch?: () => void;
+  /** Fired when the query is cleared via the clear button or Esc. */
+  onClearSearch?: () => void;
+  /** Clears active search results from screen. */
+  onClearResults?: () => void;
+  /** Whether search results are currently active on screen. */
+  hasSearchResults?: boolean;
   /**
    * A torrent was picked from disk, so the app can open its page.
    *
@@ -69,6 +79,10 @@ const SUGGEST_MIN_LENGTH = 1;
 
 export const Navbar: React.FC<NavbarProps> = ({
   onSearch,
+  onCancelSearch,
+  onClearSearch,
+  onClearResults,
+  hasSearchResults = false,
   onTorrentPicked,
   onTorrentPickFailed,
   isSearching = false,
@@ -78,6 +92,25 @@ export const Navbar: React.FC<NavbarProps> = ({
   onOpenSavedSearch,
 }) => {
   const [query, setQuery] = useState('');
+  const { active: incognito, setActive: setIncognito } = usePrivacy();
+  const [showTorrentAttachment, setShowTorrentAttachment] = useState(false);
+
+  useEffect(() => {
+    const update = () => {
+      window.cloudstream
+        ?.getSetting('show_torrent_attachment', 'false')
+        .then((val) => setShowTorrentAttachment(val === 'true'));
+    };
+    update();
+    const handleSettingsChanged = (e: Event) => {
+      const custom = e as CustomEvent<{ key?: string; value?: unknown }>;
+      if (!custom.detail || custom.detail.key === 'show_torrent_attachment') {
+        update();
+      }
+    };
+    window.addEventListener('cs3:settings-changed', handleSettingsChanged);
+    return () => window.removeEventListener('cs3:settings-changed', handleSettingsChanged);
+  }, []);
 
   /**
    * Adopts a query the app started elsewhere.
@@ -109,6 +142,30 @@ export const Navbar: React.FC<NavbarProps> = ({
   }, []);
 
   useEffect(() => refreshHistory(), [refreshHistory]);
+
+  useEffect(() => {
+    const handleFocusSearch = () => {
+      inputRef.current?.focus();
+      inputRef.current?.select();
+    };
+    window.addEventListener('cs3:focus-navbar-search', handleFocusSearch);
+    return () => window.removeEventListener('cs3:focus-navbar-search', handleFocusSearch);
+  }, []);
+
+  const mergedHistory = useMemo(() => {
+    return mergeHistoryAndSaved(history, saved);
+  }, [history, saved]);
+
+  const trimmedQuery = query.trim();
+  const displayHistory = useMemo(() => {
+    if (!trimmedQuery) {
+      return mergedHistory.slice(0, 15);
+    }
+    const lower = trimmedQuery.toLowerCase();
+    return mergedHistory
+      .filter((entry) => entry.query.toLowerCase().includes(lower))
+      .slice(0, 8);
+  }, [mergedHistory, trimmedQuery]);
 
   /**
    * Fetches suggestions for the current query, debounced.
@@ -237,18 +294,36 @@ export const Navbar: React.FC<NavbarProps> = ({
   const historyFirst = query.trim().length < SUGGEST_MIN_LENGTH;
   const orderedRows: Array<{ kind: 'suggestion' | 'history'; index: number }> = historyFirst
     ? [
-        ...history.map((_, index) => ({ kind: 'history' as const, index })),
+        ...displayHistory.map((_, index) => ({ kind: 'history' as const, index })),
         ...suggestions.map((_, index) => ({ kind: 'suggestion' as const, index })),
       ]
     : [
         ...suggestions.map((_, index) => ({ kind: 'suggestion' as const, index })),
-        ...history.map((_, index) => ({ kind: 'history' as const, index })),
+        ...displayHistory.map((_, index) => ({ kind: 'history' as const, index })),
       ];
+
+  const handleClear = useCallback(() => {
+    setQuery('');
+    lastExternal.current = '';
+    setSuggestOpen(false);
+    setHighlightedIndex(-1);
+    inputRef.current?.focus();
+    onClearSearch?.();
+    if (isSearching) {
+      onCancelSearch?.();
+    }
+  }, [isSearching, onClearSearch, onCancelSearch]);
 
   const handleKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
     if (e.key === 'Escape') {
-      setSuggestOpen(false);
-      setHighlightedIndex(-1);
+      if (suggestOpen) {
+        setSuggestOpen(false);
+        setHighlightedIndex(-1);
+      } else if (query) {
+        handleClear();
+      } else if (isSearching) {
+        onCancelSearch?.();
+      }
       return;
     }
 
@@ -271,8 +346,17 @@ export const Navbar: React.FC<NavbarProps> = ({
       if (row) {
         // Enter on a highlighted row is the same commitment as clicking it, so
         // it carries the same identity rather than degrading to a text search.
-        if (row.kind === 'suggestion') pickSuggestion(suggestions[row.index]);
-        else runSearch(history[row.index].query);
+        if (row.kind === 'suggestion') {
+          pickSuggestion(suggestions[row.index]);
+        } else {
+          const entry = displayHistory[row.index];
+          if (entry?.isSaved && entry.savedId && onOpenSavedSearch) {
+            setSuggestOpen(false);
+            onOpenSavedSearch(entry.savedId);
+          } else if (entry) {
+            runSearch(entry.query);
+          }
+        }
         return;
       }
       runSearch(query);
@@ -306,7 +390,7 @@ export const Navbar: React.FC<NavbarProps> = ({
   }, [onTorrentPicked, onTorrentPickFailed]);
 
   return (
-    <header className="navbar">
+    <header className={`navbar${incognito ? ' navbar--incognito' : ''}`}>
       {/* Search Input Bar */}
       <div className="search-bar">
         {isSearching ? (
@@ -318,7 +402,11 @@ export const Navbar: React.FC<NavbarProps> = ({
           ref={inputRef}
           type="text"
           className="search-input"
-          placeholder="Search movies, anime, TV shows across providers or paste URL..."
+          placeholder={
+            incognito
+              ? "Incognito: searches aren't saved. Search movies, anime, TV shows…"
+              : 'Search movies, anime, TV shows across providers or paste URL...'
+          }
           value={query}
           onChange={(e) => setQuery(e.target.value)}
           onKeyDown={handleKeyDown}
@@ -331,65 +419,140 @@ export const Navbar: React.FC<NavbarProps> = ({
           aria-expanded={suggestOpen}
           aria-autocomplete="list"
         />
-        {/*
-          The other way in.
-          
-          Drag-and-drop is a gesture plenty of people never use — it is awkward
-          on a trackpad and invisible if nobody has told you it exists. This is
-          the same import behind a control that looks like one, next to the box
-          where somebody is already looking for something to watch.
-        */}
-        <button
-          type="button"
-          onClick={() => void pickTorrent()}
-          disabled={picking}
-          className="search-bar__attach"
-          title="Open a .torrent file"
-          aria-label="Open a torrent file"
-        >
-          {picking ? <Loader2 size={16} className="spin" /> : <Paperclip size={16} />}
-        </button>
 
-        <button
-          onClick={() => runSearch(query)}
-          disabled={isSearching}
-          className="btn btn-primary"
-          style={{ padding: '0.35rem 0.85rem', fontSize: '0.8rem', display: 'flex', alignItems: 'center', gap: '0.4rem' }}
-        >
-          {isSearching ? <Loader2 size={14} className="spin" /> : <Search size={14} />}
-          <span>{isSearching ? 'Searching…' : 'Search'}</span>
-        </button>
+        {query.length > 0 && (
+          <button
+            type="button"
+            onMouseDown={(e) => {
+              // Keep focus on the input so typing or clearing feels instant
+              e.preventDefault();
+            }}
+            onClick={handleClear}
+            className="search-bar__clear"
+            title="Clear search (Esc)"
+            aria-label="Clear search"
+          >
+            <X size={15} />
+          </button>
+        )}
+
+        {showTorrentAttachment && !query.trim() && !isSearching && (
+          <button
+            type="button"
+            onClick={() => void pickTorrent()}
+            disabled={picking}
+            className="search-bar__attach"
+            title="Open a .torrent file"
+            aria-label="Open a torrent file"
+          >
+            {picking ? <Loader2 size={16} className="spin" /> : <Paperclip size={16} />}
+          </button>
+        )}
+
+        {hasSearchResults && onClearResults && !isSearching && (
+          <button
+            type="button"
+            onClick={onClearResults}
+            className="btn btn-secondary search-bar__clear-results-btn"
+            style={{
+              padding: '0.35rem 0.65rem',
+              fontSize: '0.8rem',
+              display: 'flex',
+              alignItems: 'center',
+              gap: '0.35rem',
+              color: 'var(--text-muted)',
+            }}
+            title="Clear current search results"
+            aria-label="Clear current search results"
+          >
+            <Trash2 size={13} />
+            <span>Clear</span>
+          </button>
+        )}
+
+        {isSearching ? (
+          <button
+            type="button"
+            onClick={onCancelSearch}
+            className="btn search-bar__stop-btn"
+            title="Stop searching"
+            aria-label="Stop search"
+          >
+            <Square size={11} fill="currentColor" />
+            <span>Stop</span>
+          </button>
+        ) : (
+          <button
+            type="button"
+            onClick={() => runSearch(query)}
+            className="btn btn-primary"
+            style={{ padding: '0.35rem 0.85rem', fontSize: '0.8rem', display: 'flex', alignItems: 'center', gap: '0.4rem' }}
+            title="Search"
+            aria-label="Search"
+          >
+            <Search size={14} />
+            <span>Search</span>
+          </button>
+        )}
 
         <SearchSuggestions
           open={suggestOpen}
           query={query}
           suggestions={suggestions}
-          history={history}
+          history={displayHistory}
           loading={suggestLoading}
           highlightedIndex={highlightedIndex}
           onHighlight={setHighlightedIndex}
           onPickSuggestion={pickSuggestion}
-          onPickHistory={(entry) => runSearch(entry.query)}
-          onRemoveHistory={(value) => {
-            window.cloudstream?.removeSearchHistory(value).then(setHistory);
+          onPickHistory={(entry) => {
+            if (entry.isSaved && entry.savedId && onOpenSavedSearch) {
+              setSuggestOpen(false);
+              onOpenSavedSearch(entry.savedId);
+            } else {
+              runSearch(entry.query);
+            }
           }}
-          onClearHistory={() => {
-            window.cloudstream?.clearSearchHistory().then(setHistory);
+          onRunFreshSearch={(text) => runSearch(text)}
+          onRemoveHistory={async (entry) => {
+            if (entry.savedId) {
+              await window.cloudstream?.removeSavedSearch?.(entry.savedId);
+            }
+            const nextHistory = await window.cloudstream?.removeSearchHistory(entry.query);
+            setHistory(nextHistory ?? []);
+            const nextSaved = await window.cloudstream?.listSavedSearches?.();
+            setSaved(nextSaved ?? []);
           }}
-          saved={saved}
-          onPickSaved={
-            onOpenSavedSearch
-              ? (id) => {
-                  setSuggestOpen(false);
-                  onOpenSavedSearch(id);
-                }
-              : undefined
-          }
+          onClearHistory={async () => {
+            await window.cloudstream?.clearSearchHistory();
+            const savedList = await window.cloudstream?.listSavedSearches?.();
+            if (savedList && savedList.length > 0) {
+              for (const item of savedList) {
+                await window.cloudstream?.removeSavedSearch?.(item.id);
+              }
+            }
+            setHistory([]);
+            setSaved([]);
+          }}
         />
       </div>
 
       <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', position: 'relative' }}>
         <SearchScopePicker onScopeChange={onScopeChange} />
+
+        <button
+          type="button"
+          onClick={() => setIncognito(!incognito)}
+          className={`btn btn-icon navbar__incognito${incognito ? ' navbar__incognito--on' : ' btn-secondary'}`}
+          aria-pressed={incognito}
+          title={
+            incognito
+              ? "Incognito: activity isn't being saved. Bookmarks and downloads you choose are still kept. (Ctrl+Shift+N to leave)"
+              : 'Incognito (Ctrl+Shift+N): stop saving history, progress and searches for this session'
+          }
+        >
+          <EyeOff size={16} />
+          {incognito && <span>Incognito</span>}
+        </button>
 
         {/*
           The inspector is a debugger, and a bug icon in the main toolbar is the

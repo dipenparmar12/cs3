@@ -196,6 +196,62 @@ body {
   color: var(--text-subtle);
 }
 
+.search-bar__clear {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+  width: 26px;
+  height: 26px;
+  border-radius: 50%;
+  border: none;
+  background: none;
+  color: var(--text-subtle);
+  cursor: pointer;
+  padding: 0;
+  transition: var(--transition);
+}
+
+.search-bar__clear:hover {
+  color: var(--text-main);
+  background: rgba(148, 163, 184, 0.16);
+}
+
+.search-bar__clear:focus-visible {
+  outline: 2px solid var(--accent-primary);
+  outline-offset: 1px;
+}
+
+.search-bar__stop-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.35rem 0.85rem;
+  font-size: 0.8rem;
+  font-weight: 500;
+  border-radius: var(--radius-md);
+  background-color: rgba(239, 68, 68, 0.15);
+  color: #fca5a5;
+  border: 1px solid rgba(239, 68, 68, 0.35);
+  cursor: pointer;
+  transition: var(--transition);
+}
+
+.search-bar__stop-btn:hover {
+  background-color: rgba(239, 68, 68, 0.28);
+  border-color: rgba(239, 68, 68, 0.6);
+  color: #ffffff;
+}
+
+.search-bar__stop-btn:active {
+  background-color: rgba(239, 68, 68, 0.38);
+}
+
+.search-bar__stop-btn:focus-visible {
+  outline: 2px solid var(--status-error);
+  outline-offset: 2px;
+}
+
 .view-viewport {
   flex: 1;
   overflow-y: auto;
@@ -590,4 +646,72 @@ select option:checked {
 
 .startup-profile__row--bad {
   background: rgba(255, 120, 100, 0.08);
+}
+
+/* Incognito (PRD-52): a subtle accent, never a theme change. */
+.navbar--incognito {
+  box-shadow: inset 0 -2px 0 rgba(168, 85, 247, 0.55);
+}
+.navbar__incognito {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+}
+.navbar__incognito--on {
+  background: rgba(168, 85, 247, 0.18);
+  color: #e9d5ff;
+  border: 1px solid rgba(168, 85, 247, 0.5);
+  padding: 0.35rem 0.7rem;
+  font-size: 0.78rem;
+}
+.player__incognito {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  font-size: 0.75rem;
+  opacity: 0.85;
+}
+
+/* Full-app 4-corner Incognito boundary indicator */
+.app-container--incognito::after {
+  content: '';
+  position: fixed;
+  inset: 0;
+  border: 2px solid rgba(168, 85, 247, 0.85);
+  box-shadow: inset 0 0 12px rgba(168, 85, 247, 0.18);
+  pointer-events: none;
+  z-index: 99999;
+}
+
+:fullscreen .app-container--incognito::after,
+.app-container--incognito:fullscreen::after,
+body:has(:fullscreen) .app-container--incognito::after {
+  display: none !important;
+}
+
+/* Global scroll-to-top (PRD-051 §18–22): subtle until hovered or focused. */
+.scroll-to-top {
+  position: fixed;
+  right: 1.5rem;
+  bottom: 1.5rem;
+  z-index: 40;
+  width: 2.25rem;
+  height: 2.25rem;
+  display: grid;
+  place-items: center;
+  border-radius: 999px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  background: rgba(20, 20, 24, 0.55);
+  color: rgba(255, 255, 255, 0.75);
+  backdrop-filter: blur(8px);
+  opacity: 0.6;
+  cursor: pointer;
+  transition: opacity 150ms ease, background 150ms ease, transform 150ms ease;
+}
+.scroll-to-top:hover,
+.scroll-to-top:focus-visible {
+  opacity: 1;
+  background: rgba(30, 30, 36, 0.9);
+  color: #fff;
+  transform: translateY(-1px);
 }

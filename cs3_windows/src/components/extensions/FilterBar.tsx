@@ -130,6 +130,32 @@ export const FilterBar: React.FC<Props> = ({
         )}
       </div>
 
+      {showCategories && facets.categories.length > 0 && (
+        <div className="ext-filters__row ext-filters__row--categories">
+          <span className="ext-filters__label">Category</span>
+          <Chip
+            pressed={categories.size === 0}
+            onClick={() => {
+              if (categories.size > 0) {
+                categories.forEach((c) => onToggleCategory(c));
+              }
+            }}
+          >
+            All
+          </Chip>
+          {facets.categories.map((category) => (
+            <Chip
+              key={category.value}
+              pressed={categories.has(category.value)}
+              count={category.count}
+              onClick={() => onToggleCategory(category.value)}
+            >
+              {category.label}
+            </Chip>
+          ))}
+        </div>
+      )}
+
       {facets.tags.length > 0 && (
         <div className="ext-filters__row">
           <span className="ext-filters__label">Content</span>
@@ -158,22 +184,6 @@ export const FilterBar: React.FC<Props> = ({
               onClick={() => onToggleLanguage(language.value)}
             >
               {language.label}
-            </Chip>
-          ))}
-        </div>
-      )}
-
-      {showMore && showCategories && facets.categories.length > 0 && (
-        <div className="ext-filters__row">
-          <span className="ext-filters__label">Category</span>
-          {facets.categories.map((category) => (
-            <Chip
-              key={category.value}
-              pressed={categories.has(category.value)}
-              count={category.count}
-              onClick={() => onToggleCategory(category.value)}
-            >
-              {category.label}
             </Chip>
           ))}
         </div>

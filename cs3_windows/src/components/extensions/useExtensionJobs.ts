@@ -61,6 +61,55 @@ export function jobForTarget(snapshot: ExtensionJobsSnapshot, target: string): E
   return best;
 }
 
+export interface RepositoryJobsSummary {
+  jobs: ExtensionJob[];
+  running: ExtensionJob[];
+  queued: ExtensionJob[];
+  failed: ExtensionJob[];
+  done: ExtensionJob[];
+  activeCount: number;
+}
+
+function normalizeRepoUrl(url: string | undefined): string {
+  return (url || '').replace(/\/refs\/heads\//, '/').replace(/\/$/, '').toLowerCase();
+}
+
+/**
+ * All jobs belonging to a repository, whether direct repository actions
+ * (`repo:<url>`) or individual extension installs (`ext:<name>`) from that repo.
+ */
+export function jobsForRepo(
+  snapshot: ExtensionJobsSnapshot,
+  repository: { url?: string; rawRepoUrl?: string } | string
+): RepositoryJobsSummary {
+  const normUrl = typeof repository === 'string' ? normalizeRepoUrl(repository) : normalizeRepoUrl(repository.url);
+  const normRaw = typeof repository === 'string' ? '' : normalizeRepoUrl(repository.rawRepoUrl);
+
+  const matching = snapshot.jobs.filter((job) => {
+    if (normUrl && (job.target === `repo:${normUrl}` || job.target === `repo-add:${normUrl}`)) return true;
+    if (normRaw && (job.target === `repo:${normRaw}` || job.target === `repo-add:${normRaw}`)) return true;
+    if (job.repositoryUrl) {
+      const jNorm = normalizeRepoUrl(job.repositoryUrl);
+      if (jNorm && (jNorm === normUrl || jNorm === normRaw)) return true;
+    }
+    return false;
+  });
+
+  const running = matching.filter((j) => j.state === 'running');
+  const queued = matching.filter((j) => j.state === 'queued');
+  const failed = matching.filter((j) => j.state === 'failed');
+  const done = matching.filter((j) => j.state === 'done');
+
+  return {
+    jobs: matching,
+    running,
+    queued,
+    failed,
+    done,
+    activeCount: running.length + queued.length,
+  };
+}
+
 export function useExtensionJobs() {
   const snapshot = useSyncExternalStore(subscribe, read);
 
@@ -87,8 +136,12 @@ export function useExtensionJobs() {
   }, []);
 
   const jobFor = useCallback((target: string) => jobForTarget(snapshot, target), [snapshot]);
+  const jobsForRepository = useCallback(
+    (repo: { url?: string; rawRepoUrl?: string } | string) => jobsForRepo(snapshot, repo),
+    [snapshot]
+  );
 
-  return { snapshot, jobFor, enqueue, cancel, cancelQueued, retry, clearFinished };
+  return { snapshot, jobFor, jobsForRepository, enqueue, cancel, cancelQueued, retry, clearFinished };
 }
 
 /**

@@ -114,7 +114,17 @@ export const PosterCard: React.FC<PosterCardProps> = ({
     else onSelectMedia(item);
   };
 
-  const titleText = item?.name || 'Untitled';
+  /*
+   * Some catalogue rows are posters only — the provider names the title on its
+   * detail page, as on Android. Such a card shows the poster and no caption
+   * rather than "Untitled" under every one; assistive tech still gets a label.
+   */
+  const hasName = Boolean(item?.name?.trim());
+  const titleText = hasName
+    ? (item?.name ?? '')
+    : item?.apiName
+      ? `a title from ${item.apiName}`
+      : 'this title';
 
   /**
    * The old `outcome` prop folded in, so one code path draws both.
@@ -212,9 +222,11 @@ export const PosterCard: React.FC<PosterCardProps> = ({
       </div>
 
       <div className="poster-info">
-        <h4 className="poster-title" title={titleText} onClick={handleCardClick}>
-          {titleText}
-        </h4>
+        {hasName && (
+          <h4 className="poster-title" title={titleText} onClick={handleCardClick}>
+            {titleText}
+          </h4>
+        )}
         <div className="poster-meta">
           {item?.year && <span>{item.year}</span>}
           {item?.apiName && (

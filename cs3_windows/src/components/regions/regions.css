@@ -1,0 +1,115 @@
+.region-picker {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(190px, 1fr));
+  gap: 0.4rem;
+}
+
+.region-picker__item {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.5rem 0.65rem;
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-sm);
+  background: var(--bg-input);
+  font-size: 0.85rem;
+  cursor: pointer;
+  transition: var(--transition);
+}
+
+.region-picker__item.is-checked {
+  border-color: var(--accent-primary);
+  background: var(--accent-light);
+}
+
+.region-picker__item--all {
+  grid-column: 1 / -1;
+}
+
+.region-picker__item input:disabled + span {
+  opacity: 0.75;
+}
+
+.region-onboarding__lead,
+.region-settings__note {
+  margin: 0;
+  color: var(--text-muted);
+  font-size: 0.85rem;
+  line-height: 1.45;
+}
+
+.region-onboarding__optional {
+  border-top: 1px solid var(--border-color);
+  padding-top: 0.75rem;
+  font-size: 0.82rem;
+  color: var(--text-muted);
+}
+
+.region-onboarding__optional summary {
+  cursor: pointer;
+  user-select: none;
+}
+
+.region-onboarding__optional label {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin-top: 0.6rem;
+  color: var(--text-main);
+}
+
+.region-onboarding__error {
+  margin: 0;
+  color: var(--status-error);
+  font-size: 0.82rem;
+}
+
+.region-settings {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.region-settings__actions {
+  display: flex;
+  gap: 0.5rem;
+  align-items: center;
+}
+
+.region-settings__review {
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-sm);
+  padding: 0.75rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  font-size: 0.85rem;
+}
+
+.region-settings__review ul {
+  margin: 0;
+  padding-left: 1.1rem;
+  color: var(--text-muted);
+}
+
+.region-cross {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.5rem;
+  font-size: 0.85rem;
+  cursor: pointer;
+}
+
+.region-cross em {
+  display: block;
+  font-style: normal;
+  font-size: 0.76rem;
+  color: var(--text-muted);
+  margin-top: 0.15rem;
+}
+
+.region-onboarding__next {
+  margin: 0;
+  font-size: 0.8rem;
+  color: var(--text-subtle);
+}

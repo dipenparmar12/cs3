@@ -6,7 +6,7 @@ import { Sidebar } from './components/Sidebar';
 import type { ActiveTab } from './components/Sidebar';
 import { Navbar } from './components/Navbar';
 import { MiniPlayerBar } from './components/player/MiniPlayerBar';
-import type { OttPlatformSummary } from './views/OttPlatformView';
+import type { OttCategoryState, OttPlatformSummary } from './views/OttPlatformView';
 import type { TorrentPlayRequest } from './views/TorrentView';
 import { ProviderInspector } from './components/ProviderInspector';
 import { useIsDeveloper } from './utils/ExperienceModeContext';
@@ -24,6 +24,7 @@ import type { PlaybackRequest, PlaybackSessionRequest } from './views/DetailView
 import { ErrorBoundary } from './components/ErrorBoundary';
 import { ViewSkeleton } from './components/ViewSkeleton';
 import { FirstRunBanner } from './components/FirstRunBanner';
+import { RegionOnboarding } from './components/regions/RegionOnboarding';
 
 import { TvType, type Episode, type SearchOptions, type SearchResponse } from './types/api';
 import type { HistoryEvent } from './types/history';
@@ -33,10 +34,14 @@ import type { TorrentResult } from './types/torrent';
 import type { PlaybackSnapshot } from '../electron/playbackSession';
 import type { SearchSnapshot } from '../electron/searchSession';
 import { describeError } from './utils/errors';
-import { pickResumePoint } from './utils/resumePoint';
+import { pickResumePoint, resumeSeconds } from './utils/resumePoint';
 import { historyEventForTask } from './utils/historyEvent';
-import { decodeShareLink } from './utils/shareLink';
+import { decodeShareLink, SHARE_SCHEME } from './utils/shareLink';
 import { loadWatchState } from './components/player/seriesContext';
+import { usePrivacy } from './utils/usePrivacy';
+import { ScrollToTop } from './components/ScrollToTop';
+import { durableAddress } from './utils/durableAddress';
+import { canonicalKey } from '../electron/cs3/libraryStore';
 
 /**
  * Every screen except Home, loaded when it is opened.
@@ -95,7 +100,53 @@ interface ActiveSession {
   snapshot: PlaybackSnapshot;
 }
 
+export const DEFAULT_OTT_PLATFORMS: OttPlatformSummary[] = [
+  {
+    id: 'netflix',
+    name: 'Netflix',
+    tagline: 'Films and series from Netflix catalogues, through installed extensions.',
+    accent: '#e50914',
+    availability: 'missing',
+    providers: [],
+    disabledProviders: [],
+    suggestedRepositories: ['netmirror', 'cncverse'],
+  },
+  {
+    id: 'primevideo',
+    name: 'Prime Video',
+    tagline: 'Amazon Prime Video catalogues, through installed extensions.',
+    accent: '#00a8e1',
+    availability: 'missing',
+    providers: [],
+    disabledProviders: [],
+    suggestedRepositories: ['netmirror', 'cncverse'],
+  },
+  {
+    id: 'disney',
+    name: 'Disney+',
+    tagline: 'The Disney+ catalogue, through installed extensions.',
+    accent: '#113ccf',
+    availability: 'missing',
+    providers: [],
+    disabledProviders: [],
+    suggestedRepositories: ['netmirror', 'cncverse'],
+  },
+];
+
 export const App: React.FC = () => {
+  const { active: incognito } = usePrivacy();
+  const [isFullscreen, setIsFullscreen] = useState(false);
+
+  useEffect(() => {
+    const handleFullscreenChange = () => {
+      setIsFullscreen(Boolean(document.fullscreenElement));
+    };
+    document.addEventListener('fullscreenchange', handleFullscreenChange);
+    return () => {
+      document.removeEventListener('fullscreenchange', handleFullscreenChange);
+    };
+  }, []);
+
   const [activeTab, setActiveTab] = useState<ActiveTab>('home');
   const [searchQuery, setSearchQuery] = useState('');
   /**
@@ -143,6 +194,14 @@ export const App: React.FC = () => {
    * button that does nothing when clicked.
    */
   const [actionNotice, setActionNotice] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!actionNotice) return;
+    const timer = window.setTimeout(() => {
+      setActionNotice(null);
+    }, 5000);
+    return () => window.clearTimeout(timer);
+  }, [actionNotice]);
   /**
    * The imported torrent being browsed, or null.
    *
@@ -246,7 +305,9 @@ export const App: React.FC = () => {
    * kind of split the extensions screen already had once between `enabled` and
    * `effectivelyEnabled`.
    */
-  const [ottPlatforms, setOttPlatforms] = useState<OttPlatformSummary[]>([]);
+  const [ottPlatforms, setOttPlatforms] = useState<OttPlatformSummary[]>(DEFAULT_OTT_PLATFORMS);
+  /** A platform row opened with "Show all" — held here so Back from a title returns to it. */
+  const [ottCategory, setOttCategory] = useState<OttCategoryState | null>(null);
 
   /**
    * Re-reads the streaming-service inventory.
@@ -258,7 +319,11 @@ export const App: React.FC = () => {
    */
   const refreshOttPlatforms = useCallback(async () => {
     const response = await window.cloudstream?.listOttPlatforms();
-    if (response?.platforms) setOttPlatforms(response.platforms as OttPlatformSummary[]);
+    if (response?.ok && Array.isArray(response.platforms)) {
+      setOttPlatforms(response.platforms as OttPlatformSummary[]);
+    } else if (response?.platforms && response.platforms.length > 0) {
+      setOttPlatforms(response.platforms as OttPlatformSummary[]);
+    }
   }, []);
 
   const [isInspectorOpen, setIsInspectorOpen] = useState(false);
@@ -380,6 +445,12 @@ export const App: React.FC = () => {
 
   useEffect(() => {
     let disposeProgress: (() => void) | undefined;
+    let disposeProviderLoad: (() => void) | undefined;
+    let disposeDiscovery: (() => void) | undefined;
+    let disposeExtensionUpdate: (() => void) | undefined;
+    let disposeBootstrap: (() => void) | undefined;
+    let disposeInstallProgress: (() => void) | undefined;
+    let refreshTimer: ReturnType<typeof setTimeout> | null = null;
 
     if (window.cloudstream) {
       window.cloudstream.getDownloadQueue().then(setDownloadQueue);
@@ -391,6 +462,35 @@ export const App: React.FC = () => {
         .getIndexerConfigs()
         .then((configs) => setProvidersList(configs.filter((c) => c.enabled).map((c) => c.name)));
       void refreshOttPlatforms();
+
+      const debouncedRefresh = () => {
+        if (refreshTimer) clearTimeout(refreshTimer);
+        refreshTimer = setTimeout(() => {
+          void refreshOttPlatforms();
+        }, 300);
+      };
+
+      disposeProviderLoad = window.cloudstream.onProviderLoadProgress?.((progress) => {
+        if (!progress.running || progress.providers > 0) {
+          debouncedRefresh();
+        }
+      });
+      disposeDiscovery = window.cloudstream.onDiscoveryInvalidated?.(() => {
+        debouncedRefresh();
+      });
+      disposeExtensionUpdate = window.cloudstream.onExtensionUpdateEvent?.(() => {
+        debouncedRefresh();
+      });
+      disposeBootstrap = window.cloudstream.onBootstrapProgress?.((progress) => {
+        if (progress.phase === 'done') {
+          debouncedRefresh();
+        }
+      });
+      disposeInstallProgress = window.cloudstream.onExtensionInstallProgress?.((progress) => {
+        if (progress.step === 'complete') {
+          debouncedRefresh();
+        }
+      });
     }
 
     /**
@@ -446,6 +546,29 @@ export const App: React.FC = () => {
         // summon is exactly the surprise standard mode exists to prevent.
         if (!isDeveloperRef.current) return;
         setIsInspectorOpen((prev) => !prev);
+        return;
+      }
+
+      // Cmd+, or Ctrl+, opens Settings and focuses settings search
+      if ((e.ctrlKey || e.metaKey) && e.key === ',') {
+        e.preventDefault();
+        setActiveTab('settings');
+        setTimeout(() => {
+          window.dispatchEvent(new CustomEvent('cs3:focus-settings-search'));
+        }, 50);
+        return;
+      }
+
+      // Ctrl+F, Cmd+F, or Ctrl+K focuses settings search (when in Settings) or navbar search
+      if ((e.ctrlKey || e.metaKey) && (e.key.toLowerCase() === 'f' || e.key.toLowerCase() === 'k')) {
+        if (activeTab === 'settings') {
+          e.preventDefault();
+          window.dispatchEvent(new CustomEvent('cs3:focus-settings-search'));
+        } else if (!document.fullscreenElement) {
+          e.preventDefault();
+          window.dispatchEvent(new CustomEvent('cs3:focus-navbar-search'));
+        }
+        return;
       }
     };
     window.addEventListener('keydown', handleKeyDown);
@@ -453,6 +576,13 @@ export const App: React.FC = () => {
     const disposeInspector = window.cloudstream?.onToggleInspector?.(() => {
       if (!isDeveloperRef.current) return;
       setIsInspectorOpen((prev) => !prev);
+    });
+
+    const disposeSettings = window.cloudstream?.onOpenSettings?.(() => {
+      setActiveTab('settings');
+      setTimeout(() => {
+        window.dispatchEvent(new CustomEvent('cs3:focus-settings-search'));
+      }, 50);
     });
 
     // Help → Licences. A menu item that does nothing is worse than no menu item.
@@ -463,13 +593,20 @@ export const App: React.FC = () => {
 
     return () => {
       window.removeEventListener('keydown', handleKeyDown);
+      if (refreshTimer) clearTimeout(refreshTimer);
       disposeProgress?.();
+      disposeProviderLoad?.();
+      disposeDiscovery?.();
+      disposeExtensionUpdate?.();
+      disposeBootstrap?.();
+      disposeInstallProgress?.();
       disposePlayback?.();
       disposeSearch?.();
       disposeInspector?.();
+      disposeSettings?.();
       disposeLicences?.();
     };
-  }, [refreshOttPlatforms]);
+  }, [refreshOttPlatforms, activeTab]);
 
   /**
    * Play a file the user already has on disk.
@@ -492,7 +629,6 @@ export const App: React.FC = () => {
     }
     const name = filePath.split(/[\\/]/).pop() ?? 'Local file';
     setPlayerHidden(false);
-    setPlayerMini(false);
     setPlayback({
       streamUrl: served.url,
       mimeType: 'video/mp4',
@@ -550,7 +686,6 @@ export const App: React.FC = () => {
     }
     const handle = result.handle;
     setPlayerHidden(false);
-    setPlayerMini(false);
     setPlayback({
       streamUrl: handle.streamUrl,
       mimeType: handle.mimeType,
@@ -659,10 +794,28 @@ export const App: React.FC = () => {
    * navigation now; this turns the gesture into the thing the user meant.
    */
   useEffect(() => {
-    const allow = (event: DragEvent) => event.preventDefault();
+    const isFileDrag = (event: DragEvent) => {
+      const types = event.dataTransfer?.types;
+      if (!types) return false;
+      if (types.includes('application/x-ott-platform')) return false;
+      return types.includes('Files') || types.includes('text/plain');
+    };
+
+    const allow = (event: DragEvent) => {
+      if (isFileDrag(event)) {
+        event.preventDefault();
+      }
+    };
     const onDrop = (event: DragEvent) => {
+      if (!isFileDrag(event)) {
+        setDragging(false);
+        dragDepth.current = 0;
+        return;
+      }
+
       event.preventDefault();
       setDragging(false);
+      dragDepth.current = 0;
 
       /*
        * Dragged *text* is checked first, because a magnet dragged out of a
@@ -692,14 +845,9 @@ export const App: React.FC = () => {
         .filter((filePath): filePath is string => Boolean(filePath));
 
       if (paths.length === 0) {
-        // Never silent. A drop that resolves to nothing has to say so, or it is
-        // indistinguishable from an app that ignores dropped files — which is
-        // exactly how this read for as long as it was broken.
-        setActionNotice(
-          files.length > 0
-            ? 'That could not be read from disk. Try the paperclip beside the search box.'
-            : 'Drop a .torrent file, a video, or a magnet link.'
-        );
+        if (files.length > 0) {
+          setActionNotice('That could not be read from disk. Try the paperclip beside the search box.');
+        }
         return;
       }
 
@@ -717,12 +865,13 @@ export const App: React.FC = () => {
      * enters and leaves is what makes it stable.
      */
     const onDragEnter = (event: DragEvent) => {
+      if (!isFileDrag(event)) return;
       event.preventDefault();
-      if (!event.dataTransfer?.types?.length) return;
       dragDepth.current += 1;
       setDragging(true);
     };
-    const onDragLeave = () => {
+    const onDragLeave = (event: DragEvent) => {
+      if (!isFileDrag(event)) return;
       dragDepth.current = Math.max(0, dragDepth.current - 1);
       if (dragDepth.current === 0) setDragging(false);
     };
@@ -754,6 +903,13 @@ export const App: React.FC = () => {
    * seconds before the slowest one has answered.
    */
   const handleSearch = useCallback(async (query: string, options?: SearchOptions) => {
+    // A pasted share link opens its page rather than being searched for as
+    // text (PRD-051 §23–27). Only our own media prefix is routed; any other
+    // URL stays a search, and a damaged link is reported by the decoder.
+    if (query.trim().toLowerCase().startsWith(`${SHARE_SCHEME}://media/`)) {
+      handleShareLink(query);
+      return;
+    }
     lastQuery.current = { query, options };
     setSavedView(null);
     setSearchQuery(query);
@@ -774,7 +930,7 @@ export const App: React.FC = () => {
     } catch (err) {
       setSearchError(describeError(err));
     }
-  }, []);
+  }, [handleShareLink]);
 
   /**
    * Abandons the running search, keeping whatever it has already found.
@@ -789,6 +945,23 @@ export const App: React.FC = () => {
     const response = await window.cloudstream?.cancelSearch(id);
     if (response?.snapshot) setSearch(response.snapshot);
   }, [search?.id]);
+
+  /**
+   * Resets active search results, query, and UI filters to empty state without
+   * clearing persistent search history or saved searches.
+   */
+  const handleClearSearchResults = useCallback(async () => {
+    if (search && !search.done) {
+      await window.cloudstream?.cancelSearch(search.id);
+    }
+    setSearch(null);
+    setSearchQuery('');
+    setSavedView(null);
+    setSearchError(null);
+    setSearchUi(EMPTY_SEARCH_UI);
+  }, [search]);
+
+  const hasSearchResults = Boolean(search && (search.results.length > 0 || !search.done));
 
   /**
    * Opens a saved search as it was saved.
@@ -928,7 +1101,6 @@ export const App: React.FC = () => {
         },
       });
       setPlayerHidden(false);
-      setPlayerMini(false);
     },
     []
   );
@@ -1018,10 +1190,7 @@ export const App: React.FC = () => {
 
     setPlayback(null);
     setSwitchError(null);
-    // Starting something new always brings the player back to the front, even
-    // if the last one was left minimised.
     setPlayerHidden(false);
-    setPlayerMini(false);
 
     const previous = sessionRef.current;
     if (previous) await window.cloudstream.stopPlayback(previous.id, true);
@@ -1033,7 +1202,15 @@ export const App: React.FC = () => {
       // Standard mode keeps trying on its own, as the Android player does —
       // every source, then everywhere. Developer mode stops to show what
       // failed. See `persistent` in `playbackSession.ts`.
-      { persistent: !isDeveloper }
+      {
+        persistent: !isDeveloper,
+        // A resume asks for the source the saved position was reached on, so
+        // the timeline it belongs to is the one that plays.
+        resumeKey:
+          context.progress?.resumeAt && context.progress.resumeAt > 0
+            ? canonicalKey(context.title, context.progress.year)
+            : undefined,
+      }
     );
     if (!response.ok || !response.snapshot) {
       setSwitchError(response.error ?? 'Could not start playback.');
@@ -1151,7 +1328,10 @@ export const App: React.FC = () => {
 
         // Both reads are local — the datastore, not a provider — so they cost
         // nothing against the round trip that just resolved the detail.
-        const watchState = await loadWatchState(item.url);
+        const watchState = await loadWatchState(item.url, {
+          title: detail?.name ?? item.name,
+          year: detail?.year ?? item.year,
+        });
         const { episode: first, resumeAt } = pickResumePoint(detail?.episodes ?? [], watchState, {
           isLive: detail?.isLive,
         });
@@ -1202,11 +1382,29 @@ export const App: React.FC = () => {
       setPreparing({ title: item.title });
 
       try {
+        // Rows written before loopback addresses were refused still carry
+        // one; the parent page is the durable route back. The title travels
+        // too, so a widened search looks for this work rather than guessing.
+        const mediaUrl = durableAddress(item.mediaUrl, item.parentMediaUrl) || item.mediaUrl;
+        // Where the viewer stopped. This path never asked, so every title
+        // reopened from History started at 0:00 with its position sitting in
+        // the store — reported on Extraction II, saved at 18 minutes in.
+        const watchState = await loadWatchState(mediaUrl, {
+          title: item.parentTitle || item.title,
+          year: item.year,
+        });
+        const resumeAt = resumeSeconds(
+          watchState,
+          item.season !== undefined || item.episode !== undefined
+            ? ({ season: item.season, episode: item.episode } as Episode)
+            : null
+        );
         await startSession({
           request: {
-            mediaUrl: item.mediaUrl,
+            mediaUrl,
             season: item.season,
             episode: item.episode,
+            titleOverride: item.parentTitle || item.title,
           },
           title: item.title,
           originalTitle: item.source?.sourceName !== item.title ? item.source?.sourceName : undefined,
@@ -1218,11 +1416,12 @@ export const App: React.FC = () => {
           },
           episodeTitle: item.episodeTitle,
           progress: {
-            mediaUrl: item.mediaUrl,
+            mediaUrl,
             year: item.year,
             posterUrl: item.posterUrl,
             season: item.season,
             episode: item.episode,
+            resumeAt,
           },
           subtitleContext: {
             season: item.season,
@@ -1563,8 +1762,10 @@ export const App: React.FC = () => {
     setHasBinaries(true);
   };
 
+  const isIncognitoBorderActive = incognito && !isFullscreen;
+
   return (
-    <div className="app-container">
+    <div className={`app-container${isIncognitoBorderActive ? ' app-container--incognito' : ''}`}>
       {/* Sidebar Navigation */}
       <Sidebar
         activeTab={activeTab}
@@ -1574,10 +1775,15 @@ export const App: React.FC = () => {
           // Home in the sidebar means the home rows, including from inside a
           // "Show all" grid.
           if (tab === 'home') setHomeCategory(null);
+          // Same for a streaming service: its sidebar row means its own page.
+          if (tab.startsWith('ott:')) setOttCategory(null);
         }}
         downloadCount={downloadQueue.filter((t) => t.state === 'Downloading' || t.state === 'Queued').length}
         missingComponentCount={missingComponents}
+        hasSearchResults={hasSearchResults}
+        onClearResults={handleClearSearchResults}
         ottPlatforms={ottPlatforms}
+        onOttPlatformsChanged={() => void refreshOttPlatforms()}
       />
 
       {/* Main App View Area */}
@@ -1589,6 +1795,14 @@ export const App: React.FC = () => {
           }}
           onTorrentPickFailed={(message) => setActionNotice(message)}
           onSearch={handleSearch}
+          onCancelSearch={handleCancelSearch}
+          onClearSearch={() => {
+            if (search && !search.done) {
+              void handleCancelSearch();
+            }
+          }}
+          onClearResults={handleClearSearchResults}
+          hasSearchResults={hasSearchResults}
           onOpenSavedSearch={handleOpenSavedSearch}
           isSearching={Boolean(search && !search.done)}
           onScopeChange={handleScopeChange}
@@ -1641,6 +1855,8 @@ export const App: React.FC = () => {
         {/* First launch only, and never blocking: the app works while the
             bundled repositories install behind it. */}
         <FirstRunBanner />
+        {/* Asked once, before anything installs (PRD-54). */}
+        <RegionOnboarding />
 
         {/*
           One boundary for every route, placed inside `main` rather than around
@@ -1649,7 +1865,18 @@ export const App: React.FC = () => {
           the next screen is the failure this split would otherwise introduce.
         */}
         <main className="view-viewport" ref={viewportRef}>
-          <Suspense fallback={<ViewSkeleton />}>
+          {/*
+            The player's own boundary, never the routes'.
+
+            They used to share one. The first visit to a screen whose code had
+            not loaded yet — Settings, Home, anything — suspended that boundary,
+            and a suspended boundary hides everything inside it and tears down
+            its effects. The player was inside it: its stream was detached, then
+            re-attached from 0:00 when the screen arrived, so stepping from a
+            mini player to another screen restarted the film. Loading a screen
+            must never reach the thing playing above it.
+          */}
+          <Suspense fallback={null}>
           {/* Active Fullscreen Video Player Overlay.
               A session takes precedence: it renders the player from the first
               click, before a stream exists, and fills it in as one resolves. */}
@@ -1855,6 +2082,9 @@ export const App: React.FC = () => {
             />
           )}
 
+          </Suspense>
+
+          <Suspense fallback={<ViewSkeleton />}>
           {/* Media Details View Overlay */}
           {selectedMedia ? (
             <DetailView
@@ -1862,7 +2092,6 @@ export const App: React.FC = () => {
               onBack={handleBackToResults}
               onPlay={(request) => {
                 setPlayerHidden(false);
-                setPlayerMini(false);
                 setPlayback(request);
               }}
               onStartSession={startSession}
@@ -1926,6 +2155,9 @@ export const App: React.FC = () => {
                         }
                         onOpenExtensions={() => setActiveTab('extensions')}
                         onInventoryChanged={() => void refreshOttPlatforms()}
+                        category={ottCategory}
+                        onCategoryChange={setOttCategory}
+                        onLeave={() => setActiveTab('home')}
                       />
                     );
                   })()}
@@ -1946,6 +2178,7 @@ export const App: React.FC = () => {
                     onRetry={handleRetrySearch}
                     savedView={savedView}
                     onSaveResults={handleSaveSearch}
+                    onClearResults={handleClearSearchResults}
                   />
                 </ErrorBoundary>
               )}
@@ -2063,6 +2296,9 @@ export const App: React.FC = () => {
           )}
           </Suspense>
         </main>
+        {/* Hidden while the player is on screen in any form: full-screen it has
+            nothing to scroll, and the mini window parks in the same corner. */}
+        <ScrollToTop target={viewportRef} hidden={!!session && !playerHidden} />
       </div>
 
       {/* Provider Inspector Panel Drawer — developer mode only. */}

@@ -150,3 +150,59 @@ export function formatVideoDate(iso: string | undefined): string | null {
   const year = iso.slice(0, 4);
   return /^\d{4}$/.test(year) ? year : null;
 }
+
+/**
+ * Merges video lists from multiple sources (Cinemeta, AniList, Provider, YouTube search),
+ * deduplicating by video id while preserving richer fields and provenance.
+ */
+export function mergeVideos(lists: (TitleVideo[] | undefined)[]): TitleVideo[] {
+  const byId = new Map<string, TitleVideo>();
+  for (const list of lists) {
+    for (const video of list ?? []) {
+      if (!video?.id || !video.url) continue;
+      const existing = byId.get(video.id);
+      if (!existing) {
+        byId.set(video.id, video);
+        continue;
+      }
+      byId.set(video.id, {
+        ...existing,
+        title: existing.title || video.title,
+        thumbnailUrl: existing.thumbnailUrl ?? video.thumbnailUrl,
+        publisher: existing.publisher ?? video.publisher,
+        durationSeconds: existing.durationSeconds ?? video.durationSeconds,
+        publishedAt: existing.publishedAt ?? video.publishedAt,
+        sources: [...new Set([...(existing.sources ?? []), ...(video.sources ?? [])])],
+      });
+    }
+  }
+  return [...byId.values()];
+}
+
+/**
+ * Extracts an 11-character YouTube video ID from bare IDs, watch URLs, youtu.be, or embed URLs.
+ */
+export function youTubeIdFrom(value: string | undefined): string | null {
+  const text = (value ?? '').trim();
+  if (!text) return null;
+  if (/^[\w-]{11}$/.test(text)) return text;
+  try {
+    const url = new URL(text);
+    if (!/(^|\.)youtube\.com$|(^|\.)youtube-nocookie\.com$|(^|\.)youtu\.be$/i.test(url.hostname)) return null;
+    if (url.hostname.endsWith('youtu.be')) {
+      const id = url.pathname.slice(1);
+      return /^[\w-]{11}$/.test(id) ? id : null;
+    }
+    const param = url.searchParams.get('v');
+    if (param && /^[\w-]{11}$/.test(param)) return param;
+    const embed = url.pathname.match(/^\/(?:embed|shorts|v)\/([\w-]{11})/);
+    return embed ? embed[1] : null;
+  } catch {
+    return null;
+  }
+}
+
+/** Addressable YouTube thumbnail image URL. */
+export function youTubeThumbnail(id: string): string {
+  return `https://i.ytimg.com/vi/${id}/hqdefault.jpg`;
+}

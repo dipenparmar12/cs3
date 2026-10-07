@@ -374,6 +374,7 @@ export interface PlaybackStreamRequest {
   force?: boolean;
   /** Attributed in telemetry; the provider is what a failure belongs to. */
   provider?: string;
+  preferredAudioLanguage?: string;
 }
 
 export interface PlaybackStreamResponse {

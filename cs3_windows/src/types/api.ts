@@ -178,6 +178,14 @@ export interface SearchHistoryEntry {
   at: number;
   /** How many results it produced, so a fruitless query looks different. */
   resultCount?: number;
+  /** Identifier of the saved search if results for this query were saved. */
+  savedId?: string;
+  /** True when results for this search are saved. */
+  isSaved?: boolean;
+  /** When the search results were saved. */
+  savedAt?: number;
+  /** Result count captured at the time of saving. */
+  savedResultCount?: number;
 }
 
 export interface Episode {
@@ -207,6 +215,12 @@ export interface LoadResponse {
   recommendations?: SearchResponse[];
   id?: number;
   /**
+   * Promotional trailers provided directly by the extension or scraper.
+   *
+   * Maps from `TrailerData` on CloudStream Android.
+   */
+  trailers?: ProviderTrailerData[];
+  /**
    * A live channel rather than a recording.
    *
    * `LiveStreamLoadResponse` on the Android side, and a whole content category
@@ -217,6 +231,13 @@ export interface LoadResponse {
    * channel going off air rather than a title finishing.
    */
   isLive?: boolean;
+}
+
+export interface ProviderTrailerData {
+  extractorUrl: string;
+  referer?: string;
+  raw?: boolean;
+  headers?: Record<string, string>;
 }
 
 /**
@@ -331,6 +352,13 @@ export interface ProviderCatalogSection {
   data: string;
   /** Landscape artwork, which changes the card shape rather than the content. */
   horizontalImages?: boolean;
+  /**
+   * An 18+ row inside a provider that also carries general content (see
+   * `src/utils/adultContent.ts`). Inferred from the row's own text — upstream
+   * publishes no per-row flag. Only ever set while adult content is allowed;
+   * otherwise such rows are removed before they leave the main process.
+   */
+  sensitive?: boolean;
 }
 
 /** One fetched page of one catalogue row. */
@@ -339,9 +367,26 @@ export interface ProviderCatalogPage {
   /** The section this page belongs to, echoed so a late reply can be placed. */
   section: string;
   page: number;
+  /** Every item on the page, all lists flattened. */
   items: SearchResponse[];
+  /**
+   * The lists the provider actually answered with. Usually one; a provider
+   * that declares a single unnamed row (upstream's default `mainPage`) answers
+   * it with its whole home page — NetMirror returns 18 named rows from one
+   * request — and each of those is a row of its own on Android.
+   */
+  lists: Array<{ name: string; horizontalImages: boolean; items: SearchResponse[]; sensitive?: boolean }>;
+  /** 18+ lists removed from this page because adult content is off. */
+  hiddenAdultRows?: number;
   /** Whether asking for `page + 1` is worth doing. */
   hasNext: boolean;
+  /**
+   * Set when the request failed, as opposed to answering with nothing. A row
+   * must say "this failed" and offer a retry, not "nothing here".
+   */
+  error?: string;
+  /** Epoch ms this page was fetched; older than now means it came from cache. */
+  fetchedAt?: number;
 }
 
 /** What a provider offers to browse, before anything is fetched. */
@@ -355,4 +400,6 @@ export interface ProviderCatalog {
    * is different from reporting a failure.
    */
   unavailableReason?: string;
+  /** 18+ rows removed because adult content is off, so the page can say so. */
+  hiddenAdultRows?: number;
 }

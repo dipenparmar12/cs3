@@ -134,7 +134,7 @@ export const PlayerDownloadPanel: React.FC<PlayerDownloadPanelProps> = ({
       `CloudStream Desktop — Download Metadata`,
       `Title:       ${t.title}`,
       `Provider:    ${t.providerName || 'Built-in'}`,
-      `Quality:     ${t.quality || t.resolution ? `${t.quality || t.resolution}p` : 'Unknown'}`,
+      `Quality:     ${t.resolution ? `${t.resolution}p` : t.quality || 'Unknown'}`,
       `State:       ${t.state}`,
       `Progress:    ${formatPanelSize(t.bytesDownloaded)} / ${formatPanelSize(t.totalBytes)} (${percent}%)`,
       `Speed:       ${formatTransferRate(t.downloadSpeed)}`,

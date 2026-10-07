@@ -5,8 +5,15 @@ import com.cloudstream.desktop.bridge.json
 import com.lagradost.cloudstream3.utils.AppUtils.parseJson
 import okhttp3.Headers
 import okhttp3.Interceptor
+import okhttp3.MediaType.Companion.toMediaTypeOrNull
+import okhttp3.Protocol
+import okhttp3.Request
 import okhttp3.Response
+import okhttp3.ResponseBody.Companion.toResponseBody
+import okio.Buffer
 import java.net.URI
+import java.util.Base64
+import java.util.concurrent.ConcurrentHashMap
 
 /**
  * `com.lagradost.cloudstream3.network.CloudflareKiller` — and since the WebView
@@ -23,32 +30,38 @@ import java.net.URI
  * now); this class had to exist as well, or the same providers failed again at
  * their first request instead of at load.
  *
- * ## What changed
+ * ## How a challenge is answered here
  *
- * This used to forward the request unchanged and return whatever the host said,
- * because there was no WebView in the sidecar and a proof-of-work interstitial
- * cannot be answered by an HTTP client. There is a browser now — Chromium, in
- * the Electron process, one reverse RPC away — so the challenge is solved for
- * real and `cf_clearance` comes back with the answer.
+ * The extension-facing shape is upstream's, so no extension had to change: send
+ * the request, and only when the reply is a real challenge, obtain a clearance
+ * and re-send with it. **A browser is never opened for a reply that is not a
+ * challenge** — the corpus attaches this interceptor defensively, to every
+ * request a provider makes.
  *
- * The shape is upstream's, deliberately, so extensions did not have to change:
+ * What is *not* upstream's is where the clearance lives. Android keeps it in
+ * [savedCookies], per interceptor instance, until the process dies, so every
+ * provider re-solves every host after every start. Here the desktop app owns
+ * it (`clearance.ts`): the browser partition's cookie jar is the store, one
+ * solve per host is shared by every provider and by the app's own indexer
+ * client, and a host the browser could not pass is left alone for ten minutes
+ * instead of costing a full timeout on every request. So, on a challenge:
  *
- * 1. No saved cookies for the host -> send the request. If the reply is not a
- *    Cloudflare challenge, that is the answer and no browser is opened.
- * 2. A challenge -> solve it in the browser, save the cookies, re-send.
- * 3. Saved cookies -> send with them attached from the start.
+ * 1. Ask the host for a clearance. Usually the jar already holds a live one and
+ *    no window opens at all — the restart case, which Android pays a browser
+ *    for every time.
+ * 2. Re-send with it and the browser's agent.
+ * 3. Challenged again with a clearance issued moments ago? Then the wall scores
+ *    more than the cookie — the TLS handshake, which OkHttp does not perform
+ *    like Chrome. The request is relayed through the browser's own network
+ *    stack (`clearance.fetch`), the client that earned the clearance.
+ * 4. Challenged with a clearance that was *remembered*? It went stale. It is
+ *    invalidated in the jar and one fresh one is obtained.
  *
- * **A browser is only opened when a real challenge came back.** The corpus
- * attaches this interceptor defensively — set once on the provider, covering
- * every request it makes, protected or not — so opening one per request would
- * put a Chromium page behind every scrape in the app.
- *
- * ## Two things kept from the forwarding version
+ * ## Kept from the forwarding version
  *
  * When no browser is reachable — an older runtime, or a JVM whose host has gone
- * — this still forwards rather than throwing. A site behind Cloudflare then
- * answers 403 and the provider reports no results, which is the truth and is
- * exactly what shipped before.
+ * — this forwards rather than throwing. A site behind Cloudflare then answers
+ * 403 and the provider reports no results, which is the truth.
  *
  * And nothing is ever forged. DROP-9 rules out inventing a `cf_clearance` for
  * the same reason `PackageManager.getPackagesForUid` returns null rather than a
@@ -65,8 +78,16 @@ class CloudflareKiller : Interceptor {
         private val ERROR_CODES = listOf(403, 503)
         private val CLOUDFLARE_SERVERS = listOf("cloudflare-nginx", "cloudflare")
 
-        /** The only cookie that matters, and the signal the challenge is done. */
-        private const val CLEARANCE = "cf_clearance"
+        /**
+         * Clearances obtained in this process, by host, shared by every
+         * instance. A cache of the host's jar, not a second store: it saves a
+         * reverse call on every request to a host already cleared.
+         */
+        private val cleared = ConcurrentHashMap<String, Map<String, String>>()
+
+        /** Deadline for a solve. The host's own browser budget sits inside it. */
+        private const val SOLVE_TIMEOUT_MS = 60_000L
+        private const val RELAY_TIMEOUT_MS = 30_000L
 
         /**
          * Pure string work and identical to upstream, so it is implemented
@@ -99,11 +120,9 @@ class CloudflareKiller : Interceptor {
      */
     fun getCookieHeaders(url: String): Headers {
         val host = runCatching { URI(url).host }.getOrNull()
-        val cookies = host?.let { savedCookies[it] }.orEmpty()
+        val cookies = host?.let { savedCookies[it] ?: cleared[it] }.orEmpty()
         val builder = Headers.Builder()
-        if (cookies.isNotEmpty()) {
-            builder.add("Cookie", cookies.entries.joinToString("; ") { "${it.key}=${it.value}" })
-        }
+        if (cookies.isNotEmpty()) builder.add("Cookie", cookieHeader(cookies))
         WebViewResolver.webViewUserAgent?.takeIf { it.isNotBlank() }
             ?.let { builder.add("user-agent", it) }
         return builder.build()
@@ -113,8 +132,18 @@ class CloudflareKiller : Interceptor {
         val request = chain.request()
         val host = request.url.host
 
-        savedCookies[host]?.takeIf { it.isNotEmpty() }?.let { known ->
-            return chain.proceed(withCookies(chain, known))
+        val remembered = savedCookies[host] ?: cleared[host]
+        if (!remembered.isNullOrEmpty()) {
+            val response = chain.proceed(withCookies(request, remembered))
+            if (!isChallenge(response)) return response
+            response.close()
+            // Refused: the clearance went stale. Forget it here and in the jar,
+            // or the host would hand the same dead cookie straight back.
+            forget(host)
+            if (HostBridge.isAvailable()) {
+                HostBridge.call("clearance.invalidate", json { field("url", request.url.toString()) })
+            }
+            return answerChallenge(chain, request)
         }
 
         val response = chain.proceed(request)
@@ -124,18 +153,34 @@ class CloudflareKiller : Interceptor {
         // interstitial nobody will read, and leaving it open holds the
         // connection out of the pool for the retry that is about to need one.
         response.close()
-
-        val solved = solve(request.url.toString(), host)
-        if (solved.isEmpty()) {
-            System.err.println("[$TAG] could not clear Cloudflare for ${request.url}")
-            // The original request again, so the caller sees the site's own 403
-            // rather than a failure invented here.
-            return chain.proceed(request)
-        }
-
-        savedCookies[host] = solved
-        return chain.proceed(withCookies(chain, solved))
+        return answerChallenge(chain, request)
     }
+
+    private fun answerChallenge(chain: Interceptor.Chain, request: Request): Response {
+        val host = request.url.host
+        // The original request again on failure, so the caller sees the site's
+        // own 403 rather than a failure invented here.
+        val clearance = obtain(request.url.toString()) ?: return chain.proceed(request)
+
+        savedCookies[host] = clearance
+        cleared[host] = clearance
+        val retried = chain.proceed(withCookies(request, clearance))
+        if (!isChallenge(retried)) return retried
+
+        // A clearance issued moments ago, refused anyway: the wall is scoring the
+        // client, not the cookie. Only the browser itself can send this one.
+        val relayed = relay(request) ?: return retried
+        retried.close()
+        return relayed
+    }
+
+    private fun forget(host: String) {
+        savedCookies.remove(host)
+        cleared.remove(host)
+    }
+
+    private fun cookieHeader(cookies: Map<String, String>) =
+        cookies.entries.joinToString("; ") { "${it.key}=${it.value}" }
 
     /**
      * Rebuilds the request with the cookies and the browser's agent.
@@ -143,13 +188,11 @@ class CloudflareKiller : Interceptor {
      * `chain.proceed` rather than upstream's `app.baseClient.newCall`: this is
      * an application interceptor, so proceeding again is allowed and keeps the
      * request inside the chain it started in — every other interceptor the
-     * provider installed still applies. Going out through a second client would
-     * also risk re-entering this interceptor, which upstream avoids only by
-     * reaching for a client that does not have it attached.
+     * provider installed still applies.
      */
-    private fun withCookies(chain: Interceptor.Chain, cookies: Map<String, String>) =
-        chain.request().newBuilder()
-            .header("Cookie", cookies.entries.joinToString("; ") { "${it.key}=${it.value}" })
+    private fun withCookies(request: Request, cookies: Map<String, String>) =
+        request.newBuilder()
+            .header("Cookie", cookieHeader(cookies))
             .apply {
                 WebViewResolver.webViewUserAgent
                     ?.takeIf { it.isNotBlank() }
@@ -158,56 +201,97 @@ class CloudflareKiller : Interceptor {
             .build()
 
     /**
-     * Both conditions, as upstream has it.
+     * Upstream's pair, plus Cloudflare's own declaration.
      *
      * A bare 403 is not a challenge — it is far more often hotlink protection or
-     * an expired signed URL, neither of which a browser can help with, and both
-     * of which are common enough that opening one on every 403 would put a
-     * Chromium page behind a large share of ordinary scraping failures.
+     * an expired signed URL, neither of which a browser can help with, so the
+     * server has to say Cloudflare as well. `cf-mitigated: challenge` is the
+     * header Cloudflare documents for exactly this and needs no inference;
+     * upstream predates it.
      */
     private fun isChallenge(response: Response): Boolean =
-        response.header("Server") in CLOUDFLARE_SERVERS && response.code in ERROR_CODES
+        response.header("cf-mitigated").equals("challenge", ignoreCase = true) ||
+            (response.header("Server") in CLOUDFLARE_SERVERS && response.code in ERROR_CODES)
 
-    /**
-     * Solves the challenge in the host's browser and returns its cookies.
-     *
-     * No intercept pattern is sent. Upstream passes the deliberately unmatchable
-     * `.^` for the same reason: there is no URL to wait for here, only a cookie,
-     * so the host is told to finish the moment `cf_clearance` appears rather
-     * than to run out its timeout.
-     */
-    private fun solve(url: String, host: String): Map<String, String> {
-        if (!HostBridge.isAvailable()) return emptyMap()
-
+    /** A clearance from the host — out of its jar, or from a browser solve. */
+    private fun obtain(url: String): Map<String, String>? {
+        if (!HostBridge.isAvailable()) return null
         val params = json {
             field("url", url)
-            field("method", "GET")
-            // Cloudflare fingerprints the agent, and upstream passes `null` here
-            // with the comment "Cloudflare needs default user agent". Omitting
-            // it leaves the browser's own, which is the point.
-            field("awaitCookie", CLEARANCE)
-            field("interceptUrl", ".^")
-            field("useOkhttp", false)
-            field("timeoutMs", 60_000L)
+            field("solve", true)
+            field("timeoutMs", SOLVE_TIMEOUT_MS)
         }
-
         val answer = runCatching {
-            parseJson<HostWebViewAnswer>(HostBridge.call("webview.resolve", params))
+            parseJson<HostClearanceAnswer>(HostBridge.call("clearance.get", params))
         }.getOrElse {
-            System.err.println("[$TAG] unreadable answer while clearing $host: ${it.message}")
-            return emptyMap()
+            System.err.println("[$TAG] unreadable clearance answer for $url: ${it.message}")
+            return null
         }
-
-        answer.userAgent?.takeIf { it.isNotBlank() }?.let { WebViewResolver.webViewUserAgent = it }
         if (!answer.ok) {
             System.err.println("[$TAG] ${answer.error}")
-            return emptyMap()
+            return null
         }
+        answer.userAgent?.takeIf { it.isNotBlank() }?.let { WebViewResolver.webViewUserAgent = it }
+        return answer.cookies.takeIf { it.isNotEmpty() }
+    }
 
-        // Only a real clearance counts. Saving whatever cookies the page happened
-        // to set would make the next request take the "already solved" path and
-        // send an ordinary session cookie into a challenge it cannot answer —
-        // failing in a way that no longer even tries the browser.
-        return if (answer.cookies.containsKey(CLEARANCE)) answer.cookies else emptyMap()
+    /**
+     * The request, sent by the browser's network stack instead of OkHttp.
+     * Null when the host would not or could not — the caller then returns the
+     * challenge it already holds, which is the honest answer.
+     */
+    private fun relay(request: Request): Response? {
+        val body = request.body?.let { body ->
+            val buffer = Buffer()
+            runCatching { body.writeTo(buffer) }.getOrNull() ?: return null
+            Base64.getEncoder().encodeToString(buffer.readByteArray())
+        }
+        val params = json {
+            field("url", request.url.toString())
+            field("method", request.method)
+            stringMap("headers", request.headers.names().associateWith { request.headers.values(it).joinToString(", ") })
+            field("bodyBase64", body)
+            field("timeoutMs", RELAY_TIMEOUT_MS)
+        }
+        val answer = runCatching {
+            parseJson<HostRelayAnswer>(HostBridge.call("clearance.fetch", params))
+        }.getOrNull()
+        val status = answer?.status
+        if (answer == null || !answer.ok || status == null) {
+            System.err.println("[$TAG] relay refused for ${request.url}: ${answer?.error}")
+            return null
+        }
+        val headers = Headers.Builder().apply {
+            for ((name, values) in answer.headers) for (value in values) addUnsafeNonAscii(name, value)
+        }.build()
+        val bytes = Base64.getDecoder().decode(answer.bodyBase64 ?: "")
+        return Response.Builder()
+            .request(request)
+            .protocol(Protocol.HTTP_1_1)
+            .code(status)
+            .message(answer.statusText ?: "")
+            .headers(headers)
+            .body(bytes.toResponseBody(headers["content-type"]?.toMediaTypeOrNull()))
+            .build()
     }
 }
+
+/** `ClearanceAnswer` in `clearance.ts`; every field defaulted, bound by name. */
+internal data class HostClearanceAnswer(
+    val ok: Boolean = false,
+    val error: String? = null,
+    val cookies: Map<String, String> = emptyMap(),
+    val userAgent: String? = null,
+    val source: String? = null,
+)
+
+/** `RelayAnswer` in `clearanceRelay.ts`; every field defaulted, bound by name. */
+internal data class HostRelayAnswer(
+    val ok: Boolean = false,
+    val error: String? = null,
+    val status: Int? = null,
+    val statusText: String? = null,
+    val url: String? = null,
+    val headers: Map<String, List<String>> = emptyMap(),
+    val bodyBase64: String? = null,
+)

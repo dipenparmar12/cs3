@@ -23,8 +23,8 @@
  * originals won — `Toggle` carrying a `suppressedReason` says something the
  * reconstruction's plain switch could not.
  */
-import React, { useCallback, useMemo, useState } from 'react';
-import { Boxes, Loader2, RefreshCw, ShieldAlert } from 'lucide-react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { Boxes, Library, Loader2, RefreshCw } from 'lucide-react';
 import { useExtensionCatalog } from './useExtensionCatalog';
 import { useExtensionFilters } from './useExtensionFilters';
 import { FilterBar } from './FilterBar';
@@ -35,34 +35,75 @@ import { BuiltInSources } from './BuiltInSources';
 import { RepositoryCatalog } from './RepositoryCatalog';
 import { ExtensionCatalog } from './ExtensionCatalog';
 import { JobsTray } from './JobsTray';
-import { InfoHint } from '../settings/InfoHint';
 import { useExtensionJobs, useOnJobsSettled } from './useExtensionJobs';
 import type { SitePlugin } from '../../types/plugin';
 import './extensions.css';
 import { describeError } from '../../utils/errors';
+import { AdultContentSetting } from '../AdultContentSetting';
+import { useAdultState } from '../../utils/useAdultMode';
 
 /**
- * Two tabs, not three.
- *
- * "What does this repository offer?" was a third destination, and reaching it
- * meant leaving the list the question was asked from. It is not a separate
- * question — it is a detail of one repository — so it is now a panel that opens
- * under that repository's card, and the tab it used to need is gone.
+ * Three tabs:
+ * - **Installed** — community extensions & providers tree
+ * - **Browse** — official & community repository catalog
+ * - **Built-in Sources** — native scrapers, Stremio addons, & self-hosted media servers
  */
-type Tab = 'sources' | 'repositories';
+type Tab = 'sources' | 'repositories' | 'builtin' | 'updates';
 
 const TABS: Array<{ id: Tab; label: string; hint: string }> = [
   { id: 'sources', label: 'Installed', hint: 'What you have, and what will be searched' },
   { id: 'repositories', label: 'Browse', hint: 'Collections of add-ons you can install' },
+  { id: 'builtin', label: 'Built-in Sources', hint: 'Ship with the app — native scrapers & servers' },
+  { id: 'updates', label: 'Updates', hint: 'Available updates, changelogs & maintenance' },
 ];
 
 export const ExtensionsScreen: React.FC = () => {
-  const { state, busy, refresh, actions, browseRepository } = useExtensionCatalog();
+  const { state, busy, refresh, actions, browseRepository, peekRepository } = useExtensionCatalog();
+  const browseToken = useRef(0);
+  const adult = useAdultState();
   const jobs = useExtensionJobs();
   // The tree is re-read, never predicted, once background work lands.
   useOnJobsSettled(jobs.snapshot, () => void refresh());
   const [tab, setTab] = useState<Tab>('sources');
   const [selected, setSelected] = useState<Set<string>>(new Set());
+
+  const [updateCounts, setUpdateCounts] = useState<{ pending: number; ignored: number; failed: number }>({
+    pending: 0,
+    ignored: 0,
+    failed: 0,
+  });
+
+  useEffect(() => {
+    const api = window.cloudstream;
+    if (!api) return;
+
+    const loadCounts = async () => {
+      try {
+        const [cached, ignored] = await Promise.all([
+          api.getCachedExtensionUpdates().catch(() => []),
+          api.getIgnoredExtensionUpdates?.().catch(() => ({})) ?? {},
+        ]);
+        const safeCached = Array.isArray(cached) ? cached : [];
+        const ignoredMap: Record<string, unknown> = (ignored as Record<string, unknown>) ?? {};
+        const pending = safeCached.filter((u) => !u.ignored && !ignoredMap[u.internalName]).length;
+        const ignoredCount = Object.keys(ignoredMap).length;
+        setUpdateCounts((prev) => ({ ...prev, pending, ignored: ignoredCount }));
+      } catch {
+        // Ignore background tally error
+      }
+    };
+
+    void loadCounts();
+
+    return api.onExtensionUpdateEvent?.((event, payload) => {
+      if (event === 'extension:updateCheckFinished') {
+        const result = payload as { updates?: Array<{ internalName: string; ignored?: boolean }> };
+        const safe = Array.isArray(result?.updates) ? result.updates : [];
+        const pending = safe.filter((u) => !u.ignored).length;
+        setUpdateCounts((prev) => ({ ...prev, pending }));
+      }
+    });
+  }, []);
 
   const [browsing, setBrowsing] = useState<{ name: string; url: string } | null>(null);
   const [plugins, setPlugins] = useState<SitePlugin[]>([]);
@@ -129,24 +170,40 @@ export const ExtensionsScreen: React.FC = () => {
    */
   const browse = useCallback(
     async (repository: { name: string; url: string }) => {
+      const token = ++browseToken.current;
+      const current = () => token === browseToken.current;
       setTab('repositories');
       setBrowsing(repository);
-      setBrowseLoading(true);
       setBrowseError(null);
-      setPlugins([]);
-      setWarnings([]);
+
+      // Show the stored listing at once; the fetch below only refreshes it.
+      const cached = await peekRepository(repository.url).catch(() => null);
+      if (!current()) return;
+      if (cached) {
+        setBrowsing({ name: cached.name || repository.name, url: cached.repositoryUrl });
+        setPlugins(cached.plugins ?? []);
+        setWarnings(cached.warnings ?? []);
+        setBrowseLoading(false);
+      } else {
+        setPlugins([]);
+        setWarnings([]);
+        setBrowseLoading(true);
+      }
+
       try {
         const result = await browseRepository(repository.url);
+        if (!current()) return;
         setBrowsing({ name: result.name || repository.name, url: result.repositoryUrl });
         setPlugins(result.plugins ?? []);
         setWarnings(result.warnings ?? []);
       } catch (error) {
-        setBrowseError(describeError(error));
+        // A failed refresh must not replace a listing that is already on screen.
+        if (current() && !cached) setBrowseError(describeError(error));
       } finally {
-        setBrowseLoading(false);
+        if (current()) setBrowseLoading(false);
       }
     },
-    [browseRepository]
+    [browseRepository, peekRepository]
   );
 
   const install = useCallback(
@@ -192,69 +249,78 @@ export const ExtensionsScreen: React.FC = () => {
 
       <JobsTray />
 
-      {/*
-        Extension updates, and the reason this line exists at all.
-
-        `ExtensionUpdates` was built — check, update one, update all, the
-        auto-update policy, live progress from `extension:update*` events — and
-        was imported by nothing. Every one of those channels was registered in
-        `main.ts` and exposed in `preload.ts`, so the IPC parity test was
-        perfectly happy: the surface agreed with itself and simply had no
-        caller. That is the same silent shape as the seven mismatched channels
-        found by diffing the two files, arriving from a third direction, and the
-        user-visible form is identical — a feature that exists and cannot be
-        reached.
-
-        It goes above the tabs rather than inside one, because an update is not
-        a property of what you are currently looking at: a fix published for a
-        provider matters whether you came here to browse repositories or to
-        switch something off.
-      */}
-      <ExtensionUpdates onUpdated={() => void refresh()} />
-
       <nav className="ext-tabs" role="tablist">
-        {TABS.map((entry) => (
-          <button
-            key={entry.id}
-            type="button"
-            role="tab"
-            aria-selected={tab === entry.id}
-            className={`ext-tab${tab === entry.id ? ' ext-tab--on' : ''}`}
-            onClick={() => setTab(entry.id)}
-          >
-            <span className="ext-tab__label">{entry.label}</span>
-            <span className="ext-tab__hint">{entry.hint}</span>
-          </button>
-        ))}
+        {TABS.map((entry) => {
+          const isUpdatesTab = entry.id === 'updates';
+          return (
+            <button
+              key={entry.id}
+              type="button"
+              role="tab"
+              aria-selected={tab === entry.id}
+              className={`ext-tab${tab === entry.id ? ' ext-tab--on' : ''}`}
+              onClick={() => setTab(entry.id)}
+            >
+              <div className="ext-tab__head">
+                <span className="ext-tab__label">{entry.label}</span>
+                {isUpdatesTab && updateCounts.pending > 0 && (
+                  <span className="ext-tab__badge ext-tab__badge--accent">
+                    {updateCounts.pending}
+                  </span>
+                )}
+                {isUpdatesTab && updateCounts.pending === 0 && updateCounts.ignored > 0 && (
+                  <span
+                    className="ext-tab__badge ext-tab__badge--muted"
+                    title={`${updateCounts.ignored} update(s) ignored due to provider errors`}
+                  >
+                    {updateCounts.ignored} ignored
+                  </span>
+                )}
+              </div>
+              <span className="ext-tab__hint">{entry.hint}</span>
+            </button>
+          );
+        })}
       </nav>
 
-      <FilterBar
-        query={filters.query}
-        onQuery={filters.setQuery}
-        status={filters.status}
-        onStatus={filters.setStatus}
-        tags={filters.tags}
-        onToggleTag={filters.toggleTag}
-        languages={filters.languages}
-        onToggleLanguage={filters.toggleLanguage}
-        categories={filters.categories}
-        onToggleCategory={filters.toggleCategory}
-        facets={filters.facets}
-        activeCount={filters.activeCount}
-        onReset={filters.reset}
-        showCategories={tab === 'repositories'}
-        scope={tab === 'repositories' ? 'repositories' : 'sources'}
-      />
+      {(tab === 'sources' || tab === 'repositories') && (
+        <FilterBar
+          query={filters.query}
+          onQuery={filters.setQuery}
+          status={filters.status}
+          onStatus={filters.setStatus}
+          tags={filters.tags}
+          onToggleTag={filters.toggleTag}
+          languages={filters.languages}
+          onToggleLanguage={filters.toggleLanguage}
+          categories={filters.categories}
+          onToggleCategory={filters.toggleCategory}
+          facets={filters.facets}
+          activeCount={filters.activeCount}
+          onReset={filters.reset}
+          showCategories={true}
+          scope={tab === 'repositories' ? 'repositories' : 'sources'}
+        />
+      )}
 
       {tab === 'sources' ? (
         <>
-          {/*
-            Above the tree, because these are the sources that always work.
-            A new install has no extensions and, before this lane existed, an
-            empty Sources tab — which reads as an app that cannot do anything
-            until you go and find plugins for it.
-          */}
-          <BuiltInSources />
+          <div className="ext-builtin-banner">
+            <div className="ext-builtin-banner__content">
+              <Library size={18} className="ext-builtin-banner__icon" />
+              <div className="ext-builtin-banner__text">
+                <strong>Built-in sources</strong>
+                <span>Ship with the app — nothing to install, and they cannot break on an update.</span>
+              </div>
+            </div>
+            <button
+              type="button"
+              className="ext-btn ext-btn--primary"
+              onClick={() => setTab('builtin')}
+            >
+              View Built-in Sources
+            </button>
+          </div>
 
           {/*
             Bulk actions apply to providers, which is the level the enable
@@ -308,10 +374,11 @@ export const ExtensionsScreen: React.FC = () => {
         <RepositoryCatalog
           official={state.official}
           installed={state.installedRepositories}
-          adultAllowed={state.adultAllowed}
+          adultAllowed={adult.allowed}
           filters={filters.state}
           busy={busy}
           jobFor={jobs.jobFor}
+          jobsForRepository={jobs.jobsForRepository}
           tree={state.tree}
           expandedUrl={browsing?.url ?? null}
           onBrowse={(repository) => void browse(repository)}
@@ -340,32 +407,22 @@ export const ExtensionsScreen: React.FC = () => {
         />
       ) : null}
 
+      {tab === 'builtin' ? (
+        <BuiltInSources />
+      ) : null}
+
+      {tab === 'updates' ? (
+        <ExtensionUpdates
+          onUpdated={() => void refresh()}
+          onCountsChange={(counts) => setUpdateCounts(counts)}
+        />
+      ) : null}
+
 
 
       <footer className="ext-footer">
-        <label className="ext-adult">
-          <input
-            type="checkbox"
-            checked={state.adultAllowed}
-            disabled={busy === 'adult'}
-            onChange={(event) => void actions.setAdultAllowed(event.target.checked)}
-          />
-          <ShieldAlert size={14} />
-          <span>
-            Show adult providers
-            {/*
-              The gate is enforced in `PluginManager.enabledProviderNames`, which
-              search, the scope picker, source discovery, playback and downloads
-              all funnel through. This checkbox is the setting, not the
-              enforcement — filtering at each call site would be five places to
-              forget.
-            */}
-          </span>
-        </label>
-        <InfoHint label="About adult providers">
-          Off by default. A source counts as adult when it says so about itself, which catches
-          one bundled inside an otherwise ordinary add-on.
-        </InfoHint>
+        {/* The same control as Settings → Adult content, bound to the same state. */}
+        <AdultContentSetting />
       </footer>
     </div>
   );

@@ -3,6 +3,7 @@ import { JsonFileStore } from '../util/jsonFileStore.ts';
 import { canonicalKey } from './libraryStore.ts';
 import type { Episode, SearchResponse, TvType } from '../../src/types/api';
 import { prune } from '../util/prune.ts';
+import { isPrivateSession } from './privacyMode.ts';
 
 /**
  * The last detail page that actually worked, kept so it can be shown again.
@@ -193,7 +194,8 @@ export class PageSnapshotStore {
     this.file = new JsonFileStore<PageSnapshot[]>(
       path.join(directory, 'page-snapshots.json'),
       WRITE_DEBOUNCE_MS,
-      () => [...this.snapshots.values()]
+      // Pages first met in a private session never reach the file (PRD-52 §10).
+      () => [...this.snapshots.values()].filter((entry) => !this.privateUrls.has(entry.url))
     );
   }
 
@@ -246,10 +248,18 @@ export class PageSnapshotStore {
     const existing = this.snapshots.get(url);
     const merged = mergeSnapshot(existing, input, now);
 
+    if (isPrivateSession()) {
+      // A page already saved before the session is answered, not touched:
+      // updating its last-seen time would record the private visit.
+      if (existing && !this.privateUrls.has(url)) return merged;
+      this.privateUrls.add(url);
+    }
     this.snapshots.set(url, merged);
     this.index(merged);
     this.evict();
-    this.file.schedule();
+    if (!isPrivateSession()) {
+      this.file.schedule();
+    }
     return merged;
   }
 
@@ -299,6 +309,7 @@ export class PageSnapshotStore {
   }
 
   private touch(entry: PageSnapshot): PageSnapshot {
+    if (isPrivateSession()) return entry;
     entry.lastUsedAt = Date.now();
     this.file.schedule();
     return entry;
@@ -320,8 +331,22 @@ export class PageSnapshotStore {
     const entry = this.find(query);
     if (!entry) return false;
     entry.pinned = pinned;
+    // Saving is the explicit action that promotes a private capture to disk.
+    if (pinned) this.privateUrls.delete(entry.url);
     this.file.schedule();
     return true;
+  }
+
+  /** Pages captured privately and never saved; dropped when the session ends. */
+  private readonly privateUrls = new Set<string>();
+
+  public discardPrivate(): void {
+    for (const url of this.privateUrls) {
+      const entry = this.snapshots.get(url);
+      this.snapshots.delete(url);
+      if (entry) this.byKey.get(entry.key)?.delete(url);
+    }
+    this.privateUrls.clear();
   }
 
   public forget(url: string): boolean {
@@ -351,6 +376,26 @@ export class PageSnapshotStore {
   public size(): number {
     this.hydrate();
     return this.snapshots.size;
+  }
+
+  /**
+   * Replaces the *pinned* snapshots, leaving the cache around them alone.
+   *
+   * Only pinned pages travel in a backup — the rest is a cache that belongs to
+   * the machine that built it — so a restore can only speak for those.
+   */
+  public replacePinned(entries: PageSnapshot[]): void {
+    this.hydrate();
+    for (const snapshot of [...this.snapshots.values()]) {
+      if (snapshot.pinned) this.snapshots.delete(snapshot.url);
+    }
+    for (const entry of entries) {
+      if (!entry || typeof entry.url !== 'string' || !entry.url || !entry.title) continue;
+      this.snapshots.set(entry.url, { ...entry, pinned: true });
+    }
+    this.byKey.clear();
+    for (const snapshot of this.snapshots.values()) this.index(snapshot);
+    this.file.schedule();
   }
 
   /** Replaces the whole set; used by a backup restore. */

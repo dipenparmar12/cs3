@@ -1,4 +1,5 @@
 import React, { useContext } from 'react';
+import { ChevronDown } from 'lucide-react';
 import { InfoHint } from './InfoHint';
 import {
   GroupMatchContext,
@@ -7,6 +8,7 @@ import {
   useSettingsQuery,
 } from './SettingsLevelContext';
 import { matchesSettingQuery } from './settingsSearch';
+import { useSettingCollapse } from './useSettingCollapse';
 
 /**
  * One setting: what it is on the left, what you do about it on the right.
@@ -72,9 +74,22 @@ export const SettingGroup: React.FC<{
   hint?: React.ReactNode;
   /** Other words someone might search for this group by. */
   keywords?: string;
-}> = ({ title, icon, children, level = 'basic', hint, keywords }) => {
+  storageKey?: string;
+  collapsible?: boolean;
+}> = ({
+  title,
+  icon,
+  children,
+  level = 'basic',
+  hint,
+  keywords,
+  storageKey,
+  collapsible = true,
+}) => {
   const settingsLevel = useSettingsLevel();
   const query = useSettingsQuery();
+  const [isCollapsed, toggleCollapse] = useSettingCollapse(storageKey || title);
+
   if (!shouldShow(settingsLevel, level)) return null;
 
   const groupMatched = query !== '' && matchesSettingQuery(query, title, keywords, hint);
@@ -99,20 +114,61 @@ export const SettingGroup: React.FC<{
     const props = child.props as Partial<SettingRowProps>;
     if (!shouldShow(settingsLevel, props.level)) return false;
     if (!query || groupMatched) return true;
-    return typeof props.label === 'string' && rowMatches(query, props);
+    if (typeof props.label !== 'string') return true;
+    return rowMatches(query, props);
   });
   if (rendered.length === 0) return null;
 
+  const effectiveCollapsed = collapsible && isCollapsed && !query;
+
   return (
-    <section className="setting-group">
-      <h3>
-        {icon}
-        {title}
-        {hint ? <InfoHint label={`About ${title}`}>{hint}</InfoHint> : null}
+    <section className={`setting-group${effectiveCollapsed ? ' setting-group--collapsed' : ''}`}>
+      <h3
+        className={`setting-group__head${collapsible ? ' setting-group__head--collapsible' : ''}`}
+        onClick={collapsible ? toggleCollapse : undefined}
+        role={collapsible ? 'button' : undefined}
+        tabIndex={collapsible ? 0 : undefined}
+        aria-expanded={collapsible ? !effectiveCollapsed : undefined}
+        onKeyDown={
+          collapsible
+            ? (e) => {
+                if (e.key === 'Enter' || e.key === ' ') {
+                  e.preventDefault();
+                  toggleCollapse();
+                }
+              }
+            : undefined
+        }
+      >
+        <div className="setting-group__title-wrap">
+          {icon}
+          <span>{title}</span>
+          {hint ? (
+            <span
+              onClick={(e) => {
+                e.stopPropagation();
+              }}
+            >
+              <InfoHint label={`About ${title}`}>{hint}</InfoHint>
+            </span>
+          ) : null}
+        </div>
+        {collapsible && (
+          <span
+            className={`setting-group__collapse-icon${
+              effectiveCollapsed ? ' setting-group__collapse-icon--collapsed' : ''
+            }`}
+            aria-hidden="true"
+          >
+            <ChevronDown size={14} />
+          </span>
+        )}
       </h3>
-      <GroupMatchContext.Provider value={groupMatched}>
-        <div className="setting-group__body">{children}</div>
-      </GroupMatchContext.Provider>
+      {!effectiveCollapsed && (
+        <GroupMatchContext.Provider value={groupMatched}>
+          <div className="setting-group__body">{children}</div>
+        </GroupMatchContext.Provider>
+      )}
     </section>
   );
 };

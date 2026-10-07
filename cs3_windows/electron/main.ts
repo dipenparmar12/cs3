@@ -37,7 +37,9 @@ startup.watch();
 const endServiceGraph = startup.span('constructServices');
 
 import { app, BrowserWindow, ipcMain, dialog, Menu, net, screen, shell } from 'electron';
-import { BackupService, type RestoreOptions } from './cs3/backupService.ts';
+import { BackupService } from './cs3/backupService.ts';
+import { createBackupSections } from './cs3/backupSections.ts';
+import type { RestorePlan } from '../src/types/backup.ts';
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
@@ -65,11 +67,18 @@ import { BinaryDownloader } from './binaryDownloader';
 import { MpvEngine } from './media/mpvEngine';
 import { TorrentEngine } from './torrent/torrentEngine';
 import { ContentService, type SourceQuery } from './contentService';
-import { PlaybackSessionManager } from './playbackSession';
+import { PlaybackSessionManager, type ResumePreference } from './playbackSession';
 import { SearchSuggestionService } from './searchSuggestions';
 import { SearchHistoryStore } from './searchHistory';
 import { SavedSearchStore, type SaveSearchInput } from './savedSearches';
-import { SubtitleService } from './subtitleService';
+import { SubtitleService, languageName, type SubtitleQuery, type SubtitleSearchResult } from './subtitleService';
+import {
+  PrivacyMode,
+  isPrivateSession,
+  allowsExplicitSaves,
+  type IncognitoSettings,
+} from './cs3/privacyMode';
+import { SubtitleLibrary, type SaveRequest as SubtitleSaveRequest } from './subtitles/subtitleLibrary';
 import { MediaTranscoder, VIDEO_CODEC_PROBES } from './mediaTranscoder';
 import { PlaybackEngine } from './media/playbackEngine';
 import { InspectionStore } from './media/inspectionStore';
@@ -102,10 +111,17 @@ import {
   type ExtensionJobRequest,
 } from './cs3/extensionJobs';
 import { OttService } from './cs3/ottService';
+import { CatalogueCache } from './cs3/catalogueCache';
+import { RepositoryListingCache } from './cs3/repositoryListingCache';
 import {
   MetadataEnrichmentService,
   type EnrichmentRequest,
 } from './metadata/enrichmentService';
+import { searchYouTubeTrailers } from './metadata/youtube';
+import { relatedMediaService } from './metadata/relatedMedia/relatedMediaService.ts';
+import type { RelatedMediaSearchRequest } from '../src/types/relatedMedia';
+import { mediaRatingService } from './metadata/ratings/mediaRatingService.ts';
+import type { CanonicalMediaIdentity } from '../src/types/ratings.ts';
 import { OttCatalogService } from './cs3/ottCatalog';
 import { TorrentImportService, classifyDroppedPath, looksLikeMagnet } from './torrent/torrentImport';
 import { parseReleaseName } from './torrent/releaseParser';
@@ -134,12 +150,10 @@ import {
 import { deadlineFromUrl } from './sourceCache';
 import { HistoryStore } from './cs3/historyStore';
 import { BookmarkStore } from './cs3/bookmarkStore';
-import {
-  PageSnapshotStore,
-  type PageSnapshot,
-  type PageSnapshotInput,
-} from './cs3/pageSnapshot.ts';
+import { PageSnapshotStore, type PageSnapshotInput } from './cs3/pageSnapshot.ts';
 import { WebViewHost, type WebViewResolveRequest } from './cs3/webViewHost';
+import { CLEARANCE_COOKIE, ClearanceService } from './cs3/clearance.ts';
+import { relayInSession } from './cs3/clearanceRelay.ts';
 import { DiscoveryService } from './cs3/discovery';
 import { SourcePrefetcher } from './cs3/sourcePrefetcher';
 import { TitleEnricher } from './cs3/titleEnricher';
@@ -176,6 +190,14 @@ app.setAppUserModelId(APP_ID);
 let mainWindow: BrowserWindow | null = null;
 
 const datastore = new DatastoreManager();
+// Constructed before every store that records activity, so the first write any
+// of them makes already sees the right answer (PRD-52).
+const privacyMode = new PrivacyMode(datastore);
+privacyMode.onChange((state) => {
+  BrowserWindow.getAllWindows().forEach((w) => w.webContents.send('privacy:changed', state));
+  const item = Menu.getApplicationMenu()?.getMenuItemById('incognito-toggle');
+  if (item) item.checked = state.active;
+});
 
 /**
  * The structured log, constructed before the services that write to it.
@@ -288,9 +310,35 @@ const pluginManager = new PluginManager(datastore);
  * grant without also granting whatever the next method would be.
  */
 const webViewHost = new WebViewHost();
+/**
+ * Bot-wall clearances for the JVM and the indexers alike — see `clearance.ts`.
+ * The browser partition's cookie jar is the store, so a clearance earned by
+ * one is used by the other and survives a restart for as long as it is valid.
+ */
+const clearance = new ClearanceService({
+  readCookies: (url) => webViewHost.jarCookies(url),
+  removeCookie: (url, name) => webViewHost.removeCookie(url, name),
+  solve: async (url) => {
+    if (!webViewHost.isAvailable()) return { ok: false, error: 'No browser is available to solve the challenge.' };
+    // Upstream's own shape: there is no URL to wait for, only the cookie.
+    const answer = await webViewHost.resolve({ url, interceptUrl: '.^', awaitCookie: CLEARANCE_COOKIE, timeoutMs: 45_000 });
+    return { ok: answer.ok, error: answer.error };
+  },
+  userAgent: () => webViewHost.userAgent(),
+});
 pluginManager.getSidecar().setHostCallHandler(async (method, params) => {
   if (method === 'webview.resolve') {
     return webViewHost.resolve(params as unknown as WebViewResolveRequest);
+  }
+  if (method === 'clearance.get') {
+    return clearance.get(String(params.url ?? ''), { solve: params.solve !== false });
+  }
+  if (method === 'clearance.invalidate') {
+    await clearance.invalidate(String(params.url ?? ''));
+    return { ok: true };
+  }
+  if (method === 'clearance.fetch') {
+    return relayInSession(params, { clearance, host: webViewHost });
   }
   return { ok: false, error: `The desktop app does not implement ${method}.` };
 });
@@ -355,7 +403,13 @@ metadataEnrichment.setListener((metadata) =>
   mainWindow?.webContents.send('metadata:extendedUpdate', metadata)
 );
 
-const ottService = new OttService(pluginManager, datastore);
+const catalogueCache = new CatalogueCache(
+  path.join(app.getPath('userData'), 'cs3-catalogue-cache.json')
+);
+const repositoryListings = new RepositoryListingCache(
+  path.join(app.getPath('userData'), 'cs3-repository-listings.json')
+);
+const ottService = new OttService(pluginManager, datastore, catalogueCache);
 /** Metadata catalogues for the platforms no installed provider can describe. */
 const ottCatalog = new OttCatalogService();
 const batchDownloader = new BatchDownloader(contentService, downloadService);
@@ -374,6 +428,9 @@ const bookmarks = new BookmarkStore(datastore);
 const pageSnapshots = new PageSnapshotStore(app.getPath('userData'));
 const savedSearches = new SavedSearchStore(app.getPath('userData'));
 contentService.setSnapshotStore(pageSnapshots);
+relatedMediaService.setDirectory(app.getPath('userData'));
+mediaRatingService.setDirectory(app.getPath('userData'));
+mediaRatingService.setDatastore(datastore);
 /**
  * The home screen's catalogue source, and the rows built from it.
  *
@@ -586,10 +643,17 @@ try {
   contentService.getProxy().addAllowedDirectory(app.getPath('userData'));
   contentService.getProxy().addAllowedDirectory(app.getPath('downloads'));
 } catch {}
+// A private session discovers into memory only; leaving it drops what was found.
+contentService.getCache().setVolatileMode(privacyMode.isActive());
+privacyMode.onChange((state) => contentService.getCache().setVolatileMode(state.active));
+privacyMode.onClearSession(() => pageSnapshots.discardPrivate());
 const playbackSessions = new PlaybackSessionManager(contentService);
 const searchSuggestions = new SearchSuggestionService();
 const searchHistory = new SearchHistoryStore(datastore);
 const subtitles = new SubtitleService();
+downloadService.setSubtitleFetcher((url) => subtitles.fetchAsVtt(url));
+// Beside the media downloads, so a viewer who opens the folder finds both.
+const subtitleLibrary = new SubtitleLibrary(path.join(os.homedir(), 'Downloads', 'CloudStream', 'Subtitles'));
 const mediaTranscoder = new MediaTranscoder(binaryDownloader);
 /**
  * Lets `resolvePromoVideo` mux a video and an audio address into one stream.
@@ -645,6 +709,15 @@ const mpvEngine = new MpvEngine({
     mainWindow?.webContents.send('mpv:update', snapshot);
     mainWindow?.webContents.send('external:update', mpvToExternalSnapshot(snapshot));
   },
+  // A key pressed in mpv's window asking for something only the app has — the
+  // subtitle search. The app window comes forward so the panel is seen.
+  onAction: (action) => {
+    if (!mainWindow || mainWindow.isDestroyed()) return;
+    if (mainWindow.isMinimized()) mainWindow.restore();
+    mainWindow.show();
+    mainWindow.focus();
+    mainWindow.webContents.send('mpv:action', action);
+  },
   diagnostics,
 });
 
@@ -697,7 +770,16 @@ app.commandLine.appendSwitch('enable-features', CHROMIUM_FEATURES.join(','));
  * `configureHostResolver`, and therefore the user's DNS setting.
  */
 const resilientFetch = new ResilientFetch({
-  primary: (input, init) => net.fetch(input, init),
+  /*
+   * `unsafe-url`: send the provider's `Referer` exactly as given, as OkHttp does
+   * on Android. Under Chromium's default policy a full-path referrer on a
+   * cross-site request is not trimmed but refused outright with
+   * `ERR_BLOCKED_BY_CLIENT` — measured 2026-10-02 on NetMirror/Jio Hotstar,
+   * whose `https://net52.cc/mobile/home?app=1` referrer killed every variant
+   * playlist on `freecdn34.top` while the same-site master played. Downloads
+   * (aria2) worked throughout, which is what made it look like a stream bug.
+   */
+  primary: (input, init) => net.fetch(input, { referrerPolicy: 'unsafe-url', ...init }),
   fallback: (input, init) => fetch(input, init),
   diagnostics,
 });
@@ -721,20 +803,14 @@ setHttpFetch((input, init) => resilientFetch.fetch(input, init));
  * would be challenged again, which is indistinguishable from the bypass having
  * failed.
  */
-setChallengeSolver(async (url) => {
-  if (!webViewHost.isAvailable()) return null;
-  const answer = await webViewHost.resolve({
-    url,
-    // Upstream's own choice for this: `CloudflareKiller` has no URL to
-    // intercept, so the only signal the challenge is done is the cookie.
-    interceptUrl: '.^',
-    awaitCookie: 'cf_clearance',
-    timeoutMs: 45_000,
-  });
-  const cookies = answer.cookies ?? {};
-  if (!answer.ok || !cookies.cf_clearance) return null;
+setChallengeSolver(async (url, { stale }) => {
+  // A clearance the site just refused is dropped first, or the jar would hand
+  // the same dead cookie straight back.
+  if (stale) await clearance.invalidate(url);
+  const answer = await clearance.get(url);
+  if (!answer.ok) return null;
   return {
-    cookie: Object.entries(cookies)
+    cookie: Object.entries(answer.cookies)
       .map(([name, value]) => `${name}=${value}`)
       .join('; '),
     userAgent: answer.userAgent,
@@ -749,11 +825,14 @@ setChallengeSolver(async (url) => {
  * `.mpd` served as `application/octet-stream` are both routine, and the only
  * reliable classifier is the first few bytes of the body.
  */
+const inspectionStore = new InspectionStore(datastore);
+privacyMode.onClearSession(() => inspectionStore.clearVolatile());
+
 const playbackEngine = new PlaybackEngine({
   proxy: contentService.getProxy(),
   transcoder: mediaTranscoder,
   nativeEngine: () => ({ available: mpvEngine.isAvailable(), policy: nativeEnginePolicy() }),
-  inspections: new InspectionStore(datastore),
+  inspections: inspectionStore,
   fetchText: async (url, bytes) => {
     try {
       const response = await resilientFetch.fetch(
@@ -988,6 +1067,20 @@ function buildApplicationMenu(): Menu {
           label: 'Open File…',
           accelerator: 'CmdOrCtrl+O',
           click: () => void openLocalMediaDialog(),
+        },
+        {
+          id: 'incognito-toggle',
+          label: 'Incognito',
+          type: 'checkbox',
+          checked: privacyMode.isActive(),
+          accelerator: 'CmdOrCtrl+Shift+N',
+          click: () => void privacyMode.setActive(!privacyMode.isActive()),
+        },
+        { type: 'separator' },
+        {
+          label: 'Settings…',
+          accelerator: 'CmdOrCtrl+,',
+          click: () => mainWindow?.webContents.send('app:openSettings'),
         },
         { type: 'separator' },
         isMac ? { role: 'close' } : { role: 'quit' },
@@ -1691,7 +1784,24 @@ app.whenReady().then(async () => {
     label: 'Loading installed extensions',
     priority: 70,
     delayMs: PROVIDER_WARMUP_DELAY_MS,
-    run: () => pluginManager.warmProviders(),
+    /**
+     * Its own lane. On the serial one the torrent client queued behind the
+     * whole warm-up — measured at fourteen minutes on a 468-archive install
+     * whose JVM had run out of memory — so a magnet pressed in that window paid
+     * the cold start the warm-up was supposed to have done. The JVM is touched
+     * by nothing else in this queue, so serial within the lane is all the
+     * ordering provider loading needs.
+     */
+    lane: 'extensions',
+    // The providers people actually use load first; a search before the pass
+    // finishes then usually finds its archives already live.
+    run: () =>
+      pluginManager.warmProviders({
+        usage: (name) => {
+          const record = providerAnalytics.get(name);
+          return record ? providerAnalytics.totalSamples(record) : 0;
+        },
+      }),
   });
 
   background.add({
@@ -1704,6 +1814,31 @@ app.whenReady().then(async () => {
     // is worth one more try before the first Play pays for it.
     retries: 1,
     run: () => torrentEngine.warmUp(),
+  });
+
+  // Every catalogue card opens from a stored listing, so the first expand of a
+  // session never says "Reading the list…". Own lane: it shares nothing with
+  // the JVM warm-up, and one failing repository costs only itself.
+  background.add({
+    id: 'repository-listings',
+    label: 'Refreshing the lists of add-ons you can install',
+    priority: 20,
+    delayMs: 20_000,
+    lane: 'catalogue',
+    run: async () => {
+      const day = 24 * 60 * 60 * 1000;
+      for (const repository of bootstrap.visibleRepositories()) {
+        if (repositoryListings.isFresh(repository.url, day)) continue;
+        try {
+          repositoryListings.put(
+            repository.url,
+            await pluginManager.fetchRepository(repository.url, { remember: false })
+          );
+        } catch {
+          // An unreachable repository keeps whatever listing it already has.
+        }
+      }
+    },
   });
 
   background.start();
@@ -1790,6 +1925,9 @@ async function shutdownServices(): Promise<void> {
   // Cast lists arrive over seconds and the write is debounced, so a viewer who
   // opens a title and quits would otherwise re-fetch four hosts next launch.
   metadataEnrichment.flush();
+  // Streaming-service rows fetched this session draw instantly next launch.
+  catalogueCache.flush();
+  repositoryListings.flush();
   mediaTranscoder.shutdown();
   contentService.shutdown();
   // Imported torrents are debounced to disk; without this the last few opens
@@ -1816,6 +1954,7 @@ app.on('before-quit', async (event) => {
   if (quitting) return;
   quitting = true;
   event.preventDefault();
+  privacyMode.shutdown();
 
   /**
    * Shutdown is raced against a deadline, and that is not belt-and-braces.
@@ -2011,73 +2150,29 @@ ipcMain.handle('api:suggest', async (event, query: string) => {
  * an OpenSubtitles match is for the work in general and may be out of sync.
  */
 ipcMain.handle(
-  'subtitles:search',
-  async (_, imdbIdOrQuery: string, season?: number, episode?: number, mediaUrl?: string) => {
+  'subtitles:find',
+  async (_, query: SubtitleQuery & { mediaUrl?: string }) => {
     try {
-      const trimmed = imdbIdOrQuery?.trim() ?? '';
-      const [fromProvider, fromCatalogue] = await Promise.all([
-        mediaUrl?.startsWith('cs3ext://')
-          ? pluginManager.loadSubtitles(mediaUrl).catch(() => [])
-          : Promise.resolve([]),
-        trimmed
-          ? (/^tt\d+$/i.test(trimmed)
-              ? subtitles.search(trimmed, season, episode).catch(() => [])
-              : subtitles.searchByTitle(trimmed, season, episode).then((r) => r.results).catch(() => []))
-          : Promise.resolve([]),
-      ]);
-
-      const providerResults = fromProvider.map((entry) => ({
-        id: `provider:${entry.url}`,
-        lang: entry.lang,
-        langName: `${entry.lang} (from this provider)`,
-        url: entry.url,
-      }));
-
-      return { ok: true, results: [...providerResults, ...fromCatalogue] };
+      const mediaUrl = query?.mediaUrl;
+      // Asked in parallel with the catalogues, never instead of them.
+      const providerResults: Promise<SubtitleSearchResult[]> = mediaUrl?.startsWith('cs3ext://')
+        ? pluginManager
+            .loadSubtitles(mediaUrl)
+            .then((entries) =>
+              entries.map((entry) => ({
+                id: `provider:${entry.url}`,
+                lang: entry.lang,
+                langName: languageName(entry.lang),
+                url: entry.url,
+                origin: 'provider' as const,
+              }))
+            )
+            .catch(() => [])
+        : Promise.resolve([]);
+      const found = await subtitles.find(query ?? {}, providerResults);
+      return { ok: true, ...found };
     } catch (error) {
-      return { ...fail(error), results: [] };
-    }
-  }
-);
-
-/**
- * Searches subtitles by custom movie/series title or IMDb id, returning the matched title and IMDb id.
- */
-ipcMain.handle(
-  'subtitles:searchByTitle',
-  async (_, query: string, season?: number, episode?: number, mediaUrl?: string) => {
-    try {
-      const trimmed = query?.trim() ?? '';
-      if (!trimmed && !mediaUrl?.startsWith('cs3ext://')) {
-        return { ok: true, results: [], imdbId: undefined, matchedTitle: undefined };
-      }
-
-      const [fromProvider, titleResult] = await Promise.all([
-        mediaUrl?.startsWith('cs3ext://')
-          ? pluginManager.loadSubtitles(mediaUrl).catch(() => [])
-          : Promise.resolve([]),
-        trimmed
-          ? subtitles
-              .searchByTitle(trimmed, season, episode)
-              .catch(() => ({ results: [], imdbId: undefined, matchedTitle: undefined }))
-          : Promise.resolve({ results: [], imdbId: undefined, matchedTitle: undefined }),
-      ]);
-
-      const providerResults = fromProvider.map((entry) => ({
-        id: `provider:${entry.url}`,
-        lang: entry.lang,
-        langName: `${entry.lang} (from this provider)`,
-        url: entry.url,
-      }));
-
-      return {
-        ok: true,
-        imdbId: titleResult.imdbId,
-        matchedTitle: titleResult.matchedTitle,
-        results: [...providerResults, ...titleResult.results],
-      };
-    } catch (error) {
-      return { ...fail(error), results: [], imdbId: undefined, matchedTitle: undefined };
+      return { ...fail(error), results: [], sources: undefined };
     }
   }
 );
@@ -2097,6 +2192,55 @@ ipcMain.handle('subtitles:fetch', async (_, url: string) => {
   }
 });
 
+/**
+ * Subtitles kept on disk for reuse. `download` fetches (or takes the VTT the
+ * renderer already has), converts and saves; a second press on the same result
+ * answers with the existing file unless `refresh` is set. Failures here never
+ * touch playback — the renderer already has the cues it is showing.
+ */
+ipcMain.handle(
+  'subtitles:download',
+  async (_, request: Omit<SubtitleSaveRequest, 'vtt'> & { vtt?: string }) => {
+    try {
+      if (!request?.title || !request.sourceUrl) throw new Error('A subtitle needs a title and a source to be saved.');
+      const existing = request.refresh ? undefined : subtitleLibrary.findBySource(request.sourceUrl);
+      if (existing) return { ok: true, entry: existing, reused: true };
+      const vtt = request.vtt || (await subtitles.fetchAsVtt(request.sourceUrl));
+      const { entry, reused } = subtitleLibrary.save({ ...request, vtt });
+      return { ok: true, entry, reused };
+    } catch (error) {
+      return { ...fail(error), entry: null, reused: false };
+    }
+  }
+);
+
+ipcMain.handle(
+  'subtitles:listSaved',
+  async (_, title: string, year?: number, season?: number, episode?: number) => {
+    try {
+      return { ok: true, entries: title ? subtitleLibrary.list(title, year, season, episode) : [] };
+    } catch (error) {
+      return { ...fail(error), entries: [] };
+    }
+  }
+);
+
+ipcMain.handle('subtitles:readSaved', async (_, id: string) => {
+  const vtt = subtitleLibrary.read(id);
+  return vtt === null
+    ? { ok: false, error: 'That saved subtitle is no longer on disk.', vtt: '' }
+    : { ok: true, vtt };
+});
+
+ipcMain.handle('subtitles:removeSaved', async (_, id: string) => ({ ok: subtitleLibrary.remove(id) }));
+
+/** Incognito (PRD-52). Every answer is the whole state, never a delta. */
+ipcMain.handle('privacy:getState', async () => privacyMode.getState());
+ipcMain.handle('privacy:setActive', async (_, active: boolean) => privacyMode.setActive(active === true));
+ipcMain.handle('privacy:updateSettings', async (_, partial: Partial<IncognitoSettings>) =>
+  privacyMode.updateSettings(partial ?? {})
+);
+
 ipcMain.handle('api:getSearchHistory', async () => searchHistory.list());
 
 ipcMain.handle('api:removeSearchHistory', async (_, query: string) =>
@@ -2114,6 +2258,9 @@ ipcMain.handle('api:clearSearchHistory', async () => searchHistory.clear());
  */
 ipcMain.handle('search:saveResults', async (_, input: SaveSearchInput) => {
   try {
+    if (isPrivateSession() && !allowsExplicitSaves()) {
+      return { ok: false, error: 'Explicit saves are disabled in Incognito mode.', saved: null };
+    }
     const saved = savedSearches.save(input);
     return saved
       ? { ok: true, saved }
@@ -2707,14 +2854,19 @@ ipcMain.handle(
   'bookmarks:toggle',
   async (_, input: Parameters<BookmarkStore['toggle']>[0]) => {
     try {
+      if (isPrivateSession() && !allowsExplicitSaves()) {
+        return { ok: false, error: 'Explicit saves are disabled in Incognito mode.', saved: false, bookmark: null };
+      }
       const result = bookmarks.toggle(input);
       // Saving a page is the same statement as adding a title to the library:
       // keep the copy that lets it open. Unsaving releases it to the cache
       // again rather than deleting it — the page is still worth drawing fast.
-      pageSnapshots.setPinned(
-        { url: input?.mediaUrl, title: input?.title, year: input?.year },
-        result.saved
-      );
+      if (!isPrivateSession()) {
+        pageSnapshots.setPinned(
+          { url: input?.mediaUrl, title: input?.title, year: input?.year },
+          result.saved
+        );
+      }
       return { ok: true, ...result };
     } catch (error) {
       return { ...fail(error), saved: false, bookmark: null };
@@ -2784,6 +2936,9 @@ ipcMain.handle(
   'pages:setPinned',
   async (_, query: { url?: string; title?: string; year?: number }, pinned: boolean) => {
     try {
+      if (pinned !== false && privacyMode.isActive() && !privacyMode.getState().settings.allowExplicitSaves) {
+        return { ok: false, error: 'Saving pages is turned off in Incognito.', pinned: false };
+      }
       return { ok: true, pinned: pageSnapshots.setPinned(query ?? {}, pinned !== false) };
     } catch (error) {
       return { ...fail(error), pinned: false };
@@ -3121,6 +3276,41 @@ ipcMain.handle('metadata:clearCache', async () => {
   }
 });
 
+ipcMain.handle('metadata:findTrailers', async (_, title: string, year?: number) => {
+  try {
+    const query = `${title || ''} ${year ? year : ''} official trailer`.trim();
+    const videos = await searchYouTubeTrailers(query, { maxResults: 8 });
+    return { ok: true, videos };
+  } catch (error) {
+    return { ...fail(error), videos: [] };
+  }
+});
+
+ipcMain.handle('metadata:findRelatedMedia', async (_, request: RelatedMediaSearchRequest) => {
+  try {
+    const res = await relatedMediaService.search(request);
+    return res;
+  } catch (error) {
+    return { ...fail(error), results: [], cached: false };
+  }
+});
+
+ipcMain.handle('ratings:get', async (_, identity: CanonicalMediaIdentity) => {
+  try {
+    return await mediaRatingService.getRatings(identity);
+  } catch (error) {
+    return { ...fail(error), ok: false, ratings: [] };
+  }
+});
+
+ipcMain.handle('ratings:refresh', async (_, identity: CanonicalMediaIdentity) => {
+  try {
+    return await mediaRatingService.refreshRatings(identity);
+  } catch (error) {
+    return { ...fail(error), ok: false, ratings: [] };
+  }
+});
+
 ipcMain.handle('api:getPluginRuntimeStatus', async () => pluginManager.getRuntimeStatus());
 
 ipcMain.handle('extension:getRuntimeReport', async (_, internalName: string) =>
@@ -3175,13 +3365,16 @@ ipcMain.handle(
     request: SourceQuery,
     title: string,
     episodeTitle?: string,
-    options?: { persistent?: boolean }
+    options?: { persistent?: boolean; resumeKey?: string }
   ) => {
     try {
       return {
         ok: true,
         snapshot: playbackSessions.start(request, title, episodeTitle, {
           persistent: Boolean(options?.persistent),
+          resume: options?.resumeKey
+            ? resumePreference(options.resumeKey, request.season, request.episode)
+            : undefined,
         }),
       };
     } catch (error) {
@@ -3574,10 +3767,35 @@ async function describeUnreadableSource(url: string): Promise<{
       },
       { operation: 'source-probe' }
     );
-    try {
-      await response.body?.cancel();
-    } catch {
-      // Nothing to cancel.
+    /*
+     * A 502 from our own proxy is not the host's answer — it is ours, saying the
+     * host could not be reached, with the reason as the body. Measured
+     * 2026-10-02 on MovieBlast's `move.mbaccess.site`: the name has no address
+     * record at all, and the viewer was told the link "may have expired, or need
+     * credentials". Read the (short) body so the sentence names the real cause.
+     */
+    let proxyReason = '';
+    if (response.status === 502 && /^https?:\/\/127\.0\.0\.1[:/]/i.test(url)) {
+      proxyReason = (await response.text().catch(() => '')).slice(0, 500);
+    } else {
+      try {
+        await response.body?.cancel();
+      } catch {
+        // Nothing to cancel.
+      }
+    }
+
+    if (proxyReason) {
+      const unresolved = /ENOTFOUND|EAI_AGAIN|NAME_NOT_RESOLVED|name resolution|getaddrinfo|no such host/i.test(
+        proxyReason
+      );
+      return {
+        status: response.status,
+        dead: true,
+        reason: unresolved
+          ? "This source's server can't be found any more — its web address no longer exists. Try another source."
+          : `This source's server could not be reached (${proxyReason.split('\n')[0]}). Try another source.`,
+      };
     }
 
     if (response.status >= 400) {
@@ -3693,13 +3911,26 @@ ipcMain.handle('mpv:setVolume', async (_, volume: number) => mpvEngine.setVolume
 ipcMain.handle('mpv:setMuted', async (_, muted: boolean) => mpvEngine.setMuted(muted));
 ipcMain.handle('mpv:setSpeed', async (_, speed: number) => mpvEngine.setSpeed(speed));
 ipcMain.handle('mpv:setFullscreen', async (_, on: boolean) => mpvEngine.setFullscreen(on));
+ipcMain.handle('mpv:setVideoTrack', async (_, id: number | 'auto' | 'no') =>
+  mpvEngine.setVideoTrack(id)
+);
 ipcMain.handle('mpv:setAudioTrack', async (_, id: number | null) => mpvEngine.setAudioTrack(id));
 ipcMain.handle('mpv:setSubtitleTrack', async (_, id: number | null) =>
   mpvEngine.setSubtitleTrack(id)
 );
-ipcMain.handle('mpv:addSubtitle', async (_, url: string, title?: string, language?: string) =>
-  mpvEngine.addSubtitle(url, title, language)
-);
+ipcMain.handle('mpv:addSubtitle', async (_, url: string, title?: string, language?: string) => {
+  let target = url;
+  if (url && (url.startsWith('WEBVTT') || url.includes('-->') || url.startsWith('blob:'))) {
+    try {
+      const tempPath = path.join(os.tmpdir(), `cs3-sub-${Date.now()}-${Math.random().toString(36).slice(2)}.vtt`);
+      fs.writeFileSync(tempPath, url, 'utf8');
+      target = tempPath;
+    } catch {
+      // If write fails, leave as-is
+    }
+  }
+  return mpvEngine.addSubtitle(target, title, language);
+});
 ipcMain.handle('mpv:setSubtitleDelay', async (_, seconds: number) =>
   mpvEngine.setSubtitleDelay(seconds)
 );
@@ -4096,6 +4327,11 @@ ipcMain.handle('indexer:saveConfig', async (_, config: IndexerConfig) => {
   return contentService.getRegistry().getConfigs();
 });
 
+ipcMain.handle('indexer:saveConfigs', async (_, configs: IndexerConfig[]) => {
+  contentService.getRegistry().saveConfigs(configs);
+  return contentService.getRegistry().getConfigs();
+});
+
 ipcMain.handle('indexer:removeConfig', async (_, id: string) => {
   contentService.getRegistry().removeConfig(id);
   return contentService.getRegistry().getConfigs();
@@ -4115,7 +4351,12 @@ ipcMain.handle('sources:savePreferences', async (_, prefs: Partial<SourcePrefere
 
 // --- downloads -----------------------------------------------------------
 
-ipcMain.handle('download:enqueue', async (_, task: DownloadTask) => downloadService.enqueue(task));
+ipcMain.handle('download:enqueue', async (_, task: DownloadTask) => {
+  if (privacyMode.isActive() && !privacyMode.getState().settings.allowDownloads) {
+    throw new Error('Downloads are turned off in Incognito.');
+  }
+  return downloadService.enqueue(task);
+});
 /**
  * The state-aware Download press.
  *
@@ -4127,6 +4368,9 @@ ipcMain.handle('download:enqueue', async (_, task: DownloadTask) => downloadServ
  */
 ipcMain.handle('download:request', async (_, task: DownloadTask) => {
   try {
+    if (privacyMode.isActive() && !privacyMode.getState().settings.allowDownloads) {
+      return { ok: false, error: 'Downloads are turned off in Incognito.', action: 'refused', message: 'Downloads are turned off in Incognito. Change this in Settings → General → Privacy.' };
+    }
     return await downloadService.request(task);
   } catch (error) {
     return {
@@ -4329,7 +4573,9 @@ ipcMain.handle(
     // Merged rather than replaced: the player writes volume/mute/speed while the
     // track panels write languages, and a whole-record write from either would
     // erase the other's choice.
-    datastore.setObject(PLAYER_PREFERENCES_KEY, { ...current, ...patch }, true);
+    const merged = { ...current, ...patch };
+    datastore.setObject(PLAYER_PREFERENCES_KEY, merged, true);
+    mainWindow?.webContents.send('player:preferencesChanged', merged);
     return { ok: true };
   }
 );
@@ -4567,6 +4813,12 @@ ipcMain.handle('search:setConcurrency', async (_, value: number) => ({
   ...pluginManager.searchConcurrencyBounds(),
 }));
 
+/** One push for every change to the adult gate, whoever made it. */
+bootstrap.onAdultChange(() => {
+  const state = { mode: bootstrap.adultMode(), allowed: bootstrap.isAdultAllowed() };
+  BrowserWindow.getAllWindows().forEach((w) => w.webContents.send('adult:changed', state));
+});
+
 ipcMain.handle('extension:getAdultAllowed', async () => bootstrap.isAdultAllowed());
 
 /**
@@ -4576,6 +4828,22 @@ ipcMain.handle('extension:getAdultAllowed', async () => bootstrap.isAdultAllowed
 ipcMain.handle('extension:setAdultAllowed', async (_, enabled: boolean) => {
   const value = bootstrap.setAdultAllowed(Boolean(enabled));
   return { ok: true, enabled: value, providers: await pluginManager.listEnabledProviders() };
+});
+
+/**
+ * PRD-54: the viewer's content regions. `regions:set` answers at once with
+ * what a removed region leaves behind (for review — nothing is disabled here);
+ * the additions run in the background on `extension:bootstrapProgress`.
+ */
+ipcMain.handle('regions:get', async () => bootstrap.getRegionState());
+
+ipcMain.handle('regions:set', async (_, selection: string[], options?: { crossRegion?: boolean }) => {
+  try {
+    const crossRegion = typeof options?.crossRegion === 'boolean' ? options.crossRegion : undefined;
+    return { ok: true, ...bootstrap.setRegions(Array.isArray(selection) ? selection : [], { crossRegion }) };
+  } catch (error) {
+    return { ...fail(error), state: bootstrap.getRegionState(), affected: [] };
+  }
 });
 
 /**
@@ -4632,9 +4900,17 @@ ipcMain.handle('extension:lockAdultForSession', async () => {
   };
 });
 
+/** What a repository offered last time, instantly. Fetches nothing. */
+ipcMain.handle('extension:peekRepository', async (_, repoUrl: string) => {
+  const entry = repositoryListings.peek(repoUrl);
+  return { ok: true, repository: entry?.value ?? null, fetchedAt: entry?.fetchedAt ?? null };
+});
+
 ipcMain.handle('extension:fetchRepository', async (_, repoUrl: string) => {
   try {
-    return { ok: true, repository: await pluginManager.fetchRepository(repoUrl) };
+    const repository = await pluginManager.fetchRepository(repoUrl);
+    repositoryListings.put(repoUrl, repository);
+    return { ok: true, repository };
   } catch (error) {
     return { ...fail(error), repository: null };
   }
@@ -4861,11 +5137,8 @@ ipcMain.handle('ott:getMetadataCatalog', async (_, platformId: string) => {
 
 ipcMain.handle('ott:listAllPlatforms', async () => {
   try {
-    return {
-      ok: true,
-      platforms: await ottService.listPlatforms(true),
-      enabled: ottService.getEnabledPlatformIds(),
-    };
+    const platforms = await ottService.listPlatforms(true);
+    return { ok: true, platforms, enabled: ottService.shownPlatformIds(platforms) };
   } catch (error) {
     return fail(error);
   }
@@ -4874,9 +5147,53 @@ ipcMain.handle('ott:listAllPlatforms', async () => {
 ipcMain.handle('ott:setPlatformEnabled', async (_, platformId: string, enabled: boolean) => {
   try {
     if (!platformId) return { ok: false, error: 'No platform was named.' };
-    return { ok: true, enabled: ottService.setPlatformEnabled(platformId, enabled) };
+    ottService.setPlatformEnabled(platformId, enabled);
+    return { ok: true, enabled: ottService.shownPlatformIds(await ottService.listPlatforms(true)) };
   } catch (error) {
     return fail(error);
+  }
+});
+
+ipcMain.handle('ott:setPinnedPlatforms', async (_, ids: string[]) => {
+  try {
+    return { ok: true, pinned: ottService.setPinnedPlatformIds(ids) };
+  } catch (error) {
+    return fail(error);
+  }
+});
+
+ipcMain.handle('ott:setPlatformsEnabled', async (_, changes: Record<string, boolean>) => {
+  try {
+    if (!changes || typeof changes !== 'object') return { ok: false, error: 'No platforms were named.' };
+    ottService.setPlatformsEnabled(changes);
+    return { ok: true, enabled: ottService.shownPlatformIds(await ottService.listPlatforms(true)) };
+  } catch (error) {
+    return fail(error);
+  }
+});
+
+ipcMain.handle(
+  'ott:getProviderCatalog',
+  async (_, platformId: string, provider: string, options?: { refresh?: boolean }) => {
+    try {
+      const catalog = await ottService.getProviderCatalog(platformId, provider, {
+        refresh: options?.refresh === true,
+      });
+      if (!catalog) {
+        return { ok: false, error: `${provider} is not part of this service.`, catalog: null };
+      }
+      return { ok: true, catalog };
+    } catch (error) {
+      return { ...fail(error), catalog: null };
+    }
+  }
+);
+
+ipcMain.handle('ott:getCatalogs', async (_, platformId: string) => {
+  try {
+    return { ok: true, ...(await ottService.getCatalogs(platformId)) };
+  } catch (error) {
+    return { ...fail(error), catalogs: [], unavailable: [] };
   }
 });
 
@@ -4894,10 +5211,16 @@ ipcMain.handle(
     _,
     provider: string,
     section: { name: string; data: string; horizontalImages?: boolean },
-    page: number
+    page: number,
+    options?: { refresh?: boolean }
   ) => {
     try {
-      return { ok: true, page: await ottService.getCatalogPage(provider, section, page) };
+      return {
+        ok: true,
+        page: await ottService.getCatalogPage(provider, section, page, {
+          refresh: options?.refresh === true,
+        }),
+      };
     } catch (error) {
       return { ...fail(error), page: null };
     }
@@ -5259,6 +5582,23 @@ ipcMain.handle('extension:saveUpdateSettings', async (_, patch: Partial<UpdateSe
   extensionUpdater.saveSettings(patch)
 );
 
+ipcMain.handle('extension:getIgnoredUpdates', async () =>
+  extensionUpdater.getIgnoredUpdates()
+);
+
+ipcMain.handle(
+  'extension:ignoreUpdate',
+  async (_, internalName: string, reason?: string) => {
+    extensionUpdater.ignoreUpdate(internalName, reason, false);
+    return { ok: true };
+  }
+);
+
+ipcMain.handle('extension:unignoreUpdate', async (_, internalName: string) => {
+  extensionUpdater.unignoreUpdate(internalName);
+  return { ok: true };
+});
+
 // --- library, watch progress and source memory ---------------------------
 
 ipcMain.handle('library:getEntries', async (_, status?: WatchStatus) =>
@@ -5275,6 +5615,9 @@ ipcMain.handle(
   ) => {
     const { sourceQuery, ...fields } = input ?? ({} as typeof input);
     const entry = libraryStore.upsertEntry(fields);
+    if (!entry) return null;
+    if (isPrivateSession()) return entry;
+
     /*
      * Adding a title to the library is the statement that its page must keep
      * opening. Pinning here rather than in the store keeps `LibraryStore` free of
@@ -5486,6 +5829,23 @@ ipcMain.handle(
  *   more useful than an entry that silently vanishes, and the full source list
  *   comes back so the viewer can choose again.
  */
+/**
+ * The source a resumed title last played from, as a playback session takes it.
+ *
+ * Local reads only: a Play press must not wait on a provider to decide what to
+ * try first. A saved link that has expired is not refreshed here — the
+ * session's own discovery is already re-asking, and `pickReplacement` finds the
+ * same release in its answer.
+ */
+function resumePreference(key: string, season?: number, episode?: number): ResumePreference | undefined {
+  const record = libraryStore.getPlayedSource(key, season, episode);
+  if (!record || record.source.status === 'Unavailable') return undefined;
+  return {
+    start: isLinkUsable(record.source) ? storedSourceToTorrentResult(record.source) : undefined,
+    match: (candidates) => pickReplacement(record.source, candidates),
+  };
+}
+
 ipcMain.handle(
   'library:resolvePlayedSource',
   async (_, key: string, season?: number, episode?: number) => {
@@ -5691,349 +6051,33 @@ ipcMain.handle('datastore:exportBackup', async () => datastore.exportBackup());
 // --- whole-app backup ------------------------------------------------------
 
 /**
- * Every store that makes an installation *this* installation.
- *
- * A table rather than two switch statements, so adding a store is one entry and
- * cannot be added to the export while being forgotten in the restore — which is
- * how a backup comes to look complete and silently not be.
- *
- * What is deliberately absent, and why, is documented on `BackupService`.
+ * Every store that makes an installation *this* installation, each registered
+ * as a section with its own rows, schema version and restore rules — see
+ * `cs3/backupSections.ts` for the table and `BackupService` for the design.
  */
 const backupService = new BackupService(
-  [
-    {
-      name: 'settings',
-      label: 'Settings and preferences',
-      collect: () => datastore.snapshot(),
-      restore: (value: unknown) => datastore.restore(value as never),
+  createBackupSections({
+    datastore,
+    library: libraryStore,
+    history: historyStore,
+    bookmarks,
+    pageSnapshots,
+    searchHistory,
+    savedSearches,
+    titleOutcomes,
+    providerAnalytics,
+    downloads: downloadService,
+    plugins: pluginManager,
+    enqueueExtensionJobs: (requests) => {
+      extensionJobs.enqueue(requests);
     },
-    {
-      name: 'library',
-      label: 'Library, watch progress and remembered sources',
-      replaceable: true,
-      collect: () => libraryStore.exportAll(),
-      restore: (value: unknown, mode) => {
-        if (mode === 'replace') libraryStore.clearAll();
-        const result = libraryStore.importAll(value as Parameters<LibraryStore['importAll']>[0]);
-        return typeof result === 'number' ? result : 1;
-      },
-    },
-    {
-      name: 'history',
-      label: 'Watch history',
-      replaceable: true,
-      collect: () => historyStore.exportAll(),
-      restore: (value: unknown, mode) => {
-        if (mode === 'replace') historyStore.clear();
-        return historyStore.importAll(value as Parameters<HistoryStore['importAll']>[0]);
-      },
-    },
-    {
-      name: 'bookmarks',
-      label: 'Saved pages',
-      replaceable: true,
-      collect: () => bookmarks.list(),
-      restore: (value: unknown, mode) => {
-        if (!Array.isArray(value)) return 0;
-        if (mode === 'replace') bookmarks.clearAll();
-        let count = 0;
-        for (const row of value) {
-          // `save` re-derives id, savedAt and openCount, so a restored row is a
-          // fresh bookmark carrying the original's identity and origin rather
-          // than a copy of a record from another machine's clock.
-          const { id: _id, savedAt: _savedAt, openCount: _openCount, ...rest } = row ?? {};
-          if (!rest?.mediaUrl) continue;
-          bookmarks.save(rest);
-          count++;
-        }
-        return count;
-      },
-    },
-    {
-      /*
-       * The pages behind the library, not just the rows in it.
-       *
-       * Restoring a library onto a new machine without these reproduces the
-       * exact failure the snapshot store exists for: every row present, every
-       * page behind it blank, until each one has been successfully re-scraped
-       * once. Bounded on export to the pages the user actually kept — the rest
-       * is a cache and belongs on the machine that built it.
-       */
-      name: 'pageSnapshots',
-      label: 'Saved page content',
-      replaceable: true,
-      collect: () => pageSnapshots.list().filter((snapshot) => snapshot.pinned),
-      restore: (value: unknown, mode) => {
-        if (!Array.isArray(value)) return 0;
-        if (mode === 'replace') return pageSnapshots.replaceAll(value as PageSnapshot[]);
-        let count = 0;
-        for (const row of value as PageSnapshot[]) {
-          if (!row?.url || !row?.title) continue;
-          // Through `capture`, so the merge rule applies: a restored copy adds
-          // what this machine is missing and never blanks what it already has.
-          pageSnapshots.capture({ ...row, verified: false });
-          pageSnapshots.setPinned({ url: row.url }, true);
-          count++;
-        }
-        return count;
-      },
-    },
-    {
-      name: 'searchHistory',
-      label: 'Past searches',
-      replaceable: true,
-      collect: () => searchHistory.list(500),
-      restore: (value: unknown, mode) => {
-        if (!Array.isArray(value)) return 0;
-        if (mode === 'replace') searchHistory.clear();
-        let count = 0;
-        // Oldest first, so the restored list keeps its original ordering — the
-        // store puts each new record at the front.
-        for (const row of [...value].reverse()) {
-          if (!row?.query) continue;
-          searchHistory.record(row.query, row.resultCount);
-          count++;
-        }
-        return count;
-      },
-    },
-    {
-      name: 'savedSearches',
-      label: 'Saved searches',
-      replaceable: true,
-      collect: () => savedSearches.exportAll(),
-      restore: (value: unknown, mode) => {
-        if (!Array.isArray(value)) return 0;
-        if (mode === 'replace') savedSearches.clear();
-        return savedSearches.importAll(value);
-      },
-    },
-    {
-      name: 'titleOutcomes',
-      label: 'What happened last time a title was opened',
-      replaceable: true,
-      collect: () => titleOutcomes.list(),
-      restore: (value: unknown, mode) => {
-        if (!value || typeof value !== 'object') return 0;
-        if (mode === 'replace') titleOutcomes.clear();
-        let count = 0;
-        for (const [url, outcome] of Object.entries(value as Record<string, { kind?: string; reason?: string }>)) {
-          if (!outcome?.kind) continue;
-          titleOutcomes.record(url, outcome.kind as never, outcome.reason);
-          count++;
-        }
-        return count;
-      },
-    },
-    {
-      name: 'providerAnalytics',
-      label: 'How each provider has behaved',
-      collect: () => ({
-        records: providerAnalytics.all(),
-        settings: providerAnalytics.getSettings(),
-        preferences: providerAnalytics.getPreferences(),
-      }),
-      restore: (value: unknown) => {
-        const payload = value as {
-          settings?: Parameters<typeof providerAnalytics.setSettings>[0];
-          preferences?: Record<string, Parameters<typeof providerAnalytics.setPreference>[1]>;
-        };
-        let count = 0;
-        // The *counts* are deliberately not restored: they are measurements of
-        // one machine's network and would misdescribe another's. The settings
-        // and the manual preferences are decisions, and those do transfer.
-        if (payload?.settings) {
-          providerAnalytics.setSettings(payload.settings);
-          count++;
-        }
-        for (const [provider, preference] of Object.entries(payload?.preferences ?? {})) {
-          providerAnalytics.setPreference(provider, preference);
-          count++;
-        }
-        return count;
-      },
-    },
-    {
-      name: 'downloads',
-      label: 'Download queue',
-      collect: () => downloadService.getTasks(),
-      // Export only: restoring a queue would point tasks at target paths and
-      // half-finished `.part` files that do not exist on the new machine, and a
-      // task that reports progress against nothing is worse than an absent one.
-      // It travels so the list can be read, not replayed.
-    },
-    {
-      name: 'extensions',
-      label: 'Repositories, extensions and what is switched off',
-      replaceable: true,
-      collect: () => ({
-        repositories: pluginManager.getInstalledRepositories(),
-        plugins: pluginManager.getInstalledPlugins().map((plugin) => ({
-          internalName: plugin.internalName,
-          name: plugin.name,
-          repositoryUrl: plugin.repositoryUrl,
-          url: plugin.url,
-          version: plugin.version,
-        })),
-        /*
-         * All three levels of the cascade, and the middle one was missing.
-         * `getDisabledExtensions` had no line here at all, so an extension
-         * switched off came back on after a restore while the provider and
-         * repository lists were reproduced exactly — a third of the state the
-         * section claims to carry, lost silently in the direction that turns
-         * sources back on.
-         */
-        disabledProviders: pluginManager.getDisabledProviders(),
-        disabledExtensions: pluginManager.getDisabledExtensions(),
-        disabledRepositories: pluginManager.getDisabledRepositories(),
-        /**
-         * What each provider was registered by, so a restored library entry
-         * addressed `cs3ext://Netflix/…` can name the extension to install.
-         * The live map only knows providers that are loaded *now*, which on a
-         * fresh machine is none of the ones a backup refers to.
-         */
-        providerOrigins: pluginManager.exportProviderOrigins(),
-        adultAllowed: bootstrap.isAdultAllowed(),
-      }),
-      /**
-       * The cheap half is restored; the expensive half is offered.
-       *
-       * Putting the repositories back into the user's list, and remembering
-       * which providers they had switched off, is a few fetches and a datastore
-       * write. Re-downloading the archives is tens of downloads and DEX
-       * translations per repository — not something to start inside a handler
-       * the user believes is reading a file, and the same cost split the
-       * repository catalogue already makes between Add and Install all.
-       *
-       * So a restore leaves someone with their repositories listed, their
-       * choices remembered, and one press per repository to fetch the archives.
-       * The extension *names* travel in the backup so that press can be
-       * targeted rather than "install everything this repository has now".
-       */
-      restore: (value: unknown, mode) => {
-        const payload = value as {
-          repositories?: string[];
-          plugins?: Array<{
-            internalName?: string;
-            name?: string;
-            repositoryUrl?: string;
-            url?: string;
-            version?: number;
-          }>;
-          disabledProviders?: string[];
-          disabledExtensions?: string[];
-          disabledRepositories?: string[];
-          providerOrigins?: Record<string, { internalName: string; pluginName: string }>;
-          adultAllowed?: boolean;
-        };
-        let count = 0;
-        if (typeof payload?.adultAllowed === 'boolean') {
-          bootstrap.setAdultAllowed(payload.adultAllowed);
-          count++;
-        }
-        for (const url of payload?.repositories ?? []) {
-          // Fire-and-forget: each is a network fetch, and a restore must not
-          // block on a repository whose host happens to be down today.
-          void pluginManager.addRepository(url).catch(() => {
-            /* Reported by the repositories screen when it next reads. */
-          });
-          count++;
-        }
-
-        /*
-         * The plugin list was collected from the first version of this section
-         * and read by nothing — the comment above it even said the names
-         * travel so a later press can be targeted, and no code ever took them.
-         * They are the whole basis of recovery: they are how the app knows
-         * that `cs3ext://Netflix/…` needs `NetMirror` from a particular
-         * repository, on a machine where nothing is installed yet.
-         */
-        if (payload?.plugins?.length) {
-          count += pluginManager.rememberKnownPlugins(payload.plugins);
-        }
-        if (payload?.providerOrigins) {
-          count += pluginManager.importProviderOrigins(payload.providerOrigins);
-        }
-
-        /*
-         * Replace rewrites the three disabled lists so they match the file
-         * exactly; merge only ever adds to them. Merge cannot turn a provider
-         * back *on*, which is the asymmetry that makes Replace worth having
-         * here: someone restoring a working setup onto an install where they
-         * had switched things off wants the file's answer, not the union of
-         * two sets of exclusions.
-         *
-         * Nothing is uninstalled in either mode. Archives are hundreds of
-         * megabytes of re-download and the undo snapshots only the datastore,
-         * so a delete reached through this radio button could not be undone.
-         */
-        const applyDisabled = (
-          current: string[],
-          wanted: string[],
-          setter: (names: string[], enabled: boolean) => unknown
-        ): number => {
-          if (mode === 'replace') {
-            const turnOn = current.filter((name) => !wanted.includes(name));
-            if (turnOn.length) setter(turnOn, true);
-            if (wanted.length) setter(wanted, false);
-            return turnOn.length + wanted.length;
-          }
-          if (!wanted.length) return 0;
-          setter(wanted, false);
-          return wanted.length;
-        };
-
-        count += applyDisabled(
-          pluginManager.getDisabledProviders(),
-          payload?.disabledProviders ?? [],
-          (names, enabled) => pluginManager.setProvidersEnabled(names, enabled)
-        );
-        count += applyDisabled(
-          pluginManager.getDisabledExtensions(),
-          payload?.disabledExtensions ?? [],
-          (names, enabled) => pluginManager.setExtensionsEnabled(names, enabled)
-        );
-        count += applyDisabled(
-          pluginManager.getDisabledRepositories(),
-          payload?.disabledRepositories ?? [],
-          (names, enabled) => pluginManager.setRepositoriesEnabled(names, enabled)
-        );
-        return count;
-      },
-    },
-    {
-      name: 'indexers',
-      label: 'Torrent indexer configuration',
-      replaceable: true,
-      collect: () => contentService.getRegistry().getConfigs(),
-      restore: (value: unknown, mode) => {
-        if (!Array.isArray(value)) return 0;
-        const registry = contentService.getRegistry();
-        if (mode === 'replace') {
-          registry.saveConfigs(value);
-          return value.length;
-        }
-        /*
-         * Merging is keyed on the indexer id, and the *local* row wins a
-         * collision. A Torznab entry carries an API key and a host that are
-         * this machine's, so a backup from another one would otherwise
-         * overwrite working credentials with stale ones — and the failure is
-         * a search that returns nothing rather than an error.
-         */
-        const byId = new Map(registry.getConfigs().map((config) => [config.id, config]));
-        let added = 0;
-        for (const config of value) {
-          if (!config?.id || byId.has(config.id)) continue;
-          byId.set(config.id, config);
-          added++;
-        }
-        registry.saveConfigs([...byId.values()]);
-        return added;
-      },
-    },
-  ],
+    isAdultAllowed: () => bootstrap.isAdultAllowed(),
+    indexers: contentService.getRegistry(),
+    adult: bootstrap,
+  }),
   app.getVersion(),
-  `${process.platform} ${os.release()}`
+  `${process.platform} ${os.release()}`,
+  { recoveryDir: path.join(app.getPath('userData'), 'backups') }
 );
 
 ipcMain.handle('backup:export', async (_, only?: string[]) => {
@@ -6051,7 +6095,10 @@ ipcMain.handle('backup:export', async (_, only?: string[]) => {
   }
 });
 
-/** Describes a file without changing anything, so a restore can be confirmed. */
+/**
+ * Chooses a file and compares it with this installation, changing nothing —
+ * the summary, the counts and the conflicts the restore screen shows.
+ */
 ipcMain.handle('backup:inspect', async () => {
   try {
     if (!mainWindow) return { ok: false, error: 'No window to ask from.' };
@@ -6061,22 +6108,21 @@ ipcMain.handle('backup:inspect', async () => {
       filters: [{ name: 'CloudStream backup', extensions: ['json'] }],
     });
     if (result.canceled || result.filePaths.length === 0) return { ok: false, cancelled: true };
-    const inspected = backupService.inspect(result.filePaths[0]);
-    return { ...inspected, path: result.filePaths[0] };
+    return backupService.analyze(result.filePaths[0]);
   } catch (error) {
     return fail(error);
   }
 });
 
-ipcMain.handle('backup:restore', async (_, filePath: string, options?: RestoreOptions) => {
+ipcMain.handle('backup:restore', async (_, filePath: string, plan: RestorePlan) => {
   try {
-    if (!filePath) return { ok: false, error: 'No backup file was chosen.' };
-    // A snapshot first: a restore writes over live data, and the alternative to
-    // being able to undo it is telling someone their library is gone.
-    datastore.createSnapshot();
-    return backupService.restore(filePath, options);
+    if (!filePath) return { ok: false, error: 'No backup file was chosen.', sections: [] };
+    if (!plan || !Array.isArray(plan.sections)) {
+      return { ok: false, error: 'Nothing was chosen to restore.', sections: [] };
+    }
+    return await backupService.restore(filePath, plan);
   } catch (error) {
-    return fail(error);
+    return { ...fail(error), sections: [] };
   }
 });
 
@@ -6128,12 +6174,12 @@ ipcMain.handle('extension:recoverProvider', async (_, provider: string) => {
   }
 });
 
-/** Puts back the datastore as it was immediately before the last restore. */
+/** Puts back what the last restore changed, from the copy it saved first. */
 ipcMain.handle('backup:undoRestore', async () => {
   try {
-    return { ok: datastore.rollbackSnapshot() };
+    return await backupService.undo();
   } catch (error) {
-    return fail(error);
+    return { ...fail(error), sections: [] };
   }
 });
 

@@ -1,6 +1,34 @@
-import React, { useCallback, useEffect, useState } from 'react';
-import { X, Search, Loader2, Check, AlertTriangle, Subtitles, CheckCircle2 } from 'lucide-react';
-import type { SubtitleSearchResult } from '../../../electron/subtitleService';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
+import {
+  X,
+  Search,
+  Loader2,
+  Check,
+  AlertTriangle,
+  CheckCircle2,
+  Download,
+  RotateCcw,
+  Minus,
+  Plus,
+  Star,
+  Sliders,
+  ChevronDown,
+  ChevronUp,
+} from 'lucide-react';
+import type { SavedSubtitle } from '../../../electron/subtitles/subtitleLibrary';
+import type { SubtitleFindResult, SubtitleSearchResult } from '../../../electron/subtitleService';
+import {
+  DEFAULT_SUBTITLE_STYLE,
+  SUBTITLE_BACKGROUNDS,
+  SUBTITLE_COLORS,
+  SUBTITLE_SCALES,
+  subtitleCssVariables,
+  type SubtitleBackground,
+  type SubtitleStyle,
+} from '../../utils/subtitleStyle';
+import { getLanguageFlag, getLanguageName } from '../../utils/languageFlag';
+
+export { getLanguageFlag, getLanguageName };
 
 /**
  * In-player subtitle search & management.
@@ -39,7 +67,43 @@ interface SubtitlePanelProps {
   embedded: Array<{ name: string; url: string }>;
   activeUrl: string | null;
   onClose: () => void;
-  onSelect: (url: string | null, label: string) => void;
+  onSelect: (url: string | null, label: string, detail?: string) => void;
+  year?: number;
+  /** Seconds the cues are shifted by; positive shows them later. */
+  delay: number;
+  onDelayChange: (seconds: number) => void;
+  /** The playing source's release name; ranks the subtitle timed to it first. */
+  releaseName?: string;
+}
+
+/** Languages offered as one-press filters before a search has returned any. */
+const COMMON_LANGUAGES: Array<{ code: string; name: string }> = [
+  { code: 'eng', name: 'English' },
+  { code: 'hin', name: 'Hindi' },
+  { code: 'spa', name: 'Spanish' },
+  { code: 'fre', name: 'French' },
+  { code: 'ger', name: 'German' },
+  { code: 'ara', name: 'Arabic' },
+  { code: 'por', name: 'Portuguese' },
+  { code: 'tam', name: 'Tamil' },
+  { code: 'tel', name: 'Telugu' },
+  { code: 'mal', name: 'Malayalam' },
+];
+
+const compactCount = (value: number): string =>
+  value >= 1_000_000 ? `${(value / 1_000_000).toFixed(1).replace(/\.0$/, '')}M` : value >= 1_000 ? `${Math.round(value / 1_000)}k` : String(value);
+
+/** What a row is called: the release it was timed to, which is what a viewer chooses by. */
+function rowLabel(result: SubtitleSearchResult, fallback: string): string {
+  const name = result.releaseName || result.fileName?.replace(/\.(srt|ass|ssa|vtt|sub)$/i, '');
+  return name ? name.replace(/[._]+/g, ' ').trim() : fallback;
+}
+
+type DownloadState = { status: 'saving' } | { status: 'saved'; reused: boolean } | { status: 'failed'; error: string };
+
+/** Where a result came from, in words a viewer can act on. */
+function originLabel(result: SubtitleSearchResult): string {
+  return result.id.startsWith('provider:') ? 'from this source' : 'OpenSubtitles';
 }
 
 export const SubtitlePanel: React.FC<SubtitlePanelProps> = ({
@@ -53,18 +117,129 @@ export const SubtitlePanel: React.FC<SubtitlePanelProps> = ({
   activeUrl,
   onClose,
   onSelect,
+  year,
+  delay,
+  onDelayChange,
+  releaseName,
 }) => {
   const [results, setResults] = useState<SubtitleSearchResult[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [saved, setSaved] = useState<SavedSubtitle[]>([]);
+  const [downloads, setDownloads] = useState<Record<string, DownloadState>>({});
+
+  const refreshSaved = useCallback(async () => {
+    if (!title) {
+      setSaved([]);
+      return;
+    }
+    const response = await window.cloudstream?.listSavedSubtitles(title, year, season, episode);
+    setSaved(response?.ok ? response.entries : []);
+  }, [title, year, season, episode]);
+
+  useEffect(() => {
+    if (open) void refreshSaved();
+  }, [open, refreshSaved]);
+
+  /**
+   * Saves a result to the subtitle folder. A second press on a saved row asks
+   * for a fresh copy; the first one never re-downloads what is already there.
+   * Nothing here touches the track that is playing.
+   */
+  const downloadResult = useCallback(
+    async (result: SubtitleSearchResult, refresh: boolean) => {
+      if (!title) return;
+      setDownloads((d) => ({ ...d, [result.id]: { status: 'saving' } }));
+      const response = await window.cloudstream?.downloadSubtitle({
+        title,
+        year,
+        season,
+        episode,
+        lang: result.lang,
+        langName: result.langName,
+        origin: result.id.startsWith('provider:') ? 'provider' : 'opensubtitles',
+        sourceUrl: result.url,
+        refresh,
+      });
+      setDownloads((d) => ({
+        ...d,
+        [result.id]: response?.ok
+          ? { status: 'saved', reused: response.reused }
+          : { status: 'failed', error: response?.error ?? 'The subtitle could not be saved.' },
+      }));
+      if (response?.ok) void refreshSaved();
+    },
+    [title, year, season, episode, refreshSaved]
+  );
+
+  const applySaved = useCallback(
+    async (entry: SavedSubtitle) => {
+      const response = await window.cloudstream?.readSavedSubtitle(entry.id);
+      if (!response?.ok || !response.vtt) {
+        setError(response?.error ?? 'That saved subtitle could not be read.');
+        void refreshSaved();
+        return;
+      }
+      const detail = `saved · ${entry.origin === 'opensubtitles' ? 'OpenSubtitles' : 'from source'}`;
+      onSelect(URL.createObjectURL(new Blob([response.vtt], { type: 'text/vtt' })), entry.langName, detail);
+      onClose();
+    },
+    [onSelect, onClose, refreshSaved]
+  );
   const [applying, setApplying] = useState<string | null>(null);
+
+  // In-player subtitle style configuration & compact language selector state
+  const [showConfig, setShowConfig] = useState(false);
+  const [langMenuOpen, setLangMenuOpen] = useState(false);
+  const [style, setStyle] = useState<SubtitleStyle>(DEFAULT_SUBTITLE_STYLE);
+
+  useEffect(() => {
+    if (!open) return;
+    let cancelled = false;
+    void (async () => {
+      const stored = await window.cloudstream?.getPlayerPreferences();
+      if (cancelled || !stored?.ok) return;
+      const p = stored.preferences;
+      setStyle({
+        scale: p.subtitleScale ?? DEFAULT_SUBTITLE_STYLE.scale,
+        color: p.subtitleColor ?? DEFAULT_SUBTITLE_STYLE.color,
+        background: p.subtitleBackground ?? DEFAULT_SUBTITLE_STYLE.background,
+        weight: p.subtitleWeight ?? DEFAULT_SUBTITLE_STYLE.weight,
+        position: p.subtitlePosition ?? DEFAULT_SUBTITLE_STYLE.position,
+      });
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [open]);
+
+  const updateStyle = (patch: Partial<SubtitleStyle>) => {
+    const next = { ...style, ...patch };
+    setStyle(next);
+    void window.cloudstream?.setPlayerPreferences({
+      subtitleScale: next.scale,
+      subtitleColor: next.color,
+      subtitleBackground: next.background,
+      subtitleWeight: next.weight,
+      subtitlePosition: next.position,
+    });
+  };
 
   // Custom search query and episode parameters
   const [searchQuery, setSearchQuery] = useState(title || imdbId || '');
   const [searchSeason, setSearchSeason] = useState<string>(season !== undefined ? String(season) : '');
   const [searchEpisode, setSearchEpisode] = useState<string>(episode !== undefined ? String(episode) : '');
+  const [searchYear, setSearchYear] = useState<string>(year !== undefined ? String(year) : '');
   const [matchedInfo, setMatchedInfo] = useState<{ imdbId?: string; matchedTitle?: string } | null>(null);
   const [lastSearched, setLastSearched] = useState<string>('');
+  /**
+   * Languages to show — several at once, because a viewer who reads two
+   * languages wants both lists, not to flip a dropdown between them. Empty is
+   * every language. Applied to what was already fetched; a search sends them
+   * too, so a language the catalogue would otherwise cut short comes back full.
+   */
+  const [languages, setLanguages] = useState<string[]>([]);
+  const [sourceNote, setSourceNote] = useState<string | null>(null);
 
   const providerCanAnswer = Boolean(mediaUrl?.startsWith('cs3ext://'));
 
@@ -83,16 +258,23 @@ export const SubtitlePanel: React.FC<SubtitlePanelProps> = ({
 
       setLoading(true);
       setError(null);
+      setSourceNote(null);
       const termToSearch = q || imdbId || title || '';
       setLastSearched(termToSearch);
+      const y = searchYear ? parseInt(searchYear, 10) : undefined;
 
       try {
-        let response;
-        if (window.cloudstream?.searchSubtitlesByTitle) {
-          response = await window.cloudstream.searchSubtitlesByTitle(termToSearch, s, e, mediaUrl);
-        } else {
-          response = await window.cloudstream?.searchSubtitles(termToSearch, s, e, mediaUrl);
-        }
+        const response = await window.cloudstream?.findSubtitles({
+          // The detected id only while the viewer is searching the detected title.
+          imdbId: q === (title || '') || !q ? imdbId : undefined,
+          title: termToSearch,
+          year: Number.isFinite(y) ? y : undefined,
+          season: s,
+          episode: e,
+          mediaUrl,
+          languages,
+          releaseName,
+        });
 
         setLoading(false);
 
@@ -102,26 +284,25 @@ export const SubtitlePanel: React.FC<SubtitlePanelProps> = ({
         }
 
         setResults(response.results);
-        const resImdbId = response && 'imdbId' in response ? (response as { imdbId?: string }).imdbId : undefined;
-        const resMatchedTitle = response && 'matchedTitle' in response ? (response as { matchedTitle?: string }).matchedTitle : undefined;
+        setMatchedInfo(
+          response.imdbId || response.matchedTitle
+            ? { imdbId: response.imdbId, matchedTitle: response.matchedTitle }
+            : null
+        );
 
-        if (resImdbId || resMatchedTitle) {
-          setMatchedInfo({
-            imdbId: resImdbId,
-            matchedTitle: resMatchedTitle,
-          });
-        } else if (/^tt\d+$/i.test(termToSearch)) {
-          setMatchedInfo({
-            imdbId: termToSearch,
-            matchedTitle: termToSearch,
-          });
-        } else {
-          setMatchedInfo(null);
-        }
+        // A catalogue that could not be reached is said so, never folded into
+        // "nothing found" — the two need different things from the viewer.
+        const sources = response.sources as SubtitleFindResult['sources'] | undefined;
+        const failed = sources
+          ? Object.entries(sources).filter(([, v]) => v.status === 'failed').map(([k]) => (k === 'stremio' ? 'Stremio OpenSubtitles' : 'OpenSubtitles'))
+          : [];
+        if (failed.length) setSourceNote(`${failed.join(' and ')} could not be reached; results may be incomplete.`);
 
         if (response.results.length === 0) {
           setError(
-            `No subtitles found for "${termToSearch}". Try refining the title, checking season/episode, or searching with an exact IMDb ID (e.g. tt1234567).`
+            failed.length === 2
+              ? 'The subtitle catalogues could not be reached. Check the connection and search again.'
+              : `No subtitles found for "${termToSearch}". Try the original title, a different year, or an IMDb ID (tt1234567).`
           );
         }
       } catch (err) {
@@ -129,20 +310,40 @@ export const SubtitlePanel: React.FC<SubtitlePanelProps> = ({
         setError(err instanceof Error ? err.message : 'Subtitle search failed.');
       }
     },
-    [searchQuery, searchSeason, searchEpisode, season, episode, imdbId, title, providerCanAnswer, mediaUrl]
+    [searchQuery, searchSeason, searchEpisode, searchYear, season, episode, imdbId, title, providerCanAnswer, mediaUrl, languages, releaseName]
   );
 
-  // Sync state when props change
+  // Track if the user has manually edited or is currently typing in the search box
+  const userEditedRef = useRef(false);
+  const userTypingRef = useRef(false);
+  const searchInputRef = useRef<HTMLInputElement | null>(null);
+
+  // Sync state when props change, guarded by ref so active typing isn't wiped
+  const prevPropsRef = useRef({ title, imdbId, season, episode, year });
   useEffect(() => {
+    const prev = prevPropsRef.current;
+    const changed =
+      prev.title !== title ||
+      prev.imdbId !== imdbId ||
+      prev.season !== season ||
+      prev.episode !== episode ||
+      prev.year !== year;
+    prevPropsRef.current = { title, imdbId, season, episode, year };
+    if (!changed) return;
+
+    // Never overwrite what the user is actively typing or has edited
+    if (userEditedRef.current || userTypingRef.current) return;
+
     const initial = title || imdbId || '';
     setSearchQuery(initial);
     setSearchSeason(season !== undefined ? String(season) : '');
     setSearchEpisode(episode !== undefined ? String(episode) : '');
+    setSearchYear(year !== undefined ? String(year) : '');
     setResults([]);
     setError(null);
     setMatchedInfo(null);
     setLastSearched('');
-  }, [title, imdbId, season, episode]);
+  }, [title, imdbId, season, episode, year]);
 
   // Searching on open rather than behind a button: the viewer opened this panel
   // because they want subtitles, and an empty list with a button is a wasted step.
@@ -186,7 +387,14 @@ export const SubtitlePanel: React.FC<SubtitlePanelProps> = ({
         return;
       }
       const blob = new Blob([response.vtt], { type: 'text/vtt' });
-      onSelect(URL.createObjectURL(blob), result.langName);
+      const detailParts = [
+        result.best ? '★ Best' : undefined,
+        result.releaseName || result.fileName?.replace(/\.(srt|ass|ssa|vtt|sub)$/i, ''),
+        result.hearingImpaired ? 'HI' : undefined,
+        originLabel(result),
+      ].filter(Boolean);
+      const detail = detailParts.join(' · ');
+      onSelect(URL.createObjectURL(blob), result.langName, detail);
       onClose();
     },
     [onSelect, onClose]
@@ -195,14 +403,37 @@ export const SubtitlePanel: React.FC<SubtitlePanelProps> = ({
   if (!open) return null;
 
   const byLanguage = new Map<string, SubtitleSearchResult[]>();
+  const codeFor = new Map<string, string>();
   for (const result of results) {
     const list = byLanguage.get(result.langName) ?? [];
     list.push(result);
     byLanguage.set(result.langName, list);
+    codeFor.set(result.langName, result.lang.toLowerCase());
   }
+  // Chips: every language the results carry, plus the common ones before a search.
+  const languageChips = (() => {
+    const chips = new Map<string, { code: string; name: string; count: number }>();
+    for (const [name, items] of byLanguage) {
+      const code = codeFor.get(name) ?? name;
+      chips.set(code, { code, name: name.replace(/\s*\(from this provider\)$/, ''), count: items.length });
+    }
+    if (chips.size === 0) for (const l of COMMON_LANGUAGES) chips.set(l.code, { ...l, count: 0 });
+    for (const code of languages) if (!chips.has(code)) chips.set(code, { code, name: code.toUpperCase(), count: 0 });
+    return [...chips.values()].sort((a, b) => (a.code === 'eng' ? -1 : b.code === 'eng' ? 1 : b.count - a.count || a.name.localeCompare(b.name)));
+  })();
+  const showLanguage = (name: string) => languages.length === 0 || languages.includes(codeFor.get(name) ?? '');
+
+  const englishChip = languageChips.find((c) => c.code === 'eng');
+  const activeOtherChips = languageChips.filter((c) => c.code !== 'eng' && languages.includes(c.code));
+  const dropdownChips = languageChips.filter((c) => c.code !== 'eng');
 
   return (
-    <aside className="player-panel player-panel--subtitles" aria-label="Subtitles">
+    <aside
+      className="player-panel player-panel--subtitles"
+      aria-label="Subtitles"
+      onPointerDown={(e) => e.stopPropagation()}
+      onClick={(e) => e.stopPropagation()}
+    >
       <header className="player-panel__head">
         <div>
           <h3>Subtitles</h3>
@@ -216,29 +447,227 @@ export const SubtitlePanel: React.FC<SubtitlePanelProps> = ({
         </div>
         <div className="player-panel__head-actions">
           <button
+            type="button"
+            className={`icon-button subtitle-panel__config-btn${showConfig ? ' active' : ''}`}
+            onClick={(e) => {
+              e.stopPropagation();
+              setShowConfig((v) => !v);
+            }}
+            onPointerDown={(e) => e.stopPropagation()}
+            onMouseDown={(e) => e.stopPropagation()}
+            title={showConfig ? 'Hide subtitle appearance settings' : 'Subtitle style & appearance settings'}
+            aria-label="Subtitle appearance settings"
+          >
+            <Sliders size={18} />
+          </button>
+          <button
+            type="button"
             className="icon-button"
-            onClick={() => void runSearch()}
+            onClick={(e) => {
+              e.stopPropagation();
+              void runSearch();
+            }}
+            onPointerDown={(e) => e.stopPropagation()}
+            onMouseDown={(e) => e.stopPropagation()}
             disabled={loading}
             title="Search again"
             aria-label="Search subtitles again"
           >
             {loading ? <Loader2 className="spin" size={18} /> : <Search size={18} />}
           </button>
-          <button className="icon-button" onClick={onClose} aria-label="Close subtitles">
+          <button
+            type="button"
+            className="icon-button"
+            onClick={(e) => {
+              e.stopPropagation();
+              onClose();
+            }}
+            onPointerDown={(e) => e.stopPropagation()}
+            onMouseDown={(e) => e.stopPropagation()}
+            aria-label="Close subtitles"
+          >
             <X size={18} />
           </button>
         </div>
       </header>
 
+      {/* In-player Subtitle Appearance Settings Drawer */}
+      {showConfig && (
+        <div
+          className="subtitle-panel__config-panel"
+          role="region"
+          aria-label="Subtitle appearance settings"
+          onPointerDown={(e) => e.stopPropagation()}
+          onMouseDown={(e) => e.stopPropagation()}
+        >
+          <div className="subtitle-panel__config-header">
+            <span className="subtitle-panel__config-title">Subtitle Appearance</span>
+            <button
+              type="button"
+              className="subtitle-panel__config-close"
+              onClick={(e) => {
+                e.stopPropagation();
+                setShowConfig(false);
+              }}
+              onPointerDown={(e) => e.stopPropagation()}
+              onMouseDown={(e) => e.stopPropagation()}
+              aria-label="Close subtitle settings"
+            >
+              <X size={14} />
+            </button>
+          </div>
+
+          {/* Live Preview */}
+          <div className="sub-preview" style={subtitleCssVariables(style) as React.CSSProperties}>
+            <span className="sub-preview__cue">
+              They're not going to make it. We should go back.
+            </span>
+          </div>
+
+          {/* Size */}
+          <div className="subtitle-panel__config-row subtitle-panel__config-row-stacked">
+            <div className="subtitle-panel__config-label-row">
+              <span>Size</span>
+              <span className="subtitle-panel__config-val">{Math.round(style.scale * 100)}%</span>
+            </div>
+            <div className="sub-choices">
+              {SUBTITLE_SCALES.map((scale) => (
+                <button
+                  key={scale}
+                  type="button"
+                  className={`btn btn-secondary sub-choice${style.scale === scale ? ' sub-choice--on' : ''}`}
+                  onClick={() => updateStyle({ scale })}
+                >
+                  {Math.round(scale * 100)}%
+                </button>
+              ))}
+            </div>
+          </div>
+
+          {/* Colour */}
+          <div className="subtitle-panel__config-row subtitle-panel__config-row-stacked">
+            <div className="subtitle-panel__config-label-row">
+              <span>Colour</span>
+              <span className="subtitle-panel__config-val">
+                {SUBTITLE_COLORS.find((c) => c.value.toLowerCase() === style.color.toLowerCase())?.label ?? style.color}
+              </span>
+            </div>
+            <div className="sub-choices">
+              {SUBTITLE_COLORS.map((option) => (
+                <button
+                  key={option.value}
+                  type="button"
+                  className={`sub-swatch${style.color.toLowerCase() === option.value.toLowerCase() ? ' sub-swatch--on' : ''}`}
+                  style={{ background: option.value }}
+                  title={option.label}
+                  aria-label={option.label}
+                  aria-pressed={style.color.toLowerCase() === option.value.toLowerCase()}
+                  onClick={() => updateStyle({ color: option.value })}
+                />
+              ))}
+            </div>
+          </div>
+
+          {/* Background */}
+          <div className="subtitle-panel__config-row subtitle-panel__config-row-stacked">
+            <div className="subtitle-panel__config-label-row">
+              <span>Background</span>
+              <span className="subtitle-panel__config-val">
+                {SUBTITLE_BACKGROUNDS.find((b) => b.value === style.background)?.label}
+              </span>
+            </div>
+            <div className="sub-choices">
+              {SUBTITLE_BACKGROUNDS.map((option) => (
+                <button
+                  key={option.value}
+                  type="button"
+                  className={`btn btn-secondary sub-choice${style.background === option.value ? ' sub-choice--on' : ''}`}
+                  title={option.hint}
+                  onClick={() => updateStyle({ background: option.value as SubtitleBackground })}
+                >
+                  {option.label}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          {/* Bold weight */}
+          <div className="subtitle-panel__config-row">
+            <span>Bold text</span>
+            <label className="toggle">
+              <input
+                type="checkbox"
+                checked={style.weight === 'bold'}
+                onChange={(e) => updateStyle({ weight: e.target.checked ? 'bold' : 'normal' })}
+              />
+              <span>{style.weight === 'bold' ? 'On' : 'Off'}</span>
+            </label>
+          </div>
+
+          {/* Vertical Lift / Position */}
+          <div className="subtitle-panel__config-row subtitle-panel__config-row-stacked">
+            <div className="subtitle-panel__config-label-row">
+              <span>Raise from bottom</span>
+              <span className="subtitle-panel__config-val">
+                {style.position === 0 ? 'Default position' : `${style.position}% up`}
+              </span>
+            </div>
+            <input
+              type="range"
+              min={0}
+              max={40}
+              step={5}
+              value={style.position}
+              onChange={(e) => updateStyle({ position: Number(e.target.value) })}
+              className="subtitle-panel__range"
+            />
+          </div>
+
+          {/* Reset */}
+          <div className="subtitle-panel__config-footer">
+            <button
+              type="button"
+              className="btn btn-secondary sub-choice"
+              onClick={() => updateStyle(DEFAULT_SUBTITLE_STYLE)}
+            >
+              Reset appearance
+            </button>
+          </div>
+        </div>
+      )}
+
       {/* Custom Subtitle Search Form */}
-      <form className="subtitle-panel__search-form" onSubmit={handleSearchSubmit}>
-        <div className="subtitle-panel__search-bar">
+      <form
+        className="subtitle-panel__search-form"
+        onSubmit={handleSearchSubmit}
+        onPointerDown={(e) => e.stopPropagation()}
+        onMouseDown={(e) => e.stopPropagation()}
+      >
+        <div
+          className="subtitle-panel__search-bar"
+          onClick={() => searchInputRef.current?.focus()}
+          onPointerDown={(e) => e.stopPropagation()}
+          onMouseDown={(e) => e.stopPropagation()}
+        >
           <Search size={14} style={{ flexShrink: 0, opacity: 0.6 }} />
           <input
+            ref={searchInputRef}
             type="text"
             className="subtitle-panel__search-input"
             value={searchQuery}
-            onChange={(e) => setSearchQuery(e.target.value)}
+            onChange={(e) => {
+              userEditedRef.current = true;
+              setSearchQuery(e.target.value);
+            }}
+            onFocus={() => {
+              userTypingRef.current = true;
+            }}
+            onBlur={() => {
+              userTypingRef.current = false;
+            }}
+            onKeyDown={(e) => e.stopPropagation()}
+            onPointerDown={(e) => e.stopPropagation()}
+            onMouseDown={(e) => e.stopPropagation()}
             placeholder="Search custom title or IMDb ID (tt...)"
             aria-label="Custom subtitle search query"
           />
@@ -246,17 +675,44 @@ export const SubtitlePanel: React.FC<SubtitlePanelProps> = ({
             <button
               type="button"
               className="subtitle-panel__search-btn"
-              onClick={() => setSearchQuery('')}
+              onClick={(e) => {
+                e.stopPropagation();
+                userEditedRef.current = true;
+                setSearchQuery('');
+                searchInputRef.current?.focus();
+              }}
+              onPointerDown={(e) => e.stopPropagation()}
+              onMouseDown={(e) => e.stopPropagation()}
               title="Clear title query"
               aria-label="Clear query"
             >
               <X size={14} />
             </button>
           )}
+          {title && searchQuery !== title && (
+            <button
+              type="button"
+              className="subtitle-panel__search-btn"
+              onClick={(e) => {
+                e.stopPropagation();
+                userEditedRef.current = false;
+                setSearchQuery(title);
+                void runSearch(title);
+              }}
+              onPointerDown={(e) => e.stopPropagation()}
+              onMouseDown={(e) => e.stopPropagation()}
+              title="Search with the detected title again"
+              aria-label="Reset to detected title"
+            >
+              <RotateCcw size={14} />
+            </button>
+          )}
           <button
             type="submit"
             className="subtitle-panel__search-btn"
             disabled={loading || !searchQuery.trim()}
+            onPointerDown={(e) => e.stopPropagation()}
+            onMouseDown={(e) => e.stopPropagation()}
             title="Search subtitles"
             aria-label="Search"
           >
@@ -264,7 +720,11 @@ export const SubtitlePanel: React.FC<SubtitlePanelProps> = ({
           </button>
         </div>
 
-        <div className="subtitle-panel__ep-inputs">
+        <div
+          className="subtitle-panel__ep-inputs"
+          onPointerDown={(e) => e.stopPropagation()}
+          onMouseDown={(e) => e.stopPropagation()}
+        >
           <div className="subtitle-panel__ep-field">
             <span>Season:</span>
             <input
@@ -273,7 +733,19 @@ export const SubtitlePanel: React.FC<SubtitlePanelProps> = ({
               className="subtitle-panel__ep-input"
               value={searchSeason}
               placeholder="S#"
-              onChange={(e) => setSearchSeason(e.target.value)}
+              onChange={(e) => {
+                userEditedRef.current = true;
+                setSearchSeason(e.target.value);
+              }}
+              onFocus={() => {
+                userTypingRef.current = true;
+              }}
+              onBlur={() => {
+                userTypingRef.current = false;
+              }}
+              onKeyDown={(e) => e.stopPropagation()}
+              onPointerDown={(e) => e.stopPropagation()}
+              onMouseDown={(e) => e.stopPropagation()}
               aria-label="Season number"
             />
           </div>
@@ -285,19 +757,145 @@ export const SubtitlePanel: React.FC<SubtitlePanelProps> = ({
               className="subtitle-panel__ep-input"
               value={searchEpisode}
               placeholder="Ep#"
-              onChange={(e) => setSearchEpisode(e.target.value)}
+              onChange={(e) => {
+                userEditedRef.current = true;
+                setSearchEpisode(e.target.value);
+              }}
+              onFocus={() => {
+                userTypingRef.current = true;
+              }}
+              onBlur={() => {
+                userTypingRef.current = false;
+              }}
+              onKeyDown={(e) => e.stopPropagation()}
+              onPointerDown={(e) => e.stopPropagation()}
+              onMouseDown={(e) => e.stopPropagation()}
               aria-label="Episode number"
+            />
+          </div>
+          <div className="subtitle-panel__ep-field">
+            <span>Year:</span>
+            <input
+              type="number"
+              min="1900"
+              max="2100"
+              className="subtitle-panel__ep-input subtitle-panel__ep-input--year"
+              value={searchYear}
+              placeholder="Year"
+              onChange={(e) => {
+                userEditedRef.current = true;
+                setSearchYear(e.target.value);
+              }}
+              onFocus={() => {
+                userTypingRef.current = true;
+              }}
+              onBlur={() => {
+                userTypingRef.current = false;
+              }}
+              onKeyDown={(e) => e.stopPropagation()}
+              onPointerDown={(e) => e.stopPropagation()}
+              onMouseDown={(e) => e.stopPropagation()}
+              aria-label="Release year"
             />
           </div>
           <button
             type="submit"
             className="subtitle-panel__search-submit-btn"
             disabled={loading || !searchQuery.trim()}
+            onPointerDown={(e) => e.stopPropagation()}
+            onMouseDown={(e) => e.stopPropagation()}
           >
             {loading ? 'Searching...' : 'Search'}
           </button>
         </div>
       </form>
+
+      {/* Language filter row with flags, primary choices (All, English, Active), and collapsible dropdown */}
+      <div className="subtitle-panel__languages" role="group" aria-label="Subtitle languages">
+        <button
+          type="button"
+          className={`subtitle-panel__chip${languages.length === 0 ? ' subtitle-panel__chip--on' : ''}`}
+          onClick={() => setLanguages([])}
+        >
+          <span className="subtitle-panel__chip-flag">🌐</span>
+          All{results.length > 0 ? ` (${results.length})` : ''}
+        </button>
+
+        {/* English chip (always offered as top option) */}
+        {englishChip && (
+          <button
+            type="button"
+            className={`subtitle-panel__chip${languages.includes(englishChip.code) ? ' subtitle-panel__chip--on' : ''}`}
+            onClick={() =>
+              setLanguages((current) =>
+                current.includes(englishChip.code)
+                  ? current.filter((c) => c !== englishChip.code)
+                  : [...current, englishChip.code]
+              )
+            }
+            aria-pressed={languages.includes(englishChip.code)}
+          >
+            <span className="subtitle-panel__chip-flag">🇬🇧</span>
+            {englishChip.name}
+            {englishChip.count > 0 ? ` (${englishChip.count})` : ''}
+          </button>
+        )}
+
+        {/* Active chips that aren't English */}
+        {activeOtherChips.map(({ code, name, count }) => (
+          <button
+            key={code}
+            type="button"
+            className="subtitle-panel__chip subtitle-panel__chip--on"
+            onClick={() => setLanguages((current) => current.filter((c) => c !== code))}
+            aria-pressed="true"
+          >
+            <span className="subtitle-panel__chip-flag">{getLanguageFlag(code, name)}</span>
+            {name}
+            {count > 0 ? ` (${count})` : ''}
+          </button>
+        ))}
+
+        {/* Expand / Collapse toggle for remaining languages */}
+        {dropdownChips.length > 0 && (
+          <button
+            type="button"
+            className={`subtitle-panel__lang-toggle${langMenuOpen ? ' subtitle-panel__lang-toggle--open' : ''}`}
+            onClick={() => setLangMenuOpen((v) => !v)}
+            aria-expanded={langMenuOpen}
+            aria-label="Show more subtitle languages"
+          >
+            <span>{langMenuOpen ? 'Fewer languages' : `More languages (${dropdownChips.length})`}</span>
+            {langMenuOpen ? <ChevronUp size={13} /> : <ChevronDown size={13} />}
+          </button>
+        )}
+
+        {/* Collapsible Dropdown Grid */}
+        {langMenuOpen && dropdownChips.length > 0 && (
+          <div className="subtitle-panel__languages-dropdown" role="group" aria-label="More subtitle languages">
+            {dropdownChips.map(({ code, name, count }) => {
+              const on = languages.includes(code);
+              return (
+                <button
+                  key={code}
+                  type="button"
+                  className={`subtitle-panel__chip${on ? ' subtitle-panel__chip--on' : ''}`}
+                  onClick={() =>
+                    setLanguages((current) =>
+                      on ? current.filter((c) => c !== code) : [...current, code]
+                    )
+                  }
+                  aria-pressed={on}
+                >
+                  <span className="subtitle-panel__chip-flag">{getLanguageFlag(code, name)}</span>
+                  {name}
+                  {count > 0 ? ` (${count})` : ''}
+                </button>
+              );
+            })}
+          </div>
+        )}
+      </div>
 
       {/* Matched Title Info Tag */}
       {matchedInfo && (
@@ -326,23 +924,87 @@ export const SubtitlePanel: React.FC<SubtitlePanelProps> = ({
           </button>
         </li>
 
-        {embedded.map((sub) => (
-          <li key={sub.url}>
-            <button
-              className={`player-panel__sub${activeUrl === sub.url ? ' player-panel__sub--current' : ''}`}
-              onClick={() => {
-                onSelect(sub.url, sub.name);
-                onClose();
-              }}
-            >
-              <Subtitles size={13} />
-              <span className="player-panel__sub-label">{sub.name}</span>
-              <span className="player-panel__sub-tag">in stream</span>
-              {activeUrl === sub.url && <Check size={14} />}
-            </button>
-          </li>
-        ))}
+        {embedded.map((sub) => {
+          const flag = getLanguageFlag('', sub.name);
+          return (
+            <li key={sub.url}>
+              <button
+                className={`player-panel__sub${activeUrl === sub.url ? ' player-panel__sub--current' : ''}`}
+                onClick={() => {
+                  onSelect(sub.url, sub.name, 'in stream');
+                  onClose();
+                }}
+              >
+                <span className="subtitle-panel__row-flag">{flag}</span>
+                <span className="player-panel__sub-label">{sub.name}</span>
+                <span className="player-panel__sub-tag">in stream</span>
+                {activeUrl === sub.url && <Check size={14} />}
+              </button>
+            </li>
+          );
+        })}
       </ul>
+
+      <div className="subtitle-panel__sync" aria-label="Subtitle timing">
+        <span>Timing</span>
+        <button
+          className="icon-button"
+          onClick={() => onDelayChange(Math.round((delay - 0.25) * 100) / 100)}
+          aria-label="Show subtitles earlier"
+          title="Earlier by 0.25s"
+        >
+          <Minus size={14} />
+        </button>
+        <output>
+          {delay > 0 ? '+' : ''}
+          {delay.toFixed(2)}s
+        </output>
+        <button
+          className="icon-button"
+          onClick={() => onDelayChange(Math.round((delay + 0.25) * 100) / 100)}
+          aria-label="Show subtitles later"
+          title="Later by 0.25s"
+        >
+          <Plus size={14} />
+        </button>
+        {delay !== 0 && (
+          <button className="subtitle-panel__sync-reset" onClick={() => onDelayChange(0)}>
+            Reset
+          </button>
+        )}
+      </div>
+
+      {saved.length > 0 && (
+        <div className="player-panel__sub-group">
+          <div className="player-panel__sub-heading">Saved on this computer</div>
+          <ul className="player-panel__subs">
+            {saved.map((entry) => {
+              const flag = getLanguageFlag(entry.lang, entry.langName);
+              return (
+                <li key={entry.id}>
+                  <button
+                    className="player-panel__sub"
+                    onClick={() => void applySaved(entry)}
+                    title={entry.filePath}
+                  >
+                    <span className="subtitle-panel__row-flag">{flag}</span>
+                    <span className="player-panel__sub-label">{entry.langName}</span>
+                    <span className="player-panel__sub-tag">
+                      saved · {entry.origin === 'opensubtitles' ? 'OpenSubtitles' : 'from source'}
+                    </span>
+                  </button>
+                </li>
+              );
+            })}
+          </ul>
+        </div>
+      )}
+
+      {!loading && lastSearched && results.length === 0 && !error && (
+        <p className="player-panel__error">
+          No matching subtitle was found online. Edit the title above and search again.
+        </p>
+      )}
 
       {error && (
         <p className="player-panel__error">
@@ -350,31 +1012,96 @@ export const SubtitlePanel: React.FC<SubtitlePanelProps> = ({
         </p>
       )}
 
-      {[...byLanguage.entries()].map(([language, items]) => (
-        <div key={language} className="player-panel__sub-group">
-          <div className="player-panel__sub-heading">{language}</div>
-          <ul className="player-panel__subs">
-            {items.map((item, index) => (
-              <li key={item.id}>
-                <button
-                  className="player-panel__sub"
-                  onClick={() => applySubtitle(item)}
-                  disabled={applying !== null}
-                >
-                  {applying === item.id ? (
-                    <Loader2 className="spin" size={13} />
-                  ) : (
-                    <Subtitles size={13} />
-                  )}
-                  <span className="player-panel__sub-label">
-                    {language} {items.length > 1 ? `#${index + 1}` : ''}
-                  </span>
-                </button>
-              </li>
-            ))}
-          </ul>
-        </div>
-      ))}
+      {sourceNote && <p className="subtitle-panel__note">{sourceNote}</p>}
+
+      {[...byLanguage.entries()]
+        .filter(([language]) => showLanguage(language))
+        .map(([language, items]) => {
+          const groupFlag = getLanguageFlag(codeFor.get(language) || '', language);
+          return (
+            <div key={language} className="player-panel__sub-group">
+              <div className="player-panel__sub-heading">
+                <span className="subtitle-panel__heading-flag">{groupFlag}</span>
+                <span>{language}</span>
+              </div>
+              <ul className="player-panel__subs">
+                {items.map((item, index) => {
+                  const state = downloads[item.id];
+                  const itemFlag = getLanguageFlag(
+                    item.lang,
+                    item.fileName || item.langName || item.releaseName
+                  );
+                  return (
+                    <li key={item.id} className="subtitle-panel__row">
+                      <button
+                        className={`player-panel__sub subtitle-panel__result${item.best ? ' subtitle-panel__result--best' : ''}`}
+                        onClick={() => applySubtitle(item)}
+                        disabled={applying !== null}
+                        title={[
+                          item.fileName,
+                          item.best ? 'Best match for what is playing' : undefined,
+                          item.matchReasons?.length ? item.matchReasons.join(' · ') : undefined,
+                        ]
+                          .filter(Boolean)
+                          .join('\n')}
+                      >
+                        {applying === item.id ? (
+                          <Loader2 className="spin" size={13} />
+                        ) : (
+                          <span className="subtitle-panel__row-flag">{itemFlag}</span>
+                        )}
+                        <span className="subtitle-panel__result-text">
+                          <span className="player-panel__sub-label">
+                            {item.best && (
+                              <Star
+                                size={12}
+                                className="subtitle-panel__star"
+                                fill="currentColor"
+                                style={{ marginRight: '0.3rem', verticalAlign: '-1px' }}
+                              />
+                            )}
+                            {rowLabel(item, `${language}${items.length > 1 ? ` #${index + 1}` : ''}`)}
+                          </span>
+                          <span className="subtitle-panel__result-meta">
+                            {item.best && <span className="subtitle-panel__best">Best match</span>}
+                            <span>{originLabel(item)}</span>
+                            {item.downloads ? <span>{compactCount(item.downloads)} downloads</span> : null}
+                            {item.rating ? <span>★ {item.rating.toFixed(1)}</span> : null}
+                            {item.hearingImpaired && <span title="Includes sound descriptions">HI</span>}
+                            {item.machineTranslated && <span>machine translated</span>}
+                          </span>
+                        </span>
+                      </button>
+                  <button
+                    className="icon-button subtitle-panel__download"
+                    onClick={() => void downloadResult(item, state?.status === 'saved')}
+                    disabled={!title || state?.status === 'saving'}
+                    title={
+                      state?.status === 'saved'
+                        ? `${state.reused ? 'Already saved' : 'Saved'}. Press to download again`
+                        : state?.status === 'failed'
+                          ? `${state.error} Press to retry.`
+                          : 'Download this subtitle'
+                    }
+                    aria-label="Download subtitle"
+                  >
+                    {state?.status === 'saving' ? (
+                      <Loader2 className="spin" size={13} />
+                    ) : state?.status === 'saved' ? (
+                      <Check size={13} />
+                    ) : state?.status === 'failed' ? (
+                      <AlertTriangle size={13} />
+                    ) : (
+                      <Download size={13} />
+                    )}
+                  </button>
+                </li>
+              );
+            })}
+            </ul>
+          </div>
+        );
+      })}
     </aside>
   );
 };

@@ -3,6 +3,8 @@ import { getLogger } from '../logging/logger.ts';
 import {
   AniListProvider,
   HEALTH_TTL_MS,
+  STREAMING_PLATFORM_CONFIGS,
+  StreamingPlatformCatalogProvider,
   StremioCatalogProvider,
   TmdbProvider,
   checkProvider,
@@ -45,6 +47,8 @@ export interface HomeProviderSummary {
   health: HomeProviderHealth | null;
   selectable: boolean;
   active: boolean;
+  accent?: string;
+  category?: 'general' | 'streaming' | 'anime';
 }
 
 export class HomeProviderRegistry {
@@ -78,6 +82,10 @@ export class HomeProviderRegistry {
         baseUrl: 'https://cinemeta-catalogs.strem.io',
       })
     );
+
+    for (const config of STREAMING_PLATFORM_CONFIGS) {
+      this.providers.set(config.id, new StreamingPlatformCatalogProvider(config));
+    }
 
     this.providers.set('anilist', new AniListProvider());
     this.providers.set('tmdb', new TmdbProvider(() => this.datastore.getString(TMDB_KEY, '', true)));
@@ -201,6 +209,8 @@ export class HomeProviderRegistry {
         health,
         selectable: isSelectable(health ?? undefined),
         active: provider.id === activeId,
+        accent: provider.accent,
+        category: provider.category ?? 'general',
       };
     });
   }

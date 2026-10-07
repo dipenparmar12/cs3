@@ -6,7 +6,8 @@ import type {
   HistoryListResponse,
   HistoryStats,
 } from '../../src/types/history';
-import { canonicalKey } from './libraryStore';
+import { canonicalKey } from './libraryStore.ts';
+import { isPrivateSession } from './privacyMode.ts';
 
 const HISTORY_KEY = 'media_history_events_v1';
 const MAX_HISTORY_EVENTS = 10_000;
@@ -56,6 +57,9 @@ export class HistoryStore {
       timestamp,
     };
 
+    // Incognito: the event is answered to the caller and never kept.
+    if (isPrivateSession()) return event;
+
     // Newest first
     this.events.unshift(event);
     this.persist();
@@ -66,6 +70,7 @@ export class HistoryStore {
    * Updates an existing live event (e.g. updating progress, duration, or completion status).
    */
   public update(id: string, updates: Partial<HistoryEvent>): HistoryEvent | null {
+    if (isPrivateSession()) return null;
     const index = this.events.findIndex((e) => e.id === id);
     if (index < 0) return null;
 
@@ -241,6 +246,14 @@ export class HistoryStore {
 
   public exportAll(): HistoryEvent[] {
     return [...this.events];
+  }
+
+  /** Stores the whole list a backup restore decided on, newest first. */
+  public replaceAll(events: HistoryEvent[]): void {
+    this.events = events
+      .filter((item) => item && typeof item.id === 'string' && item.title)
+      .sort((a, b) => b.timestamp - a.timestamp);
+    this.persist();
   }
 
   public importAll(imported: HistoryEvent[]): number {

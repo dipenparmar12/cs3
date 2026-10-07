@@ -49,6 +49,7 @@ interface PlayerCopyMenuProps {
   playerState: () => Record<string, string | number | boolean | undefined>;
   /** Delegates to the main process, which owns the environment and the log. */
   onCopyDiagnostics: (mode: 'current' | 'full') => Promise<string | null>;
+  onOpenChange?: (open: boolean) => void;
 }
 
 /** Nothing empty, nothing undefined — a report full of blanks reads as broken. */
@@ -72,10 +73,15 @@ export const PlayerCopyMenu: React.FC<PlayerCopyMenuProps> = ({
   download,
   playerState,
   onCopyDiagnostics,
+  onOpenChange,
 }) => {
   const [open, setOpen] = useState(false);
   const { message: copied, flash: setCopied } = useFlash<string>(2200);
   const wrapper = useRef<HTMLDivElement | null>(null);
+
+  React.useEffect(() => {
+    onOpenChange?.(open);
+  }, [open, onOpenChange]);
 
   const close = useCallback(() => setOpen(false), []);
   useDismissable(open, wrapper, close);
@@ -228,7 +234,12 @@ export const PlayerCopyMenu: React.FC<PlayerCopyMenuProps> = ({
   ];
 
   return (
-    <div className="player-copy" ref={wrapper}>
+    <div
+      className="player-copy"
+      ref={wrapper}
+      onPointerDown={(e) => e.stopPropagation()}
+      onClick={(e) => e.stopPropagation()}
+    >
       <button
         type="button"
         className="icon-button"

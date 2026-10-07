@@ -1,5 +1,6 @@
 import type { DatastoreManager } from '../datastore.ts';
 import type { DrmConfiguration, MediaMetadata, MediaTransport } from '../../src/types/media.ts';
+import { isPrivateSession } from '../cs3/privacyMode.ts';
 
 /**
  * Remembers what is *inside* a stream, so opening it again does not re-measure it.
@@ -59,9 +60,14 @@ interface StoredInspection {
 
 export class InspectionStore {
   private datastore: DatastoreManager;
+  private volatile = new Map<string, StoredInspection>();
 
   constructor(datastore: DatastoreManager) {
     this.datastore = datastore;
+  }
+
+  public clearVolatile(): void {
+    this.volatile.clear();
   }
 
   /**
@@ -104,13 +110,21 @@ export class InspectionStore {
   ): { metadata: MediaMetadata; transport: MediaTransport; drm: DrmConfiguration } | null {
     if (!originUrl || isLoopback(originUrl)) return null;
     const key = InspectionStore.keyFor(originUrl);
+    if (isPrivateSession()) {
+      const v = this.volatile.get(key);
+      if (v && Date.now() - v.at < TTL_MS) {
+        return { metadata: v.metadata, transport: v.transport, drm: v.drm };
+      }
+    }
     const entries = this.load();
     const entry = entries.find((candidate) => candidate.key === key);
     if (!entry) return null;
     if (Date.now() - entry.at >= TTL_MS) return null;
 
-    entry.lastUsedAt = Date.now();
-    this.save(entries);
+    if (!isPrivateSession()) {
+      entry.lastUsedAt = Date.now();
+      this.save(entries);
+    }
     return { metadata: entry.metadata, transport: entry.transport, drm: entry.drm };
   }
 
@@ -130,6 +144,10 @@ export class InspectionStore {
 
     const key = InspectionStore.keyFor(originUrl);
     const now = Date.now();
+    if (isPrivateSession()) {
+      this.volatile.set(key, { key, metadata, transport, drm, at: now, lastUsedAt: now });
+      return;
+    }
     const entries = this.load().filter((entry) => entry.key !== key);
     entries.push({ key, metadata, transport, drm, at: now, lastUsedAt: now });
     this.save(entries);

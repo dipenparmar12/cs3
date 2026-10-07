@@ -152,6 +152,7 @@ export interface ProviderTreeRepository {
   bundled?: boolean;
   description?: string;
   category?: string;
+  language?: string;
   iconUrl?: string;
   /** Whether the catalogue confirmed this URL returns a document. */
   verified?: boolean;

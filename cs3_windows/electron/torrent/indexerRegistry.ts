@@ -4,10 +4,10 @@ import type {
   IndexerQuery,
   SourcePreferences,
   TorrentResult,
-} from '../../src/types/torrent';
-import { DEFAULT_SOURCE_PREFERENCES, IndexerKind } from '../../src/types/torrent';
-import { TvType } from '../../src/types/api';
-import { finaliseResult, type TorrentIndexer } from './indexers/base';
+} from '../../src/types/torrent.ts';
+import { DEFAULT_SOURCE_PREFERENCES, IndexerKind } from '../../src/types/torrent.ts';
+import { TvType } from '../../src/types/api.ts';
+import { finaliseResult, type TorrentIndexer } from './indexers/base.ts';
 import {
   AniDexIndexer,
   AnimeToshoIndexer,
@@ -17,7 +17,7 @@ import {
   SubsPleaseIndexer,
   TokyoToshoIndexer,
   YtsIndexer,
-} from './indexers/builtins';
+} from './indexers/builtins.ts';
 import {
   ApiBayIndexer,
   CometIndexer,
@@ -28,11 +28,11 @@ import {
   StremioAddonIndexer,
   TorrentioIndexer,
   TorrentsCsvIndexer,
-} from './indexers/aggregators';
-import { BitSearchIndexer, TheRarbgIndexer, X1337Indexer } from './indexers/scrapers';
-import { TorznabIndexer } from './indexers/torznab';
-import { dedupeByInfoHash, rankResults, type RankContext } from './ranker';
-import type { DatastoreManager } from '../datastore';
+} from './indexers/aggregators.ts';
+import { BitSearchIndexer, TheRarbgIndexer, X1337Indexer } from './indexers/scrapers.ts';
+import { TorznabIndexer } from './indexers/torznab.ts';
+import { dedupeByInfoHash, rankResults, type RankContext } from './ranker.ts';
+import type { DatastoreManager } from '../datastore.ts';
 import { describeError } from '../../src/utils/errors.ts';
 import {
   EMPTY_OBSERVATION,
@@ -284,9 +284,14 @@ export class IndexerRegistry {
   }
 
   public upsertConfig(config: IndexerConfig): void {
-    const next = this.configs.filter((c) => c.id !== config.id);
-    next.push(config);
-    this.saveConfigs(next);
+    const idx = this.configs.findIndex((c) => c.id === config.id);
+    if (idx >= 0) {
+      const next = [...this.configs];
+      next[idx] = config;
+      this.saveConfigs(next);
+    } else {
+      this.saveConfigs([...this.configs, config]);
+    }
   }
 
   public removeConfig(id: string): void {

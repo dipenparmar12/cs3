@@ -112,7 +112,7 @@ const SingleTaskRow: React.FC<SingleTaskRowProps> = ({
       `Title:          ${task.title}`,
       `Item:           ${itemText}`,
       `Provider:       ${task.providerName || 'Extension / Built-in'}`,
-      `Quality:        ${task.quality || task.resolution ? `${task.quality || task.resolution}p` : 'Unknown'}`,
+      `Quality:        ${task.resolution ? `${task.resolution}p` : task.quality || 'Unknown'}`,
       `State:          ${task.state}`,
       `Progress:       ${formatDownloadSize(task.bytesDownloaded)} / ${formatDownloadSize(task.totalBytes)} (${percent}%)`,
       `Speed:          ${formatTransferRate(task.downloadSpeed)}`,

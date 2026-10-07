@@ -2,11 +2,12 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   Play, ArrowLeft, Loader2, AlertTriangle, ListVideo, Search,
 } from 'lucide-react';
-import type { SearchResponse, Episode } from '../types/api';
+import type { SearchResponse, Episode, ProviderTrailerData } from '../types/api';
 import { TvType } from '../types/api';
 import type { DownloadRequestResult, DownloadTask } from '../types/download';
 import { buildDownloadTask } from '../utils/downloadIdentity';
 import { useFlash } from '../utils/useFlash';
+import { RECOVERY_SEARCH_MS, sameWorkMatches } from '../utils/sameWork';
 import type { TorrentResult } from '../types/torrent';
 import type { PlaybackSnapshot } from '../../electron/playbackSession';
 import { SourcePicker, type SourcePickerData } from '../components/SourcePicker';
@@ -23,17 +24,29 @@ import { Poster } from '../components/Poster';
 import { CopyErrorButton } from '../components/CopyErrorButton';
 import { ProviderRecoveryPanel } from '../components/ProviderRecoveryPanel';
 import { DetailHero, type DetailHeroProvenance } from '../components/detail/DetailHero';
-import { TitleMetadata } from '../components/detail/TitleMetadata';
+import {
+  TitleCast,
+  TitleAbout,
+  TitleBehindTheScenes,
+  TitleProvenance,
+} from '../components/detail/TitleMetadata';
 import { TrailerGallery } from '../components/detail/TrailerGallery';
 import { TrailerPopup } from '../components/detail/TrailerPopup';
+import { ReviewsAndExplanations } from '../components/detail/ReviewsAndExplanations';
 import { useTitleInteractions } from '../components/useTitleInteractions';
 import { shouldRetryOnOpen } from '../utils/cardState';
-import type { ExtendedMetadata } from '../types/metadata';
+import type { ExtendedMetadata, TitleVideo } from '../types/metadata';
+import { MetadataSource, TitleVideoKind } from '../types/metadata';
 import { formatRuntimeMinutes } from '../utils/metadataDisplay';
+import { mergeVideos, youTubeIdFrom, youTubeThumbnail } from '../utils/videoGallery';
 import { ShareButton } from '../components/ShareButton';
 import type { PrefetchState } from '../../electron/cs3/sourcePrefetcher';
 import type { PageSnapshot } from '../../electron/cs3/pageSnapshot';
 import { detailFromSnapshot, mergeDetail, savedCopyAge } from '../utils/savedPage';
+import { FranchiseRail } from '../components/detail/FranchiseRail';
+
+/** Cards the rail is sized for before "Show all" is worth offering. */
+const RAIL_PREVIEW = 8;
 
 export interface PlaybackRequest {
   streamUrl: string;
@@ -164,6 +177,7 @@ interface DetailData {
    */
   actors?: string[];
   recommendations?: SearchResponse[];
+  trailers?: ProviderTrailerData[];
 }
 
 /** Groups episodes by season so a 200-episode series is navigable. */
@@ -179,6 +193,24 @@ function groupBySeason(episodes: Episode[]): Map<number, Episode[]> {
     list.sort((a, b) => (a.episode ?? 0) - (b.episode ?? 0));
   }
   return map;
+}
+
+/** Extracts the cleanest title available for a media item, falling back through aliases and query params. */
+function extractMediaTitle(item: SearchResponse): string {
+  if (item.name?.trim()) return item.name.trim();
+  if (item.originalTitle?.trim()) return item.originalTitle.trim();
+  const rawTitle = (item as unknown as Record<string, unknown>).title;
+  if (typeof rawTitle === 'string' && rawTitle.trim()) return rawTitle.trim();
+  try {
+    if (item.url?.includes('?')) {
+      const params = new URLSearchParams(item.url.split('?')[1]);
+      const titleParam = params.get('title') || params.get('name');
+      if (titleParam?.trim()) return titleParam.trim();
+    }
+  } catch {
+    // Ignore URL parse error
+  }
+  return '';
 }
 
 export const DetailView: React.FC<DetailViewProps> = ({
@@ -200,6 +232,8 @@ export const DetailView: React.FC<DetailViewProps> = ({
   const [extended, setExtended] = useState<ExtendedMetadata | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
+  /** The title being looked for on other providers after every known route failed. */
+  const [recovering, setRecovering] = useState<string | null>(null);
   const [disabledProvider, setDisabledProvider] = useState<string | null>(null);
   const [reloadToken, setReloadToken] = useState(0);
 
@@ -209,6 +243,10 @@ export const DetailView: React.FC<DetailViewProps> = ({
 
   /** The catalogues are being asked and have not finished. See the effect. */
   const [metadataPending, setMetadataPending] = useState(false);
+
+  /** Public trailers found on-demand via YouTube fallback. */
+  const [discoveredVideos, setDiscoveredVideos] = useState<TitleVideo[]>([]);
+  const [searchingTrailers, setSearchingTrailers] = useState(false);
 
   /**
    * Card states for the "More like this" rail, and for this title itself.
@@ -252,6 +290,18 @@ export const DetailView: React.FC<DetailViewProps> = ({
   const [selectedEpisode, setSelectedEpisode] = useState<Episode | null>(null);
 
   const [pickerOpen, setPickerOpen] = useState(false);
+  const [showAllRecommendations, setShowAllRecommendations] = useState(false);
+  useEffect(() => setShowAllRecommendations(false), [mediaItem.url]);
+  // Providers repeat a title across their own rows; one card per address.
+  const recommendations = useMemo(() => {
+    const seen = new Set<string>();
+    return (detail?.recommendations ?? []).filter((item) => {
+      const key = `${item.apiName}:${item.url}`;
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
+  }, [detail?.recommendations]);
   const [pickerData, setPickerData] = useState<SourcePickerData | null>(null);
   const [pickerError, setPickerError] = useState<string | undefined>();
 
@@ -341,11 +391,14 @@ export const DetailView: React.FC<DetailViewProps> = ({
        */
       setIsLoading(true);
       setLoadError(null);
+      setRecovering(null);
       setDisabledProvider(null);
       setDetail(null);
       setFellBackTo(null);
       setSnapshot(null);
       setServedFromSnapshot(null);
+      setDiscoveredVideos([]);
+      setSearchingTrailers(false);
 
       if (!window.cloudstream) {
         setLoadError('Desktop bridge unavailable.');
@@ -411,13 +464,29 @@ export const DetailView: React.FC<DetailViewProps> = ({
       ].filter((route, index, all) => route && all.indexOf(route) === index);
       const reasons: string[] = [];
 
-      for (const [index, route] of routes.entries()) {
+      /** Routes found by the automatic search below, with the provider that offered each. */
+      const recoveredNames = new Map<string, string>();
+      let searchedElsewhere = false;
+
+      for (let index = 0; index < routes.length; index++) {
+        const route = routes[index];
         const response = await window.cloudstream.loadMedia(route);
         if (cancelled) return;
 
         if (response.ok && response.detail) {
           const data = mergeDetail(response.detail as DetailData, stored);
           setDetail(data);
+          if (recoveredNames.has(route)) {
+            void window.cloudstream?.recordDiagnostic?.({
+              level: 'warn',
+              stage: 'detail',
+              source: mediaItem.apiName,
+              title: data.name,
+              url: mediaItem.url,
+              message: `Opened from ${recoveredNames.get(route)} after the original source failed`,
+              detail: reasons.join(' · ').slice(0, 1000),
+            });
+          }
           setServedFromSnapshot(null);
           setDisabledProvider(null);
           window.cloudstream?.recordTitleOutcome?.(mediaItem.url, 'played');
@@ -457,7 +526,7 @@ export const DetailView: React.FC<DetailViewProps> = ({
             index === 0
               ? null
               : ((mediaItem.alternates ?? []).find((alternate) => alternate.url === route)
-                  ?.apiName ?? 'another source')
+                  ?.apiName ?? recoveredNames.get(route) ?? 'another source')
           );
           /**
            * How the viewer got here, recorded alongside what they got.
@@ -487,6 +556,36 @@ export const DetailView: React.FC<DetailViewProps> = ({
         }
 
         if (response.error) reasons.push(response.error);
+
+        /*
+         * Every known route failed: find the title elsewhere before giving up.
+         *
+         * A catalogue poster whose provider is down, a saved row holding a dead
+         * address, a site that changed shape this morning — in each case the
+         * same title is usually one search away on another provider. Asking the
+         * viewer to press "Search again" and pick the right row is exactly the
+         * friction a streaming app must not have, so the search runs here, once,
+         * and only rows that are the same work (title, and year where both know
+         * it) are tried. Anything looser would open a different film.
+         */
+        if (index === routes.length - 1 && !searchedElsewhere) {
+          searchedElsewhere = true;
+          const wanted = extractMediaTitle(mediaItem) || mediaItem.originalTitle || mediaItem.name;
+          if (wanted && window.cloudstream.searchAll) {
+            setRecovering(wanted);
+            const reply = await Promise.race([
+              window.cloudstream.searchAll(wanted).catch(() => null),
+              new Promise<null>((resolve) => setTimeout(() => resolve(null), RECOVERY_SEARCH_MS)),
+            ]);
+            if (cancelled) return;
+            setRecovering(null);
+            for (const match of sameWorkMatches(reply?.results ?? [], wanted, mediaItem.year)) {
+              if (routes.includes(match.url)) continue;
+              routes.push(match.url);
+              recoveredNames.set(match.url, match.apiName);
+            }
+          }
+        }
       }
 
       // Every route failed. Report what each one said rather than a summary:
@@ -494,6 +593,17 @@ export const DetailView: React.FC<DetailViewProps> = ({
       // completely different responses from the user.
       const combined =
         reasons.length > 0 ? [...new Set(reasons)].join(' · ') : 'No source could open this title.';
+
+      // Logged with the exact on-screen text, so "Copy error" finds it without a paste.
+      void window.cloudstream?.recordDiagnostic?.({
+        level: 'error',
+        stage: 'detail',
+        source: mediaItem.apiName,
+        title: mediaItem.originalTitle || mediaItem.name,
+        url: mediaItem.url,
+        message: combined,
+        detail: `routes tried: ${routes.length}; searched elsewhere: ${searchedElsewhere ? 'yes' : 'no'}`,
+      });
 
       /**
        * Nothing answered — so the stored copy stands, and says so.
@@ -617,6 +727,50 @@ export const DetailView: React.FC<DetailViewProps> = ({
   snapshotRef.current = snapshot;
 
   /**
+   * Promotional trailers provided directly by the extension or scraper.
+   */
+  const providerVideos = useMemo<TitleVideo[]>(() => {
+    if (!detail?.trailers?.length) return [];
+    const list: TitleVideo[] = [];
+    for (const [idx, item] of detail.trailers.entries()) {
+      const ytId = youTubeIdFrom(item.extractorUrl);
+      if (ytId) {
+        list.push({
+          id: `youtube:${ytId}`,
+          title: `${detail.name} Trailer ${idx > 0 ? idx + 1 : ''}`.trim(),
+          url: item.extractorUrl,
+          kind: TitleVideoKind.Trailer,
+          label: idx === 0 ? 'Official Trailer' : `Trailer ${idx + 1}`,
+          host: 'youtube',
+          thumbnailUrl: youTubeThumbnail(ytId),
+          official: true,
+          sources: [MetadataSource.Provider],
+        });
+      } else if (item.extractorUrl) {
+        list.push({
+          id: `web:${item.extractorUrl}`,
+          title: `${detail.name} Promo`,
+          url: item.extractorUrl,
+          kind: TitleVideoKind.Trailer,
+          label: 'Trailer',
+          host: 'web',
+          official: true,
+          sources: [MetadataSource.Provider],
+        });
+      }
+    }
+    return list;
+  }, [detail?.trailers, detail?.name]);
+
+  /**
+   * Unified list of videos from all sources: catalogues (Cinemeta/AniList),
+   * direct extension trailers, and on-demand YouTube searches.
+   */
+  const allVideos = useMemo<TitleVideo[]>(() => {
+    return mergeVideos([extended?.videos, providerVideos, discoveredVideos]);
+  }, [extended?.videos, providerVideos, discoveredVideos]);
+
+  /**
    * Cast, crew, ratings and production notes, fetched after the page is drawn.
    *
    * Deliberately *not* part of the `loadMedia` effect above. That one is on the
@@ -676,6 +830,7 @@ export const DetailView: React.FC<DetailViewProps> = ({
         type: detail?.type,
         title: detail?.name,
         year: detail?.year,
+        providerVideos: providerVideos.length > 0 ? providerVideos : undefined,
       });
       if (cancelled) return;
       // Cleared whatever came back, including nothing. The alternative is a
@@ -689,7 +844,7 @@ export const DetailView: React.FC<DetailViewProps> = ({
     return () => {
       cancelled = true;
     };
-  }, [detail?.url, detail?.imdbId, detail?.type, detail?.name, detail?.year]);
+  }, [detail?.url, detail?.imdbId, detail?.type, detail?.name, detail?.year, providerVideos]);
 
   /**
    * Fuller records arriving as each catalogue answers.
@@ -762,6 +917,16 @@ export const DetailView: React.FC<DetailViewProps> = ({
   const pendingEpisodeRef = useRef<Episode | null>(null);
   pendingEpisodeRef.current = pendingEpisode;
 
+  /**
+   * What the picker has already found, per target (PRD-051 §2–10). Reopening
+   * the picker draws this at once and merges the new run into it, so a source
+   * that answered a minute ago never blinks out while providers are asked
+   * again. A refresh keeps it on screen only until its own run finishes —
+   * refresh exists because the old answer may be wrong.
+   */
+  const retainedSources = useRef(new Map<string, PlaybackSnapshot['sources']>());
+  const sourceTargetRef = useRef<{ key: string; refresh: boolean } | null>(null);
+
   const applySnapshot = useCallback((snapshot: PlaybackSnapshot) => {
     setDiscovery((current) =>
       current && current.id === snapshot.sessionId
@@ -780,8 +945,21 @@ export const DetailView: React.FC<DetailViewProps> = ({
         : current
     );
 
+    const target = sourceTargetRef.current;
+    let sources = snapshot.sources;
+    if (target) {
+      const previous = retainedSources.current.get(target.key) ?? [];
+      const keep = !(target.refresh && snapshot.searchDone);
+      if (keep && previous.length > 0) {
+        const identity = (s: (typeof sources)[number]) => s.infoHash || s.directUrl || s.title;
+        const seen = new Set(sources.map(identity));
+        sources = [...sources, ...previous.filter((s) => !seen.has(identity(s)))];
+      }
+      retainedSources.current.set(target.key, sources);
+    }
+
     setPickerData({
-      sources: snapshot.sources,
+      sources,
       // Neither is reported by the session: `filtered` and `indexerOutcomes`
       // are batch summaries produced after everything settles, and this list
       // is deliberately being shown before that point.
@@ -829,8 +1007,42 @@ export const DetailView: React.FC<DetailViewProps> = ({
       // taking over the screen to do something nobody asked for.
       if (!options.quiet) setPickerOpen(true);
       setPickerError(undefined);
-      setPickerData(null);
-      setDiscovery(null);
+      const key = `${episode?.url ?? detail.url}|${episode?.season ?? ''}|${episode?.episode ?? ''}`;
+      sourceTargetRef.current = { key, refresh: Boolean(options.refresh) };
+      const prefetchMatch =
+        prefetch?.sources &&
+        (episode?.url ?? detail.url) === prefetch.mediaUrl &&
+        episode?.season === prefetch.season &&
+        episode?.episode === prefetch.episode
+          ? prefetch.sources
+          : undefined;
+      const retained = retainedSources.current.get(key) ?? prefetchMatch;
+      if (retained?.length) {
+        retainedSources.current.set(key, retained);
+      }
+      setPickerData(
+        retained?.length
+          ? {
+              sources: retained,
+              filtered: [],
+              indexerOutcomes: [],
+              query: { title: detail.name, season: episode?.season, episode: episode?.episode },
+            }
+          : null
+      );
+      setDiscovery(
+        retained?.length && !options.refresh
+          ? {
+              id: 'retained',
+              searched: 1,
+              total: 1,
+              done: prefetch?.status === 'ready',
+              cancelled: false,
+              canWiden: false,
+              widened: false,
+            }
+          : null
+      );
 
       const response = await window.cloudstream.startSourceDiscovery(
         {
@@ -862,12 +1074,16 @@ export const DetailView: React.FC<DetailViewProps> = ({
         widened: response.snapshot.widened,
       });
 
+      if (response.snapshot.sources?.length) {
+        applySnapshot(response.snapshot);
+      }
+
       // Anything this session emitted while the invoke was in flight. For a
       // cache hit that is the whole answer, already complete.
       const buffered = snapshotsById.current.get(sessionId);
       if (buffered) applySnapshot(buffered);
     },
-    [applySnapshot, detail, stopDiscovery]
+    [applySnapshot, detail, prefetch, stopDiscovery]
   );
 
   useEffect(() => {
@@ -1036,9 +1252,26 @@ export const DetailView: React.FC<DetailViewProps> = ({
       if (!playMediaUrl || state.mediaUrl !== playMediaUrl) return;
       if (state.season !== playSeason || state.episode !== playEpisode) return;
       setPrefetch(state);
+
+      if (state.sources && state.sources.length > 0) {
+        const key = `${state.mediaUrl}|${state.season ?? ''}|${state.episode ?? ''}`;
+        retainedSources.current.set(key, state.sources);
+        if (sourceTargetRef.current?.key === key) {
+          setPickerData((current) => ({
+            sources: state.sources!,
+            filtered: current?.filtered ?? [],
+            indexerOutcomes: current?.indexerOutcomes ?? [],
+            query: current?.query ?? {
+              title: detail?.name ?? '',
+              season: state.season,
+              episode: state.episode,
+            },
+          }));
+        }
+      }
     });
     return () => dispose?.();
-  }, [playMediaUrl, playSeason, playEpisode]);
+  }, [detail?.name, playMediaUrl, playSeason, playEpisode]);
 
   /** Queues one release for download, from either the picker or the player. */
   const downloadSource = useCallback(
@@ -1100,6 +1333,7 @@ export const DetailView: React.FC<DetailViewProps> = ({
         duration: detail.duration,
         episodes: detail.episodes ?? [],
         currentEpisodeUrl: episode?.url,
+        pageUrl: detail.url,
         watchState,
       };
     },
@@ -1162,7 +1396,7 @@ export const DetailView: React.FC<DetailViewProps> = ({
 
       // One local datastore read, needed before the player mounts so the
       // episode list and resume point are right from the first frame.
-      const watchState = await loadWatchState(detail.url);
+      const watchState = await loadWatchState(detail.url, { title: detail.name, year: detail.year });
 
       /**
        * A null episode on a series means "Play", not "play the series URL".
@@ -1286,6 +1520,59 @@ export const DetailView: React.FC<DetailViewProps> = ({
    */
   const [trailerId, setTrailerId] = useState<string | null>(null);
 
+  /**
+   * Primary action to watch a trailer from the hero banner or on demand.
+   * Plays existing trailer if present, or dynamically discovers public trailers
+   * via YouTube search fallback for titles without catalogue trailer IDs.
+   */
+  const handleWatchTrailer = useCallback(async () => {
+    const firstTrailer =
+      allVideos.find((v) => v.kind === TitleVideoKind.Trailer) || allVideos[0];
+    if (firstTrailer) {
+      setTrailerId(firstTrailer.id);
+      return;
+    }
+
+    if (window.cloudstream?.findTrailers && detail?.name) {
+      setSearchingTrailers(true);
+      try {
+        const response = await window.cloudstream.findTrailers(detail.name, detail.year);
+        if (response?.ok && response.videos?.length) {
+          setDiscoveredVideos((prev) => mergeVideos([prev, response.videos]));
+          setTrailerId(response.videos[0].id);
+        } else {
+          flash('No trailers found for this title.');
+        }
+      } catch {
+        flash('Could not find trailers.');
+      } finally {
+        setSearchingTrailers(false);
+      }
+    } else {
+      flash('No trailers available.');
+    }
+  }, [allVideos, detail?.name, detail?.year, flash]);
+
+  /**
+   * On-demand search to expand the trailer gallery with more public YouTube trailers.
+   */
+  const handleFindMoreTrailers = useCallback(async () => {
+    if (!window.cloudstream?.findTrailers || !detail?.name) return;
+    setSearchingTrailers(true);
+    try {
+      const response = await window.cloudstream.findTrailers(detail.name, detail.year);
+      if (response?.ok && response.videos?.length) {
+        setDiscoveredVideos((prev) => mergeVideos([prev, response.videos]));
+      } else {
+        flash('No additional trailers found.');
+      }
+    } catch {
+      flash('Could not search for trailers.');
+    } finally {
+      setSearchingTrailers(false);
+    }
+  }, [detail?.name, detail?.year, flash]);
+
   const handlePlaySource = useCallback(
     async (source: TorrentResult) => {
       if (!window.cloudstream || !detail) return;
@@ -1325,7 +1612,7 @@ export const DetailView: React.FC<DetailViewProps> = ({
       });
       rememberChoice(source, pendingEpisode);
 
-      const watchState = await loadWatchState(detail.url);
+      const watchState = await loadWatchState(detail.url, { title: detail.name, year: detail.year });
 
       const others = pickerData?.sources ?? [];
 
@@ -1391,7 +1678,11 @@ export const DetailView: React.FC<DetailViewProps> = ({
     return (
       <div className="detail-view detail-view--state">
         <Loader2 className="spin" size={32} />
-        <p>Loading {mediaItem.name}…</p>
+        <p>
+          {recovering
+            ? `That source isn't answering — finding “${recovering}” on another one…`
+            : `Loading ${mediaItem.name}…`}
+        </p>
       </div>
     );
   }
@@ -1417,14 +1708,24 @@ export const DetailView: React.FC<DetailViewProps> = ({
       );
     }
 
+    const displayTitle = extractMediaTitle(mediaItem);
+    const isPlaybackHandle = Boolean(
+      loadError && /playback handle|not a page it can open/i.test(loadError)
+    );
+
     return (
       <div className="detail-view detail-view--state">
         <AlertTriangle size={32} />
         {/* Every route's own reason, not a summary of them. */}
         <p>{loadError ?? 'No details available.'}</p>
+        {isPlaybackHandle && (
+          <p style={{ color: 'var(--text-muted)', fontSize: '0.85rem', maxWidth: '480px' }}>
+            This link can't be opened as a page any more, and no other source answered with the same title. A search may find it under a slightly different name.
+          </p>
+        )}
         {(mediaItem.alternates?.length ?? 0) > 0 && (
           <p className="detail-view__tried">
-            Tried {(mediaItem.alternates?.length ?? 0) + 1} sources for “{mediaItem.name}”.
+            Tried {(mediaItem.alternates?.length ?? 0) + 1} sources for “{displayTitle || mediaItem.name}”.
           </p>
         )}
         <div className="detail-view__actions">
@@ -1442,9 +1743,16 @@ export const DetailView: React.FC<DetailViewProps> = ({
           {onSearch && (
             <button
               className="btn btn-primary"
-              onClick={() => onSearch(mediaItem.originalTitle || mediaItem.name)}
+              onClick={() => onSearch(displayTitle || mediaItem.name)}
             >
-              <Search size={16} /> Find “{mediaItem.name}” again
+              <Search size={16} />{' '}
+              {isPlaybackHandle
+                ? displayTitle
+                  ? `Search “${displayTitle}” globally`
+                  : 'Search title globally'
+                : displayTitle
+                  ? `Find “${displayTitle}” again`
+                  : 'Find title again'}
             </button>
           )}
           <button className="btn" onClick={onBack}>
@@ -1452,7 +1760,7 @@ export const DetailView: React.FC<DetailViewProps> = ({
           </button>
           <CopyErrorButton
             context={{
-              title: mediaItem.name,
+              title: displayTitle || mediaItem.name,
               url: mediaItem.url,
               source: mediaItem.apiName,
               message: loadError ?? undefined,
@@ -1464,6 +1772,7 @@ export const DetailView: React.FC<DetailViewProps> = ({
   }
 
   const episodesInSeason = seasons.get(activeSeason) ?? [];
+  const heroEpisode = isSeries ? (selectedEpisode ?? episodesInSeason[0] ?? null) : null;
 
   return (
     <div className="detail-view">
@@ -1568,6 +1877,7 @@ export const DetailView: React.FC<DetailViewProps> = ({
         plot={detail.plot || extended?.plot}
         rating={detail.rating}
         duration={detail.duration || formatRuntimeMinutes(extended?.runtimeMinutes) || undefined}
+        tmdbId={extended?.ids?.tmdb || (detail as any)?.tmdbId}
         tags={detail.tags}
         fallbackNote={
           fellBackTo
@@ -1575,7 +1885,7 @@ export const DetailView: React.FC<DetailViewProps> = ({
             : undefined
         }
         isSeries={isSeries}
-        provenance={{ ...provenance, imdbId: detail.imdbId }}
+        provenance={{ ...provenance, imdbId: detail.imdbId || extended?.ids?.imdb }}
         saved={saved}
         busy={startingStream}
         sourceReadiness={prefetch}
@@ -1585,17 +1895,13 @@ export const DetailView: React.FC<DetailViewProps> = ({
         // already found, so re-asking every provider would contradict it. An
         // empty answer is not a dead end either — the picker explains it and
         // offers the bypassing search from there.
-        onChooseSource={() => openSources(isSeries ? (episodesInSeason[0] ?? null) : null)}
-        onDownload={() => openSources(isSeries ? (episodesInSeason[0] ?? null) : null)}
+        onChooseSource={() => openSources(heroEpisode)}
+        onDownload={() => openSources(heroEpisode)}
         // "Find more" and "Refresh" are the same search with the cache bypassed,
         // and they stay two entries because they answer two questions people
         // actually ask: "is there anything else?" and "these links are dead".
-        onFindMoreSources={() =>
-          openSources(isSeries ? (episodesInSeason[0] ?? null) : null, { refresh: true })
-        }
-        onRefreshSources={() =>
-          openSources(isSeries ? (episodesInSeason[0] ?? null) : null, { refresh: true })
-        }
+        onFindMoreSources={() => openSources(heroEpisode, { refresh: true })}
+        onRefreshSources={() => openSources(heroEpisode, { refresh: true })}
         onSearchTitle={
           onSearch
             ? // The *full* title, not whatever is still sitting in the search
@@ -1605,6 +1911,7 @@ export const DetailView: React.FC<DetailViewProps> = ({
             : undefined
         }
         onDownloadSeason={isSeries ? () => setSeasonDownloadOpen(true) : undefined}
+        onWatchTrailer={handleWatchTrailer}
         libraryControl={
           // The selector keys off a search result; `detail` carries everything
           // except the provider name, which the originating item still has.
@@ -1613,6 +1920,8 @@ export const DetailView: React.FC<DetailViewProps> = ({
             sources={pickerData?.sources || undefined}
             sourceQuery={playTarget ?? undefined}
             size="sm"
+            variant="detail-action"
+            openOnHover
           />
         }
       />
@@ -1704,24 +2013,75 @@ export const DetailView: React.FC<DetailViewProps> = ({
         notes, which are what they came to read. That is also where every
         streaming service puts it.
       */}
+      {/* Trailers */}
       <TrailerGallery
-        videos={extended?.videos}
-        pending={metadataPending}
+        videos={allVideos}
+        pending={metadataPending || searchingTrailers}
         onPlay={(video) => setTrailerId(video.id)}
+        onSearchMore={handleFindMoreTrailers}
+        searchingMore={searchingTrailers}
       />
 
-      <TitleMetadata
+      {/* On-demand reviews, explanations, recaps and related media */}
+      <ReviewsAndExplanations
+        title={detail.name}
+        originalTitle={mediaItem.originalTitle}
+        year={detail.year}
+        season={selectedEpisode?.season}
+        episode={selectedEpisode?.episode}
+        onPlayVideo={(video) => {
+          setDiscoveredVideos((prev) => mergeVideos([prev, [video]]));
+          setTrailerId(video.id);
+        }}
+      />
+
+      {/* Cast */}
+      <TitleCast
         metadata={extended}
         fallbackActors={detail.actors}
+        pending={metadataPending}
+      />
+
+      {/* About */}
+      <TitleAbout
+        metadata={extended}
         providerTags={detail.tags}
         pending={metadataPending}
       />
 
-      {(detail.recommendations?.length ?? 0) > 0 && onSelectMedia && (
+      {/* Franchise rail..., in release order */}
+      {extended?.franchise && onSelectMedia && (
+        <FranchiseRail franchise={extended.franchise} currentTitle={detail.name} onSelectMedia={onSelectMedia} />
+      )}
+
+      {/* Behind the scenes */}
+      <TitleBehindTheScenes
+        metadata={extended}
+      />
+
+      {/* Related recommendations */}
+      {recommendations.length > 0 && onSelectMedia && (
         <section className="detail-facts">
-          <h2 className="detail-facts__heading">More like this</h2>
-          <div className="detail-facts__rail">
-            {detail.recommendations!.map((item) => (
+          <div className="detail-facts__head-row">
+            <h2 className="detail-facts__heading">
+              More like this
+              <span className="detail-facts__count">{recommendations.length}</span>
+            </h2>
+            {/* The provider answers one list with no paging, so Show all lays
+                out everything it gave rather than promising more it cannot fetch. */}
+            {recommendations.length > RAIL_PREVIEW && (
+              <button
+                type="button"
+                className="btn btn-ghost btn-sm trailer-gallery__more-btn"
+                onClick={() => setShowAllRecommendations((v) => !v)}
+                aria-expanded={showAllRecommendations}
+              >
+                {showAllRecommendations ? 'Show less' : 'Show all'}
+              </button>
+            )}
+          </div>
+          <div className={showAllRecommendations ? 'poster-grid' : 'detail-facts__rail'}>
+            {recommendations.map((item) => (
               <PosterCard
                 key={`${item.apiName}:${item.url}`}
                 item={item}
@@ -1736,6 +2096,11 @@ export const DetailView: React.FC<DetailViewProps> = ({
           </div>
         </section>
       )}
+
+      {/* Metadata Provenance */}
+      <TitleProvenance
+        metadata={extended}
+      />
 
       <SourcePicker
         isOpen={pickerOpen}
@@ -1792,7 +2157,7 @@ export const DetailView: React.FC<DetailViewProps> = ({
       */}
       {trailerId && (
         <TrailerPopup
-          videos={extended?.videos ?? []}
+          videos={allVideos}
           startId={trailerId}
           titleName={detail.name}
           onClose={() => setTrailerId(null)}

@@ -92,6 +92,7 @@ import {
   type RecoveryPlan,
 } from './cs3/providerRecovery.js';
 import { describeError } from '../src/utils/errors.ts';
+import { isSensitiveTitle, providerAdultKind, type AdultKind } from '../src/utils/adultContent.ts';
 
 export interface RepositoryFetchResult {
   repositoryUrl: string;
@@ -282,6 +283,7 @@ export interface ProviderTreeRepository {
   /** Present when the catalogue knows this repository; absent for sideloads. */
   description?: string;
   category?: string;
+  language?: string;
   iconUrl?: string;
   /** Whether the catalogue verified this URL returns a document. */
   verified?: boolean;
@@ -338,7 +340,7 @@ function repositoryLabel(url: string): string {
  * Both sides are therefore normalised through the same `owner/repo` reduction
  * `repositoryLabel` uses, with an exact match on either URL tried first.
  */
-function findOfficialRepository(repoUrl: string): OfficialRepository | undefined {
+export function findOfficialRepository(repoUrl: string): OfficialRepository | undefined {
   if (!repoUrl) return undefined;
   const exact = OFFICIAL_REPOSITORIES.find(
     (repo) => repo.rawRepoUrl === repoUrl || repo.url === repoUrl
@@ -425,6 +427,19 @@ export interface KnownPlugin {
  */
 function isAdultProvider(provider: ExtensionProvider): boolean {
   return provider.supportedTypes.some((type) => type.toUpperCase() === 'NSFW');
+}
+
+/**
+ * Whether the adult gate removes a provider entirely.
+ *
+ * Only a provider that is *nothing but* adult. One declaring NSFW beside
+ * general types (9kMovies: `Movie, TvSeries, NSFW`) stays available with adult
+ * content off, and its 18+ rows and titles are filtered out instead — see
+ * `src/utils/adultContent.ts`. Gating it whole hid its Bollywood, Tamil and
+ * Hollywood rows from everyone who had adult content off.
+ */
+function isAdultOnlyProvider(provider: ExtensionProvider): boolean {
+  return providerAdultKind(provider.supportedTypes) === 'adult';
 }
 
 /**
@@ -647,14 +662,24 @@ const SETTINGS_KEY_SEARCH_CONCURRENCY = 'cs3_provider_search_concurrency';
  * groups by it — and a provider that answers under a different label would
  * appear in the results as a source the user cannot find in the picker.
  */
-function mapProviderResults(providerName: string, raw: unknown): SearchResponse[] {
+/**
+ * `allowUnnamed` is for catalogue rows only. A search result with no name is
+ * useless in a list of text matches, but a home-page row is often posters
+ * alone, and dropping those emptied every row NetMirror publishes.
+ */
+function mapProviderResults(
+  providerName: string,
+  raw: unknown,
+  options: { allowUnnamed?: boolean } = {}
+): SearchResponse[] {
   if (!Array.isArray(raw)) return [];
 
   const out: SearchResponse[] = [];
   for (const item of raw as Array<Record<string, unknown>>) {
-    if (!item.name || !item.url) continue;
+    if (!item?.url) continue;
+    if (!item.name && !options.allowUnnamed) continue;
     out.push({
-      name: String(item.name),
+      name: item.name ? String(item.name) : '',
       url: buildExtensionUrl(providerName, String(item.url)),
       apiName: providerName,
       type: item.type as SearchResponse['type'],
@@ -1170,14 +1195,19 @@ export class PluginManager {
    * (`RepositoryManager.kt:39,185-190`), so no real plugin metadata was ever
    * retrieved.
    */
-  public async fetchRepository(repoUrl: string): Promise<RepositoryFetchResult> {
+  public async fetchRepository(
+    repoUrl: string,
+    options: { remember?: boolean } = {}
+  ): Promise<RepositoryFetchResult> {
+    // A background refresh of a listing is not the viewer adding a repository.
+    const remember = options.remember !== false;
     const warnings: string[] = [];
     const resolved = await resolveRepositoryDocument(repoUrl);
     const repo = resolved.document;
     const finalUrl = resolved.url;
     if (finalUrl !== repoUrl) {
       warnings.push(`Resolved to ${finalUrl}.`);
-      if (this.installedRepoUrls.has(repoUrl)) {
+      if (remember && this.installedRepoUrls.has(repoUrl)) {
         this.installedRepoUrls.delete(repoUrl);
       }
     }
@@ -1191,8 +1221,10 @@ export class PluginManager {
       if (plugins.length !== repo.length) {
         warnings.push(`${repo.length - plugins.length} entries lacked an internalName or url.`);
       }
-      this.installedRepoUrls.add(finalUrl);
-      this.persist();
+      if (remember) {
+        this.installedRepoUrls.add(finalUrl);
+        this.persist();
+      }
       return {
         repositoryUrl: finalUrl,
         name: 'Plugin list',
@@ -1233,8 +1265,10 @@ export class PluginManager {
       }
     });
 
-    this.installedRepoUrls.add(finalUrl);
-    this.persist();
+    if (remember) {
+      this.installedRepoUrls.add(finalUrl);
+      this.persist();
+    }
 
     return {
       repositoryUrl: finalUrl,
@@ -1564,23 +1598,54 @@ export class PluginManager {
         message: `Downloading ${plugin.name}...`,
       });
 
-      const artifact = chooseArtifact(plugin);
+      let artifact = chooseArtifact(plugin);
+      let buffer: Buffer;
 
-      const buffer = await fetchBuffer(artifact.url, { timeoutMs: 60_000 }, (downloaded, total, percent) => {
-        const sizeStr =
-          total > 0
-            ? ` (${(downloaded / 1024).toFixed(0)} KB / ${(total / 1024).toFixed(0)} KB)`
-            : '';
-        this.notifyInstallProgress({
-          internalName: plugin.internalName,
-          name: plugin.name,
-          step: 'downloading',
-          downloadedBytes: downloaded,
-          totalBytes: total,
-          percent,
-          message: `Downloading ${plugin.name}${sizeStr}... ${percent}%`,
+      try {
+        buffer = await fetchBuffer(artifact.url, { timeoutMs: 60_000 }, (downloaded, total, percent) => {
+          const sizeStr =
+            total > 0
+              ? ` (${(downloaded / 1024).toFixed(0)} KB / ${(total / 1024).toFixed(0)} KB)`
+              : '';
+          this.notifyInstallProgress({
+            internalName: plugin.internalName,
+            name: plugin.name,
+            step: 'downloading',
+            downloadedBytes: downloaded,
+            totalBytes: total,
+            percent,
+            message: `Downloading ${plugin.name}${sizeStr}... ${percent}%`,
+          });
         });
-      });
+      } catch (dlError) {
+        // If jar download failed (e.g. 404 or dead link), try cs3 lane if available
+        if (artifact.lane === 'jar' && plugin.url && plugin.url !== artifact.url) {
+          logger.warn('extension_jar_download_failed_fallback_cs3', {
+            plugin: plugin.internalName,
+            jarUrl: artifact.url,
+            cs3Url: plugin.url,
+            reason: describeError(dlError),
+          });
+          artifact = { url: plugin.url, hash: plugin.fileHash, lane: 'cs3', declaredSize: plugin.fileSize };
+          buffer = await fetchBuffer(artifact.url, { timeoutMs: 60_000 }, (downloaded, total, percent) => {
+            const sizeStr =
+              total > 0
+                ? ` (${(downloaded / 1024).toFixed(0)} KB / ${(total / 1024).toFixed(0)} KB)`
+                : '';
+            this.notifyInstallProgress({
+              internalName: plugin.internalName,
+              name: plugin.name,
+              step: 'downloading',
+              downloadedBytes: downloaded,
+              totalBytes: total,
+              percent,
+              message: `Downloading ${plugin.name}${sizeStr}... ${percent}%`,
+            });
+          });
+        } else {
+          throw dlError;
+        }
+      }
 
       this.notifyInstallProgress({
         internalName: plugin.internalName,
@@ -1590,44 +1655,80 @@ export class PluginManager {
         message: `Verifying package integrity...`,
       });
 
-      const digest = crypto.createHash('sha256').update(buffer).digest('hex');
+      let digest = crypto.createHash('sha256').update(buffer).digest('hex');
 
       // The hash checked is the one published for *the artifact downloaded*.
       // Verifying a jar against `fileHash` — the `.cs3`'s hash — would fail
       // every cross-platform install, and taking the mismatch as permission to
       // skip verification would be worse than not checking at all.
       if (artifact.hash) {
-        const expected = artifact.hash.replace(/^sha256-/i, '').toLowerCase();
+        let expected = artifact.hash.replace(/^sha256-/i, '').toLowerCase();
         if (expected !== digest) {
-          /**
-           * Who published the hash, and how far off it was.
-           *
-           * The message used to be one sentence about "the download", which is
-           * the one explanation that is almost never right: measured on a real
-           * install, 61 consecutive mismatches were a *mirror index* pointing
-           * `url` at another repository's artifacts while publishing its own
-           * stale hashes and sizes. Sixty identical rows blaming the transfer
-           * gave the reader nothing to act on; naming the index — and the size
-           * it claimed against the size that arrived — identifies that in one
-           * line, and a genuinely corrupted download looks different because
-           * the sizes agree.
-           */
-          const publisher = hostOf(plugin.repositoryUrl) ?? 'the repository';
-          const sizes =
-            artifact.declaredSize && artifact.declaredSize !== buffer.length
-              ? ` It also declared ${artifact.declaredSize} bytes and ${buffer.length} arrived, so the index describes a different build.`
-              : '';
-          const message =
-            `SHA-256 mismatch — ${hostOf(artifact.url) ?? 'the download'} did not match the hash ` +
-            `${publisher} published for it.${sizes} Install aborted.`;
-          this.notifyInstallProgress({
-            internalName: plugin.internalName,
-            name: plugin.name,
-            step: 'error',
-            percent: 0,
-            message: `SHA-256 mismatch`,
-          });
-          return { ok: false, message };
+          // If jar hash mismatched, try fallback to .cs3 lane if available
+          if (artifact.lane === 'jar' && plugin.url && plugin.url !== artifact.url) {
+            logger.warn('extension_jar_hash_mismatch_fallback_cs3', {
+              plugin: plugin.internalName,
+              jarUrl: artifact.url,
+              cs3Url: plugin.url,
+            });
+            const fallbackArtifact = {
+              url: plugin.url,
+              hash: plugin.fileHash,
+              lane: 'cs3' as const,
+              declaredSize: plugin.fileSize,
+            };
+            try {
+              const cs3Buffer = await fetchBuffer(fallbackArtifact.url, { timeoutMs: 60_000 });
+              const cs3Digest = crypto.createHash('sha256').update(cs3Buffer).digest('hex');
+              let cs3Valid = true;
+              if (fallbackArtifact.hash) {
+                const cs3Expected = fallbackArtifact.hash.replace(/^sha256-/i, '').toLowerCase();
+                if (cs3Expected !== cs3Digest) {
+                  cs3Valid = false;
+                }
+              }
+              if (cs3Valid) {
+                artifact = fallbackArtifact;
+                buffer = cs3Buffer;
+                digest = cs3Digest;
+                expected = artifact.hash ? artifact.hash.replace(/^sha256-/i, '').toLowerCase() : '';
+              }
+            } catch {
+              // cs3 fallback failed; fall through to mismatch error reporting
+            }
+          }
+
+          if (expected && expected !== digest) {
+            /**
+             * Who published the hash, and how far off it was.
+             *
+             * The message used to be one sentence about "the download", which is
+             * the one explanation that is almost never right: measured on a real
+             * install, 61 consecutive mismatches were a *mirror index* pointing
+             * `url` at another repository's artifacts while publishing its own
+             * stale hashes and sizes. Sixty identical rows blaming the transfer
+             * gave the reader nothing to act on; naming the index — and the size
+             * it claimed against the size that arrived — identifies that in one
+             * line, and a genuinely corrupted download looks different because
+             * the sizes agree.
+             */
+            const publisher = hostOf(plugin.repositoryUrl) ?? 'the repository';
+            const sizes =
+              artifact.declaredSize && artifact.declaredSize !== buffer.length
+                ? ` It also declared ${artifact.declaredSize} bytes and ${buffer.length} arrived, so the index describes a different build.`
+                : '';
+            const message =
+              `SHA-256 mismatch — ${hostOf(artifact.url) ?? 'the download'} did not match the hash ` +
+              `${publisher} published for it.${sizes} Install aborted.`;
+            this.notifyInstallProgress({
+              internalName: plugin.internalName,
+              name: plugin.name,
+              step: 'error',
+              percent: 0,
+              message: `SHA-256 mismatch`,
+            });
+            return { ok: false, message };
+          }
         }
       }
 
@@ -2207,6 +2308,7 @@ export class PluginManager {
           bundled: catalogued?.bundled === true,
           description: catalogued?.description,
           category: catalogued?.category,
+          language: catalogued?.language,
           iconUrl: catalogued?.iconUrl,
           verified: catalogued?.verified,
           homepageUrl: catalogued?.url,
@@ -2235,7 +2337,8 @@ export class PluginManager {
             // If these two ever disagree the screen is lying about what a
             // search will ask, which is the failure this whole tree exists to
             // prevent.
-            effectivelyEnabled: ownEnabled && extensionEffective && (allowAdult || !adult),
+            effectivelyEnabled:
+              ownEnabled && extensionEffective && (allowAdult || !isAdultOnlyProvider(provider)),
             extensionInternalName: record.internalName,
             extensionName: record.meta?.name ?? record.internalName,
             repositoryId: repoId,
@@ -2271,6 +2374,27 @@ export class PluginManager {
           ? { unavailableReason: this.explainNoProviders(record.internalName) }
           : {}),
       });
+    }
+
+    // With 18+ off, adult-only content is hidden rather than greyed out: an
+    // adult-only provider, an extension made only of them, and a repository
+    // left with nothing else (or catalogued as adult). Mixed extensions stay,
+    // their 18+ rows screened downstream. An extension with no providers yet
+    // is kept — absence of evidence is not an adult verdict.
+    if (!allowAdult) {
+      for (const [repoId, repo] of byRepo) {
+        const had = repo.extensions.length;
+        repo.extensions = repo.extensions.flatMap((ext) => {
+          if (ext.providers.length === 0) return [ext];
+          const shown = ext.providers.filter((p) => providerAdultKind(p.supportedTypes) !== 'adult');
+          if (shown.length === 0) return [];
+          if (shown.length === ext.providers.length) return [ext];
+          const tvTypes = [...new Set(shown.flatMap((p) => p.supportedTypes))].sort();
+          return [{ ...ext, providers: shown, tvTypes }];
+        });
+        const catalogued = findOfficialRepository(repo.url);
+        if ((had > 0 && repo.extensions.length === 0) || catalogued?.adult === true) byRepo.delete(repoId);
+      }
     }
 
     const repositories = [...byRepo.values()];
@@ -2628,7 +2752,7 @@ export class PluginManager {
       if (this.getDisabledRepositories().includes(repositoryId)) {
         return `${name} comes from ${known.pluginName}, whose repository is switched off. Turn that repository back on in Extensions.`;
       }
-      if (isAdultProvider(known) && !this.adultAllowed()) {
+      if (isAdultOnlyProvider(known) && !this.adultAllowed()) {
         return `${name} is an adult-content provider and adult content is turned off in Settings.`;
       }
       return `${name} is installed but the extension runtime does not have it loaded. Restarting the app usually restores it.`;
@@ -2748,13 +2872,48 @@ export class PluginManager {
        * the JVM.
        */
       const cold: Array<PluginData & { meta: SitePlugin }> = [];
+      let hydrated = 0;
       for (const record of pending) {
+        // A load that failed for reasons of its own is reported from the record
+        // rather than paid for again — see `ProviderRegistryCache.recordFailure`.
+        const failed = this.registry?.readFailure(record.internalName, record.filePath);
+        if (failed) {
+          this.runtimeReports.set(record.internalName, {
+            tier: 'T4_BLOCKED',
+            reason: failed.reason,
+            translated: false,
+            failureKind: failed.kind,
+          });
+          continue;
+        }
         const cached = this.registry?.read(record.internalName, record.filePath);
         if (!cached) {
           cold.push(record);
           continue;
         }
         this.registerProviders(record, cached);
+        hydrated += 1;
+      }
+
+      /**
+       * A warm install does not wait for its new archives.
+       *
+       * Everything recorded is already addressable, and that is what a search,
+       * the scope picker and the extensions screen need. Holding all of them
+       * until an archive nobody has asked for yet finishes loading put one
+       * extension's worst case — StreamPlay's translation ran past its deadline
+       * and into an `OutOfMemoryError` — in front of every search. The new
+       * archives load behind, through `activate`, and their providers appear as
+       * each one registers.
+       *
+       * A first run has nothing hydrated, so it still waits: there is nothing
+       * else to search with.
+       */
+      if (cold.length > 0 && hydrated > 0) {
+        this.providersLoaded = true;
+        this.publishProvenance();
+        void this.loadColdInBackground(cold);
+        return;
       }
 
       if (cold.length === 0) {
@@ -2856,6 +3015,12 @@ export class PluginManager {
             kind: response.errorKind,
             tier: 'T4_BLOCKED',
           });
+          if (!isTransportFailure(response)) {
+            this.registry?.recordFailure(record.internalName, record.filePath, {
+              reason,
+              kind: response.errorKind,
+            });
+          }
           continue;
         }
 
@@ -2964,6 +3129,8 @@ export class PluginManager {
 
     const record = this.installedPlugins.get(internalName);
     if (!record?.filePath) return false;
+    // Recorded as broken for these bytes; the report already says why.
+    if (this.registry?.readFailure(internalName, record.filePath)) return false;
 
     const run = (async (): Promise<boolean> => {
       const started = await this.sidecar.ensureStarted();
@@ -2999,15 +3166,28 @@ export class PluginManager {
           tier: 'T4_BLOCKED',
         });
         /**
-         * The cached claim is withdrawn, not merely unused.
+         * The cached claim is replaced by the failure, not merely withdrawn.
          *
          * A row says "this archive registered these providers last time". An
          * archive that will no longer load has stopped being evidence for that,
-         * and leaving the row would advertise dead providers on every launch
-         * from now on, with the failure re-discovered each time and nothing
-         * recording that it is permanent.
+         * and leaving the row would advertise dead providers on every launch.
+         * Withdrawing it was the old answer, and it made the archive *cold* —
+         * loaded again on the next launch, on the path searches wait for. The
+         * failure is recorded instead, so it is reported without being re-paid.
+         *
+         * Unless the runtime never answered. A timeout or a crash says nothing
+         * about this archive (`rpcResult.ts`), and the row it already has stays.
          */
-        this.registry?.forget(internalName);
+        if (!isTransportFailure(response)) {
+          this.registry?.recordFailure(internalName, record.filePath, {
+            reason,
+            kind: response.errorKind,
+          });
+          for (const [name, provider] of [...this.providers.entries()]) {
+            if (provider.pluginInternalName === internalName) this.providers.delete(name);
+          }
+          this.publishProvenance();
+        }
         return false;
       }
 
@@ -3038,6 +3218,33 @@ export class PluginManager {
   }
 
   /**
+   * Archives with no recorded registration, loaded behind a usable app.
+   *
+   * Through `activate`, so a search that asks for one of these meanwhile joins
+   * the load instead of starting a second, and so a failure is recorded the
+   * same way however the load was reached. Serial for the reason everything
+   * here is: overlapping loads mis-attribute providers.
+   */
+  private async loadColdInBackground(cold: Array<PluginData & { meta: SitePlugin }>): Promise<void> {
+    this.emitLoadProgress({ loaded: 0, total: cold.length, running: true });
+    let loaded = 0;
+    for (const record of cold) {
+      this.emitLoadProgress({ current: record.meta?.name ?? record.internalName });
+      try {
+        await this.activate(record.internalName);
+      } catch (error) {
+        logger.warn('extension_cold_load_failed', {
+          plugin: record.internalName,
+          error: describeError(error),
+        });
+      }
+      loaded += 1;
+      this.emitLoadProgress({ loaded });
+    }
+    this.emitLoadProgress({ running: false, current: undefined });
+  }
+
+  /**
    * Loads everything, in the background, so a later search does not have to.
    *
    * The cold cost is unavoidable and mostly one-off — 57s of JVM class loading
@@ -3051,18 +3258,59 @@ export class PluginManager {
    * user is actually doing — a warm-up that competes with a live search for the
    * sidecar's worker pool has made things worse, not better.
    */
-  public async warmProviders(signal?: AbortSignal): Promise<void> {
+  public async warmProviders(
+    options: { signal?: AbortSignal; usage?: (providerName: string) => number } = {}
+  ): Promise<void> {
+    const { signal, usage } = options;
     // A new process holds none of the archives the last one displaced.
     this.sweepDisplacedArchives();
     await this.ensureProvidersLoaded();
-    for (const record of [...this.installedPlugins.values()]) {
+
+    /**
+     * Only what a search could actually ask, most-used first.
+     *
+     * This used to warm every installed archive, in install order — switched
+     * off, adult-gated and all. On a 468-archive install that is hundreds of
+     * loads nobody can reach, and the provider someone searches with every
+     * day waited behind them. An archive none of whose providers is enabled is
+     * skipped; it loads on demand if it is ever switched back on.
+     */
+    const enabled = new Set(this.enabledProviderNames());
+    const byArchive = new Map<string, number>();
+    for (const provider of this.providers.values()) {
+      if (!enabled.has(provider.name)) continue;
+      const score = usage?.(provider.name) ?? 0;
+      byArchive.set(
+        provider.pluginInternalName,
+        Math.max(byArchive.get(provider.pluginInternalName) ?? 0, score)
+      );
+    }
+    const queue = [...byArchive.entries()].sort((a, b) => b[1] - a[1]).map(([name]) => name);
+
+    let transportFailures = 0;
+    for (const internalName of queue) {
       if (signal?.aborted) return;
-      if (this.liveInJvm.has(record.internalName)) continue;
+      if (this.liveInJvm.has(internalName)) continue;
       // Between archives, not during one: a load that has started must finish
       // or the provider is left half-registered.
       await this.waitForSearchesToFinish(signal);
       if (signal?.aborted) return;
-      await this.activate(record.internalName);
+      const loaded = await this.activate(internalName);
+      /**
+       * A runtime that has stopped answering is not warmed further.
+       *
+       * Each call into a wedged JVM costs its full deadline, so pressing on is
+       * a minute per archive spent proving the same thing — measured at
+       * fourteen minutes on the install that found it. Whatever a search asks
+       * for still loads on demand once the runtime recovers.
+       */
+      if (!loaded && this.runtimeReports.get(internalName)?.failureKind &&
+          isTransportFailure({ ok: false, errorKind: this.runtimeReports.get(internalName)?.failureKind })) {
+        transportFailures += 1;
+        if (transportFailures >= 3) return;
+      } else if (loaded) {
+        transportFailures = 0;
+      }
       // Yield to the event loop between provider archives so background class
       // loading does not starve the main thread or cause UI stutter.
       await new Promise((resolve) => setTimeout(resolve, 100));
@@ -3119,6 +3367,27 @@ export class PluginManager {
     return this.datastore.getBool(SETTINGS_KEY_ADULT_ENABLED, false);
   }
 
+  /** Whether adult content is allowed right now — for callers that filter rows. */
+  public adultContentAllowed(): boolean {
+    return this.adultAllowed();
+  }
+
+  /** `none`, `mixed` or `adult`, from what the provider declares. */
+  public providerAdultKind(name: string): AdultKind {
+    const provider = this.providers.get(name);
+    return provider ? providerAdultKind(provider.supportedTypes) : 'none';
+  }
+
+  /**
+   * A mixed provider's explicit 18+ titles, removed while adult content is off.
+   * Adult-only providers never get this far (the gate drops them whole), and a
+   * provider declaring no NSFW at all is left alone.
+   */
+  private withoutAdultTitles<T extends { name: string }>(provider: string, items: T[]): T[] {
+    if (this.adultAllowed() || this.providerAdultKind(provider) !== 'mixed') return items;
+    return items.filter((item) => !isSensitiveTitle(item.name));
+  }
+
   /**
    * Every gate, applied in one place.
    *
@@ -3139,7 +3408,7 @@ export class PluginManager {
       .filter((provider) => !disabled.has(provider.name))
       .filter((provider) => !disabledExtensions.has(provider.pluginInternalName))
       .filter((provider) => !disabledRepositories.has(this.repositoryIdOf(provider.pluginInternalName)))
-      .filter((provider) => allowAdult || !isAdultProvider(provider))
+      .filter((provider) => allowAdult || !isAdultOnlyProvider(provider))
       .map((provider) => provider.name);
   }
 
@@ -3200,7 +3469,7 @@ export class PluginManager {
     if (disabled.has(provider.name)) return false;
     if (disabledExtensions.has(provider.pluginInternalName)) return false;
     if (disabledRepositories.has(this.repositoryIdOf(provider.pluginInternalName))) return false;
-    if (!this.adultAllowed() && isAdultProvider(provider)) return false;
+    if (!this.adultAllowed() && isAdultOnlyProvider(provider)) return false;
     return true;
   }
 
@@ -3433,7 +3702,7 @@ export class PluginManager {
       return { provider: name, results: [], latencyMs, error };
     }
 
-    const results = mapProviderResults(name, parsed.results);
+    const results = this.withoutAdultTitles(name, mapProviderResults(name, parsed.results));
     // Recorded at `info`: knowing a provider answered — and how fast — is what
     // makes a later failure by the same provider diagnosable rather than just
     // annoying.
@@ -3545,15 +3814,20 @@ export class PluginManager {
     page: number
   ): Promise<ProviderCatalogPage> {
     const requested = Math.max(1, Math.floor(page) || 1);
-    const empty = (): ProviderCatalogPage => ({
+    const empty = (error?: string): ProviderCatalogPage => ({
       provider: providerName,
       section: section.name,
       page: requested,
       items: [],
+      lists: [],
       hasNext: false,
+      error,
+      fetchedAt: Date.now(),
     });
 
-    if (!this.isProviderEnabled(providerName)) return empty();
+    if (!this.isProviderEnabled(providerName)) {
+      return empty(this.explainMissingProvider(providerName));
+    }
 
     await this.ensureProviderActive(providerName);
     const started = Date.now();
@@ -3585,7 +3859,9 @@ export class PluginManager {
         latencyMs,
         error: message,
       });
-      return empty();
+      // The reason travels with the page. Returning a bare empty page here made
+      // a timeout or a blocked host read as "nothing in this row".
+      return empty(message);
     };
 
     if (!response.ok) return fail(response.error ?? 'The extension runtime did not answer.');
@@ -3605,9 +3881,19 @@ export class PluginManager {
      * app had requested them would put rows on screen the user cannot page.
      */
     const items: SearchResponse[] = [];
+    const lists: ProviderCatalogPage['lists'] = [];
     if (Array.isArray(parsed.sections)) {
       for (const raw of parsed.sections as Array<Record<string, unknown>>) {
-        items.push(...mapProviderResults(providerName, raw?.items));
+        // Unnamed items are kept: a home-page row is often posters only —
+        // NetMirror sends 340 items, every one with an empty `name` — and
+        // Android draws them as poster cards. The title comes with `load()`.
+        const listItems = mapProviderResults(providerName, raw?.items, { allowUnnamed: true });
+        items.push(...listItems);
+        lists.push({
+          name: typeof raw?.name === 'string' ? raw.name : '',
+          horizontalImages: raw?.horizontalImages === true,
+          items: listItems,
+        });
       }
     }
 
@@ -3624,7 +3910,9 @@ export class PluginManager {
       section: section.name,
       page: requested,
       items,
+      lists,
       hasNext: parsed.hasNext === true && items.length > 0,
+      fetchedAt: Date.now(),
     };
   }
 
@@ -3659,12 +3947,17 @@ export class PluginManager {
      * made. Refusing here keeps the blame where it belongs and lets callers fall
      * back on their own real diagnosis.
      */
-    if (looksLikeLinksHandle(ref.target)) {
-      throw new Error(
-        `That address is a playback handle from ${ref.provider}, not a page it can open. ` +
-          'Search for the title again to get a fresh page.'
-      );
-    }
+    /**
+     * …but JSON is also a legitimate *page* handle for part of the corpus.
+     * MovieBox Native's catalogue and search rows carry
+     * `{"season":0,"isMovie":true,"episode":0,"id":"…"}` as `SearchResponse.url`,
+     * and HDO's carry `{"imdbID":…}` — exactly what their `load()` expects.
+     * Refusing JSON outright made every one of those posters unopenable
+     * (measured 2026-10-02, MovieBox Native "Ice Cream Man"). So a JSON target
+     * is asked, and only a reply proving it was a links blob — OkHttp refusing
+     * it as a URL — is turned into the handle explanation, unscored.
+     */
+    const speculative = looksLikeLinksHandle(ref.target);
 
     if (!this.isProviderEnabled(ref.provider)) {
       throw new Error(
@@ -3693,6 +3986,21 @@ export class PluginManager {
      */
     /** Records the failure and hands back the error to throw. */
     const fail = (message: string, detail?: string): Error => {
+      if (speculative && /no scheme was found|Expected URL scheme|unexpected url/i.test(message)) {
+        const handle =
+          `That address is a playback handle from ${ref.provider}, not a page it can open. ` +
+          'Search for the title again to get a fresh page.';
+        // Recorded so a copied report can find it, never scored: the call was our guess.
+        this.diagnostics?.record({
+          level: 'warn',
+          stage: 'detail',
+          source: ref.provider,
+          url,
+          message: handle,
+          detail: message,
+        });
+        return new Error(handle);
+      }
       // A provider that is not loaded was never asked, so it is a warning about
       // the app's state rather than an error the provider committed.
       const absent = detail === 'PROVIDER_NOT_LOADED';
@@ -3792,7 +4100,10 @@ export class PluginManager {
        * restated; it also drops entries missing a name or url, which providers
        * do emit.
        */
-      recommendations: mapProviderResults(ref.provider, detail.recommendations),
+      recommendations: this.withoutAdultTitles(
+        ref.provider,
+        mapProviderResults(ref.provider, detail.recommendations)
+      ),
       // A film has no episode list; its `dataUrl` is the playable handle and is
       // re-addressed the same way an episode's is.
       id: undefined,

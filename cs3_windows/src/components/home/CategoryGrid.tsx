@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { ArrowLeft, Loader2, RefreshCw } from 'lucide-react';
+import { ArrowLeft, ArrowUp, Loader2, RefreshCw } from 'lucide-react';
 import type { SearchResponse } from '../../types/api';
 import type { HomeCategoryState } from '../../views/homeCategoryState';
 import { PosterCard } from '../PosterCard';
@@ -18,13 +18,37 @@ import { describeError } from '../../utils/errors';
  * The state is the caller's (see `homeCategoryState.ts`), so a title opened
  * from here and closed again comes back to the same place in the same grid.
  */
-export const CategoryGrid: React.FC<{
-  category: HomeCategoryState;
-  onChange: (next: HomeCategoryState) => void;
+/** One page of a row, from wherever the row comes from. */
+export type CategoryPageLoader<T extends HomeCategoryState> = (current: T) => Promise<{
+  ok: boolean;
+  items?: SearchResponse[];
+  error?: string;
+  /** The source's own "there is more"; absent means "keep asking until a page adds nothing". */
+  hasNext?: boolean;
+}>;
+
+/**
+ * `loadPage` makes the grid serve any paged row — a provider's own catalogue
+ * on a streaming-service page as well as a home row. Absent, it pages the home
+ * screen's discovery rows as it always has.
+ */
+export function CategoryGrid<T extends HomeCategoryState>({
+  category,
+  onChange,
+  onBack,
+  onOpen,
+  onPlayDirectly,
+  loadPage,
+  backLabel = 'Home',
+}: {
+  category: T;
+  onChange: (next: T) => void;
   onBack: () => void;
   onOpen: (item: SearchResponse) => void;
   onPlayDirectly?: (item: SearchResponse) => void;
-}> = ({ category, onChange, onBack, onOpen, onPlayDirectly }) => {
+  loadPage?: CategoryPageLoader<T>;
+  backLabel?: string;
+}): React.ReactElement {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const sentinel = useRef<HTMLDivElement>(null);
@@ -42,6 +66,55 @@ export const CategoryGrid: React.FC<{
     };
   }, []);
 
+  useEffect(() => {
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== 'Escape') return;
+      const target = event.target as HTMLElement | null;
+      if (
+        target &&
+        (target.tagName === 'INPUT' ||
+          target.tagName === 'TEXTAREA' ||
+          target.tagName === 'SELECT' ||
+          target.isContentEditable)
+      ) {
+        return;
+      }
+      if (document.querySelector('[role="dialog"], .modal-overlay, .source-scope-dialog')) {
+        return;
+      }
+      event.preventDefault();
+      onBack();
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [onBack]);
+
+  const containerRef = useRef<HTMLDivElement>(null);
+  const [scrolled, setScrolled] = useState(false);
+
+  useEffect(() => {
+    const viewport = containerRef.current?.closest<HTMLElement>('.view-viewport');
+    if (!viewport) return;
+
+    const handleScroll = () => {
+      setScrolled(viewport.scrollTop > 30);
+    };
+
+    handleScroll();
+    viewport.addEventListener('scroll', handleScroll, { passive: true });
+    return () => {
+      viewport.removeEventListener('scroll', handleScroll);
+    };
+  }, []);
+
+  const scrollToTop = useCallback(() => {
+    const viewport = containerRef.current?.closest<HTMLElement>('.view-viewport');
+    if (viewport) {
+      viewport.scrollTo({ top: 0, behavior: 'smooth' });
+    }
+  }, []);
+
   const loadMore = useCallback(async () => {
     const current = latest.current;
     if (busy.current || current.done) return;
@@ -49,10 +122,12 @@ export const CategoryGrid: React.FC<{
     setLoading(true);
     setError(null);
     try {
-      const response = await window.cloudstream?.getMoreDiscovery?.(current.id, {
-        skip: current.skip,
-        page: current.page + 1,
-      });
+      const response = loadPage
+        ? await loadPage(current)
+        : await window.cloudstream?.getMoreDiscovery?.(current.id, {
+            skip: current.skip,
+            page: current.page + 1,
+          });
       // Left, or moved to another row, while the page was in flight.
       if (!mounted.current || latest.current.id !== current.id) return;
       if (!response?.ok) {
@@ -61,12 +136,13 @@ export const CategoryGrid: React.FC<{
       }
       const page = response.items ?? [];
       const merged = mergePage(current.items, page);
+      const hasNext = 'hasNext' in response ? response.hasNext : undefined;
       onChange({
         ...current,
         items: merged.items,
         skip: current.skip + page.length,
         page: current.page + 1,
-        done: merged.added === 0,
+        done: merged.added === 0 || hasNext === false,
       });
     } catch (err) {
       if (mounted.current) setError(describeError(err));
@@ -74,7 +150,7 @@ export const CategoryGrid: React.FC<{
       busy.current = false;
       if (mounted.current) setLoading(false);
     }
-  }, [onChange]);
+  }, [onChange, loadPage]);
 
   /*
    * Re-observed whenever the grid grows. An observer reports a change of
@@ -99,18 +175,41 @@ export const CategoryGrid: React.FC<{
   const { interactionFor } = useTitleInteractions(category.items);
 
   return (
-    <div className="category-page">
-      <header className="category-page__head">
-        <button type="button" className="category-page__back" onClick={onBack}>
-          <ArrowLeft size={16} aria-hidden /> Home
-        </button>
-        <div className="category-page__title">
-          <h2>{category.title}</h2>
-          {category.subtitle && <p>{category.subtitle}</p>}
+    <div className="category-page" ref={containerRef}>
+      <header className={`category-page__head${scrolled ? ' category-page__head--scrolled' : ''}`}>
+        <div className="category-page__head-start">
+          <button
+            type="button"
+            className="category-page__back"
+            onClick={onBack}
+            title={`Back to ${backLabel}`}
+          >
+            <ArrowLeft size={16} aria-hidden />
+            <span>{backLabel}</span>
+          </button>
+          <div className="category-page__title">
+            <h2>{category.title}</h2>
+            {category.subtitle && <p>{category.subtitle}</p>}
+          </div>
         </div>
-        <span className="category-page__count">
-          {category.items.length} title{category.items.length === 1 ? '' : 's'}
-        </span>
+
+        <div className="category-page__head-end">
+          <span className="category-page__count">
+            {category.items.length} title{category.items.length === 1 ? '' : 's'}
+          </span>
+          {scrolled && (
+            <button
+              type="button"
+              className="category-page__top-btn"
+              onClick={scrollToTop}
+              title="Scroll to top"
+              aria-label="Scroll to top"
+            >
+              <ArrowUp size={13} aria-hidden />
+              <span>Top</span>
+            </button>
+          )}
+        </div>
       </header>
 
       <div className="poster-grid">
@@ -143,4 +242,4 @@ export const CategoryGrid: React.FC<{
       </div>
     </div>
   );
-};
+}

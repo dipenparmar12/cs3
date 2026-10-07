@@ -177,11 +177,20 @@ export interface SystemRuntimeStatus {
  * would let a provider act on a choice nobody made, whereas Android's own
  * `Toast.show()` returns immediately and tells its caller nothing, so refusing
  * it would turn a call with no consequences into an aborted scrape. The text
- * goes to stderr in the `Log` shim's shape instead, where `sidecarStderr`
- * classifies it and the issue ledger can count it — not displayed, but not
- * discarded either.
+ * Generation 15 is provider trailers serialization in `ProviderBridge.kt`.
+ * `LoadResponse.trailers` (`TrailerData`) is now encoded into `detail.trailers`
+ * so CloudStream extensions can supply promo trailers directly to desktop.
+ *
+ * Generation 16 is the desktop clearance path and the last load failures that
+ * were ours. `CloudflareKiller` now asks the host (`clearance.get`,
+ * `clearance.invalidate`, `clearance.fetch`) rather than keeping cookies per
+ * instance — a provisioned copy would call `webview.resolve` per provider and
+ * re-solve after every restart. The bridge ships `Dispatchers.Main` (StreamPlay
+ * died on it in `load()`), and the shim gains `android.webkit.*`, the layouts,
+ * `EditText`/`Editable`, `GradientDrawable`, `RippleDrawable` and
+ * `ColorStateList`: measured 463 of 468 installed archives loading, from 457.
  */
-const RUNTIME_GENERATION = 14;
+const RUNTIME_GENERATION = 16;
 
 /** Records which build the app-managed copy was taken from. */
 interface RuntimeStamp {

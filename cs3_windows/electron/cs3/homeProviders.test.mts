@@ -20,6 +20,8 @@ import { TvType, type SearchResponse } from '../../src/types/api.ts';
 import {
   checkProvider,
   isSelectable,
+  STREAMING_PLATFORM_CONFIGS,
+  StreamingPlatformCatalogProvider,
   type HomeCatalogRequest,
   type HomeProvider,
   type HomeProviderCapabilities,
@@ -160,6 +162,54 @@ test('an unchecked provider is not selectable', () => {
     isSelectable({ id: 'x', name: 'x', status: 'unchecked', checkedAt: Date.now() }),
     false
   );
+});
+
+// --- Streaming Platforms ---------------------------------------------------
+
+test('streaming platform configs define 8 major platforms with valid properties', () => {
+  assert.equal(STREAMING_PLATFORM_CONFIGS.length, 8);
+  const expectedIds = [
+    'ott:netflix',
+    'ott:primevideo',
+    'ott:disney',
+    'ott:appletv',
+    'ott:hbomax',
+    'ott:hulu',
+    'ott:paramount',
+    'ott:peacock',
+  ];
+  const ids = STREAMING_PLATFORM_CONFIGS.map((c) => c.id);
+  assert.deepEqual(ids, expectedIds);
+
+  const codes = new Set(STREAMING_PLATFORM_CONFIGS.map((c) => c.code));
+  assert.equal(codes.size, 8, 'every platform code must be unique');
+
+  for (const config of STREAMING_PLATFORM_CONFIGS) {
+    assert.ok(config.name.length > 0);
+    assert.ok(config.description.length > 0);
+    assert.match(config.accent, /^#[0-9a-f]{6}$/i);
+  }
+});
+
+test('StreamingPlatformCatalogProvider declares full capabilities with paging', () => {
+  const netflixConfig = STREAMING_PLATFORM_CONFIGS[0]!;
+  const provider = new StreamingPlatformCatalogProvider(netflixConfig);
+
+  assert.equal(provider.id, 'ott:netflix');
+  assert.equal(provider.name, 'Netflix');
+  assert.equal(provider.category, 'streaming');
+  assert.equal(provider.accent, '#e50914');
+
+  const caps = provider.capabilities();
+  assert.deepEqual(caps.catalogs, [
+    'popular-movies',
+    'popular-series',
+    'new-movies',
+    'new-series',
+    'top-rated',
+  ]);
+  assert.equal(caps.paging, true);
+  assert.ok(caps.genres.length > 10);
 });
 
 // --- runner -----------------------------------------------------------------

@@ -310,11 +310,39 @@ export class DiscoveryService {
       });
     };
 
-    add('popular-movies', 'trending', 'Trending now', 'Most watched across the catalogue this week');
-    add('popular-series', 'popular-series', 'Popular series');
-    add('new-movies', 'new-movies', 'New releases', 'Recently released films');
-    add('new-series', 'new-series', 'New episodes and seasons');
-    add('top-rated', 'featured', 'Highest rated', 'By rating');
+    const isOtt = provider.id.startsWith('ott:');
+    const pName = provider.name;
+
+    add(
+      'popular-movies',
+      'trending',
+      isOtt ? `Trending on ${pName}` : 'Trending now',
+      isOtt ? `Most watched films on ${pName}` : 'Most watched across the catalogue this week'
+    );
+    add(
+      'popular-series',
+      'popular-series',
+      isOtt ? `Popular series on ${pName}` : 'Popular series',
+      isOtt ? `Top television shows and series on ${pName}` : undefined
+    );
+    add(
+      'new-movies',
+      'new-movies',
+      isOtt ? `New on ${pName}` : 'New releases',
+      isOtt ? `Recently released films on ${pName}` : 'Recently released films'
+    );
+    add(
+      'new-series',
+      'new-series',
+      isOtt ? `New episodes on ${pName}` : 'New episodes and seasons',
+      isOtt ? `Fresh episodes and seasons on ${pName}` : undefined
+    );
+    add(
+      'top-rated',
+      'featured',
+      isOtt ? `Top rated on ${pName}` : 'Highest rated',
+      isOtt ? `Critically acclaimed titles on ${pName}` : 'By rating'
+    );
 
     /**
      * Anime comes from AniList even when it is not the selected provider.

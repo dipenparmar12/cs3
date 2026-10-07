@@ -1,5 +1,6 @@
 import type { DatastoreManager } from '../datastore';
 import type { TitleOutcomeKind } from '../../src/types/interactions.ts';
+import { isPrivateSession } from './privacyMode.ts';
 
 export type { TitleOutcomeKind };
 
@@ -80,10 +81,22 @@ export class TitleOutcomeStore {
   }
 
   public record(url: string, kind: TitleOutcomeKind, reason?: string): void {
-    if (!url) return;
+    if (!url || isPrivateSession()) return;
     const entries = this.all().filter((entry) => entry.url !== url);
     entries.unshift({ url, kind, reason, at: Date.now() });
     this.datastore.setObject(KEY, entries.slice(0, MAX_ENTRIES));
+  }
+
+  /**
+   * Stores the list a backup restore decided on. Expired rows are written as
+   * given and age out on the next read, exactly as they would have here.
+   */
+  public replaceAll(rows: TitleOutcome[]): void {
+    const next = rows
+      .filter((entry) => entry && typeof entry.url === 'string' && typeof entry.at === 'number')
+      .sort((a, b) => b.at - a.at)
+      .slice(0, MAX_ENTRIES);
+    this.datastore.setObject(KEY, next);
   }
 
   public clear(): void {

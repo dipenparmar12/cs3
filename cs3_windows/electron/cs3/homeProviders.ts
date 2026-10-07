@@ -92,6 +92,8 @@ export interface HomeProvider {
   readonly description: string;
   /** Set when the provider cannot work until the user supplies credentials. */
   readonly requiresKey?: boolean;
+  readonly accent?: string;
+  readonly category?: 'general' | 'streaming' | 'anime';
   capabilities(): HomeProviderCapabilities;
   fetch(request: HomeCatalogRequest): Promise<SearchResponse[]>;
 }
@@ -125,6 +127,7 @@ interface CatalogMeta {
   year?: string | number;
   genre?: string[];
   genres?: string[];
+  imdbRating?: string | number;
   type?: string;
 }
 
@@ -158,6 +161,7 @@ export class StremioCatalogProvider implements HomeProvider {
   public readonly id: string;
   public readonly name: string;
   public readonly description: string;
+  public readonly category = 'general' as const;
   private readonly base: string;
 
   constructor(options: { id: string; name: string; description: string; baseUrl: string }) {
@@ -233,6 +237,212 @@ export class StremioCatalogProvider implements HomeProvider {
   }
 }
 
+// --- Streaming Platforms (Keyless Stremio Streaming Catalogs Addon) ---------
+
+export interface StreamingPlatformConfig {
+  id: string;
+  name: string;
+  code: string;
+  description: string;
+  accent: string;
+}
+
+export const STREAMING_PLATFORM_CONFIGS: StreamingPlatformConfig[] = [
+  {
+    id: 'ott:netflix',
+    name: 'Netflix',
+    code: 'nfx',
+    description: 'Top films and series streaming on Netflix.',
+    accent: '#e50914',
+  },
+  {
+    id: 'ott:primevideo',
+    name: 'Prime Video',
+    code: 'amp',
+    description: 'Amazon Prime Video movies, originals, and series.',
+    accent: '#00a8e1',
+  },
+  {
+    id: 'ott:disney',
+    name: 'Disney+',
+    code: 'dnp',
+    description: 'Disney, Pixar, Marvel, Star Wars, and National Geographic.',
+    accent: '#113ccf',
+  },
+  {
+    id: 'ott:appletv',
+    name: 'Apple TV+',
+    code: 'atp',
+    description: 'Apple Original award-winning series and films.',
+    accent: '#a3aaae',
+  },
+  {
+    id: 'ott:hbomax',
+    name: 'HBO Max',
+    code: 'hbm',
+    description: 'Blockbusters, HBO Originals, Warner Bros, and DC.',
+    accent: '#7e22ce',
+  },
+  {
+    id: 'ott:hulu',
+    name: 'Hulu',
+    code: 'hlu',
+    description: 'Popular movies, current season TV, and Hulu Originals.',
+    accent: '#1ce783',
+  },
+  {
+    id: 'ott:paramount',
+    name: 'Paramount+',
+    code: 'pmp',
+    description: 'Paramount Pictures movies, CBS, MTV, and originals.',
+    accent: '#0064ff',
+  },
+  {
+    id: 'ott:peacock',
+    name: 'Peacock',
+    code: 'pcp',
+    description: 'Universal Pictures, NBC classics, and Peacock Originals.',
+    accent: '#e5a00d',
+  },
+];
+
+const STREAMING_CATALOG_BASE =
+  'https://7a82163c306e-stremio-netflix-catalog-addon.baby-beamup.club';
+
+interface ExtendedSearchResponse extends SearchResponse {
+  genres?: string[];
+  rating?: number;
+}
+
+/**
+ * Keyless, IMDb-keyed streaming catalogue for a specific OTT platform.
+ *
+ * Uses the Stremio Streaming Catalogs addon (`pw.ers.netflix-catalog`),
+ * mapping to per-service codes (`nfx`, `amp`, `dnp`, `atp`, `hbm`, `hlu`, `pmp`, `pcp`).
+ * Caches items in memory for fast row planning and serves movies, series,
+ * new releases, and genre filters.
+ */
+export class StreamingPlatformCatalogProvider implements HomeProvider {
+  public readonly id: string;
+  public readonly name: string;
+  public readonly description: string;
+  public readonly accent: string;
+  public readonly category = 'streaming' as const;
+  private readonly code: string;
+  private readonly base: string;
+
+  private itemCache = new Map<'movie' | 'series', { items: ExtendedSearchResponse[]; at: number }>();
+  private inFlight = new Map<'movie' | 'series', Promise<ExtendedSearchResponse[]>>();
+
+  constructor(config: StreamingPlatformConfig, baseUrl = STREAMING_CATALOG_BASE) {
+    this.id = config.id;
+    this.name = config.name;
+    this.description = config.description;
+    this.accent = config.accent;
+    this.code = config.code;
+    this.base = baseUrl.replace(/\/+$/, '');
+  }
+
+  public capabilities(): HomeProviderCapabilities {
+    return {
+      catalogs: ['popular-movies', 'popular-series', 'new-movies', 'new-series', 'top-rated'],
+      genres: STREMIO_GENRES,
+      paging: true,
+    };
+  }
+
+  private async fetchRaw(type: 'movie' | 'series'): Promise<ExtendedSearchResponse[]> {
+    const cached = this.itemCache.get(type);
+    if (cached && Date.now() - cached.at < 10 * 60 * 1000) {
+      return cached.items;
+    }
+
+    const running = this.inFlight.get(type);
+    if (running) return running;
+
+    const url = `${this.base}/catalog/${type}/${this.code}.json`;
+    const task = fetchJson<{ metas?: CatalogMeta[] }>(url, { timeoutMs: 15_000 })
+      .then((response) => {
+        const out: ExtendedSearchResponse[] = [];
+        for (const meta of response.metas ?? []) {
+          const imdbId = meta.imdb_id || (meta.id?.startsWith('tt') ? meta.id : undefined);
+          if (!imdbId || !meta.name) continue;
+          const year = parseYear(meta.releaseInfo ?? meta.year);
+          const rawRating = meta.imdbRating ? Number(meta.imdbRating) : undefined;
+          out.push({
+            name: meta.name,
+            url: buildCinemetaUrl(type, imdbId),
+            apiName: this.name,
+            type: toTvType(type, meta.genre ?? meta.genres),
+            posterUrl: meta.poster,
+            year,
+            imdbId,
+            genres: meta.genres ?? meta.genre ?? [],
+            rating: typeof rawRating === 'number' && !Number.isNaN(rawRating) ? rawRating : undefined,
+          });
+        }
+        if (out.length > 0) {
+          this.itemCache.set(type, { items: out, at: Date.now() });
+        }
+        return out;
+      })
+      .catch((error) => {
+        if (cached) return cached.items;
+        throw error;
+      })
+      .finally(() => {
+        this.inFlight.delete(type);
+      });
+
+    this.inFlight.set(type, task);
+    return task;
+  }
+
+  public async fetch(request: HomeCatalogRequest): Promise<SearchResponse[]> {
+    let items: ExtendedSearchResponse[] = [];
+
+    switch (request.kind) {
+      case 'popular-movies': {
+        items = [...(await this.fetchRaw('movie'))];
+        break;
+      }
+      case 'popular-series': {
+        items = [...(await this.fetchRaw('series'))];
+        break;
+      }
+      case 'new-movies': {
+        items = [...(await this.fetchRaw('movie'))].sort((a, b) => (b.year ?? 0) - (a.year ?? 0));
+        break;
+      }
+      case 'new-series': {
+        items = [...(await this.fetchRaw('series'))].sort((a, b) => (b.year ?? 0) - (a.year ?? 0));
+        break;
+      }
+      case 'top-rated': {
+        const movies = await this.fetchRaw('movie');
+        const rated = movies
+          .filter((m) => m.rating !== undefined)
+          .sort((a, b) => (b.rating ?? 0) - (a.rating ?? 0));
+        items = rated.length >= 8 ? rated : [...movies];
+        break;
+      }
+      default:
+        return [];
+    }
+
+    if (request.genre) {
+      const gLower = request.genre.toLowerCase();
+      items = items.filter((item) =>
+        item.genres?.some((g) => g.toLowerCase() === gLower)
+      );
+    }
+
+    const skip = request.skip ?? 0;
+    const limit = request.limit ?? 24;
+    return items.slice(skip, skip + limit);
+  }
+}
+
 // --- AniList ----------------------------------------------------------------
 
 /**
@@ -250,6 +460,7 @@ export class AniListProvider implements HomeProvider {
   public readonly id = 'anilist';
   public readonly name = 'AniList';
   public readonly description = 'Seasonal and trending anime. Keyless, and the only one of these that ranks anime properly.';
+  public readonly category = 'anime' as const;
 
   public capabilities(): HomeProviderCapabilities {
     return { catalogs: ['anime'], genres: [], paging: true };
@@ -320,6 +531,7 @@ export class TmdbProvider implements HomeProvider {
   public readonly description =
     'The Movie Database. Needs a free API key from themoviedb.org, which you supply — one cannot be shipped with the app.';
   public readonly requiresKey = true;
+  public readonly category = 'general' as const;
 
   private readonly key: () => string;
 
