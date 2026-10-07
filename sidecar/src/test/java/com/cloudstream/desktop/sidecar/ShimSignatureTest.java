@@ -78,7 +78,11 @@ class ShimSignatureTest {
             Map.entry("android.content.ContentResolver#update",
                     "ContentValues, as above"),
             Map.entry("android.net.Uri#equals",
-                    "java.lang.Object.equals(Object)"));
+                    "java.lang.Object.equals(Object)"),
+            Map.entry("android.webkit.ValueCallback#onReceiveValue",
+                    "ValueCallback<T>.onReceiveValue(T), erased to Object"),
+            Map.entry("android.webkit.WebView#addJavascriptInterface",
+                    "Android takes any Object as the bound interface"));
 
     /**
      * Types the shim declares. A method mentioning one of these is fine by
