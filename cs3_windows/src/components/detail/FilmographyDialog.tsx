@@ -198,7 +198,6 @@ export const FilmographyDialog: React.FC<{
                       }
                     : undefined
                 }
-                showBucketButton={false}
               />
               <p className="filmography__roles">
                 {work.character ? `as ${work.character}` : work.roles.join(' · ')}
