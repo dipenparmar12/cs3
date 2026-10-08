@@ -95,6 +95,7 @@ import type {
 import type { BatchDownloadRequest, BatchProgress } from './cs3/batchDownloader';
 import type { BootstrapProgress, RegionAffectedRepository, RegionState } from './cs3/bootstrap';
 import type { TitleOutcome, TitleOutcomeKind } from './cs3/titleOutcomes';
+import type { UserDataResetRequest, UserDataResetResult, UserDataSummary } from '../src/types/userData';
 import type {
   StoredSource,
   PlayedSource,
@@ -1883,6 +1884,14 @@ export interface CloudStreamElectronAPI {
   undoRestore: () => Promise<RestoreSummary>;
 
   /**
+   * "Erase my data": what each area holds, and erasing the chosen ones.
+   * Infrastructure (media tools, the JVM, extensions, settings) is never in
+   * the list — see `cs3/userDataReset.ts`.
+   */
+  getUserDataSummary: () => Promise<Envelope & UserDataSummary>;
+  eraseUserData: (request: UserDataResetRequest) => Promise<UserDataResetResult>;
+
+  /**
    * Making a provider a saved page names answer again.
    *
    * Two calls, because the fix can be a repository fetch and an extension
@@ -2502,6 +2511,8 @@ const api: CloudStreamElectronAPI = {
   inspectBackup: () => ipcRenderer.invoke('backup:inspect'),
   restoreUserData: (filePath, plan) => ipcRenderer.invoke('backup:restore', filePath, plan),
   undoRestore: () => ipcRenderer.invoke('backup:undoRestore'),
+  getUserDataSummary: () => ipcRenderer.invoke('userData:summary'),
+  eraseUserData: (request) => ipcRenderer.invoke('userData:erase', request),
   planProviderRecovery: (provider) =>
     ipcRenderer.invoke('extension:planProviderRecovery', provider),
   recoverProvider: (provider) => ipcRenderer.invoke('extension:recoverProvider', provider),

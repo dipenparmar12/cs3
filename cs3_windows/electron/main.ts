@@ -38,6 +38,8 @@ const endServiceGraph = startup.span('constructServices');
 
 import { app, BrowserWindow, ipcMain, dialog, Menu, net, screen, shell } from 'electron';
 import { BackupService } from './cs3/backupService.ts';
+import { runReset, summarise, type ResetAreaDefinition } from './cs3/userDataReset.ts';
+import type { UserDataResetRequest } from '../src/types/userData';
 import { createBackupSections } from './cs3/backupSections.ts';
 import type { RestorePlan } from '../src/types/backup.ts';
 import fs from 'fs';
@@ -160,6 +162,7 @@ import { DiscoveryService } from './cs3/discovery';
 import { SourcePrefetcher } from './cs3/sourcePrefetcher';
 import { TitleEnricher } from './cs3/titleEnricher';
 import type { DownloadTask } from '../src/types/download';
+import { DownloadState } from '../src/types/download';
 import type { SitePlugin } from '../src/types/plugin';
 import type { IndexerConfig, SourcePreferences, TorrentResult } from '../src/types/torrent';
 import type { SearchOptions } from '../src/types/api';
@@ -6469,6 +6472,214 @@ ipcMain.handle('backup:undoRestore', async () => {
     return await backupService.undo();
   } catch (error) {
     return { ...fail(error), sections: [] };
+  }
+});
+
+// --- erase my data ----------------------------------------------------------
+
+/**
+ * Everything the viewer did, as areas they can erase — see
+ * `cs3/userDataReset.ts` for the line between user data and infrastructure.
+ * Each clear goes through the store that owns the data, never its file.
+ */
+const FINISHED_DOWNLOAD_STATES = new Set<string>([DownloadState.Completed, DownloadState.Failed]);
+const userDataAreas: ResetAreaDefinition[] = [
+  {
+    id: 'history',
+    label: 'Watch history',
+    description: 'Everything you played, downloaded or tried, with when.',
+    defaultSelected: true,
+    count: () => historyStore.getStats().total,
+    clear: () => historyStore.clear(),
+  },
+  {
+    id: 'progress',
+    label: 'Continue watching and positions',
+    description: 'Where you stopped in every film and episode.',
+    defaultSelected: true,
+    count: () => libraryStore.exportAll().progress.length,
+    clear: () => libraryStore.replaceProgress([]),
+  },
+  {
+    id: 'library',
+    label: 'Library',
+    description: 'Titles in your lists (watching, completed, on hold…) and the sources kept with them.',
+    defaultSelected: true,
+    count: () => libraryStore.exportAll().entries.length,
+    clear: () => {
+      libraryStore.replaceEntries([]);
+      libraryStore.replaceSourceMemory([]);
+    },
+  },
+  {
+    id: 'playedSources',
+    label: 'Remembered sources',
+    description: 'Which source played for each title, used to resume on the same one.',
+    defaultSelected: true,
+    count: () => libraryStore.exportPlayedSources().length,
+    clear: () => libraryStore.replacePlayedSources([]),
+  },
+  {
+    id: 'bookmarks',
+    label: 'Saved pages',
+    description: 'Pages you saved, and the copies of every page you opened.',
+    defaultSelected: true,
+    count: () => bookmarks.list().length,
+    clear: () => {
+      bookmarks.clearAll();
+      pageSnapshots.clearAll();
+    },
+  },
+  {
+    id: 'searchHistory',
+    label: 'Search history',
+    description: 'What you typed into search.',
+    defaultSelected: true,
+    count: () => searchHistory.list().length,
+    clear: () => {
+      searchHistory.clear();
+    },
+  },
+  {
+    id: 'savedSearches',
+    label: 'Saved searches',
+    description: 'Result lists you kept.',
+    defaultSelected: true,
+    count: () => savedSearches.exportAll().length,
+    clear: () => savedSearches.clear(),
+  },
+  {
+    id: 'activity',
+    label: 'Viewed titles and results',
+    description: 'Which titles you opened, and which had nothing to play.',
+    defaultSelected: true,
+    count: () => Object.keys(titleOutcomes.list()).length,
+    clear: () => {
+      titleInteractions.clearVisits();
+      titleOutcomes.clear();
+    },
+  },
+  {
+    id: 'sources',
+    label: 'Sources found for titles',
+    description: 'Links discovered while you browsed and played. They are found again on demand.',
+    defaultSelected: true,
+    count: () => null,
+    clear: () => contentService.getCache().clear(),
+  },
+  {
+    id: 'providerStats',
+    label: 'Provider statistics',
+    description: 'How often each provider answered for you, used to rank them.',
+    defaultSelected: true,
+    count: () => null,
+    clear: () => providerAnalytics.reset(),
+  },
+  {
+    id: 'downloads',
+    label: 'Download list',
+    description: 'Finished and failed downloads in the list. Downloads still running are left alone.',
+    defaultSelected: true,
+    count: () => downloadService.getTasks().filter((task) => FINISHED_DOWNLOAD_STATES.has(task.state)).length,
+    clear: async ({ deleteDownloadedFiles }) => {
+      for (const task of downloadService.getTasks()) {
+        if (!FINISHED_DOWNLOAD_STATES.has(task.state)) continue;
+        await downloadService.remove(task.id, deleteDownloadedFiles);
+      }
+    },
+  },
+  {
+    id: 'subtitles',
+    label: 'Saved subtitles',
+    description: 'Subtitle files the app saved for reuse.',
+    defaultSelected: true,
+    count: () => subtitleLibrary.count(),
+    clear: () => {
+      subtitleLibrary.removeAll();
+    },
+  },
+  {
+    id: 'pageCaches',
+    label: 'Cached pages and details',
+    description: 'Copies of title pages, cast, ratings and home rows. Fetched again when needed.',
+    defaultSelected: true,
+    count: () => null,
+    clear: async () => {
+      for (const id of ['details', 'metadata', 'related', 'ratings', 'home']) {
+        await storage.cacheArea(id)?.clear?.();
+      }
+    },
+  },
+];
+
+/** Backup sections that hold what each area erases — the safety copy. */
+const RESET_BACKUP_SECTIONS: Record<string, string[]> = {
+  history: ['history'],
+  progress: ['continueWatching'],
+  library: ['library'],
+  playedSources: ['library'],
+  bookmarks: ['bookmarks'],
+  searchHistory: ['searchHistory'],
+  savedSearches: ['savedSearches'],
+  activity: ['titleOutcomes'],
+  downloads: ['downloads'],
+};
+
+ipcMain.handle('userData:summary', async () => {
+  try {
+    return { ok: true, ...summarise(userDataAreas) };
+  } catch (error) {
+    return { ...fail(error), areas: [], preserved: [] };
+  }
+});
+
+/**
+ * Erases the chosen areas, after saving a copy of them.
+ *
+ * The copy is an ordinary backup file in the app's backups folder, so undoing
+ * this is Settings → Backup → Restore — the existing, reviewed path, not a
+ * second one. Refusing to erase when the copy cannot be written is deliberate
+ * for the same reason a restore refuses without its recovery file.
+ */
+ipcMain.handle('userData:erase', async (_, request: UserDataResetRequest) => {
+  try {
+    const chosen = Array.isArray(request?.areas) ? request.areas.map(String) : [];
+    if (chosen.length === 0) return { ok: false, cleared: [], failed: [], error: 'Nothing was chosen.' };
+
+    let backupPath: string | undefined;
+    if (request.keepCopy !== false) {
+      const sections = [...new Set(chosen.flatMap((id) => RESET_BACKUP_SECTIONS[id] ?? []))];
+      if (sections.length > 0) {
+        const stamp = new Date().toISOString().replace(/[:.]/g, '-');
+        const target = path.join(app.getPath('userData'), 'backups', `before-erase-${stamp}.json`);
+        const written = backupService.write(target, sections);
+        if (!written.ok) {
+          return {
+            ok: false,
+            cleared: [],
+            failed: [],
+            error: `Nothing was erased: a copy could not be saved first (${written.error ?? 'unknown error'}).`,
+          };
+        }
+        backupPath = written.path;
+      }
+    }
+
+    const result = await runReset(userDataAreas, chosen, {
+      deleteDownloadedFiles: request.deleteDownloadedFiles === true,
+    });
+    datastore.flushSync();
+    pageSnapshots.flush();
+    savedSearches.flush();
+    providerAnalytics.flush();
+    metadataEnrichment.flush();
+    logger.info('app', 'user_data_erased', {
+      cleared: result.cleared.join(','),
+      failed: result.failed.length,
+    });
+    return { ...result, backupPath };
+  } catch (error) {
+    return { ...fail(error), cleared: [], failed: [] };
   }
 });
 

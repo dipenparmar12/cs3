@@ -406,3 +406,43 @@ select.ui-select:disabled { opacity: var(--control-disabled-opacity); cursor: no
 /* Library card controls on the shared tokens. */
 .library-card__status { flex: 1; min-width: 0; }
 .library-card__sources { color: var(--accent-light); padding-left: 0.3rem; }
+
+/* --- Erase my data (Settings → Privacy) ----------------------------------- */
+.erase-data { display: flex; flex-direction: column; gap: .85rem; }
+.erase-data__areas {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+  gap: .55rem .9rem;
+}
+.erase-data__count {
+  margin-left: .4rem;
+  padding: 0 .4rem;
+  border-radius: 999px;
+  background: var(--control-bg);
+  color: var(--text-muted);
+  font-size: .72rem;
+  font-variant-numeric: tabular-nums;
+}
+.erase-data__files {
+  padding: .6rem .7rem;
+  border-radius: var(--control-radius);
+  background: var(--control-danger-soft);
+}
+.erase-data__kept {
+  display: flex;
+  gap: .55rem;
+  align-items: flex-start;
+  padding: .6rem .7rem;
+  border-radius: var(--control-radius);
+  background: rgba(34, 197, 94, .07);
+  color: var(--text-muted);
+  font-size: .8rem;
+}
+.erase-data__kept svg { flex: none; margin-top: .15rem; color: #4ade80; }
+.erase-data__kept strong { display: block; color: var(--text-main); font-weight: 600; margin-bottom: .1rem; }
+.erase-data__note { margin: 0; color: var(--text-muted); font-size: .8rem; }
+.erase-data__note code { font-size: .74rem; word-break: break-all; }
+.erase-data__warning { margin: 0; color: #fca5a5; font-size: .82rem; }

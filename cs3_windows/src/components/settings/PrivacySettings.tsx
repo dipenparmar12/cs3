@@ -1,5 +1,7 @@
-import React from 'react';
-import { EyeOff } from 'lucide-react';
+import React, { useState } from 'react';
+import { EyeOff, Trash2 } from 'lucide-react';
+import { Button } from '../ui';
+import { EraseDataDialog } from './EraseDataDialog';
 import { SettingGroup, SettingRow } from './SettingRow';
 import { usePrivacy } from '../../utils/usePrivacy';
 import type { IncognitoSettings } from '../../../electron/cs3/privacyMode';
@@ -12,6 +14,7 @@ import type { IncognitoSettings } from '../../../electron/cs3/privacyMode';
  */
 export const PrivacySettings: React.FC = () => {
   const { active, state, setActive } = usePrivacy();
+  const [erasing, setErasing] = useState(false);
   const settings = state?.settings;
   const update = (partial: Partial<IncognitoSettings>) =>
     void window.cloudstream?.updatePrivacySettings(partial);
@@ -52,6 +55,17 @@ export const PrivacySettings: React.FC = () => {
       <SettingRow label="Start in Incognito if I left it on" hint="Off means every launch starts in normal mode.">
         {toggle('rememberPreference')}
       </SettingRow>
+      <SettingRow
+        label="Erase my data"
+        note="History, library, progress, saved pages, searches and downloads list"
+        hint="Removes what you did in the app and keeps everything it needs to run: media tools, the Java runtime, extensions, repositories and your settings. A copy is saved first so it can be restored from Backup."
+        keywords="erase delete wipe clear reset data history library progress profile"
+      >
+        <Button size="compact" variant="destructive" icon={Trash2} onClick={() => setErasing(true)}>
+          Erase…
+        </Button>
+      </SettingRow>
+      {erasing && <EraseDataDialog onClose={() => setErasing(false)} />}
     </SettingGroup>
   );
 };
