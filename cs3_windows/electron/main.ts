@@ -6475,6 +6475,54 @@ ipcMain.handle('backup:undoRestore', async () => {
   }
 });
 
+// --- UI inspector: open a source file in the developer's editor -------------
+
+/**
+ * Opens `src/…/File.tsx:line:col` from the Developer mode UI inspector.
+ *
+ * Only a file inside this app's own source tree, and only one that exists: the
+ * path arrives from the renderer, and "open this path" with no fence is a way
+ * to launch anything. A packaged build has no sources beside it and says so.
+ * The VS Code family is reached through its URL scheme — no CLI on PATH needed
+ * — and "Default app" opens the file without a line.
+ */
+const EDITOR_SCHEMES: Record<string, string> = {
+  vscode: 'vscode',
+  'vscode-insiders': 'vscode-insiders',
+  cursor: 'cursor',
+  windsurf: 'windsurf',
+};
+ipcMain.handle(
+  'dev:openInEditor',
+  async (_, file: string, line?: number, column?: number, editor?: string) => {
+    try {
+      const root = path.resolve(app.getAppPath());
+      const target = path.resolve(root, String(file ?? ''));
+      if (!target.startsWith(root + path.sep)) {
+        return { ok: false, error: 'That path is outside the app source tree.' };
+      }
+      if (!fs.existsSync(target)) {
+        return {
+          ok: false,
+          error: app.isPackaged
+            ? 'Source files are not part of a packaged build'
+            : 'That source file does not exist',
+        };
+      }
+      const scheme = EDITOR_SCHEMES[editor ?? 'vscode'];
+      if (!scheme) {
+        const failure = await shell.openPath(target);
+        return failure ? { ok: false, error: failure } : { ok: true };
+      }
+      const position = `${Math.max(1, Number(line) || 1)}:${Math.max(1, Number(column) || 1)}`;
+      await shell.openExternal(`${scheme}://file/${target.split(path.sep).join('/')}:${position}`);
+      return { ok: true };
+    } catch (error) {
+      return fail(error);
+    }
+  }
+);
+
 // --- erase my data ----------------------------------------------------------
 
 /**

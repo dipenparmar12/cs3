@@ -61,6 +61,8 @@ import { SCREEN_SEARCH_FOCUS_EVENT, forgetScreenQueries, screenSearchAvailable }
  * imports above stay static and cost nothing — types are erased, and a
  * `import type` does not pull the module in.
  */
+/** Developer mode only, and its own chunk: standard mode never loads it. */
+const UiInspector = lazy(() => import('./components/devtools/UiInspector'));
 const VideoPlayer = lazy(() =>
   import('./components/VideoPlayer').then((m) => ({ default: m.VideoPlayer }))
 );
@@ -2393,6 +2395,13 @@ export const App: React.FC = () => {
         >
           {actionNotice}
         </div>
+      )}
+
+      {/* Point at any UI and learn which component draws it (Ctrl+Shift+C). */}
+      {isDeveloper && (
+        <Suspense fallback={null}>
+          <UiInspector />
+        </Suspense>
       )}
     </div>
   );

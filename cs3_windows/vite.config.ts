@@ -7,6 +7,7 @@ import renderer from 'vite-plugin-electron-renderer';
 import electronBin from 'electron';
 
 import pkg from './package.json' with { type: 'json' };
+import { sourceLocator } from './vite-plugins/sourceLocator';
 
 let electronProcess: ChildProcess | null = null;
 
@@ -42,6 +43,9 @@ const mainProcessExternals = [
 
 export default defineConfig({
   plugins: [
+    // Development only: stamps JSX with its source location for the UI
+    // inspector. Before `react()`, which must see the stamped source.
+    sourceLocator(),
     react(),
     electron([
       {

@@ -20,6 +20,7 @@ import {
   Sparkles,
   Trash2,
   Wrench,
+  Crosshair,
   Zap,
 } from 'lucide-react';
 import { InfoHint } from '../components/settings/InfoHint';
@@ -49,7 +50,7 @@ import { ExtensionIssuesPanel } from '../components/settings/ExtensionIssuesPane
 import { AboutPanel } from '../components/settings/AboutPanel';
 import { StoragePanel } from '../components/settings/StoragePanel';
 import { BackupPanel } from '../components/settings/BackupPanel';
-import { SearchInput, Switch } from '../components/ui';
+import { Button, SearchInput, Switch } from '../components/ui';
 
 /**
  * `all` is a view, not a category.
@@ -819,6 +820,22 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ initialTab }) => {
                 stateLabel={mode === 'developer' ? 'On' : 'Off'}
               />
             </SettingRow>
+            {mode === 'developer' && (
+              <SettingRow
+                label="UI inspector"
+                note="Ctrl+Shift+C, or Alt+click anything"
+                hint="Point at any part of the app to see the component that draws it, its source file and line, its place in the component tree, its props and state. Copy inspection puts a self-contained reference on the clipboard for an AI coding agent. Source locations are available when the app runs from source (bun run dev)."
+                keywords="inspector component source file debug ui element react"
+              >
+                <Button
+                  size="compact"
+                  icon={Crosshair}
+                  onClick={() => window.dispatchEvent(new CustomEvent('cs3:ui-inspector'))}
+                >
+                  Inspect
+                </Button>
+              </SettingRow>
+            )}
           </SettingGroup>
           {/*
             The tally first, then the transcript.

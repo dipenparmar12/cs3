@@ -1889,6 +1889,8 @@ export interface CloudStreamElectronAPI {
    * the list — see `cs3/userDataReset.ts`.
    */
   getUserDataSummary: () => Promise<Envelope & UserDataSummary>;
+  /** Developer mode UI inspector: opens a source file at a line in the chosen editor. */
+  openInEditor: (file: string, line?: number, column?: number, editor?: string) => Promise<Envelope>;
   eraseUserData: (request: UserDataResetRequest) => Promise<UserDataResetResult>;
 
   /**
@@ -2512,6 +2514,8 @@ const api: CloudStreamElectronAPI = {
   restoreUserData: (filePath, plan) => ipcRenderer.invoke('backup:restore', filePath, plan),
   undoRestore: () => ipcRenderer.invoke('backup:undoRestore'),
   getUserDataSummary: () => ipcRenderer.invoke('userData:summary'),
+  openInEditor: (file, line, column, editor) =>
+    ipcRenderer.invoke('dev:openInEditor', file, line, column, editor),
   eraseUserData: (request) => ipcRenderer.invoke('userData:erase', request),
   planProviderRecovery: (provider) =>
     ipcRenderer.invoke('extension:planProviderRecovery', provider),
