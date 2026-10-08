@@ -193,6 +193,25 @@ export interface PlaybackPreferences {
   subtitleLabel?: string;
 }
 
+/**
+ * A playback someone chose to keep: the episode, the place, the exact source
+ * and the tracks — saved from the player's bookmark button.
+ *
+ * The link inside `source` will expire; what lasts is its identity (provider,
+ * release, resolution, languages), which a resume uses to find the same
+ * release again. See `cs3/playedSource.ts`.
+ */
+export interface SavedPlayback {
+  season?: number;
+  episode?: number;
+  episodeTitle?: string;
+  positionSeconds?: number;
+  durationSeconds?: number;
+  source?: StoredSource;
+  preferences?: PlaybackPreferences;
+  savedAt: number;
+}
+
 /** Why a saved source could not simply be reused. */
 export type PlayedSourceResolution =
   /** The stored link is still good and was used as-is. */

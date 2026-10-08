@@ -2954,6 +2954,26 @@ ipcMain.handle(
   }
 );
 
+/**
+ * Saves (or updates) a page without toggling it — the player's bookmark
+ * button, which keeps the exact playback. Pressing it again updates the
+ * position rather than unsaving, so a second press can never lose the save.
+ */
+ipcMain.handle('bookmarks:save', async (_, input: Parameters<BookmarkStore['save']>[0]) => {
+  try {
+    if (isPrivateSession() && !allowsExplicitSaves()) {
+      return { ok: false, error: 'Explicit saves are disabled in Incognito mode.', bookmark: null };
+    }
+    const bookmark = bookmarks.save(input);
+    if (!isPrivateSession()) {
+      pageSnapshots.setPinned({ url: input?.mediaUrl, title: input?.title, year: input?.year }, true);
+    }
+    return { ok: true, bookmark };
+  } catch (error) {
+    return { ...fail(error), bookmark: null };
+  }
+});
+
 ipcMain.handle('bookmarks:remove', async (_, mediaUrl: string) => ({
   ok: true,
   removed: bookmarks.remove(mediaUrl),
@@ -3464,16 +3484,20 @@ ipcMain.handle(
     request: SourceQuery,
     title: string,
     episodeTitle?: string,
-    options?: { persistent?: boolean; resumeKey?: string }
+    options?: { persistent?: boolean; resumeKey?: string; preferSource?: StoredSource }
   ) => {
     try {
       return {
         ok: true,
         snapshot: playbackSessions.start(request, title, episodeTitle, {
           persistent: Boolean(options?.persistent),
-          resume: options?.resumeKey
-            ? resumePreference(options.resumeKey, request.season, request.episode)
-            : undefined,
+          // A source named by the caller (a saved playback) outranks the
+          // remembered one: the viewer kept *that* combination on purpose.
+          resume: options?.preferSource
+            ? preferenceFor(options.preferSource)
+            : options?.resumeKey
+              ? resumePreference(options.resumeKey, request.season, request.episode)
+              : undefined,
         }),
       };
     } catch (error) {
@@ -6136,6 +6160,14 @@ ipcMain.handle(
  * session's own discovery is already re-asking, and `pickReplacement` finds the
  * same release in its answer.
  */
+/** A stored source as a session preference: started while its link holds, re-found after. */
+function preferenceFor(source: StoredSource): ResumePreference {
+  return {
+    start: isLinkUsable(source) ? storedSourceToTorrentResult(source) : undefined,
+    match: (candidates) => pickReplacement(source, candidates),
+  };
+}
+
 function resumePreference(key: string, season?: number, episode?: number): ResumePreference | undefined {
   const record = libraryStore.getPlayedSource(key, season, episode);
   if (record && record.source.status !== 'Unavailable') {

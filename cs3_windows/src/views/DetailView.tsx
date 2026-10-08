@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { originNameFor } from '../utils/originName';
 import { useSessionState } from '../utils/useSessionState';
+import type { PlaybackPreferences, StoredSource } from '../types/library';
 import {
   Play, ArrowLeft, Loader2, AlertTriangle, ListVideo, Search, Sparkles, Tv, ChevronsDownUp, ChevronsUpDown,
 } from 'lucide-react';
@@ -144,6 +145,10 @@ export interface PlaybackSessionRequest {
   onDownloadSource?: (source: TorrentResult) => void;
   /** Identity for online subtitle search, which is keyed on the IMDb id. */
   subtitleContext?: { imdbId?: string; season?: number; episode?: number };
+  /** A source to start from and re-find, outranking the remembered one (a saved playback). */
+  preferSource?: StoredSource;
+  /** Track choices to apply (a saved playback); otherwise the played-source record's. */
+  preferences?: PlaybackPreferences;
   /**
    * The library key whose played source this session should prefer.
    *

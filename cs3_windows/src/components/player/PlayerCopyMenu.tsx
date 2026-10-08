@@ -8,10 +8,10 @@ import {
   provenanceChain,
   sourceAddress,
   toSourceCsv,
-  toSourceText,
   type SourceProvenance,
 } from '../../utils/sourceExport';
 import { useDismissable } from '../../utils/useDismissable';
+import { useIsDeveloper } from '../../utils/ExperienceModeContext';
 
 /**
  * Copy actions for the player, grouped into one menu.
@@ -75,6 +75,7 @@ export const PlayerCopyMenu: React.FC<PlayerCopyMenuProps> = ({
   onCopyDiagnostics,
   onOpenChange,
 }) => {
+  const isDeveloper = useIsDeveloper();
   const [open, setOpen] = useState(false);
   const { message: copied, flash: setCopied } = useFlash<string>(2200);
   const wrapper = useRef<HTMLDivElement | null>(null);
@@ -169,10 +170,6 @@ export const PlayerCopyMenu: React.FC<PlayerCopyMenuProps> = ({
     return source.providerName ? { provider: source.providerName } : undefined;
   };
 
-  const sourcesHeading = `${episodeTitle ? `${title} — ${episodeTitle}` : title} — sources (${
-    allSources?.length ?? 0
-  })`;
-
   const downloadInfo = () =>
     download
       ? block('Download', [
@@ -189,49 +186,58 @@ export const PlayerCopyMenu: React.FC<PlayerCopyMenuProps> = ({
         ])
       : 'No download is running for this media.';
 
-  const items: Array<{ label: string; run: () => void }> = [
-    { label: 'Copy media info', run: () => void write('media', mediaInfo()) },
-    { label: 'Copy source', run: () => void write('source', sourceInfo()) },
-    /**
-     * Three destinations, because a source list goes to three different places
-     * and each wants a different shape. CSV leads: the useful operation on
-     * thirty rows is sorting and filtering them, and the links are what let a
-     * viewer hand a stream we cannot play to something that can.
-     */
-    ...(allSources && allSources.length > 0
-      ? [
-          {
-            label: `Copy all sources as CSV (${allSources.length})`,
-            run: () => void write('sources', toSourceCsv(allSources, provenanceForSource)),
-          },
-          {
-            label: 'Copy all sources as text',
-            run: () =>
-              void write('sources', toSourceText(allSources, provenanceForSource, sourcesHeading)),
-          },
-          {
-            label: 'Copy source links only',
-            run: () =>
-              void write('links', allSources.map(sourceAddress).filter(Boolean).join('\n')),
-          },
-        ]
+  /**
+   * Two items for everyone, the rest for Developer mode.
+   *
+   * The menu had eight copy commands — media info, source, sources as CSV, as
+   * text, links only, download info, error report, full debug log — in front
+   * of every viewer. What a viewer actually does with this menu is one of two
+   * things: open the video somewhere else (the link) or report that it does
+   * not work (the problem report). Everything else is for whoever is fixing
+   * it, and Developer mode is where the app already keeps that. "Sources as
+   * text" is gone: the CSV carries the same rows and sorts.
+   */
+  const activeLink = activeSource ? sourceAddress(activeSource) : streamUrl;
+  const everyday: Array<{ label: string; hint?: string; run: () => void }> = [
+    ...(activeLink
+      ? [{ label: 'Copy video link', hint: 'Open it in another player', run: () => void write('link', activeLink) }]
       : []),
-    ...(download ? [{ label: 'Copy download info', run: () => void write('download', downloadInfo()) }] : []),
     {
-      label: 'Copy error report',
+      label: 'Copy problem report',
+      hint: 'What happened, for a bug report',
       run: () =>
         void onCopyDiagnostics('current').then((text) => {
           if (text) void write('error', text);
         }),
     },
-    {
-      label: 'Copy full debug log',
-      run: () =>
-        void onCopyDiagnostics('full').then((text) => {
-          if (text) void write('debug', text);
-        }),
-    },
   ];
+  const technical: Array<{ label: string; hint?: string; run: () => void }> = isDeveloper
+    ? [
+        { label: 'Copy media info', run: () => void write('media', mediaInfo()) },
+        { label: 'Copy source', run: () => void write('source', sourceInfo()) },
+        ...(allSources && allSources.length > 0
+          ? [
+              {
+                label: `Copy all sources as CSV (${allSources.length})`,
+                run: () => void write('sources', toSourceCsv(allSources, provenanceForSource)),
+              },
+              {
+                label: 'Copy source links only',
+                run: () =>
+                  void write('links', allSources.map(sourceAddress).filter(Boolean).join('\n')),
+              },
+            ]
+          : []),
+        ...(download ? [{ label: 'Copy download info', run: () => void write('download', downloadInfo()) }] : []),
+        {
+          label: 'Copy full debug log',
+          run: () =>
+            void onCopyDiagnostics('full').then((text) => {
+              if (text) void write('debug', text);
+            }),
+        },
+      ]
+    : [];
 
   return (
     <div
@@ -246,8 +252,8 @@ export const PlayerCopyMenu: React.FC<PlayerCopyMenuProps> = ({
         onClick={() => setOpen((value) => !value)}
         aria-haspopup="menu"
         aria-expanded={open}
-        title="Copy details"
-        aria-label="Copy details"
+        title="More"
+        aria-label="More"
       >
         {copied ? <Check size={17} /> : <MoreHorizontal size={17} />}
       </button>
@@ -257,11 +263,22 @@ export const PlayerCopyMenu: React.FC<PlayerCopyMenuProps> = ({
           <p className="player-copy__heading">
             <ClipboardCopy size={12} /> Copy
           </p>
-          {items.map((item) => (
+          {everyday.map((item) => (
             <button key={item.label} type="button" role="menuitem" onClick={item.run}>
               {item.label}
+              {item.hint && <em className="player-copy__hint">{item.hint}</em>}
             </button>
           ))}
+          {technical.length > 0 && (
+            <>
+              <p className="player-copy__heading player-copy__heading--sub">Developer</p>
+              {technical.map((item) => (
+                <button key={item.label} type="button" role="menuitem" onClick={item.run}>
+                  {item.label}
+                </button>
+              ))}
+            </>
+          )}
         </div>
       )}
     </div>

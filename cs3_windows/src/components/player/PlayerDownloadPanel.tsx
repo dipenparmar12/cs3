@@ -27,6 +27,15 @@ interface PlayerDownloadPanelProps {
   onReveal?: (filePath: string) => void;
   /** Leaves the player running and shows the full Downloads screen. */
   onOpenDownloads?: () => void;
+  /**
+   * The video on screen, and its download if one exists. The panel leads with
+   * it: "Download this video", or this video's progress — the action the
+   * control bar's second download icon used to stand for.
+   */
+  current?: DownloadTask | null;
+  currentTitle?: string;
+  currentDetail?: string;
+  onDownloadCurrent?: () => void;
 }
 
 export const PlayerDownloadPanel: React.FC<PlayerDownloadPanelProps> = ({
@@ -38,6 +47,10 @@ export const PlayerDownloadPanel: React.FC<PlayerDownloadPanelProps> = ({
   onRemove,
   onReveal,
   onOpenDownloads,
+  current,
+  currentTitle,
+  currentDetail,
+  onDownloadCurrent,
 }) => {
   const { message: copiedId, flash: setCopiedId } = useFlash<string>(2500);
   const [activeFilter, setActiveFilter] = useState<DownloadFilterTab>('all');
@@ -194,6 +207,46 @@ export const PlayerDownloadPanel: React.FC<PlayerDownloadPanelProps> = ({
           <X size={19} />
         </button>
       </div>
+
+      {onDownloadCurrent && (
+        <div className="player-dl-current">
+          <div className="player-dl-current__text">
+            <span className="player-dl-current__label">This video</span>
+            <span className="player-dl-current__title" title={currentTitle}>{currentTitle}</span>
+            {currentDetail && <span className="player-dl-current__detail">{currentDetail}</span>}
+          </div>
+          {!current ? (
+            <button type="button" className="btn btn-primary btn-sm" onClick={onDownloadCurrent}>
+              <Download size={14} /> Download
+            </button>
+          ) : current.state === DownloadState.Completed ? (
+            <span className="player-dl-current__state player-dl-current__state--done">
+              <CheckCircle2 size={14} /> Downloaded
+            </span>
+          ) : (
+            <div className="player-dl-current__progress">
+              <span className="player-dl-current__state">
+                {current.state === DownloadState.Downloading && current.totalBytes > 0
+                  ? `${Math.min(100, Math.floor((current.bytesDownloaded / current.totalBytes) * 100))}%`
+                  : current.state === DownloadState.Paused
+                    ? 'Paused'
+                    : current.state === DownloadState.Failed
+                      ? 'Failed'
+                      : 'Starting…'}
+              </span>
+              {current.state === DownloadState.Downloading ? (
+                <button type="button" className="icon-button" onClick={() => onPause(current.id)} aria-label="Pause this download" title="Pause">
+                  <Pause size={14} />
+                </button>
+              ) : (current.state === DownloadState.Paused || current.state === DownloadState.Failed) ? (
+                <button type="button" className="icon-button" onClick={() => onResume(current.id)} aria-label="Resume this download" title="Resume">
+                  <Play size={14} />
+                </button>
+              ) : null}
+            </div>
+          )}
+        </div>
+      )}
 
       {/* Filter Tabs Header in requested order: ALL, Active, Paused, Failed, Done */}
       <div className="player-dl-tabs">

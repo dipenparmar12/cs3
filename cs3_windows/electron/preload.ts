@@ -442,7 +442,7 @@ export interface CloudStreamElectronAPI {
      * `persistent`: keep trying on its own — every source in turn, then every
      * provider and indexer — instead of stopping to ask. Standard mode.
      */
-    options?: { persistent?: boolean; resumeKey?: string }
+    options?: { persistent?: boolean; resumeKey?: string; preferSource?: StoredSource }
   ) => Promise<Envelope & { snapshot: PlaybackSnapshot | null }>;
   /** Starts the best source found so far instead of waiting for every indexer. */
   /** Abandons a source that started but will not play, and tries the next. */
@@ -1340,6 +1340,10 @@ export interface CloudStreamElectronAPI {
     input: Omit<Bookmark, 'id' | 'savedAt' | 'openCount'>
   ) => Promise<Envelope & { saved: boolean; bookmark: Bookmark | null }>;
   removeBookmark: (mediaUrl: string) => Promise<Envelope & { removed: boolean }>;
+  /** Saves or updates without toggling — the player's "keep this playback". */
+  saveBookmark: (
+    input: Omit<Bookmark, 'id' | 'savedAt' | 'openCount'>
+  ) => Promise<Envelope & { bookmark: Bookmark | null }>;
   setBookmarkNote: (
     mediaUrl: string,
     note?: string
@@ -2359,6 +2363,7 @@ const api: CloudStreamElectronAPI = {
   listBookmarks: () => ipcRenderer.invoke('bookmarks:list'),
   getBookmark: (mediaUrl) => ipcRenderer.invoke('bookmarks:get', mediaUrl),
   toggleBookmark: (input) => ipcRenderer.invoke('bookmarks:toggle', input),
+  saveBookmark: (input) => ipcRenderer.invoke('bookmarks:save', input),
   removeBookmark: (mediaUrl) => ipcRenderer.invoke('bookmarks:remove', mediaUrl),
   setBookmarkNote: (mediaUrl, note) => ipcRenderer.invoke('bookmarks:setNote', mediaUrl, note),
   markBookmarkOpened: (mediaUrl) => ipcRenderer.invoke('bookmarks:markOpened', mediaUrl),

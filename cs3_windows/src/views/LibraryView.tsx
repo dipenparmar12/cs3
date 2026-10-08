@@ -398,6 +398,30 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
           onProviderFilter={setProviderFilter}
           onOpen={openBookmark}
           onRemove={removeBookmark}
+          onResumePlayback={
+            onResume
+              ? (bookmark) => {
+                  const playback = bookmark.playback!;
+                  onResume({
+                    title: bookmark.title,
+                    year: bookmark.year,
+                    mediaUrl: bookmark.mediaUrl,
+                    posterUrl: bookmark.posterUrl,
+                    season: playback.season,
+                    episode: playback.episode,
+                    episodeTitle: playback.episodeTitle,
+                    resumeAt: playback.positionSeconds ?? 0,
+                    preferSource: playback.source,
+                    preferences: playback.preferences,
+                    provenance: {
+                      provider: bookmark.origin.provider,
+                      extensionName: bookmark.origin.extensionName,
+                      repositoryName: bookmark.origin.repositoryName,
+                    },
+                  });
+                }
+              : undefined
+          }
           onSearch={onSearch}
         />
       ) : (
@@ -650,6 +674,32 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
  * two providers is two entries, and a grid of identical posters would make that
  * look like a bug. The origin chain is therefore on the row, not behind a hover.
  */
+/** "Resume S1 · E3" / "Resume 1:02:10" — what a saved playback will do. */
+function savedPlaybackLabel(bookmark: Bookmark): string {
+  const playback = bookmark.playback;
+  if (!playback) return 'Play';
+  if (playback.season !== undefined || playback.episode !== undefined) {
+    return `Resume S${playback.season ?? 1} · E${playback.episode ?? 1}`;
+  }
+  const at = Math.floor(playback.positionSeconds ?? 0);
+  if (at <= 0) return 'Play';
+  const h = Math.floor(at / 3600);
+  const m = Math.floor((at % 3600) / 60);
+  const s = at % 60;
+  return `Resume ${h > 0 ? `${h}:${String(m).padStart(2, '0')}` : m}:${String(s).padStart(2, '0')}`;
+}
+
+function savedPlaybackHint(bookmark: Bookmark): string {
+  const source = bookmark.playback?.source;
+  const parts = [
+    source?.providerName ?? source?.indexerName,
+    source?.resolution ? `${source.resolution}p` : undefined,
+    bookmark.playback?.preferences?.audioLabel ?? bookmark.playback?.preferences?.audioLanguage,
+    bookmark.playback?.preferences?.subtitleLabel ? `subtitles: ${bookmark.playback.preferences.subtitleLabel}` : undefined,
+  ].filter(Boolean);
+  return `Plays the saved playback${parts.length ? ` — ${parts.join(' · ')}` : ''}`;
+}
+
 const SavedPages: React.FC<{
   bookmarks: Bookmark[];
   /** The find query already applied to `bookmarks`, or empty. */
@@ -661,7 +711,9 @@ const SavedPages: React.FC<{
   onOpen: (bookmark: Bookmark) => void;
   onRemove: (bookmark: Bookmark) => void;
   onSearch?: (query: string) => void;
-}> = ({ bookmarks, query, onClearQuery, providers, providerFilter, onProviderFilter, onOpen, onRemove, onSearch }) => {
+  /** Plays a saved playback back exactly: episode, place, source, tracks. */
+  onResumePlayback?: (bookmark: Bookmark) => void;
+}> = ({ bookmarks, query, onClearQuery, providers, providerFilter, onProviderFilter, onOpen, onRemove, onSearch, onResumePlayback }) => {
   if (bookmarks.length === 0 && !providerFilter && !query) {
     return (
       <div className="library-empty">
@@ -755,14 +807,24 @@ const SavedPages: React.FC<{
                 </div>
 
                 <div className="saved-row__actions">
-                  <button
-                    className="icon-button"
-                    onClick={() => onOpen(bookmark)}
-                    title="Open this page again"
-                    aria-label={`Open ${bookmark.title}`}
-                  >
-                    <Play size={14} />
-                  </button>
+                  {bookmark.playback && onResumePlayback ? (
+                    <button
+                      className="btn btn-primary btn-sm saved-row__resume"
+                      onClick={() => onResumePlayback(bookmark)}
+                      title={savedPlaybackHint(bookmark)}
+                    >
+                      <Play size={13} fill="currentColor" /> {savedPlaybackLabel(bookmark)}
+                    </button>
+                  ) : (
+                    <button
+                      className="icon-button"
+                      onClick={() => onOpen(bookmark)}
+                      title="Open this page again"
+                      aria-label={`Open ${bookmark.title}`}
+                    >
+                      <Play size={14} />
+                    </button>
+                  )}
                   {onSearch && bookmark.origin.searchQuery && (
                     <button
                       className="icon-button"

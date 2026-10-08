@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { useFlash } from '../../utils/useFlash';
-import {
+import { CheckCircle2,
   X, Play, RefreshCw, Loader2, Users, HardDrive, Radio, Check, AlertTriangle, Download, Filter,
   Square, Globe, Link2, Package,
 } from 'lucide-react';
@@ -67,6 +67,10 @@ interface SourcePanelProps {
   onCancelSearch?: () => void;
   /** Offered per source, so a viewer can grab the release they are watching. */
   onDownload?: (source: TorrentResult) => void;
+  /** Played / failed per source in this session. */
+  sourceStates?: Record<string, { state: 'played' | 'failed'; reason?: string }>;
+  /** The row that is the release that played last time. */
+  rememberedHash?: string;
 }
 
 /**
@@ -111,6 +115,8 @@ export const SourcePanel: React.FC<SourcePanelProps> = ({
   widened,
   onCancelSearch,
   onDownload,
+  sourceStates,
+  rememberedHash,
 }) => {
   const isDeveloper = useIsDeveloper();
   const [filterState, setFilterState] = useState<SourceFilterState>(DEFAULT_FILTER_STATE);
@@ -333,13 +339,21 @@ export const SourcePanel: React.FC<SourcePanelProps> = ({
             : providerLabel(source, provenanceFor(source));
           const host = sourceHost(source);
           const address = sourceAddress(source);
+          /*
+           * What this source has done, said quietly: a small ✓ for one that
+           * played (this session, or last time), a small ⚠ with the reason for
+           * one that was tried and failed. A source the viewer simply chose
+           * — or that was never tried — carries nothing.
+           */
+          const outcome = source.infoHash ? sourceStates?.[source.infoHash] : undefined;
+          const playedBefore = !outcome && rememberedHash !== undefined && source.infoHash === rememberedHash;
 
           return (
             <li
               key={`${source.infoHash}-${rowIndex}`}
               className={`player-panel__source-row${
                 isActive ? ' player-panel__source-row--current' : ''
-              }`}
+              }${outcome?.state === 'failed' && !isActive ? ' player-panel__source-row--failed' : ''}`}
             >
               <button
                 className="player-panel__source-play"
@@ -365,7 +379,27 @@ export const SourcePanel: React.FC<SourcePanelProps> = ({
                 onClick={() => onSelect(source)}
                 disabled={isSwitching}
               >
-                <strong>{source.title}</strong>
+                <strong>
+                  {outcome?.state === 'failed' && (
+                    <AlertTriangle
+                      size={12}
+                      className="source-outcome source-outcome--failed"
+                      aria-label="Did not play"
+                    >
+                      <title>{`Tried, did not play${outcome.reason ? ` — ${outcome.reason}` : ''}`}</title>
+                    </AlertTriangle>
+                  )}
+                  {(outcome?.state === 'played' || playedBefore) && (
+                    <CheckCircle2
+                      size={12}
+                      className={`source-outcome source-outcome--ok${playedBefore ? ' source-outcome--before' : ''}`}
+                      aria-label={playedBefore ? 'Played last time' : 'Played'}
+                    >
+                      <title>{playedBefore ? 'Played last time' : 'Played in this session'}</title>
+                    </CheckCircle2>
+                  )}
+                  {source.title}
+                </strong>
                 <span>{describe(source, isDeveloper)}</span>
                 <div className="player-panel__source-facts">
                   <span title="Seeders">

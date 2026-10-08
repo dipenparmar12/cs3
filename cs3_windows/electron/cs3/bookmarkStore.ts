@@ -1,4 +1,5 @@
 import type { DatastoreManager } from '../datastore';
+import type { SavedPlayback } from '../../src/types/library.ts';
 import type { TvType } from '../../src/types/api';
 import { prune } from '../util/prune.ts';
 import { isPrivateSession, allowsExplicitSaves } from './privacyMode.ts';
@@ -85,6 +86,8 @@ export interface Bookmark {
   origin: BookmarkOrigin;
   /** User's own note, for "watch with X" and similar. */
   note?: string;
+  /** Saved from the player: the exact playback to come back to. */
+  playback?: SavedPlayback;
   savedAt: number;
   /** Last time the page was reopened from here, for ordering by usefulness. */
   lastOpenedAt?: number;

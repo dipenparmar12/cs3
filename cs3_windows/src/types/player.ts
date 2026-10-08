@@ -1,4 +1,5 @@
 import type { ExtractorLink, SubtitleFile } from './api';
+import type { PlaybackPreferences, StoredSource } from './library';
 
 export const PlaybackBackend = {
   Web: 'WebBackend (HTML5/MSE)',
@@ -102,6 +103,10 @@ export interface ResumeTarget {
   episodeTitle?: string;
   /** Replay the page the remembered source came from rather than `mediaUrl`. */
   preferRecordedOrigin?: boolean;
+  /** A saved playback: start here, from this source, with these tracks. */
+  resumeAt?: number;
+  preferSource?: StoredSource;
+  preferences?: PlaybackPreferences;
   provenance?: {
     provider?: string;
     repositoryName?: string;

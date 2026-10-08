@@ -1286,6 +1286,7 @@ export const App: React.FC = () => {
         // start whatever ranked first. No record → the main process answers
         // undefined and discovery orders the list as usual.
         resumeKey: context.resumeKey ?? canonicalKey(context.title, context.progress?.year),
+        preferSource: context.preferSource,
       }
     );
     if (!response.ok || !response.snapshot) {
@@ -1415,7 +1416,16 @@ export const App: React.FC = () => {
         const watchState = await loadWatchState(target.mediaUrl, { title, year, key });
         let episode: Episode | null;
         let resumeAt: number | undefined;
-        if (knowsEpisode) {
+        if (knowsEpisode && target.resumeAt !== undefined) {
+          // A saved playback carries its own place.
+          episode = {
+            season: target.season,
+            episode: target.episode,
+            name: target.episodeTitle,
+            url: '',
+          } as Episode;
+          resumeAt = target.resumeAt;
+        } else if (knowsEpisode) {
           episode = {
             season: target.season,
             episode: target.episode,
@@ -1473,6 +1483,8 @@ export const App: React.FC = () => {
           providerProvenance: provenance.provider ? provenance : undefined,
           episodeTitle: episode?.name ?? played?.origin.episodeTitle,
           resumeKey: key,
+          preferSource: target.preferSource,
+          preferences: target.preferences,
           progress: {
             // The **page**, never the episode's playback handle — the same rule
             // `DetailView.playEpisodeDirectly` documents at length. A links
@@ -2032,6 +2044,7 @@ export const App: React.FC = () => {
               onOpenDownloads={() => handleLeavePlayer('downloads')}
               series={session.context.series}
               progress={session.context.progress}
+              playbackPreferences={session.context.preferences}
               switchingTo={switchingTo}
               switchError={switchError}
               subtitleContext={session.context.subtitleContext}
@@ -2081,6 +2094,7 @@ export const App: React.FC = () => {
                 widened: session.snapshot.widened,
                 retryingElsewhere: session.snapshot.retryingElsewhere,
                 tried: session.snapshot.tried,
+                sourceStates: session.snapshot.sourceStates,
                 onRestart: () => void startSession(session.context),
                 onCancelSearch: handleCancelSourceSearch,
                 onSourceUnplayable: handleSourceUnplayable,

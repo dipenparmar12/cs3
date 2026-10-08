@@ -11358,3 +11358,147 @@ button.credit-card { border: 0; background: none; padding: 0; font: inherit; col
 .filmography__empty { color: var(--text-muted); font-size: 0.88rem; }
 .filmography__work { display: flex; flex-direction: column; gap: 0.25rem; }
 .filmography__roles { margin: 0; padding-left: 0.2rem; font-size: 0.72rem; color: var(--text-subtle); }
+
+
+/* --- seek bar, quieter --------------------------------------------------
+   Thin until pointed at, a small playhead, played/buffered/unplayed told
+   apart by shade alone — the way people already read a timeline. The frame
+   preview is the large thing while seeking, with its time printed on it. */
+.player__seek { height: 18px; }
+.player__seek-track,
+.player__seek-torrent, .player__seek-buffer, .player__seek-played { height: 3px; border-radius: 1.5px; }
+.player__seek-track { background: rgba(255, 255, 255, 0.2); }
+.player__seek-torrent { background: rgba(255, 255, 255, 0.28); }
+.player__seek-buffer { background: rgba(255, 255, 255, 0.42); }
+.player__seek:hover .player__seek-track,
+.player__seek:hover .player__seek-torrent,
+.player__seek:hover .player__seek-buffer,
+.player__seek:hover .player__seek-played { height: 5px; }
+.player__seek-handle {
+  width: 9px;
+  height: 9px;
+  box-shadow: 0 0 0 1.5px rgba(0, 0, 0, 0.45);
+}
+.player__seek:hover .player__seek-handle { transform: translateX(-50%) scale(1.45); }
+.player__preview {
+  bottom: 22px;
+  padding: 0;
+  gap: 0;
+  background: transparent;
+  border: 0;
+  max-width: min(260px, 44vw);
+}
+.player__preview-frame {
+  position: relative;
+  border-radius: 6px;
+  overflow: hidden;
+  border: 2px solid rgba(255, 255, 255, 0.85);
+  box-shadow: 0 10px 28px rgba(0, 0, 0, 0.55);
+  background: #000;
+}
+.player__preview img,
+.player__preview-placeholder { width: 256px; max-width: 100%; border-radius: 0; }
+.player__preview-placeholder { height: 144px; }
+.player__preview-time {
+  position: absolute;
+  left: 50%;
+  bottom: 6px;
+  transform: translateX(-50%);
+  display: inline-flex;
+  align-items: baseline;
+  gap: 0.35rem;
+  padding: 0.1rem 0.45rem;
+  border-radius: 4px;
+  background: rgba(0, 0, 0, 0.72);
+  color: #fff;
+  font-size: 0.78rem;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.player__preview-time .player__preview-delta {
+  display: inline;
+  margin: 0;
+  font-style: normal;
+  font-size: 0.66rem;
+  font-weight: 500;
+  color: rgba(255, 255, 255, 0.7);
+}
+
+/* The download button's word for this video's download ("42%"). */
+.icon-button__progress {
+  position: absolute;
+  bottom: -6px;
+  left: 50%;
+  transform: translateX(-50%);
+  padding: 0 4px;
+  border-radius: 6px;
+  background: var(--accent-primary);
+  color: #fff;
+  font-size: 0.58rem;
+  font-weight: 700;
+  line-height: 13px;
+  white-space: nowrap;
+}
+.icon-button__badge--count {
+  top: -4px;
+  right: -4px;
+  background: #ef4444;
+}
+.icon-button--on { color: #93c5fd; }
+
+/* "This video" at the top of the player's downloads panel. */
+.player-dl-current {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  margin: 0.75rem 1rem 0.25rem;
+  padding: 0.75rem 0.85rem;
+  border-radius: 10px;
+  border: 1px solid rgba(59, 130, 246, 0.35);
+  background: rgba(59, 130, 246, 0.1);
+}
+.player-dl-current__text { display: flex; flex-direction: column; gap: 0.1rem; min-width: 0; }
+.player-dl-current__label { font-size: 0.66rem; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase; color: #93c5fd; }
+.player-dl-current__title { font-size: 0.86rem; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.player-dl-current__detail { font-size: 0.72rem; color: var(--text-muted); }
+.player-dl-current__progress { display: inline-flex; align-items: center; gap: 0.3rem; }
+.player-dl-current__state { display: inline-flex; align-items: center; gap: 0.3rem; font-size: 0.8rem; font-weight: 600; color: #bfdbfe; white-space: nowrap; }
+.player-dl-current__state--done { color: #86efac; }
+
+/* Drawn flags in the subtitle panel. */
+.flag-icon { display: inline-block; flex: none; vertical-align: -3px; border-radius: 2px; }
+.flag-icon--code {
+  min-width: 18px;
+  height: 12px;
+  padding: 0 2px;
+  border-radius: 2px;
+  background: rgba(255, 255, 255, 0.14);
+  color: rgba(255, 255, 255, 0.85);
+  font-size: 0.55rem;
+  font-weight: 700;
+  line-height: 12px;
+  text-align: center;
+  letter-spacing: 0.02em;
+}
+.subtitle-panel__flag { margin-right: 0.35rem; }
+.subtitle-panel__current-heading { margin: 0.75rem 1rem 0.25rem; }
+
+/* The More menu: a hint line under each everyday item, and a quiet
+   divider before the Developer-mode copies. */
+.player-copy__menu button { flex-direction: column; align-items: flex-start; }
+.player-copy__hint { display: block; font-style: normal; font-size: .68rem; color: rgba(255, 255, 255, .5); margin-top: .1rem; }
+.player-copy__heading--sub { margin-top: .35rem; border-top: 1px solid rgba(255, 255, 255, .08); padding-top: .5rem; }
+
+.player__title-search--on { opacity: 1; color: #93c5fd; border-color: rgba(147, 197, 253, .5); }
+
+
+/* What a source has done this session: a quiet check or warning before its
+   title, never a banner. A failed row dims a little and stays selectable. */
+.source-outcome { flex: none; margin-right: 0.3rem; vertical-align: -1px; }
+.source-outcome--ok { color: #4ade80; }
+.source-outcome--before { color: rgba(74, 222, 128, 0.65); }
+.source-outcome--failed { color: #fbbf24; }
+.player-panel__source-row--failed .player-panel__source-body { opacity: 0.72; }
+.player-panel__source-row--failed:hover .player-panel__source-body { opacity: 1; }
