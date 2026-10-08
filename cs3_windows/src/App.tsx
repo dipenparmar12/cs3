@@ -32,13 +32,14 @@ import type { DownloadRequestResult, DownloadTask } from './types/download';
 import { buildDownloadTask } from './utils/downloadIdentity';
 import type { TorrentResult } from './types/torrent';
 import type { ResumeTarget } from './types/player';
+import type { TitleVideo } from './types/metadata';
 import type { PlaybackSnapshot } from '../electron/playbackSession';
 import type { SearchSnapshot } from '../electron/searchSession';
 import { describeError } from './utils/errors';
 import { pickResumePoint, resumeSeconds } from './utils/resumePoint';
 import { historyEventForTask } from './utils/historyEvent';
 import { decodeShareLink, SHARE_SCHEME } from './utils/shareLink';
-import { loadWatchState } from './components/player/seriesContext';
+import { episodeKey, loadWatchState } from './components/player/seriesContext';
 import { usePrivacy } from './utils/usePrivacy';
 import { ScrollToTop } from './components/ScrollToTop';
 import { durableAddress } from './utils/durableAddress';
@@ -71,6 +72,9 @@ import {
  * imports above stay static and cost nothing — types are erased, and a
  * `import type` does not pull the module in.
  */
+const TrailerPopup = lazy(() =>
+  import('./components/detail/TrailerPopup').then((m) => ({ default: m.TrailerPopup }))
+);
 /** Developer mode only, and its own chunk: standard mode never loads it. */
 const UiInspector = lazy(() => import('./components/devtools/UiInspector'));
 const VideoPlayer = lazy(() =>
@@ -275,6 +279,13 @@ export const App: React.FC = () => {
    * kind of wrong it is — resend, or update.
    */
   const [shareProblem, setShareProblem] = useState<string | null>(null);
+  /**
+   * A trailer, owned here rather than by the detail page so it can be
+   * minimised and keep playing while the viewer goes elsewhere. Ended when
+   * real playback starts — two soundtracks at once is never what was meant.
+   */
+  const [trailer, setTrailer] = useState<{ videos: TitleVideo[]; startId: string; titleName: string; key: number } | null>(null);
+  const [trailerMini, setTrailerMini] = useState(false);
   const [playback, setPlayback] = useState<PlaybackRequest | null>(null);
   const [switchingTo, setSwitchingTo] = useState<Episode | null>(null);
   const [switchError, setSwitchError] = useState<string | null>(null);
@@ -1263,6 +1274,7 @@ export const App: React.FC = () => {
    */
   const startSession = useCallback(async (context: PlaybackSessionRequest) => {
     if (!window.cloudstream) return;
+    setTrailer(null);
 
     setPlayback(null);
     setSwitchError(null);
@@ -1495,6 +1507,11 @@ export const App: React.FC = () => {
             season: episode?.season,
             episode: episode?.episode,
             resumeAt,
+            // What this release measured last time, else what the title should run.
+            expectedDurationSeconds:
+              played?.durationSeconds ??
+              watchState[episodeKey(episode?.season, episode?.episode)]?.durationSeconds ??
+              undefined,
           },
           subtitleContext: {
             imdbId: (detail as { imdbId?: string } | null)?.imdbId,
@@ -2250,6 +2267,10 @@ export const App: React.FC = () => {
               // scroll-restore behaviour.
               onSelectMedia={handleSelectMedia}
               onPlayDirectly={handleQuickPlay}
+              onPlayTrailer={(videos, startId, titleName) => {
+                setTrailerMini(false);
+                setTrailer({ videos, startId, titleName, key: Date.now() });
+              }}
               // Recorded on a bookmark, so a saved page remembers the search
               // that found it and can be reached that way again.
               searchQuery={searchQuery}
@@ -2493,6 +2514,24 @@ export const App: React.FC = () => {
         >
           {actionNotice}
         </div>
+      )}
+
+      {trailer && (
+        <Suspense fallback={null}>
+          <TrailerPopup
+            key={trailer.key}
+            videos={trailer.videos}
+            startId={trailer.startId}
+            titleName={trailer.titleName}
+            mini={trailerMini}
+            onMinimize={() => setTrailerMini(true)}
+            onExpand={() => setTrailerMini(false)}
+            onClose={() => {
+              setTrailer(null);
+              setTrailerMini(false);
+            }}
+          />
+        </Suspense>
       )}
 
       {/* Point at any UI and learn which component draws it (Ctrl+Shift+C). */}

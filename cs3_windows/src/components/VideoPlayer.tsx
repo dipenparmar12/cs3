@@ -37,6 +37,7 @@ import { attachShaka, type ShakaAttachment } from '../utils/shakaSession';
 import type { SeriesContext } from './player/seriesContext';
 import type { PlaybackPreferences, StoredSource } from '../types/library';
 import { matchesRelease } from '../../electron/cs3/playedSource';
+import { looksLikeWrongMedia, wrongMediaReason } from '../utils/mediaSanity';
 import { torrentResultToStoredSource } from '../../electron/cs3/libraryStore';
 import { isPlaceholderOrigin } from '../utils/originName';
 import { canonicalKey } from '../../electron/cs3/libraryStore';
@@ -112,6 +113,8 @@ interface VideoPlayerProps {
     episode?: number;
     /** Seconds to seek to on load, from a previous session. */
     resumeAt?: number;
+    /** How long the title should run; a much shorter stream is skipped as wrong media. */
+    expectedDurationSeconds?: number;
   };
   /**
    * Live source-resolution state.
@@ -946,6 +949,30 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
     notify,
     playbackSaved,
   ]);
+
+  /**
+   * A source that plays a clip instead of the title — an advert, an "update
+   * your app" notice — is skipped like any source that will not play, with the
+   * reason on its row. Judged once per stream, after it has reported a
+   * duration, so it never delays a working source (`mediaSanity.ts`).
+   */
+  const sanityCheckedFor = useRef<string | null>(null);
+  useEffect(() => {
+    // After this stream has really started: until then `duration` can still be
+    // the previous stream's.
+    if (!streamUrl || !hasStartedPlayback || sanityCheckedFor.current === streamUrl || duration <= 0) return;
+    sanityCheckedFor.current = streamUrl;
+    const expected = progress?.expectedDurationSeconds;
+    if (!looksLikeWrongMedia({ actualSeconds: duration, expectedSeconds: expected })) return;
+    const reason = wrongMediaReason(duration, expected!);
+    if (sourceSession?.onSourceUnplayable) {
+      notify('That source was not the title — trying the next one', 'info');
+      sourceSession.onSourceUnplayable(reason);
+    } else {
+      notify(reason, 'bad');
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [streamUrl, duration, hasStartedPlayback]);
 
   // A new stream is a new question about which source works.
   useEffect(() => {

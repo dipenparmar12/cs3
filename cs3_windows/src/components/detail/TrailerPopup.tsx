@@ -8,6 +8,7 @@ import {
   Loader2,
   Maximize2,
   Minimize2,
+  PictureInPicture2,
   Pause,
   Play,
   RotateCcw,
@@ -66,7 +67,16 @@ export const TrailerPopup: React.FC<{
   /** The film or series, for the dialog's second line. */
   titleName?: string;
   onClose: () => void;
-}> = ({ videos, startId, titleName, onClose }) => {
+  /**
+   * Shrunk to a corner and still playing, so the rest of the app can be used
+   * — the same idea as the main player's mini mode. The `<video>` element is
+   * never remounted between the two layouts (same element types, only class
+   * names change), which is what keeps the trailer playing through the switch.
+   */
+  mini?: boolean;
+  onMinimize?: () => void;
+  onExpand?: () => void;
+}> = ({ videos, startId, titleName, onClose, mini = false, onMinimize, onExpand }) => {
   const [queue, setQueue] = useState<TrailerQueue>(() => buildTrailerQueue(videos, startId));
   const video = currentOf(queue);
   const next = useMemo(() => upNext(queue), [queue]);
@@ -128,13 +138,20 @@ export const TrailerPopup: React.FC<{
           void document.exitFullscreen?.().catch(() => undefined);
           return;
         }
+        // Minimised, the trailer is background: Escape belongs to whatever
+        // the viewer is doing now, not to a corner they are not looking at.
+        if (mini) return;
         event.stopPropagation();
-        onClose();
+        // Escape shrinks rather than ends when shrinking is possible: it is
+        // the "get out of my way" key, and stopping a trailer halfway is a
+        // second decision.
+        if (onMinimize) onMinimize();
+        else onClose();
       }
     };
     window.addEventListener('keydown', onKey, true);
     return () => window.removeEventListener('keydown', onKey, true);
-  }, [onClose]);
+  }, [onClose, onMinimize, mini]);
 
   // Read viewer's stored volume preferences
   useEffect(() => {
@@ -497,11 +514,15 @@ export const TrailerPopup: React.FC<{
   const showOverlayControls = showControls || !isPlaying || isScrubbing;
 
   return (
-    <div className="modal-backdrop trailer-popup__backdrop" role="presentation" onClick={onClose}>
+    <div
+      className={mini ? 'trailer-mini-host' : 'modal-backdrop trailer-popup__backdrop'}
+      role="presentation"
+      onClick={mini ? undefined : onMinimize ?? onClose}
+    >
       <div
-        className="trailer-popup"
-        role="dialog"
-        aria-modal="true"
+        className={`trailer-popup${mini ? ' trailer-popup--mini' : ''}`}
+        role={mini ? 'complementary' : 'dialog'}
+        aria-modal={mini ? undefined : true}
         aria-label={`${video.label}${titleName ? ` — ${titleName}` : ''}`}
         onClick={(event) => event.stopPropagation()}
       >
@@ -513,6 +534,29 @@ export const TrailerPopup: React.FC<{
             {context && <span className="trailer-popup__context">{context}</span>}
           </div>
           <div className="trailer-popup__actions-group">
+            {mini && onExpand && (
+              <button
+                type="button"
+                className="btn btn-secondary btn-icon"
+                onClick={onExpand}
+                title="Expand"
+                aria-label="Expand trailer"
+              >
+                <Maximize2 size={14} />
+              </button>
+            )}
+            {!mini && onMinimize && (
+              <button
+                type="button"
+                className="btn btn-secondary btn-icon"
+                onClick={onMinimize}
+                title="Minimise — keep playing while you browse (Esc)"
+                aria-label="Minimise trailer"
+              >
+                <PictureInPicture2 size={14} />
+              </button>
+            )}
+            {!mini && (
             <button
               type="button"
               className="btn btn-secondary btn-icon"
@@ -522,11 +566,12 @@ export const TrailerPopup: React.FC<{
             >
               <ExternalLink size={14} />
             </button>
+            )}
             <button
               type="button"
               className="btn btn-secondary btn-icon"
               onClick={onClose}
-              title="Close (Esc)"
+              title="Close"
               aria-label="Close trailer"
             >
               <X size={15} />

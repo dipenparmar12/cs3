@@ -57,6 +57,23 @@ import { FranchiseRail } from '../components/detail/FranchiseRail';
 /** Cards the rail is sized for before "Show all" is worth offering. */
 const RAIL_PREVIEW = 8;
 
+/**
+ * How long what is about to play should run: the length this episode or film
+ * measured last time it played, else the provider's or catalogue's runtime.
+ * Used only to notice a source that serves a clip instead (`mediaSanity.ts`).
+ */
+function expectedRuntimeSeconds(
+  detail: { duration?: string },
+  extended: { runtimeMinutes?: number } | null | undefined,
+  episode: { season?: number; episode?: number } | null,
+  watchState: Record<string, { durationSeconds: number }>
+): number | undefined {
+  const measured = watchState[episodeKey(episode?.season, episode?.episode)]?.durationSeconds;
+  if (measured && measured > 0) return measured;
+  const minutes = parseRuntimeMinutes(detail.duration) ?? extended?.runtimeMinutes;
+  return minutes ? minutes * 60 : undefined;
+}
+
 export interface PlaybackRequest {
   streamUrl: string;
   mimeType: string;
@@ -137,6 +154,8 @@ export interface PlaybackSessionRequest {
     season?: number;
     episode?: number;
     resumeAt?: number;
+    /** How long the title should run, for spotting a source that plays an advert instead. */
+    expectedDurationSeconds?: number;
   };
   onRequestEpisode?: (episode: Episode) => Promise<void>;
   /** Fired once a source actually starts, so the choice can be remembered. */
@@ -172,6 +191,11 @@ interface DetailViewProps {
   onSelectMedia?: (item: SearchResponse) => void;
   /** Plays another title straight away (related titles, a person's work). */
   onPlayDirectly?: (item: SearchResponse) => void;
+  /**
+   * Plays a trailer in the app shell, where it can be minimised and keep
+   * playing after this page is left. Without it the page shows its own popup.
+   */
+  onPlayTrailer?: (videos: TitleVideo[], startId: string, titleName: string) => void;
   /** The query that produced this item, recorded on a bookmark so it can be re-run. */
   searchQuery?: string;
 }
@@ -245,6 +269,7 @@ export const DetailView: React.FC<DetailViewProps> = ({
   onSearch,
   onSelectMedia,
   onPlayDirectly,
+  onPlayTrailer,
   searchQuery,
 }) => {
   const [detail, setDetail] = useState<DetailData | null>(null);
@@ -277,6 +302,16 @@ export const DetailView: React.FC<DetailViewProps> = ({
   const [filmography, setFilmography] = useState<{ request: FilmographyRequest; hint?: { imageUrl?: string; subtitle?: string } } | null>(null);
   /** "View all" for related titles. */
   const [moreLikeThisOpen, setMoreLikeThisOpen] = useState(false);
+  /** A trailer goes to the app shell when it can be minimised there. */
+  const allVideosRef = useRef<TitleVideo[]>([]);
+  const openTrailer = useCallback(
+    (id: string, videos?: TitleVideo[]) => {
+      if (onPlayTrailer && detail) onPlayTrailer(videos ?? allVideosRef.current, id, detail.name);
+      else setTrailerId(id);
+    },
+    [onPlayTrailer, detail]
+  );
+
   /** Narrows a long episode list. */
   const [episodeQuery, setEpisodeQuery] = useState('');
 
@@ -829,6 +864,7 @@ export const DetailView: React.FC<DetailViewProps> = ({
   const allVideos = useMemo<TitleVideo[]>(() => {
     return mergeVideos([extended?.videos, providerVideos, discoveredVideos]);
   }, [extended?.videos, providerVideos, discoveredVideos]);
+  allVideosRef.current = allVideos;
 
   /**
    * Cast, crew, ratings and production notes, fetched after the page is drawn.
@@ -1619,10 +1655,11 @@ export const DetailView: React.FC<DetailViewProps> = ({
           season: episode?.season,
           episode: episode?.episode,
           resumeAt: resumeSeconds(watchState, episode, { isLive: detail.isLive }),
+          expectedDurationSeconds: expectedRuntimeSeconds(detail, extended, episode, watchState),
         },
       });
     },
-    [detail, onStartSession, rememberChoice, seriesContextFor, downloadSource]
+    [detail, extended, onStartSession, rememberChoice, seriesContextFor, downloadSource]
   );
 
   // The handler is embedded in the request it produces, so it needs a stable
@@ -1686,7 +1723,7 @@ export const DetailView: React.FC<DetailViewProps> = ({
     const firstTrailer =
       allVideos.find((v) => v.kind === TitleVideoKind.Trailer) || allVideos[0];
     if (firstTrailer) {
-      setTrailerId(firstTrailer.id);
+      openTrailer(firstTrailer.id);
       return;
     }
 
@@ -1696,7 +1733,7 @@ export const DetailView: React.FC<DetailViewProps> = ({
         const response = await window.cloudstream.findTrailers(detail.name, detail.year);
         if (response?.ok && response.videos?.length) {
           setDiscoveredVideos((prev) => mergeVideos([prev, response.videos]));
-          setTrailerId(response.videos[0].id);
+          openTrailer(response.videos[0].id, mergeVideos([allVideos, response.videos]));
         } else {
           flash('No trailers found for this title.');
         }
@@ -1708,7 +1745,7 @@ export const DetailView: React.FC<DetailViewProps> = ({
     } else {
       flash('No trailers available.');
     }
-  }, [allVideos, detail?.name, detail?.year, flash]);
+  }, [allVideos, detail?.name, detail?.year, flash, openTrailer]);
 
   /**
    * On-demand search to expand the trailer gallery with more public YouTube trailers.
@@ -2257,7 +2294,7 @@ export const DetailView: React.FC<DetailViewProps> = ({
       <TrailerGallery
         videos={allVideos}
         pending={metadataPending || searchingTrailers}
-        onPlay={(video) => setTrailerId(video.id)}
+        onPlay={(video) => openTrailer(video.id)}
         onSearchMore={handleFindMoreTrailers}
         searchingMore={searchingTrailers}
         onClearFound={discoveredVideos.length > 0 ? () => setDiscoveredVideos([]) : undefined}
@@ -2272,7 +2309,7 @@ export const DetailView: React.FC<DetailViewProps> = ({
         episode={selectedEpisode?.episode}
         onPlayVideo={(video) => {
           setDiscoveredVideos((prev) => mergeVideos([prev, [video]]));
-          setTrailerId(video.id);
+          openTrailer(video.id);
         }}
       />
 
@@ -2417,7 +2454,7 @@ export const DetailView: React.FC<DetailViewProps> = ({
         and scrolled where it was, which is the whole difference between
         glancing at a trailer and committing to watch something.
       */}
-      {trailerId && (
+      {trailerId && !onPlayTrailer && (
         <TrailerPopup
           videos={allVideos}
           startId={trailerId}
