@@ -1231,6 +1231,33 @@ export const App: React.FC = () => {
     [handleSearch]
   );
 
+  /**
+   * Opens the detail page of what is playing, from wherever it was started.
+   *
+   * History, Downloads and Continue watching start playback without ever
+   * passing through the title's page, so there is nothing to go "back" to. The
+   * page address is the one progress is recorded against, so it is always at
+   * hand. The player shrinks rather than closes, as in `handleLeavePlayer`: the
+   * viewer asked to look at the title, not to stop watching it.
+   */
+  const handleOpenDetailFromPlayer = useCallback(() => {
+    const context = session?.context;
+    const title = context?.title ?? playback?.title ?? preparing?.title;
+    const progress = context?.progress ?? playback?.progress;
+    if (!title || !progress?.mediaUrl) return;
+    setPlayerMini(true);
+    setPlayerHidden(false);
+    openDetail({
+      name: title,
+      url: progress.mediaUrl,
+      apiName: context?.providerProvenance?.provider ?? 'Library',
+      posterUrl: progress.posterUrl,
+      year: progress.year,
+      imdbId: context?.subtitleContext?.imdbId,
+    } as SearchResponse);
+  }, [session, playback, preparing, openDetail]);
+
+
   const handleSearchFromDetail = useCallback(
     (query: string) => {
       setSearchQuery(query);
@@ -2054,6 +2081,7 @@ export const App: React.FC = () => {
               subtitles={session.snapshot.handle?.subtitleUrls ?? []}
               onBack={handleClosePlayer}
               onSearchTitle={handleSearchFromPlayer}
+              onOpenDetail={handleOpenDetailFromPlayer}
               hidden={playerHidden}
               mini={playerMini}
               onMinimize={handleMinimizePlayer}
@@ -2129,6 +2157,7 @@ export const App: React.FC = () => {
               subtitles={[]}
               onBack={handleClosePlayer}
               onSearchTitle={handleSearchFromPlayer}
+              onOpenDetail={handleOpenDetailFromPlayer}
               hidden={playerHidden}
               mini={playerMini}
               onMinimize={handleMinimizePlayer}
@@ -2156,6 +2185,7 @@ export const App: React.FC = () => {
               subtitles={playback.subtitles}
               onBack={handleClosePlayer}
               onSearchTitle={handleSearchFromPlayer}
+              onOpenDetail={handleOpenDetailFromPlayer}
               hidden={playerHidden}
               mini={playerMini}
               onMinimize={handleMinimizePlayer}

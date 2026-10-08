@@ -10,7 +10,7 @@ import {
   Loader2, Users, Gauge, Subtitles, AlertTriangle, RotateCcw, RotateCw,
   SkipBack, SkipForward, List, Settings2, MonitorPlay, Radio,
   GripHorizontal, Maximize2, Minimize2, X,
-  Search, PictureInPicture2, BookmarkCheck, BookmarkPlus,
+  Search, Info, PictureInPicture2, BookmarkCheck, BookmarkPlus,
 } from 'lucide-react';
 import type { SwarmReport, TorrentStreamStats } from '../types/torrent';
 import type { Episode } from '../types/api';
@@ -227,6 +227,8 @@ interface VideoPlayerProps {
    * there; this makes it a target.
    */
   onSearchTitle?: (query: string) => void;
+  /** Opens this title's detail page, however playback was started. */
+  onOpenDetail?: () => void;
   /** When provided, overrides the stored setting for showing aspect ratio control (default false) */
   showAspectRatioControl?: boolean;
   /** When provided, overrides the stored setting for showing playback speed control (default false) */
@@ -347,7 +349,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
   infoHash, subtitles, onBack, series, onSelectEpisode, switchingTo, switchError,
   progress, sourceSession, subtitleContext, onDownloadCurrent, onOpenDownloads, playbackPreferences,
   hidden = false, mini = false, onMinimize, onExpand, showAspectRatioControl,
-  showPlaybackSpeedControl, showSubtitlesControl: showSubtitlesControlProp, onSearchTitle,
+  showPlaybackSpeedControl, showSubtitlesControl: showSubtitlesControlProp, onSearchTitle, onOpenDetail,
 }) => {
   /**
    * Whether the viewer has asked to see how the app is built.
@@ -4693,6 +4695,17 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
         <div className="player__titles">
           <div className="player__title-row">
             <h2>{title}</h2>
+            {onOpenDetail && progress?.mediaUrl && (
+              <button
+                type="button"
+                className="player__title-search"
+                onClick={onOpenDetail}
+                title="Open title details"
+                aria-label={`Open details for ${title}`}
+              >
+                <Info size={15} />
+              </button>
+            )}
             {onSearchTitle && (
               <button
                 type="button"
