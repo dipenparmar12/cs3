@@ -165,7 +165,10 @@ const ExtensionRow: React.FC<{
   onUninstall,
 }) => {
   const [localOpen, setLocalOpen] = useState(false);
-  const open = openProp !== undefined ? openProp : localOpen;
+  // One provider is not a choice worth a click: it is always shown, with no
+  // disclosure to open first. The toggle appears only when there is a list.
+  const single = providers.length === 1;
+  const open = single || (openProp !== undefined ? openProp : localOpen);
   const toggleOpen = () => {
     if (onToggleOpen) onToggleOpen();
     else setLocalOpen((value) => !value);
@@ -209,7 +212,7 @@ const ExtensionRow: React.FC<{
       <div className="ext-row__head">
         <Disclosure
           open={open}
-          hidden={providers.length === 0}
+          hidden={providers.length <= 1}
           label={open ? 'Collapse providers' : 'Expand providers'}
           onToggle={toggleOpen}
         />
@@ -409,8 +412,10 @@ export const SourceTree: React.FC<SourceTreeProps> = ({
       <ul className="ext-tree">
         {visible.map(({ repository, extensions }) => {
           const key = repository.id ?? repository.url;
-          // By default, repositories are collapsed
-          const expanded = openRepos[key] ?? false;
+          // Collapsed by default — except a repository with one extension,
+          // which has nothing to choose between and is simply shown.
+          const singleExtension = repository.extensions.length === 1;
+          const expanded = singleExtension || (openRepos[key] ?? false);
           const providerCount = repository.extensions.reduce(
             (total, extension) => total + extension.providers.length,
             0
@@ -453,6 +458,7 @@ export const SourceTree: React.FC<SourceTreeProps> = ({
               <div className="ext-row__head">
                 <Disclosure
                   open={expanded}
+                  hidden={singleExtension}
                   label={expanded ? 'Collapse extensions' : 'Expand extensions'}
                   onToggle={() => setOpenRepos((current) => ({ ...current, [key]: !expanded }))}
                 />
@@ -483,7 +489,7 @@ export const SourceTree: React.FC<SourceTreeProps> = ({
                     <ExternalLink url={repository.homepageUrl ?? repository.url} />
                   </div>
                 </div>
-                {expanded && extensions.length > 0 ? (
+                {expanded && extensions.some(({ extension: ext }) => ext.providers.length > 1) ? (
                   <Button size="compact" variant="ambient" onClick={toggleAllRepoExts}>
                     {areAllRepoExtsOpen ? 'Hide providers' : 'Show providers'}
                   </Button>

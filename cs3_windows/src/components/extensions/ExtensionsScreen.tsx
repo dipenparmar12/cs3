@@ -539,13 +539,21 @@ export const ExtensionsScreen: React.FC = () => {
           expandedUrl={browsing?.url ?? null}
           onBrowse={(repository) => void browse(repository)}
           onCollapse={() => setBrowsing(null)}
-          renderExpanded={() => (
+          available={
+            browsing && !browseLoading && plugins.length > 0
+              ? {
+                  total: plugins.length,
+                  missing: plugins.filter((plugin) => !installedNames.has(plugin.internalName)).length,
+                }
+              : null
+          }
+          renderExpanded={(query) => (
             <ExtensionCatalog
               repository={browsing}
               plugins={plugins}
               warnings={warnings}
               installedNames={installedNames}
-              filters={filters.state}
+              filters={query ? { ...filters.state, query } : filters.state}
               loading={browseLoading}
               error={browseError}
               busy={busy}

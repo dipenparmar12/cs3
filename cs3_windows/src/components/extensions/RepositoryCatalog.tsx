@@ -30,14 +30,14 @@
  * Install into Add would commit them to a catalogue. Install-all is styled as
  * the heavier action and says how many extensions it is about to fetch.
  */
-import React, { useMemo, useState } from 'react';
-import { AlertTriangle, Check, ChevronDown, ChevronRight, ChevronUp, Clock, Loader2, Search, Trash2, X } from 'lucide-react';
+import React, { useEffect, useMemo, useState } from 'react';
+import { AlertTriangle, Check, ChevronDown, ChevronRight, ChevronUp, Loader2, Plus, Search, Trash2, X } from 'lucide-react';
 import { Badge, ExternalLink, ProgressBar } from './primitives';
 import { matchesQuery, type FilterState } from './useExtensionFilters';
 import type { ProviderTreeRepository } from '../../types/plugin';
 import type { OfficialRepository } from './useExtensionCatalog';
 import type { ExtensionJob, RepositoryJobsSummary } from './useExtensionJobs';
-import { Button } from '../ui';
+import { Button, SearchInput } from '../ui';
 
 interface RepositoryCatalogProps {
   official: OfficialRepository[];
@@ -66,7 +66,10 @@ interface RepositoryCatalogProps {
   /** Closes the inline extension list without navigating anywhere. */
   onCollapse(): void;
   /** Rendered inside the expanded card — the repository's extension list. */
-  renderExpanded(): React.ReactNode;
+  /** The open repository's extensions, narrowed by the drawer's own search. */
+  renderExpanded(query: string): React.ReactNode;
+  /** What the open repository publishes against what is installed, once read. */
+  available?: { total: number; missing: number } | null;
   onRemove(url: string): void;
   /** Keeps the repository without downloading any of its extensions. */
   onAdd(url: string, name?: string): void;
@@ -76,29 +79,6 @@ interface RepositoryCatalogProps {
 
 const working = (job: ExtensionJob | null) =>
   job !== null && (job.state === 'queued' || job.state === 'running');
-
-/** A job's state in the words a button can carry. */
-const JobLabel: React.FC<{ job: ExtensionJob | null; idle: string; active: string }> = ({
-  job,
-  idle,
-  active,
-}) => {
-  if (job?.state === 'queued') {
-    return (
-      <>
-        <Clock size={13} /> Waiting
-      </>
-    );
-  }
-  if (job?.state === 'running') {
-    return (
-      <>
-        <Loader2 size={13} className="spin" /> {active}
-      </>
-    );
-  }
-  return <>{idle}</>;
-};
 
 /**
  * What a repository matched on, when it did not match on its own text.
@@ -191,11 +171,52 @@ export const RepositoryCatalog: React.FC<RepositoryCatalogProps> = ({
   onBrowse,
   onCollapse,
   renderExpanded,
+  available,
   onRemove,
   onAdd,
   onInstallAll,
 }) => {
   const [catalogueOpen, setCatalogueOpen] = useState(true);
+  const [drawerQuery, setDrawerQuery] = useState('');
+  const [drawerSearch, setDrawerSearch] = useState(false);
+  const [aboutOpen, setAboutOpen] = useState(false);
+
+  // A new repository starts the drawer fresh: no stale search, facts folded.
+  useEffect(() => {
+    setDrawerQuery('');
+    setDrawerSearch(false);
+    setAboutOpen(false);
+  }, [expandedUrl]);
+
+  // Escape, or a press outside the drawer that is not on another card, closes
+  // it. A press on another card switches the drawer instead, so repositories
+  // can be inspected one after another without closing anything.
+  useEffect(() => {
+    if (!expandedUrl) return;
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === 'Escape' && !event.defaultPrevented) onCollapse();
+    };
+    const onPress = (event: MouseEvent) => {
+      const target = event.target as HTMLElement | null;
+      if (!target?.closest || target.closest('.ext-drawer, .ext-card--selectable, .ext-custom-list__row, [role="dialog"], [role="menu"]')) return;
+      onCollapse();
+    };
+    window.addEventListener('keydown', onKey);
+    window.addEventListener('mousedown', onPress);
+    return () => {
+      window.removeEventListener('keydown', onKey);
+      window.removeEventListener('mousedown', onPress);
+    };
+  }, [expandedUrl, onCollapse]);
+
+  /** The installed tree's node for a repository, matched the way the main process matches. */
+  const nodeFor = (url: string, rawUrl?: string) =>
+    tree.find(
+      (row) =>
+        row.url === url ||
+        row.url === rawUrl ||
+        repositoryKey(row.url).toLowerCase() === repositoryKey(rawUrl ?? url).toLowerCase()
+    );
   const [customOpen, setCustomOpen] = useState(true);
 
   /**
@@ -274,7 +295,7 @@ export const RepositoryCatalog: React.FC<RepositoryCatalogProps> = ({
    * down the list the viewer has scrolled.
    */
   return (
-    <div className={`ext-browse${opened ? ' ext-browse--split' : ''}`}>
+    <div className="ext-browse">
     <div className="ext-panel ext-browse__list">
       <button
         type="button"
@@ -403,55 +424,44 @@ export const RepositoryCatalog: React.FC<RepositoryCatalogProps> = ({
                 ) : null}
               </div>
               <div className="ext-card__actions">
+                {here ? (
+                  <span className="ext-card__state">
+                    <Check size={12} />
+                    {(() => {
+                      const count = nodeFor(repository.url, repository.rawRepoUrl)?.extensions.length ?? 0;
+                      return count > 0 ? `${count} installed` : 'In your list';
+                    })()}
+                  </span>
+                ) : addJob?.state === 'done' ? (
+                  <span className="ext-card__state">
+                    <Check size={12} /> Added
+                  </span>
+                ) : (
+                  <Button
+                    size="compact"
+                    variant="ambient"
+                    icon={Plus}
+                    loading={working(addJob)}
+                    title="Keep this repository in your list without installing anything"
+                    onClick={() => onAdd(repository.rawRepoUrl, repository.name)}
+                  >
+                    Add
+                  </Button>
+                )}
+                {failedJob?.message ? <span className="ext-item__error">{failedJob.message}</span> : null}
                 <Button
                   size="compact"
                   variant="ambient"
+                  iconOnly
                   icon={ChevronRight}
+                  className="ext-card__open"
+                  aria-label={`Details for ${repository.name}`}
                   aria-expanded={open}
                   aria-controls="ext-browse-details"
                   onClick={() =>
                     open ? onCollapse() : onBrowse({ name: repository.name, url: repository.rawRepoUrl })
                   }
-                >
-                  {open ? 'Showing' : 'Details'}
-                </Button>
-                {here ? null : addJob?.state === 'done' ? (
-                  <span className="ext-item__installed">
-                    <Check size={13} /> Added
-                  </span>
-                ) : (
-                  <button
-                    type="button"
-                    className="btn btn-secondary btn-sm"
-                    disabled={working(addJob)}
-                    title="Keep this repository in your list without installing anything"
-                    onClick={() => onAdd(repository.rawRepoUrl, repository.name)}
-                  >
-                    <JobLabel job={addJob} idle="Add" active="Adding" />
-                  </button>
-                )}
-                <button
-                  type="button"
-                  className="btn btn-secondary btn-sm"
-                  disabled={working(installJob)}
-                  title="Install every extension this repository publishes, in the background"
-                  onClick={() => onInstallAll(repository.rawRepoUrl, repository.name)}
-                >
-                  <JobLabel job={installJob} idle="Install all" active="Reading list" />
-                </button>
-                {here ? (
-                  <button
-                    type="button"
-                    className="btn btn-secondary btn-sm btn--danger-text"
-                    disabled={busy === `remove:${repository.rawRepoUrl}`}
-                    onClick={() => onRemove(repository.rawRepoUrl)}
-                  >
-                    Remove
-                  </button>
-                ) : null}
-                {failedJob?.message ? (
-                  <span className="ext-item__error">{failedJob.message}</span>
-                ) : null}
+                />
               </div>
             </li>
 
@@ -514,18 +524,139 @@ export const RepositoryCatalog: React.FC<RepositoryCatalogProps> = ({
         </section>
       )}
     </div>
-    {opened ? (
-      <aside id="ext-browse-details" className="ext-browse__details" aria-label={`Extensions in ${opened.name}`}>
-        <header className="ext-browse__details-head">
-          <div className="ext-browse__details-title">
-            <strong>{opened.name}</strong>
-            {opened.description ? <p title={opened.description}>{opened.description}</p> : null}
+    {opened ? (() => {
+      const catalogued = official.find((repository) => repository.rawRepoUrl === expandedUrl);
+      const inList = catalogued ? isInstalled(catalogued, installed) : true;
+      const node = nodeFor(catalogued?.url ?? expandedUrl ?? '', expandedUrl ?? undefined);
+      const installedCount = node?.extensions.length ?? 0;
+      const addJob = jobFor(`repo-add:${expandedUrl}`);
+      const installJob = jobFor(`repo:${expandedUrl}`);
+      const facts: Array<[string, React.ReactNode]> = catalogued
+        ? [
+            ['About', catalogued.description],
+            ['Category', catalogued.category],
+            ['Language', catalogued.language],
+            ...(catalogued.shortcode ? [['Shortcode', catalogued.shortcode] as [string, React.ReactNode]] : []),
+            ['Checked', catalogued.verified ? 'Returns a plugin list' : 'Not confirmed to return a plugin list'],
+            ['Project', <ExternalLink key="p" url={catalogued.url} />],
+            ['Index', <code key="i">{catalogued.rawRepoUrl}</code>],
+          ]
+        : [['Index', <code key="i">{expandedUrl}</code>], ['Origin', 'Added by you by its address']];
+      return (
+        /*
+         * A drawer over the list, never beside or inside it: the catalogue
+         * underneath does not move, resize or re-render, so closing it puts
+         * the viewer back exactly where they were. Not modal — another card
+         * can be opened straight from behind it.
+         */
+        <aside id="ext-browse-details" className="ext-drawer" role="dialog" aria-modal="false" aria-label={`${opened.name} details`}>
+          <header className="ext-drawer__head">
+            <div className="ext-drawer__title">
+              <strong>{opened.name}</strong>
+              <span className="ext-drawer__badges">
+                {catalogued?.verified ? <Badge tone="success">verified</Badge> : null}
+                {catalogued?.adult ? <Badge tone="warning">18+</Badge> : null}
+                {!catalogued ? <Badge tone="neutral">added by you</Badge> : null}
+              </span>
+            </div>
+            {(available?.total ?? 0) > 6 ? (
+              <Button
+                size="compact"
+                variant="ambient"
+                iconOnly
+                icon={Search}
+                aria-label="Search this repository"
+                aria-pressed={drawerSearch}
+                onClick={() => {
+                  setDrawerSearch((on) => !on);
+                  setDrawerQuery('');
+                }}
+              />
+            ) : null}
+            <Button size="compact" variant="ambient" iconOnly icon={X} aria-label="Close details" onClick={onCollapse} />
+          </header>
+
+          {/* State first, with the one action that state calls for. */}
+          <div className="ext-drawer__status">
+            {!inList && addJob?.state !== 'done' ? (
+              <>
+                <span>Not in your list</span>
+                <Button size="compact" variant="prominent" icon={Plus} loading={working(addJob)} onClick={() => onAdd(expandedUrl ?? '', opened.name)}>
+                  Add
+                </Button>
+                <Button size="compact" loading={working(installJob)} onClick={() => onInstallAll(expandedUrl ?? '', opened.name)}>
+                  Install all
+                </Button>
+              </>
+            ) : available && available.missing > 0 ? (
+              <>
+                <span>
+                  {installedCount > 0 ? `${available.total - available.missing} of ${available.total} installed` : `${available.total} extensions, none installed`}
+                </span>
+                <Button size="compact" variant="prominent" loading={working(installJob)} onClick={() => onInstallAll(expandedUrl ?? '', opened.name)}>
+                  {installedCount > 0 ? `Install ${available.missing} more` : 'Install all'}
+                </Button>
+              </>
+            ) : available ? (
+              <span className="ext-drawer__ok">
+                <Check size={13} /> All {available.total} extensions installed
+              </span>
+            ) : (
+              <span>{installedCount > 0 ? `${installedCount} installed` : 'In your list'}</span>
+            )}
           </div>
-          <Button size="compact" variant="ambient" iconOnly icon={X} aria-label="Close details" onClick={onCollapse} />
-        </header>
-        <div className="ext-browse__details-body">{renderExpanded()}</div>
-      </aside>
-    ) : null}
+
+          {drawerSearch ? (
+            <div className="ext-drawer__search">
+              <SearchInput
+                variant="compact"
+                autoFocus
+                label="Search this repository"
+                placeholder="Extensions and providers"
+                value={drawerQuery}
+                onChange={setDrawerQuery}
+              />
+            </div>
+          ) : null}
+
+          <div className="ext-drawer__body">
+            {renderExpanded(drawerQuery)}
+
+            <section className="ext-drawer__about">
+              <button type="button" className="ext-section-toggle" aria-expanded={aboutOpen} onClick={() => setAboutOpen((o) => !o)}>
+                {aboutOpen ? <ChevronUp size={13} /> : <ChevronDown size={13} />}
+                About this repository
+              </button>
+              {aboutOpen ? (
+                <dl className="ext-drawer__facts">
+                  {facts.map(([label, value]) => (
+                    <React.Fragment key={label}>
+                      <dt>{label}</dt>
+                      <dd>{value}</dd>
+                    </React.Fragment>
+                  ))}
+                </dl>
+              ) : null}
+            </section>
+          </div>
+
+          {inList ? (
+            <footer className="ext-drawer__foot">
+              <Button
+                size="compact"
+                variant="ambient"
+                icon={Trash2}
+                disabled={busy === `remove:${expandedUrl}`}
+                title={installedCount > 0 ? 'Remove the repository and uninstall what it installed' : 'Remove from your list'}
+                onClick={() => onRemove(expandedUrl ?? '')}
+              >
+                Remove repository
+              </Button>
+            </footer>
+          ) : null}
+        </aside>
+      );
+    })() : null}
     </div>
   );
 };
