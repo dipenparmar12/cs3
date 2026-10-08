@@ -1,0 +1,42 @@
+# Checks on every push and pull request: typecheck and the fast unit suites,
+# on Windows (the primary platform) and Linux. Packaging and the slow suites
+# run in the release workflow.
+
+name: CI
+
+on:
+  push:
+    branches: ['**']
+    tags-ignore: ['v*']
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  checks:
+    name: Checks (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, ubuntu-latest]
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - uses: oven-sh/setup-bun@v2
+      - name: Install dependencies
+        working-directory: cs3_windows
+        run: bun install --frozen-lockfile
+      - name: Typecheck (tsc -b)
+        working-directory: cs3_windows
+        run: ./node_modules/.bin/tsc -b
+      - name: Unit tests
+        working-directory: cs3_windows
+        run: bun run test --fast

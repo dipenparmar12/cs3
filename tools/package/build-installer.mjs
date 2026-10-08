@@ -1,6 +1,11 @@
 #!/usr/bin/env node
 /**
- * One command that turns a checkout into a distributable Windows installer.
+ * One command that turns a checkout into distributable packages for this
+ * operating system: Windows (installer, portable exe, zip), macOS (dmg, zip)
+ * or Linux (AppImage, deb, tar.gz). Each OS builds its own packages — the JRE
+ * is jlinked and the media tools staged for the machine running the build —
+ * which is what the release workflow (`.github/workflows/release.yml`) does on
+ * one runner per OS and architecture.
  *
  * The pieces have existed for a while and had to be run by hand, in an order
  * that is not guessable and whose failure is silent in the worst way: skip the
@@ -16,6 +21,7 @@
  *   node tools/package/build-installer.mjs
  *   node tools/package/build-installer.mjs --fast        # reuse existing jars
  *   node tools/package/build-installer.mjs --target nsis
+ *   node tools/package/build-installer.mjs --version 1.2.3     # name artifacts for a release
  */
 
 import { spawnSync } from 'node:child_process';
@@ -37,12 +43,15 @@ function flagValue(name, fallback) {
 }
 
 if (has('--help') || has('-h')) {
-  console.log(`Build a distributable Windows package.
+  console.log(`Build distributable packages for this operating system.
 
   --clean               rebuild every stage, even one nothing has invalidated
   --fast                trust whatever is already staged, without checking it
   --quick               store the payload instead of compressing it (test builds)
-  --target nsis|portable|both   default: both
+  --target <list>       Windows: nsis|portable|zip|both (default: nsis,portable,zip)
+                        macOS: dmg|zip (default: both); Linux: AppImage|deb|tar.gz (default: all)
+  --arch x64|arm64      default: this machine's
+  --version x.y.z       the version artifacts are named for (default: package.json)
   --skip-jvm            do not build the sidecar (the package will run no extensions)
   --skip-media          do not bundle ffmpeg/mpv (they are then fetched on first use)
   --allow-missing-media stage whatever media binaries are present instead of failing
@@ -58,9 +67,17 @@ const SKIP_JVM = has('--skip-jvm');
 const SKIP_MEDIA = has('--skip-media');
 const SKIP_TYPECHECK = has('--skip-typecheck');
 const ALLOW_MISSING_MEDIA = has('--allow-missing-media');
-// nsis is the installer people expect; portable is the unzip-and-run copy.
-// Both are cheap once the heavy staging is done, so both is the default.
+/**
+ * The packages each OS gets. Windows: the installer people expect, the
+ * portable exe, and a zip of the same files for anyone whose policy forbids
+ * running a self-extractor. macOS: a dmg and a zip. Linux: an AppImage that
+ * runs anywhere, a deb, and a plain tarball.
+ */
+const OS = process.platform === 'darwin' ? 'mac' : process.platform === 'linux' ? 'linux' : 'win';
+const DEFAULT_TARGETS = { win: ['nsis', 'portable', 'zip'], mac: ['dmg', 'zip'], linux: ['AppImage', 'deb', 'tar.gz'] };
 const TARGETS = flagValue('--target', 'both');
+const ARCH = flagValue('--arch', process.arch);
+const VERSION = flagValue('--version', null);
 
 let step = 0;
 const started = Date.now();
@@ -428,7 +445,7 @@ if (SKIP_MEDIA) {
   if (
     upToDate(
       'cs3_windows/media-runtime',
-      ['ffmpeg', 'ffprobe', 'mpv'].map((name) =>
+      (isWindows ? ['ffmpeg', 'ffprobe', 'mpv'] : ['ffmpeg', 'ffprobe']).map((name) =>
         path.join(mediaDir, isWindows ? `${name}.exe` : name),
       ),
       [path.join(root, 'tools', 'package', 'build-media-runtime.mjs')],
@@ -482,8 +499,13 @@ if (fs.existsSync(assets)) {
 }
 
 // ── Package ──────────────────────────────────────────────────────────────────
-heading(`Packaging for Windows (${TARGETS})`);
-// electron-builder extracts Electron into release/win-unpacked.tmp and renames
+const OS_LABEL = { win: 'Windows', mac: 'macOS', linux: 'Linux' }[OS];
+const targets =
+  TARGETS === 'both'
+    ? DEFAULT_TARGETS[OS]
+    : TARGETS.split(',').map((target) => target.trim()).filter(Boolean);
+heading(`Packaging for ${OS_LABEL} ${ARCH} (${targets.join(', ')})`);
+// electron-builder extracts Electron into release/<os>-unpacked.tmp and renames
 // it into place. A run interrupted between those two steps leaves the .tmp
 // behind, and the next rename then fails with EPERM naming a path that looks
 // like a permissions problem and is really our own debris.
@@ -495,7 +517,6 @@ if (fs.existsSync(releaseDir)) {
     fs.rmSync(path.join(releaseDir, entry), { recursive: true, force: true });
   }
 }
-const targets = TARGETS === 'both' ? ['nsis', 'portable'] : [TARGETS];
 /**
  * `compression: maximum` is right for something people download and wrong for
  * something you are about to run once.
@@ -508,9 +529,20 @@ const targets = TARGETS === 'both' ? ['nsis', 'portable'] : [TARGETS];
  * the report names it.
  */
 if (QUICK) info('compression: store (--quick) — larger artifact, for testing rather than release');
+if (VERSION) info(`version ${VERSION}`);
 run(
   requireBin('electron-builder'),
-  ['--win', ...targets, '--publish', 'never', ...(QUICK ? ['-c.compression=store'] : [])],
+  [
+    `--${OS}`,
+    ...targets,
+    `--${ARCH}`,
+    '--publish',
+    'never',
+    ...(QUICK ? ['-c.compression=store'] : []),
+    // The release names every artifact after the tag, not after whatever
+    // package.json says on the commit it was cut from.
+    ...(VERSION ? [`-c.extraMetadata.version=${VERSION}`] : []),
+  ],
   { cwd: app },
 );
 
@@ -525,13 +557,13 @@ for (const entry of timings) {
 const produced = fs.existsSync(releaseDir)
   ? fs
       .readdirSync(releaseDir)
-      .filter((f) => /\.(exe|msi)$/.test(f))
+      .filter((f) => /\.(exe|msi|zip|dmg|AppImage|deb|tar\.gz)$/.test(f))
       .map((f) => ({ name: f, mb: (fs.statSync(path.join(releaseDir, f)).size / 1024 / 1024).toFixed(1) }))
   : [];
 
 console.log(`\n\x1b[32mDone\x1b[0m in ${Math.round((Date.now() - started) / 1000)}s — ${releaseDir}`);
 for (const file of produced) console.log(`    ${file.name}  (${file.mb} MB)`);
-if (!produced.length) console.log('    (no installer found — check the electron-builder output above)');
+if (!produced.length) console.log('    (no package found — check the electron-builder output above)');
 if (SKIP_JVM) {
   console.log('\n\x1b[33mNote:\x1b[0m built with --skip-jvm — extensions will not work in this package.');
 }

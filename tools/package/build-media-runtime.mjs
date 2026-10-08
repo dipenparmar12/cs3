@@ -168,8 +168,30 @@ const SOURCES = {
   },
 };
 
-SOURCES['darwin-arm64'] = SOURCES['darwin-x64'];
-SOURCES['linux-arm64'] = SOURCES['linux-x64'];
+/*
+ * Apple silicon: evermeet publishes Intel builds only, and an x86 binary
+ * spawned by the app fails with "Bad CPU type" wherever Rosetta is not
+ * installed — which is most new Macs. Rather than ship a binary that may not
+ * run, the arm64 package uses Homebrew's ffmpeg (`brew install ffmpeg`); the
+ * app searches Homebrew's prefix even though a Finder-launched app's PATH
+ * lacks it (`electron/platform/binarySources.ts`).
+ */
+SOURCES['darwin-arm64'] = {
+  ffmpeg: { required: false, reason: 'use Homebrew on Apple silicon (`brew install ffmpeg`)' },
+  ffprobe: { required: false, reason: 'installed with Homebrew ffmpeg' },
+  mpv: SOURCES['darwin-x64'].mpv,
+};
+
+/* Linux on ARM: the same builder's aarch64 build — never the x86_64 one. */
+SOURCES['linux-arm64'] = {
+  ...SOURCES['linux-x64'],
+  ffmpeg: {
+    ...SOURCES['linux-x64'].ffmpeg,
+    mirrors: [
+      'https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-master-latest-linuxarm64-gpl.tar.xz',
+    ],
+  },
+};
 
 const key = `${platformArg}-${archArg}`;
 const plan = SOURCES[key];
