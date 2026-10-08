@@ -8,29 +8,22 @@ import { normaliseTitleForMatch, titleSimilarity } from './torrent/releaseParser
 import { parseCinemetaUrl } from './cinemeta';
 
 /**
- * Collapses one search's results down to one row per actual work.
+ * Collapses duplicate results within each provider / source down to one row.
  *
- * A single query fans out to extension providers, Cinemeta, TVmaze and AniList,
- * and they overlap heavily — a popular film comes back from four of them with
- * four spellings, four posters and four URLs. Shown raw that reads as four
- * different films, and the viewer has to guess which one will actually play.
+ * Each responding provider (e.g. Castle TV, 4KHD hub, Movie box) remains its own
+ * distinct result entry on the search grid with its own poster card, allowing the
+ * viewer to choose specific providers directly and test their sources.
  *
- * Merging needs an identity, and the available identifiers are not equally
- * good:
+ * Within the same provider, duplicate rows are deduplicated:
  *
- * - **IMDb id** is exact. Two rows carrying the same one are the same work,
- *   full stop, whatever they call themselves.
+ * - **IMDb id** is exact. Two rows from the same provider carrying the same one
+ *   are the same work.
  * - **Normalised title + year** is the fallback, and it is deliberately strict
- *   about the year. "Dune (1984)" and "Dune (2021)" are different films;
- *   merging them would be a worse failure than showing a duplicate.
- * - **Normalised title alone** is used only to absorb a row that has *no* year,
- *   which is common for extension providers — they scrape a site that never
- *   printed one. That row cannot contradict a year it does not have, so it
- *   folds into the yeared row rather than sitting beside it as a near-copy.
+ *   about the year. "Dune (1984)" and "Dune (2021)" stay separate.
+ * - **Normalised title alone** is used only to absorb a row from the same provider
+ *   that has *no* year into a yeared row from that provider.
  *
- * Type is not part of the key. A provider that labels Attack on Titan `Anime`
- * and a catalogue that labels it `TvSeries` are not disagreeing about which
- * work it is, and splitting on that would defeat the whole exercise.
+ * Direct links (magnets, torrents) and distinct providers are kept separate.
  */
 
 /** Rows the merger will never touch: they are the query, not a match for it. */
@@ -162,14 +155,15 @@ export function mergeSearchResults(results: SearchResponse[]): SearchResponse[] 
   };
 
   const index = (group: Group, result: SearchResponse) => {
+    const providerKey = (result.apiName ?? '').toLowerCase().trim();
     const imdb = imdbIdOf(result);
     const title = normaliseTitleForMatch(result.name);
-    if (imdb) byImdb.set(imdb, group);
+    if (imdb) byImdb.set(`${providerKey}|${imdb}`, group);
     if (title) {
-      if (result.year !== undefined) byTitleYear.set(`${title}|${result.year}`, group);
+      if (result.year !== undefined) byTitleYear.set(`${providerKey}|${title}|${result.year}`, group);
       // First writer wins: the earliest row for a title is the best-ranked one,
       // and a year-less straggler should join it rather than redirect it.
-      if (!byTitle.has(title)) byTitle.set(title, group);
+      if (!byTitle.has(`${providerKey}|${title}`)) byTitle.set(`${providerKey}|${title}`, group);
     }
   };
 
@@ -179,6 +173,7 @@ export function mergeSearchResults(results: SearchResponse[]): SearchResponse[] 
       continue;
     }
 
+    const providerKey = (result.apiName ?? '').toLowerCase().trim();
     const imdb = imdbIdOf(result);
     const title = normaliseTitleForMatch(result.name);
 
@@ -187,7 +182,7 @@ export function mergeSearchResults(results: SearchResponse[]): SearchResponse[] 
      * best has no year accepts a yeared row. What must never happen is two
      * *different* years merging: that is Dune 1984 swallowing Dune 2021.
      */
-    const sameTitle = title ? byTitle.get(title) : undefined;
+    const sameTitle = title ? byTitle.get(`${providerKey}|${title}`) : undefined;
     const yearCompatible =
       sameTitle &&
       (result.year === undefined ||
@@ -195,9 +190,9 @@ export function mergeSearchResults(results: SearchResponse[]): SearchResponse[] 
         sameTitle.best.year === result.year);
 
     const existing =
-      (imdb ? byImdb.get(imdb) : undefined) ??
+      (imdb ? byImdb.get(`${providerKey}|${imdb}`) : undefined) ??
       (title && result.year !== undefined
-        ? byTitleYear.get(`${title}|${result.year}`)
+        ? byTitleYear.get(`${providerKey}|${title}|${result.year}`)
         : undefined) ??
       (yearCompatible ? sameTitle : undefined);
 

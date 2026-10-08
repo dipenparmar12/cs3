@@ -16,7 +16,6 @@ import { useTitleEnrichment } from '../components/useTitleEnrichment';
 import { useReveal } from '../utils/ExperienceModeContext';
 import { plainMessage } from '../utils/experienceMode';
 import { type SearchUiState } from './searchUiState';
-import { groupVariants, variantSummary } from '../utils/variantGroups';
 import { Button, Menu } from '../components/ui';
 
 interface SearchViewProps {
@@ -698,13 +697,6 @@ const Grid: React.FC<{
   const { visible, hidden } = partitionDeadRows(items, outcomes, {
     hideDeadRows: !showDead,
   });
-  /*
-   * One card per release family from one source (`variantGroups.ts`): every
-   * row is still here, inside its card. Grouping runs on what is visible so a
-   * hidden dead row is never the one a card opens.
-   */
-  const cards = useMemo(() => groupVariants(visible), [visible]);
-
   return (
     <>
       <div
@@ -714,17 +706,13 @@ const Grid: React.FC<{
           gap: '1.25rem',
         }}
       >
-        {cards.map((card, index) => (
+        {visible.map((item, index) => (
           <PosterCard
-            key={`${card.primary.url}-${index}`}
-            item={card.primary}
+            key={`${item.url}-${index}`}
+            item={item}
             onSelectMedia={onSelectMedia}
             onPlayDirectly={onPlayDirectly}
-            interaction={interactionFor(card.primary)}
-            variants={card.variants}
-            variantSummary={variantSummary(card)}
-            variantsIdentical={card.identical}
-            displayName={card.title}
+            interaction={interactionFor(item)}
           />
         ))}
       </div>
