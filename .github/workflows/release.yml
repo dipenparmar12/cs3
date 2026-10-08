@@ -111,7 +111,7 @@ jobs:
       VERSION: ${{ needs.version.outputs.version }}
       # Signing is opt-in: provide CSC_LINK/CSC_KEY_PASSWORD (and APPLE_* for
       # notarisation) as repository secrets to sign; without them the macOS
-      # app is ad-hoc signed by tools/package/after-pack.cjs.
+      # app is ad-hoc signed by cs3_windows/scripts/after-pack.cjs.
       CSC_IDENTITY_AUTO_DISCOVERY: 'false'
     steps:
       - uses: actions/checkout@v4

@@ -1,6 +1,9 @@
 /**
  * electron-builder afterPack hook.
  *
+ * Hook implementation lives in cs3_windows/scripts/after-pack.cjs because
+ * electron-builder requires hook module paths to resolve within the workspace root.
+ * ---
  * macOS on Apple silicon refuses to launch a bundle whose code signature is
  * invalid, and electron-builder rewrites the bundle (Info.plist, resources)
  * after Electron's own ad-hoc signature was made. With no Developer ID
@@ -11,14 +14,4 @@
  *
  * Every other platform: nothing to do.
  */
-const { execFileSync } = require('node:child_process');
-const path = require('node:path');
-
-exports.default = async function afterPack(context) {
-  if (context.electronPlatformName !== 'darwin') return;
-  if (process.env.CSC_LINK || process.env.CSC_NAME) return;
-  const appName = `${context.packager.appInfo.productFilename}.app`;
-  const appPath = path.join(context.appOutDir, appName);
-  console.log(`  • ad-hoc signing ${appName} (no Developer ID configured)`);
-  execFileSync('codesign', ['--force', '--deep', '--sign', '-', appPath], { stdio: 'inherit' });
-};
+module.exports = require('../../cs3_windows/scripts/after-pack.cjs')

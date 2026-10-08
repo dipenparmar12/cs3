@@ -101,7 +101,7 @@ deb:
 appImage:
   artifactName: CS3-${version}-linux-${arch}.${ext}
 
-afterPack: ../tools/package/after-pack.cjs
+afterPack: ./scripts/after-pack.cjs
 
 # oneClick:false with perMachine:false is what makes this installable by
 # anyone on any machine: a per-user install needs no administrator and raises
