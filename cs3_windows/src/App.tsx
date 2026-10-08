@@ -2235,6 +2235,7 @@ export const App: React.FC = () => {
               // search result, so it reuses the same handler and the same
               // scroll-restore behaviour.
               onSelectMedia={handleSelectMedia}
+              onPlayDirectly={handleQuickPlay}
               // Recorded on a bookmark, so a saved page remembers the search
               // that found it and can be reached that way again.
               searchQuery={searchQuery}

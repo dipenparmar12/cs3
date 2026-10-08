@@ -24,7 +24,7 @@ interface DialogProps {
   icon?: React.ReactNode;
   /** `danger` tints the heading icon; the actions carry their own variants. */
   tone?: 'default' | 'danger';
-  size?: 'sm' | 'md' | 'lg';
+  size?: 'sm' | 'md' | 'lg' | 'xl';
   onClose: () => void;
   children?: React.ReactNode;
   /** Usually a {@link DialogActions}. */

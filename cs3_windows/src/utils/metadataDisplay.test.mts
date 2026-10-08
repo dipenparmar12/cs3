@@ -10,6 +10,7 @@ import {
   formatRating,
   formatReleaseDate,
   formatRuntimeMinutes,
+  parseRuntimeMinutes,
   formatSeasonCount,
   formatStatus,
   formatVotes,
@@ -257,4 +258,15 @@ test('a certification is never shown without its country', () => {
   assert.equal(formatCertifications([]), null);
   assert.equal(formatCertifications(undefined), null);
   assert.equal(formatCertifications([{ country: 'US', rating: '  ' }]), null);
+});
+
+test('provider durations are read in every spelling', () => {
+  assert.equal(parseRuntimeMinutes('136 min'), 136);
+  assert.equal(parseRuntimeMinutes('2h 16m'), 136);
+  assert.equal(parseRuntimeMinutes('1 hr 45 mins'), 105);
+  assert.equal(parseRuntimeMinutes('PT2H16M'), 136);
+  assert.equal(parseRuntimeMinutes('136'), 136);
+  assert.equal(parseRuntimeMinutes('2 hours'), 120);
+  assert.equal(parseRuntimeMinutes('Unknown'), undefined);
+  assert.equal(parseRuntimeMinutes(''), undefined);
 });

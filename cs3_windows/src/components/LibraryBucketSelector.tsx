@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { Bookmark, BookmarkCheck, Check, ChevronDown, Trash2 } from 'lucide-react';
+import { Bookmark, BookmarkCheck, Check, ChevronDown, ListChecks, ListPlus, Trash2 } from 'lucide-react';
 import { isPlaceholderOrigin } from '../utils/originName';
 import { BUCKET_LABELS, WatchStatus, type SearchResponse } from '../types/api';
 import type { TorrentResult } from '../types/torrent';
@@ -39,7 +39,7 @@ interface LibraryBucketSelectorProps {
    * detail hero action buttons; 'poster' is a small round button that sits in
    * a poster's corner, so the control costs a card no height at all.
    */
-  variant?: 'default' | 'detail-action' | 'poster';
+  variant?: 'default' | 'detail-action' | 'poster' | 'icon';
 }
 
 const BUCKETS: Array<{ status: WatchStatus; label: string }> = [
@@ -202,18 +202,35 @@ export const LibraryBucketSelector: React.FC<LibraryBucketSelectorProps> = ({
 
   const isDetailAction = variant === 'detail-action';
   const isPoster = variant === 'poster';
+  // The detail hero's round icon button: same control, the hero's shape.
+  const isIcon = variant === 'icon';
   // The poster corner uses the detail menu's look: one dropdown style for the
   // same five choices wherever they are offered.
-  const menuLikeDetail = isDetailAction || isPoster;
+  const menuLikeDetail = isDetailAction || isPoster || isIcon;
 
   return (
     <div
       className={isPoster ? `poster-bucket${currentStatus ? ' poster-bucket--on' : ''}${open ? ' poster-bucket--open' : ''}` : undefined}
-      style={isPoster ? undefined : { position: 'relative', display: isDetailAction ? 'inline-flex' : 'inline-block' }}
+      style={isPoster ? undefined : { position: 'relative', display: isDetailAction || isIcon ? 'inline-flex' : 'inline-block' }}
       onMouseEnter={openOnHover ? handleMouseEnter : undefined}
       onMouseLeave={openOnHover ? handleMouseLeave : undefined}
     >
-      {isPoster ? (
+      {isIcon ? (
+        <button
+          type="button"
+          className={`detail-icon${currentStatus ? ' detail-icon--on' : ''}`}
+          onClick={(e) => {
+            e.stopPropagation();
+            setOpen((v) => !v);
+          }}
+          aria-haspopup="menu"
+          aria-expanded={open}
+          aria-label={currentStatus ? `In library: ${BUCKET_LABELS[currentStatus]}` : 'Add to library'}
+          title={currentStatus ? `Library: ${BUCKET_LABELS[currentStatus]}` : 'Add to a library list'}
+        >
+          {currentStatus ? <ListChecks size={17} /> : <ListPlus size={17} />}
+        </button>
+      ) : isPoster ? (
         <button
           type="button"
           className="poster-bucket__button"

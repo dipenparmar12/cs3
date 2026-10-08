@@ -18,6 +18,8 @@
 }
 .ui-dialog--sm { width: min(420px, 100%); }
 .ui-dialog--lg { width: min(720px, 100%); }
+/* Collections ("View all" cast, trailers, titles): wide enough for a grid. */
+.ui-dialog--xl { width: min(1120px, 94vw); max-height: 88vh; }
 .ui-dialog__head {
   display: flex;
   align-items: flex-start;
@@ -506,3 +508,11 @@ select.ui-select:disabled { opacity: var(--control-disabled-opacity); cursor: no
   flex: none;
 }
 .search-toolbar__saved { color: #93c5fd; }
+
+/* "View all" collections on the detail page. */
+.collection-dialog__grid { display: grid; gap: 1rem; padding-bottom: 0.5rem; }
+.collection-dialog__grid--posters { grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); }
+.collection-dialog__grid--wide { grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); }
+.collection-dialog__grid--people { grid-template-columns: repeat(auto-fill, minmax(120px, 1fr)); }
+.collection-dialog__grid--wide .video-card { width: 100%; }
+.collection-dialog__grid--people .credit-card { width: 100%; }

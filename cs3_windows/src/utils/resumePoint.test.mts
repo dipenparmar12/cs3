@@ -9,7 +9,7 @@
  * never report as one.
  */
 import assert from 'node:assert/strict';
-import { inPlayOrder, pickResumePoint, resumeSeconds } from './resumePoint.ts';
+import { inPlayOrder, pickResumePoint, playLabel, resumeSeconds } from './resumePoint.ts';
 import { episodeKey, type EpisodeWatchState } from '../components/player/seriesContext.ts';
 import type { Episode } from '../types/api.ts';
 
@@ -117,6 +117,22 @@ test('inPlayOrder sorts by season then episode and does not mutate', () => {
     ['S1E1', 'S1E2', 'S1E3', 'S1E4', 'S2E1', 'S2E2']
   );
   assert.deepEqual(SERIES, before);
+});
+
+test('the Play label says resume, and where', () => {
+  const state = watched([[ep(1, 2), { positionSeconds: 600, completed: false }]]);
+  assert.equal(playLabel(pickResumePoint(SERIES, state), state, { isSeries: true }), 'Resume S1 · E2');
+  const done = watched([[ep(1, 2), { positionSeconds: 2350, completed: true }]]);
+  assert.equal(playLabel(pickResumePoint(SERIES, done), done, { isSeries: true }), 'Play S1 · E3');
+  assert.equal(playLabel(pickResumePoint(SERIES, {}), {}, { isSeries: true }), 'Play S1 · E1');
+});
+
+test('a half-watched film says how much is left', () => {
+  const film: Record<string, EpisodeWatchState> = {
+    [episodeKey(undefined, undefined)]: { positionSeconds: 3000, durationSeconds: 5580, completed: false },
+  };
+  assert.equal(playLabel(pickResumePoint([], film), film, { isSeries: false }), 'Resume · 43 min left');
+  assert.equal(playLabel(pickResumePoint([], {}), {}, { isSeries: false }), 'Play');
 });
 
 // --- runner ----------------------------------------------------------------

@@ -162,6 +162,31 @@ export function formatRuntimeMinutes(minutes: number | undefined): string | null
   return rest ? `${hours} h ${rest} min` : `${hours} h`;
 }
 
+/**
+ * A provider's duration string, as minutes.
+ *
+ * Providers write it every way there is — "136 min", "2h 16m", "1 hr 45 mins",
+ * "PT2H16M", a bare "136" — and the page showed whichever arrived. Read once
+ * here so the page can say "2 h 16 min" for all of them. Anything it does not
+ * recognise is `undefined`, and the caller shows the original text.
+ */
+export function parseRuntimeMinutes(value: string | number | undefined): number | undefined {
+  if (typeof value === 'number') return Number.isFinite(value) && value > 0 ? value : undefined;
+  const text = (value ?? '').trim().toLowerCase();
+  if (!text) return undefined;
+  const iso = text.match(/^pt(?:(\d+)h)?(?:(\d+)m)?(?:(\d+)s)?$/);
+  if (iso && (iso[1] || iso[2])) return Number(iso[1] ?? 0) * 60 + Number(iso[2] ?? 0);
+  if (/^\d+$/.test(text)) {
+    const minutes = Number(text);
+    return minutes > 0 && minutes < 1000 ? minutes : undefined;
+  }
+  const hours = text.match(/(\d+(?:\.\d+)?)\s*(?:h|hr|hrs|hour|hours)\b/);
+  const minutes = text.match(/(\d+)\s*(?:m|min|mins|minute|minutes)\b/);
+  if (!hours && !minutes) return undefined;
+  const total = Math.round(Number(hours?.[1] ?? 0) * 60 + Number(minutes?.[1] ?? 0));
+  return total > 0 ? total : undefined;
+}
+
 export interface CastGroups {
   /** On-screen performers and voice credits, in billing order. */
   cast: CreditPerson[];

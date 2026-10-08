@@ -1,5 +1,7 @@
 import React, { useMemo, useState } from 'react';
-import { Film, Loader2, Play, Search } from 'lucide-react';
+import { Eraser, Film, Loader2, Play, Search } from 'lucide-react';
+import { DetailSection, SectionAction } from './DetailSection';
+import { CollectionDialog } from './CollectionDialog';
 
 import { Poster } from '../Poster';
 import type { TitleVideo } from '../../types/metadata';
@@ -56,6 +58,8 @@ interface TrailerGalleryProps {
   /** Allows finding more public trailers on demand. */
   onSearchMore?: () => void;
   searchingMore?: boolean;
+  /** Forgets the trailers "Find more" added; offered only when it added some. */
+  onClearFound?: () => void;
 }
 
 const VideoCard: React.FC<{
@@ -117,6 +121,7 @@ export const TrailerGallery: React.FC<TrailerGalleryProps> = ({
   onPlay,
   onSearchMore,
   searchingMore,
+  onClearFound,
 }) => {
   const grouped = useMemo(() => groupVideos(videos ?? []), [videos]);
   const state = videoSectionState({ videos, pending });
@@ -124,51 +129,59 @@ export const TrailerGallery: React.FC<TrailerGalleryProps> = ({
   /**
    * Related videos are collapsed behind a count, and trailers never are.
    *
-   * The opposite of `TitleMetadata`'s "everything found is shown", and for a
-   * reason that does not apply there: a cast list is what somebody came to
-   * read, while a rail of featurettes below the trailers is a second thing
-   * competing with the first. The count is on the button, so nothing is hidden
-   * without saying how much.
+   * A rail of featurettes below the trailers is a second thing competing with
+   * the first; the count is on the button, so nothing is hidden without saying
+   * how much.
    */
   const [relatedOpen, setRelatedOpen] = useState(false);
+  const [viewAll, setViewAll] = useState(false);
 
-  if (state === 'nothing') return null;
+  if (state === 'nothing' && !searchingMore) return null;
+
+  const actions = (
+    <>
+      {onSearchMore && (
+        <SectionAction
+          icon={searchingMore ? <Loader2 size={13} className="spin" /> : <Search size={13} />}
+          label="Find more"
+          title="Search public sites for more trailers"
+          onClick={onSearchMore}
+          disabled={searchingMore}
+        />
+      )}
+      {onClearFound && (
+        <SectionAction
+          icon={<Eraser size={13} />}
+          label="Clear found"
+          title="Remove the trailers found with Find more"
+          onClick={onClearFound}
+        />
+      )}
+    </>
+  );
 
   if (state === 'looking') {
     return (
-      <section className="detail-facts">
-        <h2 className="detail-facts__heading">Trailers &amp; videos</h2>
+      <DetailSection id="trailers" title="Trailers & videos" icon={<Film size={16} />} actions={actions}>
         <p className="metadata-status" role="status">
           <Loader2 size={13} className="spin" />
           <span>Looking for trailers…</span>
         </p>
-      </section>
+      </DetailSection>
     );
   }
 
-  return (
-    <section className="detail-facts">
-      <div className="detail-facts__head-row">
-        <h2 className="detail-facts__heading">
-          Trailers &amp; videos
-          {/* The count, for the reason the cast rail states one: a scroll bar
-              cannot say whether it is showing three of three or three of nine. */}
-          <span className="detail-facts__count">{grouped.total}</span>
-        </h2>
-        {onSearchMore && (
-          <button
-            type="button"
-            className="btn btn-ghost btn-sm trailer-gallery__more-btn"
-            onClick={onSearchMore}
-            disabled={searchingMore}
-            title="Search for more public trailers"
-          >
-            {searchingMore ? <Loader2 size={13} className="spin" /> : <Search size={13} />}
-            <span>Find more</span>
-          </button>
-        )}
-      </div>
+  const everything = [...grouped.trailerGroups.flatMap((group) => group.videos), ...grouped.related];
 
+  return (
+    <DetailSection
+      id="trailers"
+      title="Trailers & videos"
+      icon={<Film size={16} />}
+      count={grouped.total}
+      actions={actions}
+      onViewAll={grouped.total > 3 ? () => setViewAll(true) : undefined}
+    >
       {grouped.trailerGroups.map((group) => (
         <div className="video-group" key={group.heading ?? 'all'}>
           {group.heading && <h3 className="video-group__heading">{group.heading}</h3>}
@@ -200,6 +213,27 @@ export const TrailerGallery: React.FC<TrailerGalleryProps> = ({
           )}
         </div>
       )}
-    </section>
+
+      {viewAll && (
+        <CollectionDialog
+          title="Trailers & videos"
+          count={everything.length}
+          icon={<Film size={18} />}
+          layout="wide"
+          onClose={() => setViewAll(false)}
+        >
+          {everything.map((video) => (
+            <VideoCard
+              key={video.id}
+              video={video}
+              onPlay={(chosen) => {
+                setViewAll(false);
+                onPlay(chosen);
+              }}
+            />
+          ))}
+        </CollectionDialog>
+      )}
+    </DetailSection>
   );
 };

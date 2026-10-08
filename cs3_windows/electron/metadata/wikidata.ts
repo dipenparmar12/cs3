@@ -89,14 +89,14 @@ const MAX_CREDITS = 60;
 /** SPARQL is a shared public service and this is a background enrichment. */
 const TIMEOUT_MS = 20_000;
 
-interface SparqlBinding {
+export interface SparqlBinding {
   type?: string;
   value?: string;
   'xml:lang'?: string;
   datatype?: string;
 }
 
-interface SparqlResponse {
+export interface SparqlResponse {
   results?: { bindings?: Record<string, SparqlBinding>[] };
 }
 
@@ -424,7 +424,7 @@ export function parseFacts(response: SparqlResponse): WikidataFacts | null {
   };
 }
 
-async function runQuery(query: string, signal?: AbortSignal): Promise<SparqlResponse> {
+export async function runQuery(query: string, signal?: AbortSignal): Promise<SparqlResponse> {
   const url = `${ENDPOINT}?query=${encodeURIComponent(query)}&format=json`;
   return fetchJson<SparqlResponse>(url, {
     signal,

@@ -1,8 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   AlertCircle,
-  ChevronDown,
-  ChevronRight,
+  Eraser,
   ExternalLink,
   Film,
   Loader2,
@@ -23,6 +22,7 @@ import type {
 import type { TitleVideo } from '../../types/metadata';
 import { TitleVideoKind } from '../../types/metadata';
 import { formatVideoDuration } from '../../utils/videoGallery';
+import { DetailSection, SectionAction } from './DetailSection';
 
 export interface ReviewsAndExplanationsProps {
   title: string;
@@ -63,7 +63,6 @@ export const ReviewsAndExplanations: React.FC<ReviewsAndExplanationsProps> = ({
   episode,
   onPlayVideo,
 }) => {
-  const [isExpanded, setIsExpanded] = useState(true);
   const [status, setStatus] = useState<'idle' | 'loading' | 'loaded' | 'error'>('idle');
   const [results, setResults] = useState<RelatedMediaResult[]>([]);
   const [activeCategory, setActiveCategory] = useState<RelatedMediaCategory | 'all'>('all');
@@ -117,7 +116,6 @@ export const ReviewsAndExplanations: React.FC<ReviewsAndExplanationsProps> = ({
 
       setStatus('loading');
       setErrorMessage(null);
-      setIsExpanded(true);
 
       try {
         const req: RelatedMediaSearchRequest = {
@@ -154,6 +152,16 @@ export const ReviewsAndExplanations: React.FC<ReviewsAndExplanationsProps> = ({
     },
     [title, originalTitle, year, season, episode]
   );
+
+  /** Forgets this title's results, here and in the cache, back to the invitation. */
+  const handleClear = useCallback(async () => {
+    abortControllerRef.current?.abort();
+    abortControllerRef.current = null;
+    await window.cloudstream?.forgetRelatedMedia?.({ title, originalTitle, year, season, episode, type: 'all' });
+    setResults([]);
+    setStatus('idle');
+    setActiveCategory('all');
+  }, [title, originalTitle, year, season, episode]);
 
   const handleCancel = useCallback(() => {
     if (abortControllerRef.current) {
@@ -216,42 +224,31 @@ export const ReviewsAndExplanations: React.FC<ReviewsAndExplanationsProps> = ({
   const hasMore = filteredResults.length > visibleCount;
 
   return (
-    <section className="detail-facts reviews-section" aria-label="Reviews and Explanations">
-      <div className="detail-facts__head-row reviews-section__head-row">
-        {/* Collapsible title button with Chevron placed immediately next to title and count */}
-        <button
-          type="button"
-          className="reviews-section__title-btn"
-          onClick={() => setIsExpanded((prev) => !prev)}
-          aria-expanded={isExpanded}
-          title={isExpanded ? 'Collapse Reviews & Explanations' : 'Expand Reviews & Explanations'}
-        >
-          <MessageSquare size={18} aria-hidden />
-          <h2 className="detail-facts__heading reviews-section__heading-inline">
-            Reviews &amp; Explanations
-          </h2>
-          {status === 'loaded' && results.length > 0 && (
-            <span className="detail-facts__count">{filteredResults.length}</span>
-          )}
-          <span className="reviews-section__chevron" aria-hidden>
-            {isExpanded ? <ChevronDown size={17} /> : <ChevronRight size={17} />}
-          </span>
-        </button>
-
-        {status === 'loaded' && isExpanded && (
-          <button
-            type="button"
-            className="btn btn-ghost btn-sm trailer-gallery__more-btn"
-            onClick={() => void handleSearch(true)}
-            title="Refresh reviews and explanations"
-          >
-            <RotateCw size={13} />
-            <span>Refresh</span>
-          </button>
-        )}
-      </div>
-
-      {isExpanded && (
+    <DetailSection
+      id="reviews"
+      title="Reviews & explanations"
+      icon={<MessageSquare size={16} />}
+      count={status === 'loaded' ? filteredResults.length : undefined}
+      className="reviews-section"
+      actions={
+        status === 'loaded' ? (
+          <>
+            <SectionAction
+              icon={<RotateCw size={13} />}
+              label="Refresh"
+              title="Search again for reviews and explanations"
+              onClick={() => void handleSearch(true)}
+            />
+            <SectionAction
+              icon={<Eraser size={13} />}
+              label="Clear"
+              title="Forget what was found for this title"
+              onClick={() => void handleClear()}
+            />
+          </>
+        ) : undefined
+      }
+    >
         <>
           {status === 'idle' && (
             <div className="reviews-section__invite">
@@ -452,7 +449,6 @@ export const ReviewsAndExplanations: React.FC<ReviewsAndExplanationsProps> = ({
             </>
           )}
         </>
-      )}
-    </section>
+    </DetailSection>
   );
 };

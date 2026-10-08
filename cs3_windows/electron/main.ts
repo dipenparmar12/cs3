@@ -121,6 +121,8 @@ import {
 } from './metadata/enrichmentService';
 import { searchYouTubeTrailers } from './metadata/youtube';
 import { relatedMediaService } from './metadata/relatedMedia/relatedMediaService.ts';
+import { fetchFilmography } from './metadata/filmography.ts';
+import type { FilmographyRequest } from '../src/types/filmography';
 import type { RelatedMediaSearchRequest } from '../src/types/relatedMedia';
 import { mediaRatingService } from './metadata/ratings/mediaRatingService.ts';
 import type { CanonicalMediaIdentity } from '../src/types/ratings.ts';
@@ -3363,6 +3365,25 @@ ipcMain.handle('metadata:findTrailers', async (_, title: string, year?: number) 
     return { ...fail(error), videos: [] };
   }
 });
+
+/**
+ * "More from this person / studio" — see `metadata/filmography.ts`. Read-only
+ * and keyless; resolved by id, or by being credited on the title in view,
+ * never by name alone.
+ */
+ipcMain.handle('metadata:filmography', async (_, request: FilmographyRequest) => {
+  try {
+    if (!request?.name) return { ok: false, error: 'No one was named.', filmography: null };
+    return { ok: true, filmography: await fetchFilmography(request) };
+  } catch (error) {
+    return { ...fail(error), filmography: null };
+  }
+});
+
+ipcMain.handle('metadata:forgetRelatedMedia', async (_, request: RelatedMediaSearchRequest) => ({
+  ok: true,
+  removed: request ? relatedMediaService.forget(request) : false,
+}));
 
 ipcMain.handle('metadata:findRelatedMedia', async (_, request: RelatedMediaSearchRequest) => {
   try {
