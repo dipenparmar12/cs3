@@ -240,6 +240,21 @@ export const SubtitlePanel: React.FC<SubtitlePanelProps> = ({
     };
   }, [open]);
 
+  useEffect(() => {
+    const unsubscribe = window.cloudstream?.onPlayerPreferencesChanged?.((p) => {
+      setStyle({
+        scale: p.subtitleScale ?? DEFAULT_SUBTITLE_STYLE.scale,
+        color: p.subtitleColor ?? DEFAULT_SUBTITLE_STYLE.color,
+        background: p.subtitleBackground ?? DEFAULT_SUBTITLE_STYLE.background,
+        weight: p.subtitleWeight ?? DEFAULT_SUBTITLE_STYLE.weight,
+        position: p.subtitlePosition ?? DEFAULT_SUBTITLE_STYLE.position,
+      });
+    });
+    return () => {
+      unsubscribe?.();
+    };
+  }, []);
+
   const updateStyle = (patch: Partial<SubtitleStyle>) => {
     const next = { ...style, ...patch };
     setStyle(next);
@@ -550,12 +565,22 @@ export const SubtitlePanel: React.FC<SubtitlePanelProps> = ({
               <span>Size</span>
               <span className="subtitle-panel__config-val">{Math.round(style.scale * 100)}%</span>
             </div>
-            <div className="sub-choices">
+            <input
+              type="range"
+              min={0.5}
+              max={2.5}
+              step={0.05}
+              value={style.scale}
+              onChange={(e) => updateStyle({ scale: Number(e.target.value) })}
+              className="subtitle-panel__range"
+              aria-label="Subtitle size"
+            />
+            <div className="sub-choices--compact" role="group" aria-label="Quick size presets">
               {SUBTITLE_SCALES.map((scale) => (
                 <button
                   key={scale}
                   type="button"
-                  className={`btn btn-secondary sub-choice${style.scale === scale ? ' sub-choice--on' : ''}`}
+                  className={`sub-chip${Math.abs(style.scale - scale) < 0.01 ? ' sub-chip--on' : ''}`}
                   onClick={() => updateStyle({ scale })}
                 >
                   {Math.round(scale * 100)}%
@@ -601,7 +626,7 @@ export const SubtitlePanel: React.FC<SubtitlePanelProps> = ({
                 <button
                   key={option.value}
                   type="button"
-                  className={`btn btn-secondary sub-choice${style.background === option.value ? ' sub-choice--on' : ''}`}
+                  className={`sub-choice${style.background === option.value ? ' sub-choice--on' : ''}`}
                   title={option.hint}
                   onClick={() => updateStyle({ background: option.value as SubtitleBackground })}
                 >
@@ -640,6 +665,7 @@ export const SubtitlePanel: React.FC<SubtitlePanelProps> = ({
               value={style.position}
               onChange={(e) => updateStyle({ position: Number(e.target.value) })}
               className="subtitle-panel__range"
+              aria-label="Raise from bottom"
             />
           </div>
 
@@ -647,7 +673,7 @@ export const SubtitlePanel: React.FC<SubtitlePanelProps> = ({
           <div className="subtitle-panel__config-footer">
             <button
               type="button"
-              className="btn btn-secondary sub-choice"
+              className="sub-choice"
               onClick={() => updateStyle(DEFAULT_SUBTITLE_STYLE)}
             >
               Reset appearance

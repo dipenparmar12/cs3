@@ -4802,13 +4802,9 @@ const BACKGROUND_MODES = new Set(['continue', 'audio-only', 'pause']);
 const SUBTITLE_BACKGROUNDS = new Set(['none', 'shadow', 'outline', 'box']);
 const HEX_COLOR = /^#[0-9a-fA-F]{6}$/;
 
-ipcMain.handle('player:getPreferences', async () => {
-  const stored = datastore.getObject<StoredPlayerPreferences>(PLAYER_PREFERENCES_KEY, null);
-  /**
-   * Clamped on read, not just on write. A datastore edited by hand — or carried
-   * in from an Android backup — can hold a volume of 40 or -1, and either one
-   * makes the element throw `IndexSizeError` the moment it is assigned.
-   */
+function sanitizePlayerPreferences(
+  stored: Partial<StoredPlayerPreferences> | null | undefined
+): StoredPlayerPreferences {
   const preferences: StoredPlayerPreferences = {
     ...DEFAULT_PLAYER_PREFERENCES,
     ...(stored ?? {}),
@@ -4837,19 +4833,28 @@ ipcMain.handle('player:getPreferences', async () => {
     preferences.backgroundPlayback = DEFAULT_PLAYER_PREFERENCES.backgroundPlayback;
   }
   preferences.alwaysOnTop = preferences.alwaysOnTop === true;
+  return preferences;
+}
+
+ipcMain.handle('player:getPreferences', async () => {
+  const stored =
+    datastore.getObject<StoredPlayerPreferences>(PLAYER_PREFERENCES_KEY, null, true) ??
+    datastore.getObject<StoredPlayerPreferences>(PLAYER_PREFERENCES_KEY, null, false);
+  const preferences = sanitizePlayerPreferences(stored);
   return { ok: true, preferences };
 });
 
 ipcMain.handle(
   'player:setPreferences',
   async (_, patch: Partial<StoredPlayerPreferences>) => {
-    const current =
-      datastore.getObject<StoredPlayerPreferences>(PLAYER_PREFERENCES_KEY, null) ??
-      DEFAULT_PLAYER_PREFERENCES;
+    const raw =
+      datastore.getObject<StoredPlayerPreferences>(PLAYER_PREFERENCES_KEY, null, true) ??
+      datastore.getObject<StoredPlayerPreferences>(PLAYER_PREFERENCES_KEY, null, false);
+    const current = sanitizePlayerPreferences(raw);
     // Merged rather than replaced: the player writes volume/mute/speed while the
     // track panels write languages, and a whole-record write from either would
     // erase the other's choice.
-    const merged = { ...current, ...patch };
+    const merged = sanitizePlayerPreferences({ ...current, ...patch });
     datastore.setObject(PLAYER_PREFERENCES_KEY, merged, true);
     mainWindow?.webContents.send('player:preferencesChanged', merged);
     return { ok: true };

@@ -81,12 +81,24 @@ export const SubtitleSettings: React.FC = () => {
       </SettingRow>
 
       <SettingRow label="Size" note={`${Math.round(style.scale * 100)}%`}>
+        <input
+          type="range"
+          min={0.5}
+          max={2.5}
+          step={0.05}
+          value={style.scale}
+          disabled={!loaded}
+          onChange={(event) => update({ scale: Number(event.target.value) })}
+          className="subtitle-panel__range"
+          style={{ marginBottom: '0.35rem' }}
+          aria-label="Subtitle size"
+        />
         <div className="sub-choices">
           {SUBTITLE_SCALES.map((scale) => (
             <button
               key={scale}
               type="button"
-              className={`btn btn-secondary sub-choice${style.scale === scale ? ' sub-choice--on' : ''}`}
+              className={`btn btn-secondary sub-choice${Math.abs(style.scale - scale) < 0.01 ? ' sub-choice--on' : ''}`}
               disabled={!loaded}
               onClick={() => update({ scale })}
             >
