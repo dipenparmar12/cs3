@@ -29,6 +29,7 @@ import { useExtensionCatalog } from './useExtensionCatalog';
 import { useExtensionFilters } from './useExtensionFilters';
 import { FilterBar } from './FilterBar';
 import { ExtensionUpdates } from '../ExtensionUpdates';
+import { Button } from '../ui';
 import { BulkActionBar } from './BulkActionBar';
 import { BulkConfirmDialog, type BulkVerb } from './BulkConfirmDialog';
 import {
@@ -351,14 +352,15 @@ export const ExtensionsScreen: React.FC = () => {
             </>
           )}
         </p>
-        <button
-          type="button"
-          className="btn btn-secondary btn-sm"
+        <Button
+          size="compact"
+          variant="ambient"
+          icon={RefreshCw}
           onClick={() => void refresh()}
           disabled={state.loading || busy !== null}
         >
-          <RefreshCw size={13} /> Refresh
-        </button>
+          Refresh
+        </Button>
       </header>
 
       {state.error ? <p className="ext-error">{state.error}</p> : null}
@@ -376,6 +378,7 @@ export const ExtensionsScreen: React.FC = () => {
               aria-selected={tab === entry.id}
               className={`ext-tab${tab === entry.id ? ' ext-tab--on' : ''}`}
               onClick={() => setTab(entry.id)}
+              title={entry.hint}
             >
               <div className="ext-tab__head">
                 <span className="ext-tab__label">{entry.label}</span>
@@ -393,7 +396,6 @@ export const ExtensionsScreen: React.FC = () => {
                   </span>
                 )}
               </div>
-              <span className="ext-tab__hint">{entry.hint}</span>
             </button>
           );
         })}
@@ -421,6 +423,7 @@ export const ExtensionsScreen: React.FC = () => {
 
       {tab === 'sources' ? (
         <>
+          {counts.extensions === 0 && (
           <div className="ext-builtin-banner">
             <div className="ext-builtin-banner__content">
               <Library size={18} className="ext-builtin-banner__icon" />
@@ -429,14 +432,11 @@ export const ExtensionsScreen: React.FC = () => {
                 <span>Ship with the app — nothing to install, and they cannot break on an update.</span>
               </div>
             </div>
-            <button
-              type="button"
-              className="btn btn-primary btn-sm"
-              onClick={() => setTab('builtin')}
-            >
-              View Built-in Sources
-            </button>
+            <Button size="compact" onClick={() => setTab('builtin')}>
+              View built-in sources
+            </Button>
           </div>
+          )}
 
           {/*
             One selection model over both levels the actions work at: an
@@ -445,6 +445,7 @@ export const ExtensionsScreen: React.FC = () => {
             plan from `bulkSelection.ts`, so they cannot disagree about what an
             action will reach.
           */}
+          {counts.extensions > 0 && (
           <BulkActionBar
             plan={plan}
             matchingCount={matching.size}
@@ -457,6 +458,7 @@ export const ExtensionsScreen: React.FC = () => {
             onClearHidden={() => setSelected((current) => splitSelection(current, visibleTree).shown)}
             onAction={(verb) => setConfirming(verb)}
           />
+          )}
           {bulkNotice ? (
             <p className="ext-error" role="status">
               {bulkNotice}

@@ -963,29 +963,6 @@ export const HistoryView: React.FC<HistoryViewProps> = ({ onSelectMedia, onPlayD
                           </span>
                         )}
 
-                        {/* Visited Repeat Count in Brackets (e.g. [3 visits] or (3)) */}
-                        {group.visitCount > 1 && (
-                          <span
-                            style={{
-                              display: 'inline-flex',
-                              alignItems: 'center',
-                              gap: '0.2rem',
-                              fontSize: '0.7rem',
-                              fontWeight: 800,
-                              padding: '0.12rem 0.45rem',
-                              borderRadius: '10px',
-                              backgroundColor: 'rgba(99, 102, 241, 0.15)',
-                              color: '#a5b4fc',
-                              border: '1px solid rgba(99, 102, 241, 0.35)',
-                              letterSpacing: '0.01em',
-                            }}
-                            title={`Revisited ${group.visitCount} times across streams, downloads & discovery`}
-                          >
-                            <Layers size={11} />
-                            <span>({group.visitCount})</span>
-                          </span>
-                        )}
-
                         {/* Distinct Action Tags / Accents (Streamed, Downloaded, Failed, Refreshed) */}
                         {accents.map((acc) => (
                           <span
@@ -1040,7 +1017,7 @@ export const HistoryView: React.FC<HistoryViewProps> = ({ onSelectMedia, onPlayD
                           </span>
                         )}
 
-                        {item.source?.providerName && (
+                        {item.source?.providerName && !latestActionDesc.includes(item.source.providerName) && (
                           <span style={{ color: 'var(--text-subtle)', display: 'flex', alignItems: 'center', gap: '0.25rem' }}>
                             <span style={{ color: '#94a3b8' }}>Provider:</span>
                             <strong style={{ color: 'var(--text-primary)' }}>{item.source.providerName}</strong>
@@ -1075,7 +1052,7 @@ export const HistoryView: React.FC<HistoryViewProps> = ({ onSelectMedia, onPlayD
                           </span>
                         )}
 
-                        {!refreshMsg && item.failureReason && (
+                        {!refreshMsg && item.failureReason && !latestActionDesc.includes(item.failureReason) && (
                           <span style={{ color: '#fb7185', fontSize: '0.75rem', fontStyle: 'italic', maxWidth: '280px', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
                             — {item.failureReason}
                           </span>
@@ -1097,69 +1074,62 @@ export const HistoryView: React.FC<HistoryViewProps> = ({ onSelectMedia, onPlayD
                       ) : null}
                     </div>
 
-                    {/* Direct Play Button */}
-                    <button
-                      type="button"
-                      className="btn btn-primary btn-sm"
+                    {/*
+                      One prominent action per row. Refresh, Inspect and Delete were
+                      labelled secondary buttons beside it, so every row carried five
+                      equally loud controls; they are quiet icons now, and the visits
+                      toggle says how many there are instead of a separate badge.
+                    */}
+                    <Button
+                      size="compact"
+                      variant="prominent"
+                      icon={Play}
                       onClick={(e) => handlePlayMedia(item, e)}
-                      title="Play stream directly from history"
-                      style={{ padding: '0.35rem 0.65rem', fontSize: '0.75rem', gap: '0.3rem' }}
+                      title="Play, resuming the source that played last"
                     >
-                      <Play size={13} fill="currentColor" />
-                      <span>Play</span>
-                    </button>
-
-                    {/* Refresh Sources Button */}
-                    <button
-                      type="button"
-                      className="btn btn-secondary btn-sm"
+                      Play
+                    </Button>
+                    <Button
+                      size="compact"
+                      variant="ambient"
+                      iconOnly
+                      icon={RotateCw}
+                      loading={isRefreshing}
                       onClick={(e) => handleRefreshSource(item, e)}
-                      disabled={isRefreshing}
+                      aria-label="Find fresh sources"
                       title="Re-check enabled providers and discover fresh sources"
-                      style={{ padding: '0.35rem 0.55rem', fontSize: '0.75rem', gap: '0.3rem' }}
-                    >
-                      <RotateCw size={13} className={isRefreshing ? 'animate-spin' : ''} />
-                      <span>Refresh</span>
-                    </button>
-
-                    {/* Inspector Button */}
-                    <button
-                      type="button"
-                      className="btn btn-secondary btn-sm"
+                    />
+                    <Button
+                      size="compact"
+                      variant="ambient"
+                      iconOnly
+                      icon={Code2}
                       onClick={(e) => {
                         e.stopPropagation();
                         setInspectingItem(item);
                       }}
-                      title="Inspect raw provider metadata, direct links, and diagnostics"
-                      style={{ padding: '0.35rem 0.55rem', fontSize: '0.75rem', gap: '0.3rem' }}
-                    >
-                      <Code2 size={13} />
-                      <span>Inspect</span>
-                    </button>
-
-                    {/* Activity History Expander Toggle (Shows activity logs up to 5 items) */}
-                    <button
-                      type="button"
-                      className={`btn btn-sm ${isExpanded ? 'btn-primary' : 'btn-secondary'}`}
+                      aria-label="Inspect"
+                      title="Inspect provider metadata, links and diagnostics"
+                    />
+                    <Button
+                      size="compact"
+                      variant="ambient"
+                      icon={isExpanded ? ChevronUp : ChevronDown}
                       onClick={(e) => toggleGroupExpand(group.groupKey, e)}
-                      title="View all individual visits and action history for this media"
-                      style={{ padding: '0.35rem 0.55rem', fontSize: '0.75rem', gap: '0.3rem' }}
+                      aria-expanded={isExpanded}
+                      title="Every visit, stream and download for this title"
                     >
-                      <Clock size={13} />
-                      <span>({group.visitCount}) Activity</span>
-                      {isExpanded ? <ChevronUp size={13} /> : <ChevronDown size={13} />}
-                    </button>
-
-                    {/* Delete Group Button */}
-                    <button
-                      type="button"
-                      className="btn btn-ghost btn-sm"
+                      {group.visitCount} visit{group.visitCount === 1 ? '' : 's'}
+                    </Button>
+                    <Button
+                      size="compact"
+                      variant="ambient"
+                      iconOnly
+                      icon={Trash2}
                       onClick={(e) => handleDeleteGroup(group, e)}
-                      title={`Delete all ${group.visitCount} records for this media`}
-                      style={{ padding: '0.35rem 0.45rem', color: 'var(--text-subtle)' }}
-                    >
-                      <Trash2 size={13} />
-                    </button>
+                      aria-label="Remove from history"
+                      title={`Delete all ${group.visitCount} records for this title`}
+                    />
                   </div>
                 </div>
 
@@ -1523,7 +1493,7 @@ export const HistoryView: React.FC<HistoryViewProps> = ({ onSelectMedia, onPlayD
                         </span>
                       )}
 
-                      {!refreshMsg && item.failureReason && (
+                      {!refreshMsg && item.failureReason && !actionDesc.includes(item.failureReason) && (
                         <span style={{ color: '#fb7185', fontSize: '0.75rem', fontStyle: 'italic', maxWidth: '300px', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
                           — {item.failureReason}
                         </span>

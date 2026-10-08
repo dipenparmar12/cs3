@@ -59,7 +59,6 @@
 .ext-tab:hover { color: var(--text-main); }
 .ext-tab--on { color: var(--text-main); border-bottom-color: var(--accent-primary); }
 .ext-tab__label { font-size: 0.9rem; font-weight: 600; }
-.ext-tab__hint { font-size: 0.72rem; color: var(--text-subtle); }
 
 /* --- rows, shared by the tree and the cards --- */
 
