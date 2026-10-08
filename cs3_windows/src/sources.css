@@ -6188,6 +6188,28 @@
 .player__title-search:focus-visible { opacity: 1; background: rgba(255, 255, 255, .16); color: #fff; }
 .player--mini .player__title-search { display: none; }
 
+/* What is playing, on one quiet line under the title: provider, extension,
+   repository, then the release's own facts. Separated by dots rather than
+   boxed, because five coloured chips under a film title read as a debug
+   overlay. */
+.player__provenance {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  margin-top: .2rem;
+  max-width: 560px;
+  font-size: .72rem;
+  color: rgba(255, 255, 255, .62);
+}
+.player__provenance > span + span::before {
+  content: '·';
+  margin: 0 .4rem;
+  color: rgba(255, 255, 255, .35);
+}
+.player__provenance-provider { color: rgba(255, 255, 255, .9); font-weight: 600; }
+.player__provenance-codec { text-transform: uppercase; }
+.player--mini .player__provenance { display: none; }
+
 /* --- player toasts --------------------------------------------------------
    Routine download state changes get a toast, never a modal: a dialog over a
    playing film to confirm a background transfer is a worse interruption than
@@ -10845,3 +10867,39 @@ video::cue {
   user-select: text;
 }
 .storage-message { margin: 0.4rem 0 0; font-size: 0.78rem; color: var(--text-muted); }
+
+/* "Resumed at 47:12 · Start over" — bottom-left, above the seek bar, gone in
+   a few seconds. A notice, not a question: the resume already happened. */
+.player__resume-notice {
+  position: absolute;
+  left: 1.25rem;
+  bottom: 6.5rem;
+  z-index: 6;
+  display: inline-flex;
+  align-items: center;
+  gap: .6rem;
+  padding: .4rem .45rem .4rem .8rem;
+  border-radius: 999px;
+  background: rgba(15, 17, 21, .78);
+  border: 1px solid rgba(255, 255, 255, .12);
+  color: rgba(255, 255, 255, .88);
+  font-size: .8rem;
+  backdrop-filter: blur(8px);
+  animation: player-resume-notice-in .25s ease-out;
+}
+.player__resume-notice button {
+  border: 0;
+  border-radius: 999px;
+  padding: .25rem .7rem;
+  background: rgba(255, 255, 255, .14);
+  color: #fff;
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+}
+.player__resume-notice button:hover,
+.player__resume-notice button:focus-visible { background: rgba(255, 255, 255, .24); }
+@keyframes player-resume-notice-in {
+  from { opacity: 0; transform: translateY(6px); }
+  to { opacity: 1; transform: none; }
+}

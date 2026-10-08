@@ -103,3 +103,48 @@ export function pickReplacement(
   const savedTitle = normaliseReleaseName(saved.title);
   return matches.find((candidate) => normaliseReleaseName(candidate.title) === savedTitle) ?? matches[0];
 }
+
+/**
+ * The candidate closest to what played on a *neighbouring* episode, or null.
+ *
+ * A different episode is a different file, so `matchesRelease` can never
+ * succeed across episodes — but the viewer's choice still carries: the provider
+ * they settled on, the resolution, the dub. Someone who picked the 720p Hindi
+ * stream for episode 4 wants episode 5 the same way, not whatever ranks first.
+ *
+ * Only ever an ordering preference, never a pinned start: the caller puts this
+ * first and lets the normal walk fail over from it. The provider must match;
+ * resolution and language each narrow further when the candidate states them,
+ * and an unstated one is not held against it.
+ */
+export function pickSibling(
+  saved: StoredSource,
+  candidates: TorrentResult[]
+): TorrentResult | null {
+  const savedProvider = normaliseReleaseName(saved.providerName ?? saved.indexerName);
+  if (!savedProvider) return null;
+
+  const sameProvider = candidates.filter(
+    (candidate) => normaliseReleaseName(candidate.indexerName) === savedProvider
+  );
+  if (sameProvider.length === 0) return null;
+
+  const savedResolution = saved.resolution ?? saved.parsed?.resolution;
+  const savedLanguages = new Set(
+    (saved.languages ?? saved.parsed?.languages ?? []).map((language) => language.toLowerCase())
+  );
+
+  const score = (candidate: TorrentResult): number => {
+    let points = 0;
+    const resolution = candidate.parsed?.resolution;
+    if (savedResolution && resolution && String(savedResolution) === String(resolution)) points += 2;
+    const languages = candidate.parsed?.languages ?? [];
+    if (savedLanguages.size > 0 && languages.some((l) => savedLanguages.has(l.toLowerCase()))) {
+      points += 1;
+    }
+    return points;
+  };
+
+  // Stable: equal scores keep the ranker's order, which already weighs health.
+  return sameProvider.reduce((best, candidate) => (score(candidate) > score(best) ? candidate : best));
+}

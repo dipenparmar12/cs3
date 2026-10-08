@@ -567,6 +567,7 @@ export class LibraryStore {
     origin: PlayedSource['origin'];
     positionSeconds?: number;
     durationSeconds?: number;
+    preferences?: PlayedSource['preferences'];
   }): PlayedSource {
     const played = this.loadPlayedSources();
     const slot = LibraryStore.playedSlot(input.key, input.season, input.episode);
@@ -594,6 +595,13 @@ export class LibraryStore {
       playedAt: Date.now(),
       positionSeconds: input.positionSeconds,
       durationSeconds: input.durationSeconds,
+      // A replay of the same release keeps the tracks chosen last time until
+      // the player reports new ones.
+      preferences:
+        input.preferences ??
+        (existing && LibraryStore.sameRelease(existing.source, input.source)
+          ? existing.preferences
+          : undefined),
       playCount: (existing?.playCount ?? 0) + 1,
     };
 
@@ -602,6 +610,41 @@ export class LibraryStore {
     played.set(slot, record);
     this.persistPlayedSources(played);
     return record;
+  }
+
+  /**
+   * Track choices and position, written onto an existing record only.
+   *
+   * Returns false when nothing was recorded for the slot — the source has not
+   * yet played long enough to be one worth resuming.
+   */
+  public updatePlayedSourcePreferences(
+    key: string,
+    season: number | undefined,
+    episode: number | undefined,
+    patch: { preferences?: PlayedSource['preferences']; positionSeconds?: number }
+  ): boolean {
+    if (isPrivateSession()) return false;
+    const played = this.loadPlayedSources();
+    const slot = LibraryStore.playedSlot(key, season, episode);
+    const existing = played.get(slot);
+    if (!existing) return false;
+    played.set(slot, {
+      ...existing,
+      preferences: patch.preferences
+        ? { ...existing.preferences, ...patch.preferences }
+        : existing.preferences,
+      positionSeconds: patch.positionSeconds ?? existing.positionSeconds,
+    });
+    this.persistPlayedSources(played);
+    return true;
+  }
+
+  /** Whether two stored sources name the same release (provider + title). */
+  private static sameRelease(a: StoredSource, b: StoredSource): boolean {
+    return (
+      (a.providerName ?? a.indexerName) === (b.providerName ?? b.indexerName) && a.title === b.title
+    );
   }
 
   public getPlayedSource(key: string, season?: number, episode?: number): PlayedSource | null {

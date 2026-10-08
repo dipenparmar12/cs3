@@ -35,6 +35,9 @@ import type { PlaybackStreamResponse, SourceCapabilityModel } from '../types/med
 import { attachClearKey, type ClearKeyAttachment } from '../utils/clearKeySession';
 import { attachShaka, type ShakaAttachment } from '../utils/shakaSession';
 import type { SeriesContext } from './player/seriesContext';
+import type { PlaybackPreferences } from '../types/library';
+import { isPlaceholderOrigin } from '../utils/originName';
+import { canonicalKey } from '../../electron/cs3/libraryStore';
 import { UpNextCard } from './player/UpNextCard';
 import { useTimelinePreview } from './player/useTimelinePreview';
 import { useMiniFrame } from './player/useMiniFrame';
@@ -225,6 +228,8 @@ export type PlaybackPhase = 'searching' | 'starting' | 'playing' | 'error';
 /** How often playback position is written. Frequent enough to be useful, rare
  *  enough not to write on every timeupdate tick (which fires ~4x/second). */
 const PROGRESS_SAVE_INTERVAL_MS = 5_000;
+/** How long "Resumed at … · Start over" stays before getting out of the way. */
+const RESUME_NOTICE_MS = 9_000;
 
 /**
  * How long the pointer may sit still inside the player before the controls go.
@@ -515,8 +520,15 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
     extensionName?: string;
   } | null>(null);
 
+  /*
+   * The source's own provider first: discovery may have widened past the page
+   * the title was opened from, and the header should name what actually plays.
+   * A screen label ("Library") passed as a provider is never shown.
+   */
   const effectiveProvider =
-    providerProvenance?.provider || activeSource?.providerName || activeSource?.indexerName;
+    activeSource?.providerName ||
+    activeSource?.indexerName ||
+    (isPlaceholderOrigin(providerProvenance?.provider) ? undefined : providerProvenance?.provider);
 
   useEffect(() => {
     let active = true;
@@ -791,6 +803,30 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
    * Recorded once per stream. The effect re-runs on every timeupdate, so the
    * ref is what stops this becoming an IPC call four times a second.
    */
+  /**
+   * What History keeps about the source that played.
+   *
+   * It used to keep the provider's *display* name and the film's title as the
+   * "source name" — so a row reopened from History could not say which
+   * extension or repository served it, nor which of a provider's eight
+   * releases was the one watched. The release, its resolution and languages,
+   * and the full origin chain are all known here; History is where they are
+   * needed later.
+   */
+  const historySourceInfo = () => ({
+    providerName:
+      providerProvenance?.provider || activeSource?.indexerName || providerProvenance?.indexerName,
+    extension: providerProvenance?.extensionName,
+    repository: providerProvenance?.repositoryName,
+    indexerName: activeSource?.indexerName ?? providerProvenance?.indexerName,
+    sourceName: activeSource?.title || title,
+    resolution: activeSource?.parsed?.resolution ? Number(activeSource.parsed.resolution) || undefined : undefined,
+    quality: activeSource?.parsed?.source && activeSource.parsed.source !== 'Unknown' ? String(activeSource.parsed.source) : undefined,
+    languages: activeSource?.parsed?.languages?.length ? activeSource.parsed.languages : undefined,
+    sizeBytes: activeSource?.sizeBytes || undefined,
+    directUrl: streamUrl.startsWith('http') ? streamUrl : undefined,
+  });
+
   const recordedSourceFor = useRef<string | null>(null);
   useEffect(() => {
     if (!streamUrl || recordedSourceFor.current === streamUrl) return;
@@ -808,8 +844,32 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
       source: activeSource,
       positionSeconds: currentTime,
       durationSeconds: duration || undefined,
+      // Where it came from, kept with the record: a resume shows the same
+      // provider, extension and repository the viewer saw, not "Library".
+      provenance: providerProvenance
+        ? {
+            provider: providerProvenance.provider ?? providerProvenance.indexerName,
+            extensionName: providerProvenance.extensionName,
+            repositoryName: providerProvenance.repositoryName,
+          }
+        : undefined,
+      originalTitle,
+      posterUrl: progress.posterUrl,
+      imdbId: subtitleContext?.imdbId,
+      preferences: currentTrackChoices.current ?? undefined,
     });
-  }, [streamUrl, currentTime, activeSource, progress, title, episodeTitle, duration]);
+  }, [
+    streamUrl,
+    currentTime,
+    activeSource,
+    progress,
+    title,
+    episodeTitle,
+    duration,
+    providerProvenance,
+    originalTitle,
+    subtitleContext?.imdbId,
+  ]);
 
   // A new stream is a new question about which source works.
   useEffect(() => {
@@ -1514,15 +1574,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
             action: 'playback_started',
             status: 'Played',
             durationSeconds: video.duration || undefined,
-            source: {
-              providerName:
-                providerProvenance?.provider ||
-                providerProvenance?.extensionName ||
-                providerProvenance?.indexerName,
-              sourceName: title,
-              quality: undefined,
-              directUrl: streamUrl.startsWith('http') ? streamUrl : undefined,
-            },
+            source: historySourceInfo(),
           });
         })
         .catch((err) => {
@@ -1544,14 +1596,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
               action: 'playback_failed',
               status: 'Failed',
               failureReason: err?.message || 'Video element playback rejected',
-              source: {
-                providerName:
-                  providerProvenance?.provider ||
-                  providerProvenance?.extensionName ||
-                  providerProvenance?.indexerName,
-                sourceName: title,
-                directUrl: streamUrl.startsWith('http') ? streamUrl : undefined,
-              },
+              source: historySourceInfo(),
             });
           }
         });
@@ -2033,8 +2078,33 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
     if (resumedRef.current === streamUrl) return;
 
     resumedRef.current = streamUrl;
-    if (resumeAt < duration - 10) video.currentTime = resumeAt;
+    if (resumeAt < duration - 10) {
+      video.currentTime = resumeAt;
+      setResumeNotice(resumeAt);
+    }
   }, [progress?.resumeAt, duration, streamUrl]);
+
+  /**
+   * "Resumed at 47:12 · Start over", for a few seconds.
+   *
+   * The resume itself is automatic — asking first would stop the film to ask a
+   * question whose answer is nearly always yes. What the viewer needs is to
+   * know it happened and a one-press way back to the start; after that the
+   * notice is in the way and goes. It also goes the moment they seek, which is
+   * them answering the question themselves.
+   */
+  const [resumeNotice, setResumeNotice] = useState<number | null>(null);
+  useEffect(() => {
+    if (resumeNotice === null) return;
+    const timer = window.setTimeout(() => setResumeNotice(null), RESUME_NOTICE_MS);
+    return () => window.clearTimeout(timer);
+  }, [resumeNotice]);
+  useEffect(() => {
+    setResumeNotice(null);
+  }, [streamUrl]);
+  // The native engine seeks itself from `startSeconds`; the notice follows its
+  // first real frame rather than the element's metadata.
+  const nativeResumeShown = useRef<string | null>(null);
 
   // --- controls ------------------------------------------------------------
 
@@ -2121,6 +2191,19 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
     },
     [commitSeek]
   );
+
+  useEffect(() => {
+    const at = progress?.resumeAt;
+    if (!isNativeEngine || !hasStartedPlayback || !at || at <= 0) return;
+    if (nativeResumeShown.current === streamUrl) return;
+    nativeResumeShown.current = streamUrl;
+    setResumeNotice(at);
+  }, [isNativeEngine, hasStartedPlayback, progress?.resumeAt, streamUrl]);
+
+  const startOver = useCallback(() => {
+    setResumeNotice(null);
+    seekTo(0);
+  }, [seekTo]);
 
   const seekBy = useCallback(
     (delta: number) => {
@@ -2394,6 +2477,32 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
   const preferredAudioLanguage = useRef<string | null>(null);
   const preferredSubtitleLanguage = useRef<string | null>(null);
   const subtitlesOff = useRef(false);
+
+  /**
+   * The tracks chosen the last time *this* title and episode played.
+   *
+   * Narrower than the global language preference above and wins over it: the
+   * viewer who watches most things in English but this one series in its
+   * Hindi dub with English subtitles should get exactly that back on resume.
+   * Read from the played-source record, which is keyed the way it is written.
+   */
+  const titlePreferences = useRef<PlaybackPreferences | null>(null);
+  const currentTrackChoices = useRef<PlaybackPreferences | null>(null);
+  useEffect(() => {
+    titlePreferences.current = null;
+    currentTrackChoices.current = null;
+    if (!title) return;
+    let cancelled = false;
+    void window.cloudstream
+      ?.getPlayedSource?.(canonicalKey(title, progress?.year), progress?.season, progress?.episode)
+      .then((response) => {
+        if (!cancelled) titlePreferences.current = response?.record?.preferences ?? null;
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, [title, progress?.year, progress?.season, progress?.episode]);
   const { active: incognito } = usePrivacy();
 
   /**
@@ -2781,8 +2890,9 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
        * not carry it — which is the correct outcome, not a failure.
        */
       const tracks = response.capability?.metadata?.audio ?? [];
-      const remembered = preferredAudioLanguage.current
-        ? tracks.find((track) => track.language === preferredAudioLanguage.current)
+      const wantedAudio = titlePreferences.current?.audioLanguage ?? preferredAudioLanguage.current;
+      const remembered = wantedAudio
+        ? tracks.find((track) => track.language === wantedAudio)
         : undefined;
       const preferred =
         remembered?.index ?? response.capability?.transformationPlan.selectedAudioIndex ?? -1;
@@ -3119,6 +3229,44 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
   }, [subtitles, fetchedSubtitles, prepared?.subtitles]);
 
   /**
+   * Keeps the played-source record's track choices current.
+   *
+   * The record is written once, ten seconds in; the dub and subtitle a viewer
+   * settles on are usually chosen after that, so each change is written onto
+   * it. Before the record exists the choice is only held, and goes out with
+   * the record itself.
+   */
+  useEffect(() => {
+    const subtitle = activeSubtitle ? allSubtitles.find((s) => s.url === activeSubtitle) : undefined;
+    const audio =
+      audioTracks.find((track) => String(track.id) === String(activeAudioTrack)) ?? undefined;
+    const fileAudio = preparedRef.current?.capability?.metadata?.audio.find(
+      (track) => track.index === selectedAudioIndex
+    );
+    const choices: PlaybackPreferences = {
+      audioLanguage: audio?.language ?? (fileAudio?.language !== 'und' ? fileAudio?.language : undefined),
+      audioLabel: audio?.label,
+      subtitleMode: subtitle ? 'track' : subtitlesOff.current ? 'off' : undefined,
+      subtitleLanguage: subtitle ? (preferredSubtitleLanguage.current ?? subtitle.name) : undefined,
+      subtitleLabel: subtitle?.name,
+    };
+    currentTrackChoices.current = choices;
+
+    if (!streamUrl || recordedSourceFor.current !== streamUrl || !title) return;
+    const timer = window.setTimeout(() => {
+      void window.cloudstream?.updatePlayedSourcePreferences?.({
+        title,
+        year: progress?.year,
+        season: progress?.season,
+        episode: progress?.episode,
+        preferences: choices,
+      });
+    }, 800);
+    return () => window.clearTimeout(timer);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeSubtitle, activeAudioTrack, selectedAudioIndex, audioTracks, streamUrl]);
+
+  /**
    * Applies the selected subtitle by driving `TextTrack.mode` directly.
    *
    * Setting the `default` attribute on a `<track>` only has an effect before
@@ -3240,12 +3388,20 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
   const subtitleDurationRef = useRef(0);
   subtitleDurationRef.current = duration;
   useEffect(() => {
-    if (!prepared || activeSubtitle || subtitlesOff.current || !title) return;
+    const titleChoice = titlePreferences.current;
+    if (!prepared || activeSubtitle || !title) return;
+    if (titleChoice?.subtitleMode === 'off' || (!titleChoice?.subtitleLanguage && subtitlesOff.current)) {
+      return;
+    }
     const key = `${title}|${subtitleContext?.season ?? ''}|${subtitleContext?.episode ?? ''}`;
     if (autoSubtitleKey.current === key) return;
     autoSubtitleKey.current = key;
 
-    const wanted = (preferredSubtitleLanguage.current || 'English').toLowerCase();
+    const wanted = (
+      titleChoice?.subtitleLanguage ||
+      preferredSubtitleLanguage.current ||
+      'English'
+    ).toLowerCase();
     const matches = (label: string) => {
       const l = label.toLowerCase();
       return l.startsWith(wanted) || (wanted === 'english' && /\b(eng|english|en)\b/.test(l));
@@ -4436,25 +4592,6 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
               </button>
             )}
           </div>
-          {(originalTitle || (activeSource?.title && activeSource.title !== title)) && (
-            <span
-              className="player__original-title"
-              style={{
-                fontSize: '0.74rem',
-                color: 'rgba(255, 255, 255, 0.55)',
-                fontStyle: 'italic',
-                display: 'block',
-                marginTop: '0.1rem',
-                maxWidth: '520px',
-                overflow: 'hidden',
-                textOverflow: 'ellipsis',
-                whiteSpace: 'nowrap',
-              }}
-              title={`Original release: ${originalTitle || activeSource?.title}`}
-            >
-              Refined from: "{originalTitle || activeSource?.title}"
-            </span>
-          )}
           {(episodeTitle || currentEpisode) && (
             <p>
               {/* Where you are in the series belongs on screen, not one click
@@ -4472,83 +4609,35 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
               )}
             </p>
           )}
-          {(effectiveProvider || resolvedProvenance?.repositoryName || activeSource?.parsed?.resolution) && (
+          {/*
+            What is playing, from the source record itself — never from the
+            screen the title was opened on. One quiet line: provider, the
+            extension and repository behind it, then the release's own facts.
+            The release name sits in the tooltip; it used to be a second line
+            labelled "Refined from", which on a title reopened from the library
+            printed the search query of some earlier session.
+          */}
+          {(effectiveProvider || activeSource?.parsed?.resolution) && (
             <div
-              className="player__provenance-badge"
-              style={{
-                display: 'flex',
-                alignItems: 'center',
-                gap: '0.35rem',
-                fontSize: '0.7rem',
-                color: 'rgba(255, 255, 255, 0.75)',
-                marginTop: '0.2rem',
-                flexWrap: 'wrap',
-              }}
+              className="player__provenance"
+              title={activeSource?.title ? `Release: ${activeSource.title}` : undefined}
             >
-              {effectiveProvider && (
-                <span
-                  style={{
-                    padding: '0.08rem 0.35rem',
-                    borderRadius: '4px',
-                    backgroundColor: 'rgba(59, 130, 246, 0.18)',
-                    color: '#93c5fd',
-                    border: '1px solid rgba(59, 130, 246, 0.3)',
-                    fontWeight: 600,
-                  }}
-                >
-                  Provider: {effectiveProvider}
-                </span>
+              {effectiveProvider && <span className="player__provenance-provider">{effectiveProvider}</span>}
+              {(resolvedProvenance?.extensionName ?? providerProvenance?.extensionName) &&
+                (resolvedProvenance?.extensionName ?? providerProvenance?.extensionName) !==
+                  effectiveProvider && (
+                  <span>{resolvedProvenance?.extensionName ?? providerProvenance?.extensionName}</span>
+                )}
+              {(resolvedProvenance?.repositoryName ?? providerProvenance?.repositoryName) && (
+                <span>{resolvedProvenance?.repositoryName ?? providerProvenance?.repositoryName}</span>
               )}
-              {resolvedProvenance?.repositoryName && (
-                <span
-                  style={{
-                    padding: '0.08rem 0.35rem',
-                    borderRadius: '4px',
-                    backgroundColor: 'rgba(255, 255, 255, 0.08)',
-                    color: 'rgba(255, 255, 255, 0.85)',
-                  }}
-                >
-                  Repo: {resolvedProvenance.repositoryName}
-                </span>
+              {activeSource?.parsed?.resolution ? <span>{activeSource.parsed.resolution}p</span> : null}
+              {activeSource?.parsed?.videoCodec && activeSource.parsed.videoCodec !== 'Unknown' && (
+                <span className="player__provenance-codec">{activeSource.parsed.videoCodec}</span>
               )}
-              {activeSource?.indexerName && activeSource.indexerName !== effectiveProvider && (
-                <span
-                  style={{
-                    padding: '0.08rem 0.35rem',
-                    borderRadius: '4px',
-                    backgroundColor: 'rgba(168, 85, 247, 0.15)',
-                    color: '#d8b4fe',
-                  }}
-                >
-                  Indexer: {activeSource.indexerName}
-                </span>
-              )}
-              {activeSource?.parsed?.resolution && (
-                <span
-                  style={{
-                    padding: '0.08rem 0.3rem',
-                    borderRadius: '3px',
-                    backgroundColor: 'rgba(255, 255, 255, 0.1)',
-                    color: '#fff',
-                    fontWeight: 700,
-                  }}
-                >
-                  {activeSource.parsed.resolution}p
-                </span>
-              )}
-              {activeSource?.parsed?.videoCodec && (
-                <span
-                  style={{
-                    padding: '0.08rem 0.3rem',
-                    borderRadius: '3px',
-                    backgroundColor: 'rgba(255, 255, 255, 0.06)',
-                    color: 'rgba(255, 255, 255, 0.7)',
-                    textTransform: 'uppercase',
-                  }}
-                >
-                  {activeSource.parsed.videoCodec}
-                </span>
-              )}
+              {activeSource?.parsed?.languages?.length ? (
+                <span>{activeSource.parsed.languages.slice(0, 3).join(' · ')}</span>
+              ) : null}
             </div>
           )}
         </div>
@@ -4575,6 +4664,21 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
           )}
         </div>
       </header>
+
+      {resumeNotice !== null && !mini && (
+        <div className="player__resume-notice" role="status">
+          <span>Resumed at {formatTimecode(resumeNotice)}</span>
+          <button
+            type="button"
+            onClick={(event) => {
+              event.stopPropagation();
+              startOver();
+            }}
+          >
+            Start over
+          </button>
+        </div>
+      )}
 
       {showUpNext && nextEpisode && (
         <UpNextCard

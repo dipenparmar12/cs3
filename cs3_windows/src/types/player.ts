@@ -78,3 +78,34 @@ export interface StoredPlayerPreferences {
   backgroundPlayback: 'continue' | 'audio-only' | 'pause';
   alwaysOnTop: boolean;
 }
+
+/**
+ * What a Play or Resume press knows about a title before anything is fetched.
+ *
+ * Every card, row and list outside the detail page funnels through one
+ * handler (`handleResume` in `App.tsx`) with one of these, so "Play" means the
+ * same thing — the remembered episode, source and position — wherever it is
+ * pressed.
+ */
+export interface ResumeTarget {
+  title: string;
+  year?: number;
+  /** The page address — never an episode's links handle. */
+  mediaUrl: string;
+  posterUrl?: string;
+  originalTitle?: string;
+  /** The library key, when the caller holds one; otherwise title + year. */
+  key?: string;
+  /** Set when the caller already knows the episode (Continue watching, History). */
+  season?: number;
+  episode?: number;
+  episodeTitle?: string;
+  /** Replay the page the remembered source came from rather than `mediaUrl`. */
+  preferRecordedOrigin?: boolean;
+  provenance?: {
+    provider?: string;
+    repositoryName?: string;
+    extensionName?: string;
+    indexerName?: string;
+  };
+}

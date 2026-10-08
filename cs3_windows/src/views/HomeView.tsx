@@ -1,4 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import type { ResumeTarget } from '../types/player';
+import { providerFromAddress } from '../utils/originName';
 import { useTitleInteractions } from '../components/useTitleInteractions';
 import type { SearchResponse } from '../types/api';
 import { matchesTab, tabsFor } from '../utils/contentTypes';
@@ -58,6 +60,8 @@ interface HomeViewProps {
   onSelectMedia: (item: SearchResponse) => void;
   /** Quick-play from the card, bypassing the detail page. */
   onPlayDirectly?: (item: SearchResponse) => void;
+  /** Resumes a Continue watching row: its episode, its source, its position. */
+  onResume?: (target: ResumeTarget) => void;
   /**
    * Runs a search.
    *
@@ -77,6 +81,7 @@ interface HomeViewProps {
 export const HomeView: React.FC<HomeViewProps> = ({
   onSelectMedia,
   onPlayDirectly,
+  onResume,
   onSearch,
   category,
   onCategoryChange,
@@ -86,6 +91,37 @@ export const HomeView: React.FC<HomeViewProps> = ({
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [continueWatching, setContinueWatching] = useState<WatchProgress[]>([]);
+
+  const resumeRow = (row: WatchProgress) => {
+    (document.activeElement as HTMLElement)?.blur();
+    if (!onResume) {
+      openRowDetails(row);
+      return;
+    }
+    onResume({
+      title: row.title,
+      mediaUrl: row.mediaUrl,
+      posterUrl: row.posterUrl,
+      key: row.key,
+      season: row.season,
+      episode: row.episode,
+      episodeTitle: row.episodeTitle,
+      preferRecordedOrigin: true,
+    });
+  };
+
+  const openRowDetails = (row: WatchProgress) => {
+    (document.activeElement as HTMLElement)?.blur();
+    onSelectMedia({
+      name: row.title,
+      url: row.mediaUrl,
+      // The provider the address names — never the row's own label, which
+      // the detail page would print as if it were a provider.
+      apiName: providerFromAddress(row.mediaUrl) ?? 'Continue watching',
+      type: row.season != null ? TvType.TvSeries : TvType.Movie,
+      posterUrl: row.posterUrl,
+    });
+  };
   const [continueWatchingCollapsed, setContinueWatchingCollapsed] = useState<boolean>(() =>
     readContinueWatchingCollapsed(storage())
   );
@@ -436,19 +472,31 @@ export const HomeView: React.FC<HomeViewProps> = ({
                 <div
                   key={`${row.key}-${row.season ?? ''}-${row.episode ?? ''}`}
                   className="poster-card"
-                  onClick={(event) => {
-                    (event.currentTarget as HTMLElement)?.blur();
-                    (document.activeElement as HTMLElement)?.blur();
-                    onSelectMedia({
-                      name: row.title,
-                      url: row.mediaUrl,
-                      apiName: 'Continue watching',
-                      type: TvType.Movie,
-                      posterUrl: row.posterUrl,
-                    });
-                  }}
                 >
-                  <div className="poster-container">
+                  {/*
+                    The poster is the resume target, as on every streaming
+                    app's Continue row; the title opens the details. The Play
+                    button here used to have no handler at all, so the press
+                    fell through to "open the detail page" and the viewer had to
+                    pick a provider and a source again for something they were
+                    halfway through.
+                  */}
+                  <div
+                    className="poster-container"
+                    role="button"
+                    tabIndex={0}
+                    aria-label={`Resume ${row.title}`}
+                    onClick={(event) => {
+                      (event.currentTarget as HTMLElement)?.blur();
+                      resumeRow(row);
+                    }}
+                    onKeyDown={(event) => {
+                      if (event.key === 'Enter' || event.key === ' ') {
+                        event.preventDefault();
+                        resumeRow(row);
+                      }
+                    }}
+                  >
                     {row.posterUrl ? (
                       <img src={row.posterUrl} alt="" loading="lazy" />
                     ) : (
@@ -457,9 +505,9 @@ export const HomeView: React.FC<HomeViewProps> = ({
                       </div>
                     )}
                     <div className="poster-overlay">
-                      <button className="play-button-overlay">
-                        <Play size={20} fill="#fff" />
-                      </button>
+                      <span className="play-button-overlay" aria-hidden>
+                        <Play size={17} fill="#fff" />
+                      </span>
                     </div>
                     {/*
                       Removes the title from this row and nothing else. The
@@ -488,7 +536,13 @@ export const HomeView: React.FC<HomeViewProps> = ({
                   </div>
 
                   <div className="poster-info">
-                    <h4 className="poster-title">{row.title}</h4>
+                    <h4
+                      className="poster-title"
+                      title={`Open ${row.title}`}
+                      onClick={() => openRowDetails(row)}
+                    >
+                      {row.title}
+                    </h4>
                     <div className="poster-meta">
                       <span>
                         {row.season != null && row.episode != null

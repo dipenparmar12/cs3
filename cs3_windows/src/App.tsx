@@ -31,6 +31,7 @@ import type { HistoryEvent } from './types/history';
 import type { DownloadRequestResult, DownloadTask } from './types/download';
 import { buildDownloadTask } from './utils/downloadIdentity';
 import type { TorrentResult } from './types/torrent';
+import type { ResumeTarget } from './types/player';
 import type { PlaybackSnapshot } from '../electron/playbackSession';
 import type { SearchSnapshot } from '../electron/searchSession';
 import { describeError } from './utils/errors';
@@ -93,6 +94,12 @@ const DownloadCenter = lazy(() =>
   import('./components/DownloadCenter').then((m) => ({ default: m.DownloadCenter }))
 );
 
+
+/** The year `canonicalKey` appended, for rows (Continue watching) that carry only the key. */
+function yearFromKey(key: string | undefined): number | undefined {
+  const match = key?.match(/:(\d{4})$/);
+  return match ? Number(match[1]) : undefined;
+}
 
 /** One live playback session: its id, what asked for it, and its latest state. */
 interface ActiveSession {
@@ -1211,12 +1218,12 @@ export const App: React.FC = () => {
       // failed. See `persistent` in `playbackSession.ts`.
       {
         persistent: !isDeveloper,
-        // A resume asks for the source the saved position was reached on, so
-        // the timeline it belongs to is the one that plays.
-        resumeKey:
-          context.progress?.resumeAt && context.progress.resumeAt > 0
-            ? canonicalKey(context.title, context.progress.year)
-            : undefined,
+        // Every Play asks for the source that played last time, not only a
+        // resume with a position: gating this on `resumeAt > 0` is what made a
+        // second Play of a short watch, a finished film or the next episode
+        // start whatever ranked first. No record → the main process answers
+        // undefined and discovery orders the list as usual.
+        resumeKey: context.resumeKey ?? canonicalKey(context.title, context.progress?.year),
       }
     );
     if (!response.ok || !response.snapshot) {
@@ -1303,75 +1310,124 @@ export const App: React.FC = () => {
   };
 
   /**
-   * Quick-play straight from a card.
+   * Play or Resume from anywhere that is not the detail page — one path.
    *
-   * The player is shown on the click, before anything is known about the title,
-   * because resolving the detail is a network round trip and a card that
-   * appears to do nothing for half a second reads as broken. `preparing` holds
-   * the player open in its resolving state until the real session exists.
+   * Cards, Continue watching, Library and History each had their own copy of
+   * this, and they disagreed: the Continue watching and Library cards drew a
+   * Play button wired to nothing, so the press fell through to the card and
+   * opened the detail page (labelled "Continue watching" / "Library" as if
+   * those were providers); History resumed the position but never asked for
+   * the source; Home asked for the source only when a position existed. That
+   * is the whole of "Resume sometimes works".
    *
-   * A series resolves to a specific episode rather than to the series URL:
-   * handing a series URL to source discovery finds season packs at best, and
-   * nothing at all more often.
+   * The player is shown on the click, before anything is known, because a card
+   * that appears to do nothing for half a second reads as broken. What plays:
    *
-   * **Which** episode is the viewer's watch history, not always the first. This
-   * path started every series at its pilot, which is right exactly once and
-   * wrong on every visit after — someone six episodes in pressed Play on the
-   * poster and got episode one. Nothing errors and nothing looks broken, so it
-   * is absorbed as "this app does not remember where I was", which is the one
-   * thing a streaming app is expected to do. The detail page had always read
-   * this history; only the card path never asked. See `pickResumePoint`.
+   *  1. which episode — the caller's when it knows (a Continue watching row),
+   *     otherwise the viewer's history over the title's episode list
+   *     (`pickResumePoint`), never "the first one";
+   *  2. which source — the one recorded as having played this exact
+   *     title/season/episode (`playedSource`), started at once while its link
+   *     holds and re-found by release identity when it has expired; for a
+   *     never-played episode, the provider/resolution/dub of the last one;
+   *  3. where — the stored position.
+   *
+   * The source list is only shown when none of that can be recovered.
    */
-  const handleQuickPlay = useCallback(
-    async (item: SearchResponse) => {
+  const handleResume = useCallback(
+    async (target: ResumeTarget) => {
       setSelectedMedia(null);
       setPlayerHidden(false);
       setPlayerMini(false);
-      setPreparing({ title: item.name });
+      setPreparing({ title: target.title });
 
       try {
-        const response = await window.cloudstream?.loadMedia(item.url);
-        const detail = response?.ok ? response.detail : null;
+        const knowsEpisode = target.season !== undefined || target.episode !== undefined;
 
-        // Both reads are local — the datastore, not a provider — so they cost
-        // nothing against the round trip that just resolved the detail.
-        const watchState = await loadWatchState(item.url, {
-          title: detail?.name ?? item.name,
-          year: detail?.year ?? item.year,
-        });
-        const { episode: first, resumeAt } = pickResumePoint(detail?.episodes ?? [], watchState, {
-          isLive: detail?.isLive,
-        });
+        // The detail is needed only to choose an episode, and costs a provider
+        // round trip — a row that already names its episode skips it.
+        const response = knowsEpisode ? null : await window.cloudstream?.loadMedia(target.mediaUrl);
+        const detail = response?.ok ? response.detail : null;
+        const title = detail?.name ?? target.title;
+        const year = detail?.year ?? target.year ?? yearFromKey(target.key);
+        const key = target.key ?? canonicalKey(title, year);
+
+        const watchState = await loadWatchState(target.mediaUrl, { title, year, key });
+        let episode: Episode | null;
+        let resumeAt: number | undefined;
+        if (knowsEpisode) {
+          episode = {
+            season: target.season,
+            episode: target.episode,
+            name: target.episodeTitle,
+            url: '',
+          } as Episode;
+          resumeAt = resumeSeconds(watchState, episode);
+        } else {
+          ({ episode, resumeAt } = pickResumePoint(detail?.episodes ?? [], watchState, {
+            isLive: detail?.isLive,
+          }));
+        }
+
+        /*
+         * What played here last time also says where it came from. A resume
+         * surface (Continue watching, Library, History) replays the page that
+         * source was found on, so the same provider is asked again; a search
+         * card keeps the provider the viewer just clicked.
+         */
+        const played = (
+          await window.cloudstream?.getPlayedSource?.(key, episode?.season, episode?.episode)
+        )?.record;
+        const pageUrl =
+          target.preferRecordedOrigin && played?.origin.mediaUrl ? played.origin.mediaUrl : target.mediaUrl;
+        const provider =
+          played?.origin.provider ??
+          played?.source.providerName ??
+          played?.source.indexerName ??
+          target.provenance?.provider;
+        let provenance: NonNullable<PlaybackSessionRequest['providerProvenance']> = {
+          ...target.provenance,
+          ...(played?.origin.extensionName ? { extensionName: played.origin.extensionName } : {}),
+          ...(played?.origin.repositoryName ? { repositoryName: played.origin.repositoryName } : {}),
+          provider,
+        };
+        if (provider && !provenance.extensionName) {
+          const chain = (await window.cloudstream?.getProviderProvenanceMap?.([provider]))?.provenance?.[
+            provider
+          ];
+          if (chain) provenance = { ...provenance, ...chain };
+        }
 
         await startSession({
           request: {
-            mediaUrl: first?.url ?? item.url,
-            season: first?.season,
-            episode: first?.episode,
+            // An episode's own links handle when the list gave one; otherwise
+            // the page plus season/episode, which the provider resolves itself.
+            mediaUrl: episode?.url || pageUrl,
+            season: episode?.season,
+            episode: episode?.episode,
+            titleOverride: title,
           },
-          title: detail?.name ?? item.name,
-          originalTitle: item.originalTitle || (detail as any)?.originalTitle,
-          providerProvenance: item.apiName ? { provider: item.apiName } : undefined,
-          episodeTitle: first?.name,
+          title,
+          originalTitle:
+            target.originalTitle || (detail as { originalTitle?: string } | null)?.originalTitle,
+          providerProvenance: provenance.provider ? provenance : undefined,
+          episodeTitle: episode?.name ?? played?.origin.episodeTitle,
+          resumeKey: key,
           progress: {
             // The **page**, never the episode's playback handle — the same rule
-            // `DetailView.playEpisodeDirectly` documents at length. `first.url`
-            // is the opaque blob `loadLinks` wants, which for much of the corpus
-            // is JSON; storing it here writes it into the library and Continue
-            // Watching, and reopening that row calls `load()` on a links handle
-            // and comes up blank. It also silently disables the next-episode
-            // prefetch, which refuses a links handle by design.
-            mediaUrl: item.url,
-            year: detail?.year ?? item.year,
-            posterUrl: detail?.posterUrl ?? item.posterUrl,
-            season: first?.season,
-            episode: first?.episode,
+            // `DetailView.playEpisodeDirectly` documents at length. A links
+            // handle written here reopens as a blank page.
+            mediaUrl: pageUrl,
+            year,
+            posterUrl: detail?.posterUrl ?? target.posterUrl,
+            season: episode?.season,
+            episode: episode?.episode,
             resumeAt,
           },
           subtitleContext: {
             imdbId: (detail as { imdbId?: string } | null)?.imdbId,
-            season: first?.season,
-            episode: first?.episode,
+            season: episode?.season,
+            episode: episode?.episode,
           },
         });
       } finally {
@@ -1381,65 +1437,42 @@ export const App: React.FC = () => {
     [startSession]
   );
 
-  const handlePlayFromHistory = useCallback(
-    async (item: HistoryEvent) => {
-      setSelectedMedia(null);
-      setPlayerHidden(false);
-      setPlayerMini(false);
-      setPreparing({ title: item.title });
+  /** The Play button on any search or catalogue card. */
+  const handleQuickPlay = useCallback(
+    (item: SearchResponse) =>
+      handleResume({
+        title: item.name,
+        year: item.year,
+        mediaUrl: item.url,
+        posterUrl: item.posterUrl,
+        originalTitle: item.originalTitle,
+        provenance: item.apiName ? { provider: item.apiName } : undefined,
+      }),
+    [handleResume]
+  );
 
-      try {
+  const handlePlayFromHistory = useCallback(
+    (item: HistoryEvent) =>
+      handleResume({
         // Rows written before loopback addresses were refused still carry
-        // one; the parent page is the durable route back. The title travels
-        // too, so a widened search looks for this work rather than guessing.
-        const mediaUrl = durableAddress(item.mediaUrl, item.parentMediaUrl) || item.mediaUrl;
-        // Where the viewer stopped. This path never asked, so every title
-        // reopened from History started at 0:00 with its position sitting in
-        // the store — reported on Extraction II, saved at 18 minutes in.
-        const watchState = await loadWatchState(mediaUrl, {
-          title: item.parentTitle || item.title,
-          year: item.year,
-        });
-        const resumeAt = resumeSeconds(
-          watchState,
-          item.season !== undefined || item.episode !== undefined
-            ? ({ season: item.season, episode: item.episode } as Episode)
-            : null
-        );
-        await startSession({
-          request: {
-            mediaUrl,
-            season: item.season,
-            episode: item.episode,
-            titleOverride: item.parentTitle || item.title,
-          },
-          title: item.title,
-          originalTitle: item.source?.sourceName !== item.title ? item.source?.sourceName : undefined,
-          providerProvenance: {
-            provider: item.source?.providerName,
-            repositoryName: item.source?.repository,
-            extensionName: item.source?.extension,
-            indexerName: item.source?.indexerName,
-          },
-          episodeTitle: item.episodeTitle,
-          progress: {
-            mediaUrl,
-            year: item.year,
-            posterUrl: item.posterUrl,
-            season: item.season,
-            episode: item.episode,
-            resumeAt,
-          },
-          subtitleContext: {
-            season: item.season,
-            episode: item.episode,
-          },
-        });
-      } finally {
-        setPreparing(null);
-      }
-    },
-    [startSession]
+        // one; the parent page is the durable route back.
+        mediaUrl: durableAddress(item.mediaUrl, item.parentMediaUrl) || item.mediaUrl,
+        title: item.parentTitle || item.title,
+        year: item.year,
+        posterUrl: item.posterUrl,
+        originalTitle: item.originalTitle,
+        season: item.season,
+        episode: item.episode,
+        episodeTitle: item.episodeTitle,
+        preferRecordedOrigin: true,
+        provenance: {
+          provider: item.source?.providerName,
+          repositoryName: item.source?.repository,
+          extensionName: item.source?.extension,
+          indexerName: item.source?.indexerName,
+        },
+      }),
+    [handleResume]
   );
 
   /**
@@ -2139,6 +2172,7 @@ export const App: React.FC = () => {
                   <HomeView
                     onSelectMedia={handleSelectMedia}
                     onPlayDirectly={handleQuickPlay}
+                    onResume={handleResume}
                     // Trending anime carries no IMDb id, so those cards open
                     // through a search rather than straight into a detail page.
                     onSearch={handleSearchFromDetail}
@@ -2202,6 +2236,7 @@ export const App: React.FC = () => {
                 <ErrorBoundary>
                   <LibraryView
                     onSelectMedia={handleSelectMedia}
+                    onResume={handleResume}
                     onSearch={handleSearchFromDetail}
                     onPlaySavedSource={handlePlaySavedSource}
                     onBrowse={() => setActiveTab('home')}

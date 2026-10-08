@@ -95,7 +95,11 @@ import type {
 import type { BatchDownloadRequest, BatchProgress } from './cs3/batchDownloader';
 import type { BootstrapProgress, RegionAffectedRepository, RegionState } from './cs3/bootstrap';
 import type { TitleOutcome, TitleOutcomeKind } from './cs3/titleOutcomes';
-import type { StoredSource, PlayedSource } from '../src/types/library';
+import type {
+  StoredSource,
+  PlayedSource,
+  PlaybackPreferences,
+} from '../src/types/library';
 import type {
   HistoryEvent,
   HistoryFilter,
@@ -1745,7 +1749,21 @@ export interface CloudStreamElectronAPI {
     source: TorrentResult;
     positionSeconds?: number;
     durationSeconds?: number;
+    provenance?: { provider?: string; extensionName?: string; repositoryName?: string };
+    originalTitle?: string;
+    posterUrl?: string;
+    imdbId?: string;
+    preferences?: PlaybackPreferences;
   }) => Promise<Envelope & { record: PlayedSource | null }>;
+  /** Updates the track choices (and position) on the record for what is playing. */
+  updatePlayedSourcePreferences: (input: {
+    title: string;
+    year?: number;
+    season?: number;
+    episode?: number;
+    preferences?: PlaybackPreferences;
+    positionSeconds?: number;
+  }) => Promise<Envelope & { updated: boolean }>;
   getPlayedSource: (
     key: string,
     season?: number,
@@ -2439,6 +2457,8 @@ const api: CloudStreamElectronAPI = {
   clearWatchProgress: (key, season, episode) =>
     ipcRenderer.invoke('library:clearProgress', key, season, episode),
   recordPlayedSource: (input) => ipcRenderer.invoke('library:recordPlayedSource', input),
+  updatePlayedSourcePreferences: (input) =>
+    ipcRenderer.invoke('library:updatePlayedSourcePreferences', input),
   getPlayedSource: (key, season, episode) =>
     ipcRenderer.invoke('library:getPlayedSource', key, season, episode),
   listPlayedSources: (limit) => ipcRenderer.invoke('library:listPlayedSources', limit),

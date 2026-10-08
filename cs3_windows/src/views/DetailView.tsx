@@ -1,4 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { originNameFor } from '../utils/originName';
 import {
   Play, ArrowLeft, Loader2, AlertTriangle, ListVideo, Search,
 } from 'lucide-react';
@@ -136,6 +137,14 @@ export interface PlaybackSessionRequest {
   onDownloadSource?: (source: TorrentResult) => void;
   /** Identity for online subtitle search, which is keyed on the IMDb id. */
   subtitleContext?: { imdbId?: string; season?: number; episode?: number };
+  /**
+   * The library key whose played source this session should prefer.
+   *
+   * Defaults to `canonicalKey(title, progress.year)` — the key the player
+   * records under — so only a caller that already holds a different, exact key
+   * (a library card) needs to set it.
+   */
+  resumeKey?: string;
 }
 
 interface DetailViewProps {
@@ -1171,24 +1180,24 @@ export const DetailView: React.FC<DetailViewProps> = ({
     if (!url) return;
 
     void (async () => {
-      const [bookmark, origin] = await Promise.all([
-        window.cloudstream?.getBookmark?.(url),
-        mediaItem.apiName
-          ? window.cloudstream?.getProviderProvenance?.(mediaItem.apiName)
-          : Promise.resolve(undefined),
-      ]);
+      // A screen name ("Library", "Continue watching") is not a provider; the
+      // address or the saved page says which one it really was.
+      const bookmark = await window.cloudstream?.getBookmark?.(url);
+      const named =
+        originNameFor(mediaItem.apiName, url) ?? bookmark?.bookmark?.origin.provider ?? undefined;
+      const origin = named ? await window.cloudstream?.getProviderProvenance?.(named) : undefined;
       if (cancelled) return;
 
       setSaved(Boolean(bookmark?.bookmark));
       setProvenance({
-        provider: origin?.provenance?.provider ?? mediaItem.apiName,
-        extensionName: origin?.provenance?.extensionName,
-        repositoryName: origin?.provenance?.repositoryName,
+        provider: origin?.provenance?.provider ?? named,
+        extensionName: origin?.provenance?.extensionName ?? bookmark?.bookmark?.origin.extensionName,
+        repositoryName: origin?.provenance?.repositoryName ?? bookmark?.bookmark?.origin.repositoryName,
         repositoryId: origin?.provenance?.repositoryId,
         // A catalogue result has no extension behind it; naming the catalogue
         // is what stops the origin line reading as "unknown" for half the app.
-        metadataSource: origin?.provenance?.extensionName ? undefined : mediaItem.apiName,
-        searchQuery,
+        metadataSource: origin?.provenance?.extensionName ? undefined : named,
+        searchQuery: searchQuery ?? bookmark?.bookmark?.origin.searchQuery,
       });
 
       // Reopening from the saved list is what makes "most used" meaningful.
@@ -1470,7 +1479,7 @@ export const DetailView: React.FC<DetailViewProps> = ({
           episode: episode?.episode,
         },
         title: detail.name,
-        originalTitle: mediaItem.originalTitle || (detail as any)?.originalTitle || searchQuery,
+        originalTitle: mediaItem.originalTitle || (detail as any)?.originalTitle,
         providerProvenance: {
           provider: provenance.provider,
           repositoryName: provenance.repositoryName,

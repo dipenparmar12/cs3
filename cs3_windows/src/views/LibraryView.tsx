@@ -1,4 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import type { ResumeTarget } from '../types/player';
+import { providerFromAddress } from '../utils/originName';
 import { useTitleInteractions } from '../components/useTitleInteractions';
 import { badgeLabel, badgeTooltip, cardStateFor, primaryBadge } from '../utils/cardState';
 import { EmptyState } from '../components/EmptyState';
@@ -38,6 +40,8 @@ import type { Bookmark } from '../../electron/cs3/bookmarkStore';
 
 interface LibraryViewProps {
   onSelectMedia: (item: SearchResponse) => void;
+  /** Plays a library title: its remembered episode, source and position. */
+  onResume?: (target: ResumeTarget) => void;
   /**
    * Plays a source the library had saved as working.
    *
@@ -114,6 +118,7 @@ function formatWatched(progress: WatchProgress | undefined): string | null {
 
 export const LibraryView: React.FC<LibraryViewProps> = ({
   onSelectMedia,
+  onResume,
   onSearch,
   onPlaySavedSource,
   onBrowse,
@@ -272,10 +277,36 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
     onSelectMedia({
       name: entry.title,
       url,
-      apiName: 'Library',
+      // The provider the address names; "Library" is where the viewer found it
+      // today, not where it came from.
+      apiName: providerFromAddress(url) ?? entry.metadata?.provider ?? 'Library',
       type: entry.type ?? TvType.Movie,
       posterUrl: entry.posterUrl,
       year: entry.year,
+    });
+  };
+
+  /**
+   * Play, not "open": the remembered episode, source and position, straight
+   * into the player. The overlay button drew a Play icon and did nothing of
+   * its own — the click fell through to the card and opened the page.
+   */
+  const playEntry = (entry: LibraryEntry, e?: React.MouseEvent) => {
+    e?.stopPropagation();
+    (document.activeElement as HTMLElement)?.blur();
+    const url = entry.urls[0];
+    if (!url) return;
+    if (!onResume) {
+      openEntry(entry);
+      return;
+    }
+    onResume({
+      title: entry.title,
+      year: entry.year,
+      mediaUrl: url,
+      posterUrl: entry.posterUrl,
+      key: entry.key,
+      preferRecordedOrigin: true,
     });
   };
 
@@ -451,8 +482,14 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
                     </span>
                   )}
                   <div className="poster-overlay">
-                    <button className="play-button-overlay">
-                      <Play size={20} fill="#fff" />
+                    <button
+                      type="button"
+                      className="play-button-overlay"
+                      aria-label={`Play ${entry.title}`}
+                      title={progressByKey.get(entry.key) ? 'Resume' : 'Play'}
+                      onClick={(e) => playEntry(entry, e)}
+                    >
+                      <Play size={17} fill="#fff" />
                     </button>
                   </div>
                   {percent > 0 && (

@@ -892,6 +892,18 @@ export class PlaybackSessionManager {
        * runs once — a second failure is a real failure, not a stale URL, and
        * retrying forever would just hide it.
        */
+      /*
+       * The remembered link has just failed, so it stops being pinned to the
+       * head of the list — `keepPinned` would otherwise put the dead link back in
+       * front of every refreshed answer. Its `match` stays: the same release,
+       * freshly resolved, is still what a resume should start.
+       */
+      const pinned = session.resume?.start;
+      if (pinned && candidates.some((c) => c.infoHash === pinned.infoHash)) {
+        session.resume = { ...session.resume, start: undefined };
+        session.sources = session.sources.filter((s) => s.infoHash !== pinned.infoHash);
+      }
+
       const wasDirect = candidates.some((c) => c.directUrl);
       if (wasDirect && !options.isRecovery) {
         session.error = undefined;
@@ -903,7 +915,10 @@ export class PlaybackSessionManager {
         if (session.disposed || generation !== session.generation) return;
 
         if (session.sources.length > 0) {
-          await this.beginStream(session, session.sources, { ...options, isRecovery: true });
+          await this.beginStream(session, this.preferResumed(session, session.sources), {
+            ...options,
+            isRecovery: true,
+          });
           return;
         }
       }

@@ -139,7 +139,7 @@ import {
   continueWatchingEnabled,
   setContinueWatchingEnabled,
 } from './cs3/continueWatching';
-import { isLinkUsable, pickReplacement } from './cs3/playedSource';
+import { isLinkUsable, pickReplacement, pickSibling } from './cs3/playedSource';
 import {
   LibraryStore,
   type WatchStatus,
@@ -164,7 +164,10 @@ import type { SitePlugin } from '../src/types/plugin';
 import type { IndexerConfig, SourcePreferences, TorrentResult } from '../src/types/torrent';
 import type { SearchOptions } from '../src/types/api';
 import type { HistoryEvent, HistoryFilter } from '../src/types/history';
-import type { StoredSource } from '../src/types/library';
+import type {
+  StoredSource,
+  PlaybackPreferences,
+} from '../src/types/library';
 import type { ExternalPlaybackSnapshot } from '../src/types/player';
 import type { MpvSnapshot } from '../src/types/mpv';
 import { describeError } from '../src/utils/errors.ts';
@@ -5972,6 +5975,11 @@ ipcMain.handle(
       source: TorrentResult;
       positionSeconds?: number;
       durationSeconds?: number;
+      provenance?: { provider?: string; extensionName?: string; repositoryName?: string };
+      originalTitle?: string;
+      posterUrl?: string;
+      imdbId?: string;
+      preferences?: PlaybackPreferences;
     }
   ) => {
     try {
@@ -6002,13 +6010,55 @@ ipcMain.handle(
           title: input.title,
           year: input.year,
           episodeTitle: input.episodeTitle,
+          provider: input.provenance?.provider,
+          extensionName: input.provenance?.extensionName,
+          repositoryName: input.provenance?.repositoryName,
+          originalTitle: input.originalTitle,
+          posterUrl: input.posterUrl,
+          imdbId: input.imdbId,
         },
         positionSeconds: input.positionSeconds,
         durationSeconds: input.durationSeconds,
+        preferences: input.preferences,
       });
       return { ok: true, record };
     } catch (error) {
       return { ...fail(error), record: null };
+    }
+  }
+);
+
+/**
+ * The viewer changed a track (or kept watching) on a source already recorded.
+ *
+ * Separate from recording because the record is written once, at ten seconds
+ * of real playback — and the dub or subtitle a viewer settles on is usually
+ * chosen after that. Nothing is created here: a source that never reached the
+ * threshold is not one worth resuming.
+ */
+ipcMain.handle(
+  'library:updatePlayedSourcePreferences',
+  async (
+    _,
+    input: {
+      title: string;
+      year?: number;
+      season?: number;
+      episode?: number;
+      preferences?: PlaybackPreferences;
+      positionSeconds?: number;
+    }
+  ) => {
+    try {
+      const updated = libraryStore.updatePlayedSourcePreferences(
+        canonicalKey(input.title, input.year),
+        input.season,
+        input.episode,
+        { preferences: input.preferences, positionSeconds: input.positionSeconds }
+      );
+      return { ok: true, updated };
+    } catch (error) {
+      return { ...fail(error), updated: false };
     }
   }
 );
@@ -6064,11 +6114,25 @@ ipcMain.handle(
  */
 function resumePreference(key: string, season?: number, episode?: number): ResumePreference | undefined {
   const record = libraryStore.getPlayedSource(key, season, episode);
-  if (!record || record.source.status === 'Unavailable') return undefined;
-  return {
-    start: isLinkUsable(record.source) ? storedSourceToTorrentResult(record.source) : undefined,
-    match: (candidates) => pickReplacement(record.source, candidates),
-  };
+  if (record && record.source.status !== 'Unavailable') {
+    return {
+      start: isLinkUsable(record.source) ? storedSourceToTorrentResult(record.source) : undefined,
+      match: (candidates) => pickReplacement(record.source, candidates),
+    };
+  }
+
+  /*
+   * Nothing played for this exact episode — the usual case for "next episode"
+   * or a series resumed after finishing one. The most recent source played for
+   * any episode of the title still says which provider, resolution and dub the
+   * viewer settled on, so it orders the walk without pinning anything.
+   */
+  const sibling = libraryStore
+    .getPlayedSourcesForKey(key)
+    .filter((entry) => entry.source.status !== 'Unavailable')
+    .sort((a, b) => b.playedAt - a.playedAt)[0];
+  if (!sibling) return undefined;
+  return { match: (candidates) => pickSibling(sibling.source, candidates) };
 }
 
 ipcMain.handle(
