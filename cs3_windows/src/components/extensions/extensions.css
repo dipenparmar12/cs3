@@ -386,16 +386,6 @@
  * list would render inside one 290px column and read as belonging to the card's
  * neighbours; `1 / -1` gives it the whole row, immediately after its own card.
  */
-.ext-card__panel {
-  grid-column: 1 / -1;
-  margin: -0.2rem 0 0.35rem;
-  border: 1px solid var(--accent-primary);
-  border-top-width: 2px;
-  border-radius: var(--radius-md);
-  background: var(--bg-input);
-  overflow: hidden;
-}
-
 /* The open card and its panel read as one object. */
 .ext-card--open {
   border-color: var(--accent-primary);
@@ -848,3 +838,22 @@
 .ext-custom-list__row + .ext-custom-list__row { border-top: 1px solid var(--border-color); }
 .ext-custom-list__name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-primary); }
 .ext-empty .btn { margin-top: 0.5rem; }
+
+/* Browse as master-detail: list left, the opened repository in a sticky panel. */
+.ext-browse { display: grid; grid-template-columns: minmax(0, 1fr); gap: 1rem; align-items: start; }
+.ext-browse--split { grid-template-columns: minmax(0, 1fr) minmax(320px, 40%); }
+.ext-browse__details { position: sticky; top: 0.75rem; max-height: calc(100vh - 7rem); display: flex; flex-direction: column; background: var(--bg-card); border: 1px solid var(--border-color); border-radius: var(--radius-md); overflow: hidden; }
+.ext-browse__details-head { display: flex; align-items: flex-start; gap: 0.5rem; padding: 0.7rem 0.8rem; border-bottom: 1px solid var(--border-color); }
+.ext-browse__details-title { flex: 1; min-width: 0; }
+.ext-browse__details-title strong { display: block; color: var(--text-primary); font-size: 0.9rem; }
+.ext-browse__details-title p { margin: 0.15rem 0 0; font-size: 0.74rem; color: var(--text-subtle); display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+.ext-browse__details-body { overflow: auto; padding: 0.5rem 0.6rem; }
+.ext-card--selectable { cursor: pointer; }
+.ext-card--selectable:hover { border-color: rgba(255, 255, 255, 0.18); }
+.ext-card--open { border-color: var(--accent-primary); box-shadow: 0 0 0 1px var(--accent-primary) inset; }
+/* Too narrow for two panes: the details slide over the list instead of
+   landing under it, which would bring back the scroll hunt. */
+@media (max-width: 900px) {
+  .ext-browse--split { grid-template-columns: minmax(0, 1fr); }
+  .ext-browse__details { position: fixed; top: 0; right: 0; bottom: 0; width: min(420px, 92vw); max-height: none; z-index: 40; border-radius: 0; box-shadow: -12px 0 32px rgba(0, 0, 0, 0.45); }
+}

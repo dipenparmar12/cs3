@@ -31,7 +31,7 @@
  * the heavier action and says how many extensions it is about to fetch.
  */
 import React, { useMemo, useState } from 'react';
-import { AlertTriangle, Check, ChevronDown, ChevronUp, Clock, Loader2, Search, Trash2 } from 'lucide-react';
+import { AlertTriangle, Check, ChevronDown, ChevronRight, ChevronUp, Clock, Loader2, Search, Trash2, X } from 'lucide-react';
 import { Badge, ExternalLink, ProgressBar } from './primitives';
 import { matchesQuery, type FilterState } from './useExtensionFilters';
 import type { ProviderTreeRepository } from '../../types/plugin';
@@ -257,23 +257,25 @@ export const RepositoryCatalog: React.FC<RepositoryCatalogProps> = ({
     [official, filters, adultAllowed, installed, tree]
   );
 
+  /** The repository whose details are open, catalogued or added by the viewer. */
+  const opened = expandedUrl
+    ? official.find((repository) => repository.rawRepoUrl === expandedUrl) ??
+      (custom.includes(expandedUrl) ? { name: repositoryKey(expandedUrl), description: expandedUrl } : null)
+    : null;
+
+  /*
+   * Master-detail, the way an extension marketplace works: opening a
+   * repository shows its extensions in a panel beside the list instead of
+   * inside it. The list reflows once when the panel opens and then holds
+   * still — switching from one repository to the next moves nothing — where
+   * an inline expansion pushed every card below it down by the height of a
+   * forty-row list, so comparing three columns meant hunting for your place
+   * after every click. The panel is sticky, so it stays in view however far
+   * down the list the viewer has scrolled.
+   */
   return (
-    <div className="ext-panel">
-
-
-      <div className="ext-tree-toolbar">
-        <span className="ext-tree-toolbar__count">
-          Showing <strong>{visible.length}</strong> of {official.length} repositories
-        </span>
-        <div className="ext-tree-toolbar__actions">
-          {expandedUrl ? (
-            <Button size="compact" variant="ambient" icon={ChevronUp} onClick={onCollapse}>
-              Collapse
-            </Button>
-          ) : null}
-        </div>
-      </div>
-
+    <div className={`ext-browse${opened ? ' ext-browse--split' : ''}`}>
+    <div className="ext-panel ext-browse__list">
       <button
         type="button"
         className="ext-section-toggle"
@@ -281,7 +283,7 @@ export const RepositoryCatalog: React.FC<RepositoryCatalogProps> = ({
         onClick={() => setCatalogueOpen((open) => !open)}
       >
         {catalogueOpen ? <ChevronUp size={13} /> : <ChevronDown size={13} />}
-        Catalogue <span>{visible.length}</span>
+        Catalogue <span>{visible.length === official.length ? official.length : `${visible.length} of ${official.length}`}</span>
       </button>
 
       {catalogueOpen && (
@@ -307,7 +309,14 @@ export const RepositoryCatalog: React.FC<RepositoryCatalogProps> = ({
 
           return (
             <React.Fragment key={repository.id}>
-            <li className={`ext-card${open ? ' ext-card--open' : ''}`}>
+            <li
+              className={`ext-card ext-card--selectable${open ? ' ext-card--open' : ''}`}
+              onClick={(event) => {
+                // The card is the target; its own buttons and links keep theirs.
+                if ((event.target as HTMLElement).closest('button, a, input')) return;
+                if (!open) onBrowse({ name: repository.name, url: repository.rawRepoUrl });
+              }}
+            >
               <div className="ext-row__title">
                 {repository.name}
                 {activeJobCount > 0 ? (
@@ -394,30 +403,18 @@ export const RepositoryCatalog: React.FC<RepositoryCatalogProps> = ({
                 ) : null}
               </div>
               <div className="ext-card__actions">
-                {/*
-                  Browse opens the list *here*, under this card, instead of
-                  throwing the user onto a third tab. Reading what a repository
-                  offers and comparing it against the others is one task, and
-                  navigating away to answer it loses the row you were comparing
-                  from — along with the scroll position and every filter chip.
-                */}
-                <button
-                  type="button"
-                  className="btn btn-primary btn-sm"
+                <Button
+                  size="compact"
+                  variant="ambient"
+                  icon={ChevronRight}
                   aria-expanded={open}
+                  aria-controls="ext-browse-details"
                   onClick={() =>
-                    open
-                      ? onCollapse()
-                      : onBrowse({ name: repository.name, url: repository.rawRepoUrl })
+                    open ? onCollapse() : onBrowse({ name: repository.name, url: repository.rawRepoUrl })
                   }
                 >
-                  {open ? (
-                    <ChevronUp size={13} />
-                  ) : (
-                    <ChevronDown size={13} />
-                  )}
-                  {open ? 'Hide extensions' : 'Browse extensions'}
-                </button>
+                  {open ? 'Showing' : 'Details'}
+                </Button>
                 {here ? null : addJob?.state === 'done' ? (
                   <span className="ext-item__installed">
                     <Check size={13} /> Added
@@ -457,18 +454,7 @@ export const RepositoryCatalog: React.FC<RepositoryCatalogProps> = ({
                 ) : null}
               </div>
             </li>
-            {/*
-              Full-width, and immediately after the card it belongs to.
-              `grid-column: 1 / -1` makes the panel break the three-up rhythm
-              and take the whole row, which is the only layout where a long
-              extension list under one card of three does not look like it
-              belongs to its neighbours.
-            */}
-            {open ? (
-              <li className="ext-card__panel" aria-label={`Extensions in ${repository.name}`}>
-                {renderExpanded()}
-              </li>
-            ) : null}
+
             </React.Fragment>
           );
         })}
@@ -503,11 +489,12 @@ export const RepositoryCatalog: React.FC<RepositoryCatalogProps> = ({
                       <Button
                         size="compact"
                         variant="ambient"
-                        icon={open ? ChevronUp : ChevronDown}
+                        icon={ChevronRight}
                         aria-expanded={open}
+                        aria-controls="ext-browse-details"
                         onClick={() => (open ? onCollapse() : onBrowse({ name: repositoryKey(url), url }))}
                       >
-                        {open ? 'Hide' : 'Extensions'}
+                        {open ? 'Showing' : 'Details'}
                       </Button>
                       <Button
                         size="compact"
@@ -519,7 +506,6 @@ export const RepositoryCatalog: React.FC<RepositoryCatalogProps> = ({
                         onClick={() => onRemove(url)}
                       />
                     </li>
-                    {open ? <li className="ext-card__panel">{renderExpanded()}</li> : null}
                   </React.Fragment>
                 );
               })}
@@ -527,6 +513,19 @@ export const RepositoryCatalog: React.FC<RepositoryCatalogProps> = ({
           )}
         </section>
       )}
+    </div>
+    {opened ? (
+      <aside id="ext-browse-details" className="ext-browse__details" aria-label={`Extensions in ${opened.name}`}>
+        <header className="ext-browse__details-head">
+          <div className="ext-browse__details-title">
+            <strong>{opened.name}</strong>
+            {opened.description ? <p title={opened.description}>{opened.description}</p> : null}
+          </div>
+          <Button size="compact" variant="ambient" iconOnly icon={X} aria-label="Close details" onClick={onCollapse} />
+        </header>
+        <div className="ext-browse__details-body">{renderExpanded()}</div>
+      </aside>
+    ) : null}
     </div>
   );
 };
