@@ -325,10 +325,7 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
     <div style={{ display: 'flex', flexDirection: 'column', gap: '1.5rem' }}>
       <div className="screen-head">
         <div className="screen-head__titles">
-          <h2 style={{ fontSize: '1.25rem', fontWeight: 700, color: '#fff' }}>Library</h2>
-          <p style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>
-            Titles you have watched or saved, with where you left off
-          </p>
+          <h2 className="screen-head__title">Library</h2>
         </div>
         <ScreenSearch
           label={mode === 'searches' ? 'saved searches' : mode === 'saved' ? 'saved pages' : 'library'}

@@ -1,4 +1,5 @@
 import React, { useState, useMemo, useCallback, useEffect } from 'react';
+import { Button } from './ui';
 import { useSessionState } from '../utils/useSessionState';
 import { useIsDeveloper } from '../utils/ExperienceModeContext';
 import { plainMessage } from '../utils/experienceMode';
@@ -633,38 +634,29 @@ export const DownloadCenter: React.FC<DownloadCenterProps> = ({
     <div style={{ display: 'flex', flexDirection: 'column', gap: '1.25rem' }}>
       {/* Top Header */}
       <div className="download-manager__header-row">
-        <div>
-          <h2 style={{ fontSize: '1.25rem', fontWeight: 700, color: '#fff', margin: 0 }}>
-            Download Manager
-          </h2>
-          <p style={{ fontSize: '0.8rem', color: 'var(--text-muted)', marginTop: '0.2rem' }}>
-            {isDeveloper
-              ? 'High-speed multi-threaded downloads via aria2c daemon engine'
-              : 'Films and episodes you have saved to watch offline'}
-          </p>
+        <div className="screen-head__titles">
+          <h2 className="screen-head__title">Downloads</h2>
+          {isDeveloper && (
+            <p className="screen-head__meta">aria2c segmented transfers, HTTP fallback</p>
+          )}
         </div>
 
-        <div style={{ display: 'flex', gap: '0.6rem', alignItems: 'center' }}>
-          {onReveal && (
-            <button
-              onClick={() => onReveal()}
-              className="btn btn-secondary"
-              style={{ fontSize: '0.78rem' }}
-              title="Open default downloads folder in Windows File Explorer"
-            >
-              <FolderOpen size={16} style={{ color: 'var(--accent-light)' }} />
-              <span>Open Downloads Folder</span>
-            </button>
-          )}
-
+        <div className="screen-head__actions">
           {!hasBinaries && onOpenBinarySetup && (
-            <button
-              onClick={onOpenBinarySetup}
-              className="btn btn-primary"
+            <Button size="compact" icon={Zap} onClick={onOpenBinarySetup}>
+              Set up faster downloads
+            </Button>
+          )}
+          {onReveal && (
+            <Button
+              size="compact"
+              variant="ambient"
+              icon={FolderOpen}
+              onClick={() => onReveal()}
+              title="Open the downloads folder"
             >
-              <Zap size={16} style={{ color: 'var(--accent-light)' }} />
-              <span>Set up faster downloads</span>
-            </button>
+              Open folder
+            </Button>
           )}
         </div>
       </div>

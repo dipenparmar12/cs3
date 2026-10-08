@@ -372,7 +372,6 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ initialTab }) => {
       <header className="settings__head">
         <div className="settings__head-text">
           <h2>Settings</h2>
-          <p>Sensible defaults throughout — change only what you need.</p>
         </div>
         {/*
           The level switch. It stopped being about this screen — it decides

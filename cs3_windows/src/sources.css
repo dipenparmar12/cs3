@@ -11531,3 +11531,12 @@ button.credit-card { border: 0; background: none; padding: 0; font: inherit; col
   from { opacity: 0; transform: translateY(10px) scale(0.98); }
   to { opacity: 1; transform: none; }
 }
+
+
+/* One header shape for the list screens: a compact title, an optional muted
+   line of counts, and the screen's few actions on the right. */
+.screen-head { align-items: center; flex-wrap: wrap; }
+.screen-head__title { margin: 0; font-size: 1.3rem; font-weight: 700; color: #fff; letter-spacing: -0.01em; }
+.screen-head__meta { margin: 0.15rem 0 0; font-size: 0.78rem; color: var(--text-subtle); }
+.screen-head__meta-warn { color: #fbbf24; }
+.screen-head__actions { display: inline-flex; align-items: center; gap: 0.35rem; flex-wrap: wrap; }

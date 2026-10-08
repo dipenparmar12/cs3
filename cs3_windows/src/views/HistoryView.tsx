@@ -1,7 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useSessionState } from '../utils/useSessionState';
 import { useFlash } from '../utils/useFlash';
-import {
+import { Loader2, MoreHorizontal,
   History as HistoryIcon,
   Play,
   Trash2,
@@ -490,226 +490,123 @@ export const HistoryView: React.FC<HistoryViewProps> = ({ onSelectMedia, onPlayD
         overflowY: 'auto',
       }}
     >
-      {/* Header & Stats Banner */}
-      <div style={{ display: 'flex', flexDirection: 'column', gap: '1.25rem' }}>
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
-          <div>
-            <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', marginBottom: '0.35rem' }}>
-              <div
-                style={{
-                  width: '36px',
-                  height: '36px',
-                  borderRadius: '10px',
-                  backgroundColor: 'rgba(59, 130, 246, 0.15)',
-                  color: '#60a5fa',
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                  border: '1px solid rgba(59, 130, 246, 0.25)',
-                }}
-              >
-                <HistoryIcon size={20} />
-              </div>
-              <h1 style={{ fontSize: '1.6rem', fontWeight: 800, color: '#fff', letterSpacing: '-0.02em', margin: 0 }}>
-                Media History
-              </h1>
-            </div>
-            <p style={{ margin: 0, fontSize: '0.85rem', color: 'var(--text-muted)' }}>
-              Consolidated playback & download history. Revisit past streams, inspect provider diagnostics, or refresh fresh sources.
+      {/*
+        One quiet header. It was an icon tile, a large "Media History" title, a
+        sentence about diagnostics, five coloured stat cards and five buttons —
+        the most prominent things on the page were the counts and the tools,
+        not the history. Now: the title, the counts as one muted line, find,
+        and everything else (refresh, export, select, clear) in one menu.
+      */}
+      <div className="screen-head">
+        <div className="screen-head__titles">
+          <h2 className="screen-head__title">History</h2>
+          {stats.total > 0 && (
+            <p className="screen-head__meta">
+              {groupedItems.length} title{groupedItems.length === 1 ? '' : 's'} · {stats.played} played
+              {stats.downloaded > 0 && ` · ${stats.downloaded} downloaded`}
+              {stats.failed > 0 && <span className="screen-head__meta-warn"> · {stats.failed} failed</span>}
             </p>
-          </div>
-
-          {/* Action buttons */}
-          <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-            <ScreenSearch
-              label="history"
-              value={searchQuery}
-              onChange={setSearchQuery}
-              matches={
-                searchQuery === appliedQuery && !loading
-                  ? viewMode === 'grouped'
-                    ? groupedItems.length
-                    : events.length
-                  : undefined
-              }
-              hint="titles, episodes, years, providers, quality and errors"
-            />
-            <Button
-              size="compact"
-              icon={RotateCw}
-              loading={refreshing}
-              onClick={() => {
-                setRefreshing(true);
-                fetchHistory();
-              }}
-              disabled={loading}
-              title="Refresh history"
-            >
-              Refresh
-            </Button>
-
-            {events.length > 0 && (
-              <Menu
-                label="Export history"
-                trigger={(props) => (
-                  <Button {...props} size="compact" icon={FileSpreadsheet} loading={exporting}
-                    title="Export your watch history as a spreadsheet">
-                    {exportSuccessMessage ? exportSuccessMessage : 'Export CSV'}
-                    <ChevronDown size={12} aria-hidden />
-                  </Button>
-                )}
-                items={[
-                  {
-                    label: `Export current view (${events.length})`,
-                    description: 'The items the find and filters leave',
-                    icon: Download,
-                    onSelect: handleExportFilteredCsv,
-                  },
-                  {
-                    label: `Export all history (${stats.total})`,
-                    description: 'Every record, whatever is filtered',
-                    icon: FileSpreadsheet,
-                    onSelect: () => void handleExportAllCsv(),
-                  },
-                  {
-                    label: 'Copy CSV to clipboard',
-                    description: 'Paste into Excel, Sheets, or notes',
-                    icon: Copy,
-                    onSelect: () => void handleCopyCsvToClipboard(),
-                  },
-                ]}
-              />
-            )}
-
-            {events.length > 0 && (
-              <>
-                <Button
-                  size="compact"
-                  variant={selectMode ? 'prominent' : 'default'}
-                  aria-pressed={selectMode}
-                  onClick={() => {
-                    setSelectMode((v) => !v);
-                    setSelectedIds(new Set());
-                  }}
-                >
-                  {selectMode ? 'Cancel selection' : 'Select'}
-                </Button>
-
-                {selectMode && (
-                  <>
-                    <Button size="compact" onClick={selectAll}>
-                      {selectedIds.size === events.length ? 'Select none' : 'Select all'}
-                    </Button>
-
-                    {selectedIds.size > 0 && (
-                      <Button size="compact" variant="destructive" icon={Trash2} onClick={handleDeleteSelected}>
-                        Delete {selectedIds.size}
-                      </Button>
-                    )}
-                  </>
-                )}
-
-                {!selectMode && (
-                  <Button size="compact" variant="ambient" icon={Trash2} className="btn--danger-text"
-                    onClick={() => setConfirmClearOpen(true)}>
-                    Clear all
-                  </Button>
-                )}
-              </>
-            )}
-          </div>
+          )}
         </div>
 
-        {/* Stats summary cards */}
-        <div
-          style={{
-            display: 'grid',
-            gridTemplateColumns: 'repeat(auto-fit, minmax(130px, 1fr))',
-            gap: '0.75rem',
-          }}
-        >
-          <div
-            style={{
-              padding: '0.75rem 1rem',
-              borderRadius: 'var(--radius-md)',
-              backgroundColor: 'var(--bg-card)',
-              border: '1px solid var(--border-color)',
-            }}
-          >
-            <div style={{ fontSize: '0.72rem', color: 'var(--text-subtle)', fontWeight: 600, textTransform: 'uppercase' }}>
-              Unique Titles
-            </div>
-            <div style={{ fontSize: '1.35rem', fontWeight: 800, color: '#fff', marginTop: '0.2rem' }}>
-              {groupedItems.length}
-            </div>
-            <div style={{ fontSize: '0.68rem', color: 'var(--text-subtle)', marginTop: '0.1rem' }}>
-              ({stats.total} total logs)
-            </div>
-          </div>
+        <div className="screen-head__actions">
+          <ScreenSearch
+            label="history"
+            value={searchQuery}
+            onChange={setSearchQuery}
+            matches={
+              searchQuery === appliedQuery && !loading
+                ? viewMode === 'grouped'
+                  ? groupedItems.length
+                  : events.length
+                : undefined
+            }
+            hint="titles, episodes, years, providers, quality and errors"
+          />
 
-          <div
-            style={{
-              padding: '0.75rem 1rem',
-              borderRadius: 'var(--radius-md)',
-              backgroundColor: 'var(--bg-card)',
-              border: '1px solid rgba(16, 185, 129, 0.25)',
-            }}
-          >
-            <div style={{ fontSize: '0.72rem', color: '#34d399', fontWeight: 600, textTransform: 'uppercase' }}>
-              Played
-            </div>
-            <div style={{ fontSize: '1.35rem', fontWeight: 800, color: '#34d399', marginTop: '0.2rem' }}>
-              {stats.played}
-            </div>
-          </div>
-
-          <div
-            style={{
-              padding: '0.75rem 1rem',
-              borderRadius: 'var(--radius-md)',
-              backgroundColor: 'var(--bg-card)',
-              border: '1px solid rgba(244, 63, 94, 0.25)',
-            }}
-          >
-            <div style={{ fontSize: '0.72rem', color: '#fb7185', fontWeight: 600, textTransform: 'uppercase' }}>
-              Failed
-            </div>
-            <div style={{ fontSize: '1.35rem', fontWeight: 800, color: '#fb7185', marginTop: '0.2rem' }}>
-              {stats.failed}
-            </div>
-          </div>
-
-          <div
-            style={{
-              padding: '0.75rem 1rem',
-              borderRadius: 'var(--radius-md)',
-              backgroundColor: 'var(--bg-card)',
-              border: '1px solid rgba(59, 130, 246, 0.25)',
-            }}
-          >
-            <div style={{ fontSize: '0.72rem', color: '#60a5fa', fontWeight: 600, textTransform: 'uppercase' }}>
-              Downloaded
-            </div>
-            <div style={{ fontSize: '1.35rem', fontWeight: 800, color: '#60a5fa', marginTop: '0.2rem' }}>
-              {stats.downloaded}
-            </div>
-          </div>
-
-          <div
-            style={{
-              padding: '0.75rem 1rem',
-              borderRadius: 'var(--radius-md)',
-              backgroundColor: 'var(--bg-card)',
-              border: '1px solid var(--border-color)',
-            }}
-          >
-            <div style={{ fontSize: '0.72rem', color: '#fbbf24', fontWeight: 600, textTransform: 'uppercase' }}>
-              Attempted
-            </div>
-            <div style={{ fontSize: '1.35rem', fontWeight: 800, color: '#fbbf24', marginTop: '0.2rem' }}>
-              {stats.attempted}
-            </div>
-          </div>
+          {selectMode ? (
+            <>
+              <Button size="compact" onClick={selectAll}>
+                {selectedIds.size === events.length ? 'Select none' : 'Select all'}
+              </Button>
+              {selectedIds.size > 0 && (
+                <Button size="compact" variant="destructive" icon={Trash2} onClick={handleDeleteSelected}>
+                  Delete {selectedIds.size}
+                </Button>
+              )}
+              <Button
+                size="compact"
+                variant="ambient"
+                onClick={() => {
+                  setSelectMode(false);
+                  setSelectedIds(new Set());
+                }}
+              >
+                Done
+              </Button>
+            </>
+          ) : (
+            <Menu
+              label="History actions"
+              trigger={(props) => (
+                <Button
+                  {...props}
+                  size="compact"
+                  variant="ambient"
+                  iconOnly
+                  icon={exporting || refreshing ? Loader2 : MoreHorizontal}
+                  aria-label="More history actions"
+                  title={exportSuccessMessage ?? 'More'}
+                />
+              )}
+              items={[
+                {
+                  label: 'Refresh',
+                  icon: RotateCw,
+                  onSelect: () => {
+                    setRefreshing(true);
+                    fetchHistory();
+                  },
+                },
+                ...(events.length > 0
+                  ? [
+                      {
+                        label: 'Select…',
+                        description: 'Pick entries to delete',
+                        icon: CheckSquare,
+                        onSelect: () => {
+                          setSelectMode(true);
+                          setSelectedIds(new Set());
+                        },
+                      },
+                      {
+                        label: `Export current view (${events.length})`,
+                        description: 'The items the find and filters leave, as CSV',
+                        icon: Download,
+                        onSelect: handleExportFilteredCsv,
+                      },
+                      {
+                        label: `Export all history (${stats.total})`,
+                        description: 'Every record, as CSV',
+                        icon: FileSpreadsheet,
+                        onSelect: () => void handleExportAllCsv(),
+                      },
+                      {
+                        label: 'Copy CSV to clipboard',
+                        icon: Copy,
+                        onSelect: () => void handleCopyCsvToClipboard(),
+                      },
+                      {
+                        label: 'Clear all history…',
+                        icon: Trash2,
+                        tone: 'danger' as const,
+                        onSelect: () => setConfirmClearOpen(true),
+                      },
+                    ]
+                  : []),
+              ]}
+            />
+          )}
         </div>
       </div>
 
