@@ -325,7 +325,7 @@ export async function fetchJson<T>(url: string, options: HttpOptions = {}): Prom
     ...options,
     headers: { Accept: 'application/json', ...options.headers },
   });
-  return (await response.json()) as T;
+  return readJson<T>(response, url);
 }
 
 /** POSTs a JSON body and parses a JSON reply. Used by search APIs that take filters. */
@@ -339,7 +339,61 @@ export async function postJson<T>(
     body,
     headers: { Accept: 'application/json', ...options.headers },
   });
-  return (await response.json()) as T;
+  return readJson<T>(response, url);
+}
+
+/** A 200 whose body is not the JSON that was asked for. */
+export class NotJsonError extends Error {
+  readonly url: string;
+  /** Where the request ended up, when a redirect moved it. */
+  readonly finalUrl?: string;
+
+  constructor(message: string, url: string, finalUrl?: string) {
+    super(message);
+    this.name = 'NotJsonError';
+    this.url = url;
+    this.finalUrl = finalUrl;
+  }
+}
+
+/**
+ * A reply's body as JSON, or an error that says what came back instead.
+ *
+ * A 200 that is a web page — a sign-in wall in front of a repository made
+ * private (measured: git.disroot.org redirects FStream's raw `repo.json` to
+ * `/user/login`), a moved project's landing page, an ISP block page — used to
+ * reach `response.json()` and surface as `Unexpected token '<', "<!DOCTYPE "…`,
+ * which names neither the address nor the reason.
+ */
+async function readJson<T>(response: Response, url: string): Promise<T> {
+  const text = await response.text();
+  try {
+    return JSON.parse(text) as T;
+  } catch (error) {
+    let host = url;
+    try {
+      host = new URL(url).host;
+    } catch {
+      // keep the raw address
+    }
+    const landed = response.url && response.url !== url ? response.url : undefined;
+    const type = response.headers.get('content-type')?.split(';')[0].trim() ?? '';
+    if (!/^\s*</.test(text) && !type.includes('html')) {
+      throw new NotJsonError(
+        `${host} sent a reply that is not valid JSON (${(error as Error).message}).`,
+        url,
+        landed
+      );
+    }
+    const signIn = landed && /\/(user\/)?(login|signin|sign_in|sign-in|auth)\b/i.test(landed);
+    throw new NotJsonError(
+      signIn
+        ? `${host} asks for a sign-in instead of returning this file — it was made private or moved.`
+        : `${host} answered with a web page instead of JSON${landed ? ` (redirected to ${landed})` : ''} — the address is wrong or no longer published.`,
+      url,
+      landed
+    );
+  }
 }
 
 export async function fetchText(url: string, options: HttpOptions = {}): Promise<string> {

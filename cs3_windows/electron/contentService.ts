@@ -975,6 +975,30 @@ export class ContentService {
   }
 
   /**
+   * Forgets what the cache holds for one title or episode — both scopes —
+   * so the next discovery for it resolves afresh.
+   *
+   * The viewer's "these sources are wrong" from the details page. Scoped by the
+   * same key discovery reads (`stripQuery` + season/episode, then `origin` and
+   * `#all`), so nothing else in the cache moves. Returns how many went.
+   */
+  /** Empties the provider detail-page cache (re-creatable; refetched on open). */
+  public clearDetailCache(): void {
+    this.details.clear();
+  }
+
+  public clearCachedSources(request: SourceQuery): number {
+    const base = stripQuery(request.mediaUrl);
+    if (!base || base.startsWith('magnet:')) return 0;
+    const fromUrl = parseEpisodeParams(request.mediaUrl);
+    return this.cache.forget(
+      [this.cacheUrlFor(base, 'origin'), this.cacheUrlFor(base, 'all')],
+      request.season ?? fromUrl.season,
+      request.episode ?? fromUrl.episode
+    );
+  }
+
+  /**
    * Hears about every discovery that found something, keyed by page address.
    *
    * The cache key carries the scope as a `#all` suffix; that is an implementation

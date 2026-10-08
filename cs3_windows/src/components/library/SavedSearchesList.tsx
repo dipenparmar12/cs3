@@ -7,15 +7,22 @@
  * saved rows on the search screen, which says they are saved and offers to
  * search again.
  */
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { Bookmark, Search, Target, Trash2 } from 'lucide-react';
 import type { SavedSearchSummary } from '../../../electron/savedSearches';
 import { EmptyState } from '../EmptyState';
+import { ScreenSearchNoMatches } from '../ScreenSearch';
+import { matchesScreenQuery } from '../../utils/screenSearch';
 
 interface Props {
   onOpen: (id: string) => void;
   /** Reports how many there are, for the tab's count. */
   onCount?: (count: number) => void;
+  /** The Library's find query; narrows the list without fetching anything. */
+  query?: string;
+  /** Reports how many the query leaves, for the find field's count. */
+  onMatches?: (count: number) => void;
+  onClearQuery?: () => void;
 }
 
 function savedOn(timestamp: number): string {
@@ -26,8 +33,16 @@ function savedOn(timestamp: number): string {
   });
 }
 
-export const SavedSearchesList: React.FC<Props> = ({ onOpen, onCount }) => {
+export const SavedSearchesList: React.FC<Props> = ({ onOpen, onCount, query = '', onMatches, onClearQuery }) => {
   const [searches, setSearches] = useState<SavedSearchSummary[] | null>(null);
+  const shown = useMemo(
+    () => searches?.filter((search) => matchesScreenQuery(query, [search.query])) ?? [],
+    [searches, query]
+  );
+
+  useEffect(() => {
+    if (searches !== null) onMatches?.(shown.length);
+  }, [searches, shown.length, onMatches]);
 
   const load = useCallback(async () => {
     const list = (await window.cloudstream?.listSavedSearches?.()) ?? [];
@@ -57,9 +72,13 @@ export const SavedSearchesList: React.FC<Props> = ({ onOpen, onCount }) => {
     );
   }
 
+  if (shown.length === 0) {
+    return <ScreenSearchNoMatches query={query} where="saved searches" onClear={() => onClearQuery?.()} />;
+  }
+
   return (
     <ul className="saved-searches">
-      {searches.map((search) => (
+      {shown.map((search) => (
         <li key={search.id} className="saved-searches__row">
           <button type="button" className="saved-searches__open" onClick={() => onOpen(search.id)}>
             <span className="saved-searches__posters" aria-hidden>

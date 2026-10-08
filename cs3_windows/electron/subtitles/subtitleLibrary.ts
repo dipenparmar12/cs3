@@ -194,4 +194,26 @@ export class SubtitleLibrary {
     this.persist();
     return true;
   }
+
+  count(): number {
+    return this.load().length;
+  }
+
+  /**
+   * Removes every subtitle this library saved, and only those.
+   *
+   * Driven by the index rather than by listing the folder: the folder sits in
+   * the viewer's Downloads and may hold files they put there themselves.
+   */
+  removeAll(): number {
+    const all = this.load();
+    for (const entry of all) {
+      try {
+        fs.unlinkSync(entry.filePath);
+      } catch {}
+    }
+    this.entries = [];
+    this.persist();
+    return all.length;
+  }
 }

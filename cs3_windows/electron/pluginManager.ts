@@ -280,6 +280,8 @@ export interface ProviderTreeRepository {
    * decision about, and every one of these is removable.
    */
   bundled: boolean;
+  /** Added by the viewer's own address; no catalogue entry knows it. */
+  userAdded: boolean;
   /** Present when the catalogue knows this repository; absent for sideloads. */
   description?: string;
   category?: string;
@@ -312,6 +314,10 @@ function repositoryLabel(url: string): string {
   try {
     const parsed = new URL(url);
     const segments = parsed.pathname.split('/').filter(Boolean);
+    // jsDelivr mirrors a GitHub repository as `/gh/owner/repo@branch/…`.
+    if (parsed.hostname.includes('jsdelivr') && segments[0] === 'gh' && segments.length >= 3) {
+      return `${segments[1]}/${segments[2].split('@')[0]}`;
+    }
     if (
       (parsed.hostname.includes('github') ||
         parsed.hostname.includes('gitlab') ||
@@ -1821,6 +1827,23 @@ export class PluginManager {
     }
   }
 
+  /**
+   * Uninstall as a background job: under the same lock as an install's place-
+   * and-load step, so an `unload` never lands in the middle of another
+   * extension's `load` (providers self-register into one global).
+   */
+  public uninstallPluginExclusive(internalName: string): Promise<{ ok: boolean; message: string }> {
+    return this.oneAtATime(async () => {
+      if (!this.installedPlugins.has(internalName)) {
+        return { ok: false, message: 'It is not installed any more.' };
+      }
+      const removed = this.uninstallPlugin(internalName);
+      return removed
+        ? { ok: true, message: 'Uninstalled' }
+        : { ok: false, message: 'Could not be uninstalled.' };
+    });
+  }
+
   public uninstallPlugin(internalName: string): boolean {
     const record = this.installedPlugins.get(internalName);
     if (!record) return false;
@@ -2306,6 +2329,7 @@ export class PluginManager {
           extensions: [],
           enabled: !disabledRepositories.has(repoId),
           bundled: catalogued?.bundled === true,
+          userAdded: !catalogued && repoId !== SIDELOADED_REPOSITORY_ID,
           description: catalogued?.description,
           category: catalogued?.category,
           language: catalogued?.language,

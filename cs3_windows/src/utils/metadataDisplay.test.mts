@@ -10,11 +10,13 @@ import {
   formatRating,
   formatReleaseDate,
   formatRuntimeMinutes,
+  parseRuntimeMinutes,
   formatSeasonCount,
   formatStatus,
   formatVotes,
   groupCredits,
   hasAnything,
+  plotChoices,
   sourceLabel,
 } from './metadataDisplay.ts';
 import {
@@ -257,4 +259,55 @@ test('a certification is never shown without its country', () => {
   assert.equal(formatCertifications([]), null);
   assert.equal(formatCertifications(undefined), null);
   assert.equal(formatCertifications([{ country: 'US', rating: '  ' }]), null);
+});
+
+test('provider durations are read in every spelling', () => {
+  assert.equal(parseRuntimeMinutes('136 min'), 136);
+  assert.equal(parseRuntimeMinutes('2h 16m'), 136);
+  assert.equal(parseRuntimeMinutes('1 hr 45 mins'), 105);
+  assert.equal(parseRuntimeMinutes('PT2H16M'), 136);
+  assert.equal(parseRuntimeMinutes('136'), 136);
+  assert.equal(parseRuntimeMinutes('2 hours'), 120);
+  assert.equal(parseRuntimeMinutes('Unknown'), undefined);
+  assert.equal(parseRuntimeMinutes(''), undefined);
+});
+
+const IMDB_PLOT =
+  'Thomas A. Anderson is a man living two lives: by day an average programmer, by night a hacker known as Neo.';
+
+test('plotChoices puts the provider first and labels catalogues by name', () => {
+  const choices = plotChoices('Neo learns the truth. Hindi dubbed release.', 'Hindmoviez', [
+    { source: 'cinemeta', text: IMDB_PLOT },
+  ]);
+  assert.deepEqual(
+    choices.map((choice) => [choice.id, choice.label]),
+    [
+      ['provider', 'Hindmoviez'],
+      ['cinemeta', 'IMDb'],
+    ]
+  );
+});
+
+test('plotChoices does not offer a catalogue plot that repeats the provider', () => {
+  // The provider scraped the same paragraph and cut it short.
+  const choices = plotChoices(`${IMDB_PLOT.slice(0, 60)}...`, 'Hindmoviez', [
+    { source: 'cinemeta', text: IMDB_PLOT },
+  ]);
+  assert.equal(choices.length, 1);
+  assert.equal(choices[0].id, 'provider');
+});
+
+test('plotChoices falls back to the catalogues when the provider has no plot', () => {
+  const choices = plotChoices(undefined, 'Hindmoviez', [
+    { source: 'cinemeta', text: IMDB_PLOT },
+    { source: 'tvmaze', text: 'A completely different summary written by a television network for its listings page.' },
+  ]);
+  assert.deepEqual(
+    choices.map((choice) => choice.label),
+    ['IMDb', 'TVmaze']
+  );
+});
+
+test('plotChoices names an unknown provider generically', () => {
+  assert.equal(plotChoices('Some text that is long enough to be a plot.', undefined, [])[0].label, 'Provider');
 });

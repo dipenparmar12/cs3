@@ -38,6 +38,8 @@ const endServiceGraph = startup.span('constructServices');
 
 import { app, BrowserWindow, ipcMain, dialog, Menu, net, screen, shell } from 'electron';
 import { BackupService } from './cs3/backupService.ts';
+import { runReset, summarise, type ResetAreaDefinition } from './cs3/userDataReset.ts';
+import type { UserDataResetRequest } from '../src/types/userData';
 import { createBackupSections } from './cs3/backupSections.ts';
 import type { RestorePlan } from '../src/types/backup.ts';
 import fs from 'fs';
@@ -119,6 +121,8 @@ import {
 } from './metadata/enrichmentService';
 import { searchYouTubeTrailers } from './metadata/youtube';
 import { relatedMediaService } from './metadata/relatedMedia/relatedMediaService.ts';
+import { fetchFilmography } from './metadata/filmography.ts';
+import type { FilmographyRequest } from '../src/types/filmography';
 import type { RelatedMediaSearchRequest } from '../src/types/relatedMedia';
 import { mediaRatingService } from './metadata/ratings/mediaRatingService.ts';
 import type { CanonicalMediaIdentity } from '../src/types/ratings.ts';
@@ -139,7 +143,7 @@ import {
   continueWatchingEnabled,
   setContinueWatchingEnabled,
 } from './cs3/continueWatching';
-import { isLinkUsable, pickReplacement } from './cs3/playedSource';
+import { isLinkUsable, pickReplacement, pickSibling } from './cs3/playedSource';
 import {
   LibraryStore,
   type WatchStatus,
@@ -148,6 +152,8 @@ import {
   storedSourceToTorrentResult,
 } from './cs3/libraryStore';
 import { deadlineFromUrl } from './sourceCache';
+import { configureAppStorage, migratePath } from './storage/appStorage.ts';
+import { areaSize, sweepCacheArea, sweepTemp } from './storage/storageCleanup.ts';
 import { HistoryStore } from './cs3/historyStore';
 import { BookmarkStore } from './cs3/bookmarkStore';
 import { PageSnapshotStore, type PageSnapshotInput } from './cs3/pageSnapshot.ts';
@@ -158,16 +164,25 @@ import { DiscoveryService } from './cs3/discovery';
 import { SourcePrefetcher } from './cs3/sourcePrefetcher';
 import { TitleEnricher } from './cs3/titleEnricher';
 import type { DownloadTask } from '../src/types/download';
+import { DownloadState } from '../src/types/download';
 import type { SitePlugin } from '../src/types/plugin';
 import type { IndexerConfig, SourcePreferences, TorrentResult } from '../src/types/torrent';
 import type { SearchOptions } from '../src/types/api';
 import type { HistoryEvent, HistoryFilter } from '../src/types/history';
-import type { StoredSource } from '../src/types/library';
+import type {
+  StoredSource,
+  PlaybackPreferences,
+} from '../src/types/library';
 import type { ExternalPlaybackSnapshot } from '../src/types/player';
 import type { MpvSnapshot } from '../src/types/mpv';
 import { describeError } from '../src/utils/errors.ts';
 import type { TitleInteractionQuery } from '../src/types/interactions';
 import { SHARE_SCHEME } from '../src/utils/shareLink.ts';
+import {
+  subtitleMpvProperties,
+  type SubtitleBackground,
+  type SubtitleWeight,
+} from '../src/utils/subtitleStyle.ts';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -188,6 +203,43 @@ app.name = APP_NAME;
 app.setAppUserModelId(APP_ID);
 
 let mainWindow: BrowserWindow | null = null;
+
+/**
+ * Where everything lives on disk — configured before any service that stores
+ * something is constructed. See `storage/appStorage.ts` for the layout.
+ *
+ * Downloads: an existing `~/Downloads/CloudStream` is kept (that is where
+ * every earlier build put things, and moving a person's films is not ours to
+ * do); otherwise the platform's own Downloads folder, which follows a
+ * redirected or localised one where a home-directory guess would not.
+ */
+const legacyDownloadsDir = path.join(os.homedir(), 'Downloads', 'CloudStream');
+const downloadsDir = fs.existsSync(legacyDownloadsDir)
+  ? legacyDownloadsDir
+  : path.join(app.getPath('downloads'), 'CloudStream');
+/** The viewer's chosen folder (Settings → Downloads), else the default above. */
+const DOWNLOAD_DIRECTORY_KEY = 'download_directory';
+const storage = configureAppStorage({
+  root: app.getPath('userData'),
+  downloads: () => datastore.getString(DOWNLOAD_DIRECTORY_KEY, '', true) || downloadsDir,
+});
+/*
+ * Re-creatable caches that earlier builds wrote beside the persistent data.
+ * Moved once into `cache/`, before the services below read them; a file that
+ * cannot be moved stays put and its service starts a fresh cache.
+ */
+const CACHE_FILES = [
+  'cs3-detail-cache.json',
+  'cs3-discovery-cache.json',
+  'cs3-metadata-cache.json',
+  'cs3-related-media-cache.json',
+  'cs3-ratings-cache.json',
+  'cs3-catalogue-cache.json',
+  'cs3-repository-listings.json',
+  'cs3-ffmpeg-capabilities.json',
+] as const;
+for (const name of CACHE_FILES) storage.migrateIntoCache(path.join(storage.dataDir, name));
+migratePath(path.join(storage.dataDir, 'torrent-state'), path.join(storage.cacheRoot, 'torrent-state'));
 
 const datastore = new DatastoreManager();
 // Constructed before every store that records activity, so the first write any
@@ -344,7 +396,10 @@ pluginManager.getSidecar().setHostCallHandler(async (method, params) => {
 });
 const binaryDownloader = new BinaryDownloader();
 const torrentEngine = new TorrentEngine({
-  downloadPath: datastore.getString('torrent_cache_path', '', true) || undefined,
+  // The viewer's chosen folder, else `cache/torrent-pieces` — never the
+  // system temp directory, which is where every earlier build put it.
+  downloadPath:
+    datastore.getString('torrent_cache_path', '', true) || storage.cacheDir('torrent-pieces'),
   /**
    * Warm-start state lives under `userData`, never under the piece cache.
    *
@@ -354,7 +409,7 @@ const torrentEngine = new TorrentEngine({
    * cold start on the next launch, so they are deliberately somewhere that
    * button cannot reach.
    */
-  statePath: path.join(app.getPath('userData'), 'torrent-state'),
+  statePath: storage.cacheDir('torrent-state'),
   /**
    * A getter, not a value. Read once at construction this would need a restart
    * to take effect, and a privacy switch that only applies next launch is one
@@ -398,16 +453,14 @@ const titleEnricher = new TitleEnricher();
 // provider's file name — see `ContentService.searchTitleFor`.
 contentService.setTitleResolver((raw, hint) => titleEnricher.resolve(raw, hint));
 
-const metadataEnrichment = new MetadataEnrichmentService(undefined, titleEnricher);
+const metadataEnrichment = new MetadataEnrichmentService(storage.cacheDir(), titleEnricher);
 metadataEnrichment.setListener((metadata) =>
   mainWindow?.webContents.send('metadata:extendedUpdate', metadata)
 );
 
-const catalogueCache = new CatalogueCache(
-  path.join(app.getPath('userData'), 'cs3-catalogue-cache.json')
-);
+const catalogueCache = new CatalogueCache(storage.cacheFile('cs3-catalogue-cache.json'));
 const repositoryListings = new RepositoryListingCache(
-  path.join(app.getPath('userData'), 'cs3-repository-listings.json')
+  storage.cacheFile('cs3-repository-listings.json')
 );
 const ottService = new OttService(pluginManager, datastore, catalogueCache);
 /** Metadata catalogues for the platforms no installed provider can describe. */
@@ -428,8 +481,8 @@ const bookmarks = new BookmarkStore(datastore);
 const pageSnapshots = new PageSnapshotStore(app.getPath('userData'));
 const savedSearches = new SavedSearchStore(app.getPath('userData'));
 contentService.setSnapshotStore(pageSnapshots);
-relatedMediaService.setDirectory(app.getPath('userData'));
-mediaRatingService.setDirectory(app.getPath('userData'));
+relatedMediaService.setDirectory(storage.cacheDir());
+mediaRatingService.setDirectory(storage.cacheDir());
 mediaRatingService.setDatastore(datastore);
 /**
  * The home screen's catalogue source, and the rows built from it.
@@ -449,7 +502,7 @@ const homeProviders = new HomeProviderRegistry(datastore);
  */
 const discovery = new DiscoveryService(
   homeProviders,
-  undefined,
+  storage.cacheDir(),
   contentService.getNativeProviders()
 );
 /**
@@ -531,6 +584,8 @@ const extensionJobs: ExtensionJobQueue = new ExtensionJobQueue({
         return pluginManager.installPlugin(request.plugin, request.repositoryUrl);
       case 'update':
         return extensionUpdater.updatePlugin(request.internalName);
+      case 'uninstall':
+        return pluginManager.uninstallPluginExclusive(request.internalName);
       case 'addRepository':
         return pluginManager.addRepository(request.url);
       case 'installRepository': {
@@ -653,7 +708,7 @@ const searchHistory = new SearchHistoryStore(datastore);
 const subtitles = new SubtitleService();
 downloadService.setSubtitleFetcher((url) => subtitles.fetchAsVtt(url));
 // Beside the media downloads, so a viewer who opens the folder finds both.
-const subtitleLibrary = new SubtitleLibrary(path.join(os.homedir(), 'Downloads', 'CloudStream', 'Subtitles'));
+const subtitleLibrary = new SubtitleLibrary(path.join(downloadsDir, 'Subtitles'));
 const mediaTranscoder = new MediaTranscoder(binaryDownloader);
 /**
  * Lets `resolvePromoVideo` mux a video and an audio address into one stream.
@@ -705,6 +760,7 @@ function mpvToExternalSnapshot(snapshot: MpvSnapshot): ExternalPlaybackSnapshot 
 
 const mpvEngine = new MpvEngine({
   resolveBinary: (name) => binaryDownloader.resolveBinary(name),
+  getSubtitleStyle: () => getStoredMpvSubtitleProperties(),
   onUpdate: (snapshot) => {
     mainWindow?.webContents.send('mpv:update', snapshot);
     mainWindow?.webContents.send('external:update', mpvToExternalSnapshot(snapshot));
@@ -871,7 +927,7 @@ async function refreshFfmpegOptionSupport(): Promise<void> {
    * on a cold cache — the 1.1–1.8s freeze every cold launch log recorded as its
    * worst stall. See `media/toolCapabilities.ts`.
    */
-  const file = path.join(app.getPath('userData'), 'cs3-ffmpeg-capabilities.json');
+  const file = storage.cacheFile('cs3-ffmpeg-capabilities.json');
   let known: ToolCapabilities = {};
   try {
     known = (JSON.parse(fs.readFileSync(file, 'utf8')) as ToolCapabilities) ?? {};
@@ -1820,6 +1876,15 @@ app.whenReady().then(async () => {
   // session never says "Reading the list…". Own lane: it shares nothing with
   // the JVM warm-up, and one failing repository costs only itself.
   background.add({
+    id: 'storage-sweep',
+    label: 'Tidying the app’s cache and temporary files',
+    priority: 10,
+    delayMs: 45_000,
+    lane: 'storage',
+    run: runStorageSweep,
+  });
+
+  background.add({
     id: 'repository-listings',
     label: 'Refreshing the lists of add-ons you can install',
     priority: 20,
@@ -1987,6 +2052,9 @@ app.on('before-quit', async (event) => {
       error: describeError(error),
     });
   }
+  // Every service has let go of its working files by now. Anything still
+  // locked stays, and the next launch's sweep removes it.
+  storage.disposeSession();
   // Last, and synchronous: nothing after this point gets written.
   logger.shutdown();
   app.exit(0);
@@ -2589,6 +2657,24 @@ ipcMain.handle('sources:prefetch', async (_, request: SourceQuery) => {
   }
 });
 
+/**
+ * Clears the cached sources for one title or episode from its details page.
+ *
+ * Scoped to that title's cache entries only — `sources:clearCache` is the
+ * global one in Settings. The prefetcher is told too, so the page's "ready"
+ * badge does not keep describing sources that no longer exist.
+ */
+ipcMain.handle('sources:clearForMedia', async (_, request: SourceQuery) => {
+  try {
+    if (!request?.mediaUrl) return { ok: false, error: 'No title was given.', removed: 0 };
+    const removed = contentService.clearCachedSources(request);
+    sourcePrefetcher.forget(request);
+    return { ok: true, removed };
+  } catch (error) {
+    return { ...fail(error), removed: 0 };
+  }
+});
+
 ipcMain.handle('sources:cancelPrefetch', async () => {
   sourcePrefetcher.cancel();
   return { ok: true };
@@ -2873,6 +2959,26 @@ ipcMain.handle(
     }
   }
 );
+
+/**
+ * Saves (or updates) a page without toggling it — the player's bookmark
+ * button, which keeps the exact playback. Pressing it again updates the
+ * position rather than unsaving, so a second press can never lose the save.
+ */
+ipcMain.handle('bookmarks:save', async (_, input: Parameters<BookmarkStore['save']>[0]) => {
+  try {
+    if (isPrivateSession() && !allowsExplicitSaves()) {
+      return { ok: false, error: 'Explicit saves are disabled in Incognito mode.', bookmark: null };
+    }
+    const bookmark = bookmarks.save(input);
+    if (!isPrivateSession()) {
+      pageSnapshots.setPinned({ url: input?.mediaUrl, title: input?.title, year: input?.year }, true);
+    }
+    return { ok: true, bookmark };
+  } catch (error) {
+    return { ...fail(error), bookmark: null };
+  }
+});
 
 ipcMain.handle('bookmarks:remove', async (_, mediaUrl: string) => ({
   ok: true,
@@ -3286,6 +3392,25 @@ ipcMain.handle('metadata:findTrailers', async (_, title: string, year?: number) 
   }
 });
 
+/**
+ * "More from this person / studio" — see `metadata/filmography.ts`. Read-only
+ * and keyless; resolved by id, or by being credited on the title in view,
+ * never by name alone.
+ */
+ipcMain.handle('metadata:filmography', async (_, request: FilmographyRequest) => {
+  try {
+    if (!request?.name) return { ok: false, error: 'No one was named.', filmography: null };
+    return { ok: true, filmography: await fetchFilmography(request) };
+  } catch (error) {
+    return { ...fail(error), filmography: null };
+  }
+});
+
+ipcMain.handle('metadata:forgetRelatedMedia', async (_, request: RelatedMediaSearchRequest) => ({
+  ok: true,
+  removed: request ? relatedMediaService.forget(request) : false,
+}));
+
 ipcMain.handle('metadata:findRelatedMedia', async (_, request: RelatedMediaSearchRequest) => {
   try {
     const res = await relatedMediaService.search(request);
@@ -3365,16 +3490,20 @@ ipcMain.handle(
     request: SourceQuery,
     title: string,
     episodeTitle?: string,
-    options?: { persistent?: boolean; resumeKey?: string }
+    options?: { persistent?: boolean; resumeKey?: string; preferSource?: StoredSource }
   ) => {
     try {
       return {
         ok: true,
         snapshot: playbackSessions.start(request, title, episodeTitle, {
           persistent: Boolean(options?.persistent),
-          resume: options?.resumeKey
-            ? resumePreference(options.resumeKey, request.season, request.episode)
-            : undefined,
+          // A source named by the caller (a saved playback) outranks the
+          // remembered one: the viewer kept *that* combination on purpose.
+          resume: options?.preferSource
+            ? preferenceFor(options.preferSource)
+            : options?.resumeKey
+              ? resumePreference(options.resumeKey, request.season, request.episode)
+              : undefined,
         }),
       };
     } catch (error) {
@@ -3922,7 +4051,8 @@ ipcMain.handle('mpv:addSubtitle', async (_, url: string, title?: string, languag
   let target = url;
   if (url && (url.startsWith('WEBVTT') || url.includes('-->') || url.startsWith('blob:'))) {
     try {
-      const tempPath = path.join(os.tmpdir(), `cs3-sub-${Date.now()}-${Math.random().toString(36).slice(2)}.vtt`);
+      // This launch's temp directory: removed on quit, swept after a crash.
+      const tempPath = storage.tempFile('mpv-subtitle', 'vtt');
       fs.writeFileSync(tempPath, url, 'utf8');
       target = tempPath;
     } catch {
@@ -4037,6 +4167,158 @@ ipcMain.handle('binary:setupMpv', async () => {
   } catch (error) {
     return { ...fail(error), status: await mpvEngine.status() };
   }
+});
+
+// --- storage: where things live, and cleaning what may be cleaned ---------
+
+const DAY_MS = 24 * 60 * 60 * 1000;
+
+/*
+ * The caches the storage report lists and the sweep looks after. Each names
+ * the owning service's own clear, because emptying a JSON store's file while
+ * the service holds it in memory would be undone by its next write.
+ */
+storage.registerCacheArea({
+  id: 'torrent-pieces',
+  label: 'Torrent streaming cache',
+  path: torrentEngine.getCachePath(),
+  kind: 'dir',
+  // Pieces of something streamed a week ago are not worth keeping, and a
+  // runaway cache must not fill a disk: oldest go first beyond 20 GB.
+  maxAgeMs: 7 * DAY_MS,
+  maxBytes: 20 * 1024 ** 3,
+  isActive: (entry) => torrentEngine.isCacheEntryActive(path.basename(entry)),
+  clear: () => torrentEngine.clearCache(),
+});
+storage.registerCacheArea({
+  id: 'torrent-state',
+  label: 'Torrent metadata and DHT contacts',
+  path: storage.cacheDir('torrent-state'),
+  // `torrentMetadata` sweeps its own files; DHT contacts are rewritten live.
+  kind: 'self-managed',
+});
+storage.registerCacheArea({
+  id: 'yt-dlp',
+  label: 'Video page helper cache',
+  path: storage.cacheDir('yt-dlp'),
+  kind: 'dir',
+  maxAgeMs: 30 * DAY_MS,
+  // yt-dlp re-creates it on the next run; nothing in it is ever in use between runs.
+  clear: () => fs.promises.rm(storage.cacheDir('yt-dlp'), { recursive: true, force: true }),
+});
+const selfManaged: Array<[string, string, string, (() => unknown) | undefined]> = [
+  ['details', 'Title pages', 'cs3-detail-cache.json', () => contentService.clearDetailCache()],
+  ['home', 'Home rows', 'cs3-discovery-cache.json', () => discovery.invalidate()],
+  ['metadata', 'Cast, crew and production notes', 'cs3-metadata-cache.json', () => metadataEnrichment.clear()],
+  ['related', 'Related titles', 'cs3-related-media-cache.json', () => relatedMediaService.clearCache()],
+  ['ratings', 'Ratings', 'cs3-ratings-cache.json', () => mediaRatingService.clearCache()],
+  ['catalogues', 'Streaming-service catalogues', 'cs3-catalogue-cache.json', undefined],
+  ['repository-listings', 'Add-on lists', 'cs3-repository-listings.json', undefined],
+  ['ffmpeg', 'Media tool capabilities', 'cs3-ffmpeg-capabilities.json', undefined],
+];
+for (const [id, label, file, clear] of selfManaged) {
+  storage.registerCacheArea({ id, label, path: storage.cacheFile(file), kind: 'self-managed', clear });
+}
+
+/** Where every earlier build put the piece cache: the system temp directory. */
+const LEGACY_TEMP_DIRS = ['torrent-cache', 'torrent-state'].map((name) =>
+  path.join(os.tmpdir(), 'cloudstream-desktop', name)
+);
+
+/**
+ * The background sweep: abandoned temp sessions, aged JVM temp files, and the
+ * piece cache's age and size rules. Never on the path to the first frame, and
+ * every step tolerates locked or vanished files.
+ */
+async function runStorageSweep(): Promise<void> {
+  // Sessions only. The JVM's temp area is aged by the supervisor just before
+  // the runtime starts, when nothing can be holding a file in it.
+  const temp = await sweepTemp(storage.tempRoot, { currentPid: storage.processId });
+  let freed = temp.freedBytes;
+  const errors = [...temp.errors];
+  for (const area of storage.cacheAreas()) {
+    const swept = await sweepCacheArea(area, storage.cacheRoot);
+    freed += swept.freedBytes;
+    errors.push(...swept.errors);
+  }
+  logger.info('app', 'storage_sweep', {
+    removedTemp: temp.removed.length,
+    freedBytes: freed,
+    errors: errors.length,
+  });
+}
+
+/**
+ * Where CS3 keeps cache, temp, downloads and data, with sizes. Read-shaped;
+ * the Storage panel in Settings draws it, and the Developer view shows paths.
+ */
+ipcMain.handle('storage:getReport', async () => {
+  try {
+    const areas = await Promise.all(
+      storage.cacheAreas().map(async (area) => ({
+        id: area.id,
+        label: area.label,
+        path: area.path,
+        kind: area.kind,
+        managed: area.managed,
+        clearable: Boolean(area.clear),
+        bytes: await areaSize(area),
+        maxAgeDays: area.maxAgeMs ? Math.round(area.maxAgeMs / DAY_MS) : undefined,
+        maxBytes: area.maxBytes,
+      }))
+    );
+    const tempBytes = await areaSize({ path: storage.tempRoot });
+    const legacy = await Promise.all(
+      LEGACY_TEMP_DIRS.filter((dir) => fs.existsSync(dir)).map(async (dir) => ({
+        path: dir,
+        bytes: await areaSize({ path: dir }),
+      }))
+    );
+    return { ok: true, locations: storage.locations(), areas, tempBytes, legacy };
+  } catch (error) {
+    return fail(error);
+  }
+});
+
+/** Empties one cache area through its owning service. Nothing persistent is reachable from here. */
+ipcMain.handle('storage:clearArea', async (_, id: string) => {
+  const area = storage.cacheArea(String(id));
+  if (!area?.clear) return { ok: false, error: 'That cache cannot be cleared from here.' };
+  try {
+    await area.clear();
+    return { ok: true };
+  } catch (error) {
+    return fail(error);
+  }
+});
+
+/**
+ * Removes what earlier builds left in the system temp directory.
+ *
+ * Only on the viewer's request, and only the exact folders those builds
+ * created — a name match alone is not ownership enough to delete on a timer.
+ */
+ipcMain.handle('storage:removeLegacyTemp', async () => {
+  let removed = 0;
+  for (const dir of LEGACY_TEMP_DIRS) {
+    if (!fs.existsSync(dir)) continue;
+    try {
+      await fs.promises.rm(dir, { recursive: true, force: true, maxRetries: 1 });
+      removed += 1;
+    } catch {
+      // Held by something; it stays and is offered again next time.
+    }
+  }
+  return { ok: true, removed };
+});
+
+ipcMain.handle('storage:openLocation', async (_, which: string) => {
+  const where = storage.locations() as Record<string, string>;
+  const target = where[String(which)];
+  if (!target) return { ok: false, error: 'Unknown location.' };
+  fs.mkdirSync(target, { recursive: true });
+  const error = await shell.openPath(target);
+  return error ? { ok: false, error } : { ok: true };
 });
 
 ipcMain.handle('sources:getCacheStats', async () => contentService.getCache().stats());
@@ -4526,13 +4808,9 @@ const BACKGROUND_MODES = new Set(['continue', 'audio-only', 'pause']);
 const SUBTITLE_BACKGROUNDS = new Set(['none', 'shadow', 'outline', 'box']);
 const HEX_COLOR = /^#[0-9a-fA-F]{6}$/;
 
-ipcMain.handle('player:getPreferences', async () => {
-  const stored = datastore.getObject<StoredPlayerPreferences>(PLAYER_PREFERENCES_KEY, null);
-  /**
-   * Clamped on read, not just on write. A datastore edited by hand — or carried
-   * in from an Android backup — can hold a volume of 40 or -1, and either one
-   * makes the element throw `IndexSizeError` the moment it is assigned.
-   */
+function sanitizePlayerPreferences(
+  stored: Partial<StoredPlayerPreferences> | null | undefined
+): StoredPlayerPreferences {
   const preferences: StoredPlayerPreferences = {
     ...DEFAULT_PLAYER_PREFERENCES,
     ...(stored ?? {}),
@@ -4561,21 +4839,45 @@ ipcMain.handle('player:getPreferences', async () => {
     preferences.backgroundPlayback = DEFAULT_PLAYER_PREFERENCES.backgroundPlayback;
   }
   preferences.alwaysOnTop = preferences.alwaysOnTop === true;
+  return preferences;
+}
+
+function getStoredMpvSubtitleProperties(): Record<string, unknown> {
+  const stored =
+    datastore.getObject<StoredPlayerPreferences>(PLAYER_PREFERENCES_KEY, null, true) ??
+    datastore.getObject<StoredPlayerPreferences>(PLAYER_PREFERENCES_KEY, null, false);
+  const prefs = sanitizePlayerPreferences(stored);
+  return subtitleMpvProperties({
+    scale: prefs.subtitleScale,
+    color: prefs.subtitleColor,
+    background: prefs.subtitleBackground as SubtitleBackground,
+    weight: prefs.subtitleWeight as SubtitleWeight,
+    position: prefs.subtitlePosition,
+  });
+}
+
+ipcMain.handle('player:getPreferences', async () => {
+  const stored =
+    datastore.getObject<StoredPlayerPreferences>(PLAYER_PREFERENCES_KEY, null, true) ??
+    datastore.getObject<StoredPlayerPreferences>(PLAYER_PREFERENCES_KEY, null, false);
+  const preferences = sanitizePlayerPreferences(stored);
   return { ok: true, preferences };
 });
 
 ipcMain.handle(
   'player:setPreferences',
   async (_, patch: Partial<StoredPlayerPreferences>) => {
-    const current =
-      datastore.getObject<StoredPlayerPreferences>(PLAYER_PREFERENCES_KEY, null) ??
-      DEFAULT_PLAYER_PREFERENCES;
+    const raw =
+      datastore.getObject<StoredPlayerPreferences>(PLAYER_PREFERENCES_KEY, null, true) ??
+      datastore.getObject<StoredPlayerPreferences>(PLAYER_PREFERENCES_KEY, null, false);
+    const current = sanitizePlayerPreferences(raw);
     // Merged rather than replaced: the player writes volume/mute/speed while the
     // track panels write languages, and a whole-record write from either would
     // erase the other's choice.
-    const merged = { ...current, ...patch };
+    const merged = sanitizePlayerPreferences({ ...current, ...patch });
     datastore.setObject(PLAYER_PREFERENCES_KEY, merged, true);
     mainWindow?.webContents.send('player:preferencesChanged', merged);
+    void mpvEngine.setSubtitleStyle(getStoredMpvSubtitleProperties());
     return { ok: true };
   }
 );
@@ -4679,7 +4981,7 @@ ipcMain.handle('download:cancelBatch', async (_, batchId: string) =>
 ipcMain.handle('download:getActiveBatches', async () => batchDownloader.getActive());
 
 ipcMain.handle('download:revealInFolder', async (_, targetPath?: string) => {
-  const defaultDir = path.join(os.homedir(), 'Downloads', 'CloudStream');
+  const defaultDir = storage.downloadsDir();
   const target = targetPath || defaultDir;
   try {
     const normalized = path.normalize(target);
@@ -4966,8 +5268,8 @@ ipcMain.handle('extension:addRepository', async (_, repoUrl: string) => {
  */
 ipcMain.handle('extension:enqueueJobs', async (_, requests: ExtensionJobRequest[]) => {
   try {
-    const { snapshot } = extensionJobs.enqueue(Array.isArray(requests) ? requests : []);
-    return { ok: true, snapshot };
+    const { snapshot, refused } = extensionJobs.enqueue(Array.isArray(requests) ? requests : []);
+    return { ok: true, snapshot, refused };
   } catch (error) {
     return { ...fail(error), snapshot: extensionJobs.snapshot() };
   }
@@ -5747,6 +6049,11 @@ ipcMain.handle(
       source: TorrentResult;
       positionSeconds?: number;
       durationSeconds?: number;
+      provenance?: { provider?: string; extensionName?: string; repositoryName?: string };
+      originalTitle?: string;
+      posterUrl?: string;
+      imdbId?: string;
+      preferences?: PlaybackPreferences;
     }
   ) => {
     try {
@@ -5777,13 +6084,55 @@ ipcMain.handle(
           title: input.title,
           year: input.year,
           episodeTitle: input.episodeTitle,
+          provider: input.provenance?.provider,
+          extensionName: input.provenance?.extensionName,
+          repositoryName: input.provenance?.repositoryName,
+          originalTitle: input.originalTitle,
+          posterUrl: input.posterUrl,
+          imdbId: input.imdbId,
         },
         positionSeconds: input.positionSeconds,
         durationSeconds: input.durationSeconds,
+        preferences: input.preferences,
       });
       return { ok: true, record };
     } catch (error) {
       return { ...fail(error), record: null };
+    }
+  }
+);
+
+/**
+ * The viewer changed a track (or kept watching) on a source already recorded.
+ *
+ * Separate from recording because the record is written once, at ten seconds
+ * of real playback — and the dub or subtitle a viewer settles on is usually
+ * chosen after that. Nothing is created here: a source that never reached the
+ * threshold is not one worth resuming.
+ */
+ipcMain.handle(
+  'library:updatePlayedSourcePreferences',
+  async (
+    _,
+    input: {
+      title: string;
+      year?: number;
+      season?: number;
+      episode?: number;
+      preferences?: PlaybackPreferences;
+      positionSeconds?: number;
+    }
+  ) => {
+    try {
+      const updated = libraryStore.updatePlayedSourcePreferences(
+        canonicalKey(input.title, input.year),
+        input.season,
+        input.episode,
+        { preferences: input.preferences, positionSeconds: input.positionSeconds }
+      );
+      return { ok: true, updated };
+    } catch (error) {
+      return { ...fail(error), updated: false };
     }
   }
 );
@@ -5837,13 +6186,35 @@ ipcMain.handle(
  * session's own discovery is already re-asking, and `pickReplacement` finds the
  * same release in its answer.
  */
+/** A stored source as a session preference: started while its link holds, re-found after. */
+function preferenceFor(source: StoredSource): ResumePreference {
+  return {
+    start: isLinkUsable(source) ? storedSourceToTorrentResult(source) : undefined,
+    match: (candidates) => pickReplacement(source, candidates),
+  };
+}
+
 function resumePreference(key: string, season?: number, episode?: number): ResumePreference | undefined {
   const record = libraryStore.getPlayedSource(key, season, episode);
-  if (!record || record.source.status === 'Unavailable') return undefined;
-  return {
-    start: isLinkUsable(record.source) ? storedSourceToTorrentResult(record.source) : undefined,
-    match: (candidates) => pickReplacement(record.source, candidates),
-  };
+  if (record && record.source.status !== 'Unavailable') {
+    return {
+      start: isLinkUsable(record.source) ? storedSourceToTorrentResult(record.source) : undefined,
+      match: (candidates) => pickReplacement(record.source, candidates),
+    };
+  }
+
+  /*
+   * Nothing played for this exact episode — the usual case for "next episode"
+   * or a series resumed after finishing one. The most recent source played for
+   * any episode of the title still says which provider, resolution and dub the
+   * viewer settled on, so it orders the walk without pinning anything.
+   */
+  const sibling = libraryStore
+    .getPlayedSourcesForKey(key)
+    .filter((entry) => entry.source.status !== 'Unavailable')
+    .sort((a, b) => b.playedAt - a.playedAt)[0];
+  if (!sibling) return undefined;
+  return { match: (candidates) => pickSibling(sibling.source, candidates) };
 }
 
 ipcMain.handle(
@@ -6180,6 +6551,289 @@ ipcMain.handle('backup:undoRestore', async () => {
     return await backupService.undo();
   } catch (error) {
     return { ...fail(error), sections: [] };
+  }
+});
+
+// --- UI inspector: open a source file in the developer's editor -------------
+
+/**
+ * Opens `src/…/File.tsx:line:col` from the Developer mode UI inspector.
+ *
+ * Only a file inside this app's own source tree, and only one that exists: the
+ * path arrives from the renderer, and "open this path" with no fence is a way
+ * to launch anything. A packaged build has no sources beside it and says so.
+ * The VS Code family is reached through its URL scheme — no CLI on PATH needed
+ * — and "Default app" opens the file without a line.
+ */
+const EDITOR_SCHEMES: Record<string, string> = {
+  vscode: 'vscode',
+  'vscode-insiders': 'vscode-insiders',
+  cursor: 'cursor',
+  windsurf: 'windsurf',
+};
+ipcMain.handle(
+  'dev:openInEditor',
+  async (_, file: string, line?: number, column?: number, editor?: string) => {
+    try {
+      const root = path.resolve(app.getAppPath());
+      const target = path.resolve(root, String(file ?? ''));
+      if (!target.startsWith(root + path.sep)) {
+        return { ok: false, error: 'That path is outside the app source tree.' };
+      }
+      if (!fs.existsSync(target)) {
+        return {
+          ok: false,
+          error: app.isPackaged
+            ? 'Source files are not part of a packaged build'
+            : 'That source file does not exist',
+        };
+      }
+      const scheme = EDITOR_SCHEMES[editor ?? 'vscode'];
+      if (!scheme) {
+        const failure = await shell.openPath(target);
+        return failure ? { ok: false, error: failure } : { ok: true };
+      }
+      const position = `${Math.max(1, Number(line) || 1)}:${Math.max(1, Number(column) || 1)}`;
+      await shell.openExternal(`${scheme}://file/${target.split(path.sep).join('/')}:${position}`);
+      return { ok: true };
+    } catch (error) {
+      return fail(error);
+    }
+  }
+);
+
+// --- erase my data ----------------------------------------------------------
+
+/**
+ * Everything the viewer did, as areas they can erase — see
+ * `cs3/userDataReset.ts` for the line between user data and infrastructure.
+ * Each clear goes through the store that owns the data, never its file.
+ */
+const FINISHED_DOWNLOAD_STATES = new Set<string>([DownloadState.Completed, DownloadState.Failed]);
+const userDataAreas: ResetAreaDefinition[] = [
+  {
+    id: 'history',
+    label: 'Watch history',
+    description: 'Everything you played, downloaded or tried, with when.',
+    defaultSelected: true,
+    count: () => historyStore.getStats().total,
+    clear: () => historyStore.clear(),
+  },
+  {
+    id: 'progress',
+    label: 'Continue watching and positions',
+    description: 'Where you stopped in every film and episode.',
+    defaultSelected: true,
+    count: () => libraryStore.exportAll().progress.length,
+    clear: () => libraryStore.replaceProgress([]),
+  },
+  {
+    id: 'library',
+    label: 'Library',
+    description: 'Titles in your lists (watching, completed, on hold…) and the sources kept with them.',
+    defaultSelected: true,
+    count: () => libraryStore.exportAll().entries.length,
+    clear: () => {
+      libraryStore.replaceEntries([]);
+      libraryStore.replaceSourceMemory([]);
+    },
+  },
+  {
+    id: 'playedSources',
+    label: 'Remembered sources',
+    description: 'Which source played for each title, used to resume on the same one.',
+    defaultSelected: true,
+    count: () => libraryStore.exportPlayedSources().length,
+    clear: () => libraryStore.replacePlayedSources([]),
+  },
+  {
+    id: 'bookmarks',
+    label: 'Saved pages',
+    description: 'Pages you saved, and the copies of every page you opened.',
+    defaultSelected: true,
+    count: () => bookmarks.list().length,
+    clear: () => {
+      bookmarks.clearAll();
+      pageSnapshots.clearAll();
+    },
+  },
+  {
+    id: 'searchHistory',
+    label: 'Search history',
+    description: 'What you typed into search.',
+    defaultSelected: true,
+    count: () => searchHistory.list().length,
+    clear: () => {
+      searchHistory.clear();
+    },
+  },
+  {
+    id: 'savedSearches',
+    label: 'Saved searches',
+    description: 'Result lists you kept.',
+    defaultSelected: true,
+    count: () => savedSearches.exportAll().length,
+    clear: () => savedSearches.clear(),
+  },
+  {
+    id: 'activity',
+    label: 'Viewed titles and results',
+    description: 'Which titles you opened, and which had nothing to play.',
+    defaultSelected: true,
+    count: () => Object.keys(titleOutcomes.list()).length,
+    clear: () => {
+      titleInteractions.clearVisits();
+      titleOutcomes.clear();
+    },
+  },
+  {
+    id: 'sources',
+    label: 'Sources found for titles',
+    description: 'Links discovered while you browsed and played. They are found again on demand.',
+    defaultSelected: true,
+    count: () => null,
+    clear: () => contentService.getCache().clear(),
+  },
+  {
+    id: 'providerStats',
+    label: 'Provider statistics',
+    description: 'How often each provider answered for you, used to rank them.',
+    defaultSelected: true,
+    count: () => null,
+    clear: () => providerAnalytics.reset(),
+  },
+  {
+    id: 'downloads',
+    label: 'Download list',
+    description: 'Finished and failed downloads in the list. Downloads still running are left alone.',
+    defaultSelected: true,
+    count: () => downloadService.getTasks().filter((task) => FINISHED_DOWNLOAD_STATES.has(task.state)).length,
+    clear: async ({ deleteDownloadedFiles }) => {
+      for (const task of downloadService.getTasks()) {
+        if (!FINISHED_DOWNLOAD_STATES.has(task.state)) continue;
+        await downloadService.remove(task.id, deleteDownloadedFiles);
+      }
+    },
+  },
+  {
+    id: 'subtitles',
+    label: 'Saved subtitles',
+    description: 'Subtitle files the app saved for reuse.',
+    defaultSelected: true,
+    count: () => subtitleLibrary.count(),
+    clear: () => {
+      subtitleLibrary.removeAll();
+    },
+  },
+  {
+    id: 'pageCaches',
+    label: 'Cached pages and details',
+    description: 'Copies of title pages, cast, ratings and home rows. Fetched again when needed.',
+    defaultSelected: true,
+    count: () => null,
+    clear: async () => {
+      for (const id of ['details', 'metadata', 'related', 'ratings', 'home']) {
+        await storage.cacheArea(id)?.clear?.();
+      }
+    },
+  },
+];
+
+/** Backup sections that hold what each area erases — the safety copy. */
+const RESET_BACKUP_SECTIONS: Record<string, string[]> = {
+  history: ['history'],
+  progress: ['continueWatching'],
+  library: ['library'],
+  playedSources: ['library'],
+  bookmarks: ['bookmarks'],
+  searchHistory: ['searchHistory'],
+  savedSearches: ['savedSearches'],
+  activity: ['titleOutcomes'],
+  downloads: ['downloads'],
+};
+
+ipcMain.handle('userData:summary', async () => {
+  try {
+    return { ok: true, ...summarise(userDataAreas) };
+  } catch (error) {
+    return { ...fail(error), areas: [], preserved: [] };
+  }
+});
+
+/**
+ * Erases the chosen areas, after saving a copy of them.
+ *
+ * The copy is an ordinary backup file in the app's backups folder, so undoing
+ * this is Settings → Backup → Restore — the existing, reviewed path, not a
+ * second one. Refusing to erase when the copy cannot be written is deliberate
+ * for the same reason a restore refuses without its recovery file.
+ */
+ipcMain.handle('userData:erase', async (_, request: UserDataResetRequest) => {
+  try {
+    const chosen = Array.isArray(request?.areas) ? request.areas.map(String) : [];
+    if (chosen.length === 0) return { ok: false, cleared: [], failed: [], error: 'Nothing was chosen.' };
+
+    let backupPath: string | undefined;
+    if (request.keepCopy !== false) {
+      const sections = [...new Set(chosen.flatMap((id) => RESET_BACKUP_SECTIONS[id] ?? []))];
+      if (sections.length > 0) {
+        const stamp = new Date().toISOString().replace(/[:.]/g, '-');
+        const target = path.join(app.getPath('userData'), 'backups', `before-erase-${stamp}.json`);
+        const written = backupService.write(target, sections);
+        if (!written.ok) {
+          return {
+            ok: false,
+            cleared: [],
+            failed: [],
+            error: `Nothing was erased: a copy could not be saved first (${written.error ?? 'unknown error'}).`,
+          };
+        }
+        backupPath = written.path;
+      }
+    }
+
+    const result = await runReset(userDataAreas, chosen, {
+      deleteDownloadedFiles: request.deleteDownloadedFiles === true,
+    });
+    datastore.flushSync();
+    pageSnapshots.flush();
+    savedSearches.flush();
+    providerAnalytics.flush();
+    metadataEnrichment.flush();
+    logger.info('app', 'user_data_erased', {
+      cleared: result.cleared.join(','),
+      failed: result.failed.length,
+    });
+    return { ...result, backupPath };
+  } catch (error) {
+    return { ...fail(error), cleared: [], failed: [] };
+  }
+});
+
+/**
+ * Where new downloads go. It used to be a field in Settings that remembered
+ * nothing and changed nothing while saying "Download folder updated."
+ * Existing downloads keep their paths; this decides new ones only.
+ */
+ipcMain.handle('download:getDirectory', async () => ({
+  ok: true,
+  directory: storage.downloadsDir(),
+  isDefault: !datastore.getString(DOWNLOAD_DIRECTORY_KEY, '', true),
+}));
+
+ipcMain.handle('download:setDirectory', async (_, directory: string | null) => {
+  try {
+    if (directory) {
+      const resolved = path.resolve(String(directory));
+      fs.mkdirSync(resolved, { recursive: true });
+      fs.accessSync(resolved, fs.constants.W_OK);
+      datastore.setString(DOWNLOAD_DIRECTORY_KEY, resolved, true);
+    } else {
+      datastore.setString(DOWNLOAD_DIRECTORY_KEY, '', true);
+    }
+    return { ok: true, directory: storage.downloadsDir() };
+  } catch (error) {
+    return { ...fail(error), directory: storage.downloadsDir() };
   }
 });
 

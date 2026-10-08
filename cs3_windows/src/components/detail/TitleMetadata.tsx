@@ -1,5 +1,7 @@
-import React, { useMemo } from 'react';
-import { ExternalLink, Info, Loader2 } from 'lucide-react';
+import React, { useMemo, useState } from 'react';
+import { BookOpen, ExternalLink, Info, Loader2, Users } from 'lucide-react';
+import { DetailSection } from './DetailSection';
+import { CollectionDialog } from './CollectionDialog';
 
 import { Poster } from '../Poster';
 import type { CreditPerson, ExtendedMetadata, ProductionNote } from '../../types/metadata';
@@ -107,7 +109,10 @@ const MetadataStatus: React.FC<{ answered: string[] }> = ({ answered }) => (
   </p>
 );
 
-const PersonCard: React.FC<{ person: CreditPerson }> = ({ person }) => {
+const PersonCard: React.FC<{ person: CreditPerson; onSelect?: (person: CreditPerson) => void }> = ({
+  person,
+  onSelect,
+}) => {
   const described = describeCredit(person);
 
   const card = (
@@ -145,9 +150,22 @@ const PersonCard: React.FC<{ person: CreditPerson }> = ({ person }) => {
     </>
   );
 
-  // A profile link is an external page, so it opens in the system browser via
-  // the app's existing `setWindowOpenHandler`; a credit with no link must not
-  // render as a dead anchor, so it is a plain div instead.
+  // With a person view available, a card opens their other work in the app —
+  // the profile page is one click further, inside that view. Without it, a
+  // profile link opens in the system browser as before; a credit with no link
+  // is a plain div rather than a dead anchor.
+  if (onSelect) {
+    return (
+      <button
+        type="button"
+        className="credit-card credit-card--link"
+        onClick={() => onSelect(person)}
+        title={`More from ${person.name}`}
+      >
+        {card}
+      </button>
+    );
+  }
   return person.profileUrl ? (
     <a
       className="credit-card credit-card--link"
@@ -187,31 +205,46 @@ export interface TitleCastProps {
   metadata: ExtendedMetadata | null | undefined;
   fallbackActors?: string[];
   pending?: boolean;
+  /** Opens a person's other work. */
+  onSelectPerson?: (person: CreditPerson) => void;
 }
 
 export const TitleCast: React.FC<TitleCastProps> = ({
   metadata,
   fallbackActors,
   pending = false,
+  onSelectPerson,
 }) => {
   const { cast } = useMemo(() => groupCredits(metadata?.people), [metadata?.people]);
   const section = metadataSectionState({ metadata, fallbackActors, pending });
   const looking = shouldShowStatus({ metadata, fallbackActors, pending });
   const answered = answeringSources(metadata?.outcomes);
 
+  const [viewAll, setViewAll] = useState(false);
+
   if (section === 'fallback') {
     return (
-      <section className="detail-facts detail-facts--cast">
-        <h2 className="detail-facts__heading">Cast</h2>
+      <DetailSection id="cast" title="Cast" icon={<Users size={16} />} count={fallbackActors!.length} className="detail-facts--cast">
         {looking && <MetadataStatus answered={answered} />}
         <ul className="detail-facts__people">
           {fallbackActors!.map((actor) => (
             <li key={actor} className="detail-facts__person">
-              {actor}
+              {onSelectPerson ? (
+                <button
+                  type="button"
+                  className="detail-facts__person-link"
+                  onClick={() => onSelectPerson({ name: actor, role: 'cast', sources: [] } as unknown as CreditPerson)}
+                  title={`More from ${actor}`}
+                >
+                  {actor}
+                </button>
+              ) : (
+                actor
+              )}
             </li>
           ))}
         </ul>
-      </section>
+      </DetailSection>
     );
   }
 
@@ -220,23 +253,42 @@ export const TitleCast: React.FC<TitleCastProps> = ({
   }
 
   return (
-    <section className="detail-facts detail-facts--cast">
-      <h2 className="detail-facts__heading">
-        Cast
-        <span className="detail-facts__count">{cast.length}</span>
-        {looking && (
-          <span className="detail-facts__pending"> · still looking</span>
-        )}
-      </h2>
+    <DetailSection
+      id="cast"
+      title={looking ? 'Cast · still looking' : 'Cast'}
+      icon={<Users size={16} />}
+      count={cast.length}
+      className="detail-facts--cast"
+      onViewAll={cast.length > 8 ? () => setViewAll(true) : undefined}
+    >
       <div className="credit-rail">
         {cast.map((person, index) => (
           <PersonCard
             key={`${person.name}:${person.character ?? ''}:${index}`}
             person={person}
+            onSelect={onSelectPerson}
           />
         ))}
       </div>
-    </section>
+      {viewAll && (
+        <CollectionDialog title="Cast" count={cast.length} icon={<Users size={18} />} layout="people" onClose={() => setViewAll(false)}>
+          {cast.map((person, index) => (
+            <PersonCard
+              key={`${person.name}:${person.character ?? ''}:${index}`}
+              person={person}
+              onSelect={
+                onSelectPerson
+                  ? (chosen) => {
+                      setViewAll(false);
+                      onSelectPerson(chosen);
+                    }
+                  : undefined
+              }
+            />
+          ))}
+        </CollectionDialog>
+      )}
+    </DetailSection>
   );
 };
 
@@ -245,6 +297,10 @@ export interface TitleAboutProps {
   providerTags?: string[];
   fallbackActors?: string[];
   pending?: boolean;
+  /** Opens a person's other work (crew names become links). */
+  onSelectPerson?: (person: CreditPerson) => void;
+  /** Opens a studio's other work. */
+  onSelectStudio?: (studio: { name: string; url?: string }) => void;
 }
 
 export const TitleAbout: React.FC<TitleAboutProps> = ({
@@ -252,6 +308,8 @@ export const TitleAbout: React.FC<TitleAboutProps> = ({
   providerTags,
   fallbackActors,
   pending = false,
+  onSelectPerson,
+  onSelectStudio,
 }) => {
   const { crew } = useMemo(() => groupCredits(metadata?.people), [metadata?.people]);
 
@@ -309,7 +367,8 @@ export const TitleAbout: React.FC<TitleAboutProps> = ({
     if (metadata?.networks?.length) {
       rows.push({ label: 'Network', value: metadata.networks.slice(0, 3).map((n) => n.name).join(', ') });
     }
-    if (metadata?.studios?.length) {
+    // Studios are drawn as links below when they can be browsed.
+    if (metadata?.studios?.length && !onSelectStudio) {
       rows.push({ label: 'Studio', value: metadata.studios.slice(0, 3).map((s) => s.name).join(', ') });
     }
     const budget = formatMoney(metadata?.budget, metadata?.currency);
@@ -330,10 +389,9 @@ export const TitleAbout: React.FC<TitleAboutProps> = ({
 
   if (section !== 'content' || !metadata) {
     return looking ? (
-      <section className="detail-facts detail-facts--about">
-        <h2 className="detail-facts__heading">About</h2>
+      <DetailSection id="about" title="About" icon={<Info size={16} />} className="detail-facts--about">
         <MetadataStatus answered={answered} />
-      </section>
+      </DetailSection>
     ) : null;
   }
 
@@ -349,9 +407,7 @@ export const TitleAbout: React.FC<TitleAboutProps> = ({
   }
 
   return (
-    <section className="detail-facts detail-facts--about">
-      <h2 className="detail-facts__heading">About</h2>
-
+    <DetailSection id="about" title="About" icon={<Info size={16} />} className="detail-facts--about">
       {looking && <MetadataStatus answered={answered} />}
 
       {extraGenres.length > 0 && (
@@ -411,14 +467,50 @@ export const TitleAbout: React.FC<TitleAboutProps> = ({
         </dl>
       )}
 
-      {crewGroups.length > 0 && (
+      {(crewGroups.length > 0 || (onSelectStudio && metadata.studios?.length)) && (
         <dl className="metadata-facts metadata-facts--crew">
           {crewGroups.map(([job, people]) => (
             <div key={job} className="metadata-facts__row">
               <dt>{job}</dt>
-              <dd>{people.map((person) => person.name).join(', ')}</dd>
+              <dd>
+                {onSelectPerson
+                  ? people.map((person, index) => (
+                      <React.Fragment key={person.name}>
+                        {index > 0 && ', '}
+                        <button
+                          type="button"
+                          className="metadata-facts__link"
+                          onClick={() => onSelectPerson(person)}
+                          title={`More from ${person.name}`}
+                        >
+                          {person.name}
+                        </button>
+                      </React.Fragment>
+                    ))
+                  : people.map((person) => person.name).join(', ')}
+              </dd>
             </div>
           ))}
+          {onSelectStudio && metadata.studios && metadata.studios.length > 0 && (
+            <div className="metadata-facts__row">
+              <dt>Studio</dt>
+              <dd>
+                {metadata.studios.slice(0, 4).map((studio, index) => (
+                  <React.Fragment key={studio.name}>
+                    {index > 0 && ', '}
+                    <button
+                      type="button"
+                      className="metadata-facts__link"
+                      onClick={() => onSelectStudio(studio)}
+                      title={`More from ${studio.name}`}
+                    >
+                      {studio.name}
+                    </button>
+                  </React.Fragment>
+                ))}
+              </dd>
+            </div>
+          )}
         </dl>
       )}
 
@@ -431,7 +523,7 @@ export const TitleAbout: React.FC<TitleAboutProps> = ({
           ))}
         </ul>
       )}
-    </section>
+    </DetailSection>
   );
 };
 
@@ -448,14 +540,13 @@ export const TitleBehindTheScenes: React.FC<TitleBehindTheScenesProps> = ({ meta
   if (notes.length === 0) return null;
 
   return (
-    <section className="detail-facts detail-facts--notes">
-      <h2 className="detail-facts__heading">Behind the scenes</h2>
+    <DetailSection id="behind" title="Behind the scenes" icon={<BookOpen size={16} />} count={notes.length} className="detail-facts--notes">
       <div className="metadata-notes">
         {notes.map((note) => (
           <NoteBlock key={`${note.heading}:${note.attribution.url}`} note={note} />
         ))}
       </div>
-    </section>
+    </DetailSection>
   );
 };
 

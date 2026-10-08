@@ -222,6 +222,16 @@ export class SourcePrefetcher {
   }
 
   /**
+   * Withdraws what this module last said about a target whose cache was just
+   * cleared: a running prefetch for it is abandoned (its answer may be the one
+   * being thrown away) and the page is told there is nothing ready any more.
+   */
+  public forget(request: SourceQuery): void {
+    if (this.current?.key === SourcePrefetcher.keyOf(request)) this.cancel();
+    this.emit(request, { status: 'idle', count: 0, fromCache: false, sources: [] });
+  }
+
+  /**
    * Abandons any pending or running prefetch.
    *
    * The abort reaches `ContentService`, which only cancels the underlying run

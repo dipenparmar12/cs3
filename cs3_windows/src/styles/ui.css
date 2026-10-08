@@ -1,0 +1,518 @@
+/* ===========================================================================
+   Shared UI components (src/components/ui/*).
+   Loaded after index.css and sources.css so these definitions are the ones
+   that hold where an older rule targets the same class.
+   =========================================================================== */
+
+/* --- Dialog ---------------------------------------------------------------- */
+.ui-dialog {
+  display: flex;
+  flex-direction: column;
+  max-height: 86vh;
+  width: min(520px, 100%);
+  background: var(--bg-card);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: var(--radius-lg);
+  box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.85);
+  overflow: hidden;
+}
+.ui-dialog--sm { width: min(420px, 100%); }
+.ui-dialog--lg { width: min(720px, 100%); }
+/* Collections ("View all" cast, trailers, titles): wide enough for a grid. */
+.ui-dialog--xl { width: min(1120px, 94vw); max-height: 88vh; }
+.ui-dialog__head {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.75rem;
+  padding: 1.1rem 1.25rem 0.9rem;
+}
+.ui-dialog__icon {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 34px;
+  height: 34px;
+  border-radius: var(--radius-md);
+  background: rgba(59, 130, 246, 0.14);
+  color: var(--accent-light);
+}
+.ui-dialog__icon--danger { background: rgba(239, 68, 68, 0.14); color: #f87171; }
+.ui-dialog__titles { flex: 1 1 auto; min-width: 0; }
+.ui-dialog__titles h3 { margin: 0; font-size: 1rem; font-weight: 700; color: var(--text-main); }
+.ui-dialog__description { margin: 0.3rem 0 0; font-size: 0.82rem; line-height: 1.45; color: var(--text-muted); }
+.ui-dialog__close {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  border: none;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text-subtle);
+  cursor: pointer;
+}
+.ui-dialog__close:hover { background: rgba(255, 255, 255, 0.08); color: var(--text-main); }
+.ui-dialog__close:focus-visible { outline: 2px solid var(--accent-light); outline-offset: 1px; }
+.ui-dialog__body {
+  padding: 0 1.25rem 1rem;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  font-size: 0.85rem;
+  color: var(--text-muted);
+}
+.ui-dialog__foot {
+  padding: 0.85rem 1.25rem;
+  border-top: 1px solid var(--border-color);
+  background: rgba(0, 0, 0, 0.18);
+}
+.ui-dialog__actions { display: flex; align-items: center; gap: 0.75rem; }
+.ui-dialog__actions-start { flex: 1 1 auto; min-width: 0; font-size: 0.8rem; color: var(--text-muted); }
+.ui-dialog__actions-end { display: flex; gap: 0.5rem; margin-left: auto; }
+
+/* --- Button states shared by every variant -------------------------------- */
+.btn--loading { cursor: progress; }
+
+/* ===========================================================================
+   Buttons — one family. `.btn` + a variant + optionally `.btn-sm` / `.btn-icon`.
+   Variant  →  class:  default → .btn-secondary   prominent → .btn-primary
+                       ambient → .btn-ghost       destructive → .btn-danger
+   Legacy alias kept on the same tokens: .icon-button (ambient, icon only).
+   =========================================================================== */
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--control-gap);
+  min-height: var(--control-height);
+  padding: 0 var(--control-padding-x);
+  font-family: inherit;
+  font-size: var(--control-font-size);
+  font-weight: var(--control-font-weight);
+  line-height: 1.2;
+  white-space: nowrap;
+  border-radius: var(--control-radius);
+  border: 1px solid transparent;
+  cursor: pointer;
+  user-select: none;
+  transition: background-color 0.15s ease, border-color 0.15s ease, color 0.15s ease, box-shadow 0.15s ease;
+}
+.btn:focus-visible { outline: none; box-shadow: var(--control-focus-ring); }
+.btn:active:not(:disabled) { transform: translateY(0.5px); }
+.btn > svg { flex: 0 0 auto; }
+
+.btn-secondary { background: var(--control-bg); border-color: var(--control-border); color: var(--control-text); }
+.btn-secondary:hover:not(:disabled) { background: var(--control-bg-hover); border-color: var(--control-border-hover); }
+.btn-secondary:active:not(:disabled) { background: var(--control-bg-active); }
+
+.btn-primary { background: var(--accent-primary); border-color: var(--accent-primary); color: #fff; }
+.btn-primary:hover:not(:disabled) { background: var(--accent-hover); border-color: var(--accent-hover); }
+
+/* Ambient: blends into the surface until pointed at. */
+.btn-ghost { background: transparent; border-color: transparent; color: var(--text-muted); }
+.btn-ghost:hover:not(:disabled) { background: var(--control-ambient-hover); color: var(--text-main); border-color: transparent; }
+.btn-ghost:active:not(:disabled) { background: var(--control-ambient-active); }
+
+.btn-danger { background: var(--control-danger); border-color: var(--control-danger); color: #fff; }
+.btn-danger:hover:not(:disabled) { background: var(--control-danger-hover); border-color: var(--control-danger-hover); filter: none; }
+
+.btn-sm {
+  min-height: var(--control-height-compact);
+  padding: 0 var(--control-padding-x-compact);
+  font-size: var(--control-font-size-compact);
+  border-radius: var(--control-radius-compact);
+  gap: 0.35rem;
+}
+.btn-icon { width: var(--control-height); min-width: var(--control-height); padding: 0; }
+.btn-icon.btn-sm { width: var(--control-height-compact); min-width: var(--control-height-compact); }
+
+.btn:disabled,
+.btn[aria-disabled='true'] { opacity: var(--control-disabled-opacity); cursor: not-allowed; }
+.btn:disabled:hover,
+.btn[aria-disabled='true']:hover { filter: none; }
+
+/* A destructive action that is not the main one (a row's trash icon, a toolbar
+   "Remove"): the default or ambient button, coloured as what it does. */
+.btn--danger-text { color: #f87171; }
+.btn--danger-text:hover:not(:disabled) { background: var(--control-danger-soft); border-color: rgba(239, 68, 68, 0.4); color: #fca5a5; }
+
+/* Legacy: an ambient icon-only button. */
+.icon-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: var(--control-height-compact);
+  min-height: var(--control-height-compact);
+  padding: 0.3rem;
+  border: none;
+  border-radius: var(--control-radius-compact);
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+  transition: background-color 0.15s ease, color 0.15s ease;
+}
+.icon-button:hover:not(:disabled) { background: var(--control-ambient-hover); color: var(--text-main); }
+.icon-button:focus-visible { outline: none; box-shadow: var(--control-focus-ring); }
+.icon-button:disabled { opacity: var(--control-disabled-opacity); cursor: not-allowed; }
+
+/* ===========================================================================
+   Fields — text, search, select. `.input` was used and never defined.
+   =========================================================================== */
+.input,
+.ui-input {
+  display: block;
+  width: 100%;
+  min-height: var(--control-height);
+  padding: 0 0.75rem;
+  font-family: inherit;
+  font-size: var(--control-font-size);
+  color: var(--control-text);
+  background: var(--control-bg);
+  border: 1px solid var(--control-border);
+  border-radius: var(--control-radius);
+  outline: none;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease, background-color 0.15s ease;
+}
+.input::placeholder,
+.ui-input::placeholder { color: var(--control-placeholder); }
+.input:hover:not(:disabled),
+.ui-input:hover:not(:disabled) { border-color: var(--control-border-hover); }
+.input:focus,
+.ui-input:focus { border-color: var(--accent-light); box-shadow: var(--control-focus-ring); }
+.input:disabled,
+.ui-input:disabled { opacity: var(--control-disabled-opacity); cursor: not-allowed; }
+.ui-input--compact { min-height: var(--control-height-compact); font-size: var(--control-font-size-compact); border-radius: var(--control-radius-compact); padding: 0 0.6rem; }
+.ui-input[aria-invalid='true'] { border-color: var(--control-danger); }
+.ui-input[aria-invalid='true']:focus { box-shadow: 0 0 0 2px rgba(239, 68, 68, 0.45); }
+
+/* Native select on the same tokens (index.css keeps the dark popup colours). */
+select.ui-select {
+  min-height: var(--control-height);
+  padding: 0 2rem 0 0.75rem;
+  border-radius: var(--control-radius);
+  font-size: var(--control-font-size);
+  border-color: var(--control-border);
+  cursor: pointer;
+}
+select.ui-select--compact {
+  min-height: var(--control-height-compact);
+  padding: 0 1.6rem 0 0.55rem;
+  border-radius: var(--control-radius-compact);
+  font-size: var(--control-font-size-compact);
+}
+select.ui-select:hover:not(:disabled) { border-color: var(--control-border-hover); }
+select.ui-select:focus-visible { outline: none; border-color: var(--accent-light); box-shadow: var(--control-focus-ring); }
+select.ui-select:disabled { opacity: var(--control-disabled-opacity); cursor: not-allowed; }
+
+/* Search: an input with a leading icon and a clear action, in three emphases. */
+.ui-search {
+  position: relative;
+  display: flex;
+  align-items: center;
+  min-height: var(--control-height);
+  background: var(--control-bg);
+  border: 1px solid var(--control-border);
+  border-radius: var(--control-radius);
+  color: var(--text-subtle);
+  transition: border-color 0.15s ease, box-shadow 0.15s ease, background-color 0.15s ease;
+}
+.ui-search:hover { border-color: var(--control-border-hover); }
+.ui-search:focus-within { border-color: var(--accent-light); box-shadow: var(--control-focus-ring); color: var(--text-muted); }
+.ui-search__icon { flex: 0 0 auto; margin-left: 0.7rem; }
+.ui-search__input {
+  flex: 1 1 auto;
+  min-width: 0;
+  height: 100%;
+  min-height: inherit;
+  padding: 0 0.5rem;
+  background: transparent;
+  border: none;
+  outline: none;
+  color: var(--control-text);
+  font-family: inherit;
+  font-size: var(--control-font-size);
+}
+.ui-search__input::placeholder { color: var(--control-placeholder); }
+.ui-search__input::-webkit-search-cancel-button { display: none; }
+.ui-search__meta { flex: 0 0 auto; font-size: 0.68rem; color: var(--text-subtle); white-space: nowrap; font-variant-numeric: tabular-nums; }
+.ui-search__meta--warn { color: var(--status-warning); }
+.ui-search__clear {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  margin-right: 0.35rem;
+  border: none;
+  border-radius: 50%;
+  background: transparent;
+  color: var(--text-subtle);
+  cursor: pointer;
+}
+.ui-search__clear:hover { background: var(--control-ambient-hover); color: var(--text-main); }
+.ui-search__clear:focus-visible { outline: none; box-shadow: var(--control-focus-ring); }
+.ui-search__kbd {
+  flex: 0 0 auto;
+  margin-right: 0.55rem;
+  padding: 0.05rem 0.35rem;
+  font-family: inherit;
+  font-size: 0.62rem;
+  color: var(--text-subtle);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 4px;
+}
+.ui-search--compact { min-height: var(--control-height-compact); border-radius: var(--control-radius-compact); }
+.ui-search--compact .ui-search__input { font-size: var(--control-font-size-compact); }
+.ui-search--compact .ui-search__icon { margin-left: 0.55rem; }
+/* Ambient: a quiet pill that belongs to the screen it filters. */
+.ui-search--ambient { border-radius: var(--radius-full); background: rgba(255, 255, 255, 0.04); border-color: rgba(255, 255, 255, 0.1); }
+.ui-search--ambient:focus-within { background: rgba(255, 255, 255, 0.06); border-color: rgba(96, 165, 250, 0.45); }
+
+/* ===========================================================================
+   Choices — checkbox, radio, switch.
+   =========================================================================== */
+.ui-check {
+  display: inline-flex;
+  align-items: flex-start;
+  gap: 0.55rem;
+  font-size: var(--control-font-size);
+  color: var(--control-text);
+  cursor: pointer;
+}
+.ui-check input {
+  flex: 0 0 auto;
+  width: 16px;
+  height: 16px;
+  margin: 0.1rem 0 0;
+  accent-color: var(--accent-primary);
+  cursor: pointer;
+}
+.ui-check input:focus-visible { outline: none; box-shadow: var(--control-focus-ring); border-radius: 3px; }
+.ui-check__text { display: flex; flex-direction: column; gap: 0.1rem; }
+.ui-check__description { font-size: 0.75rem; color: var(--text-muted); }
+.ui-check--disabled { opacity: var(--control-disabled-opacity); cursor: not-allowed; }
+.ui-check--disabled input { cursor: not-allowed; }
+.ui-radio-group { display: flex; flex-direction: column; gap: 0.5rem; border: none; margin: 0; padding: 0; }
+.ui-radio-group--inline { flex-direction: row; flex-wrap: wrap; gap: 1rem; }
+.ui-radio-group legend { padding: 0; margin-bottom: 0.35rem; font-size: 0.8rem; font-weight: 600; color: var(--text-main); }
+
+.ui-switch {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0;
+  border: none;
+  background: none;
+  color: var(--text-muted);
+  font-family: inherit;
+  font-size: var(--control-font-size-compact);
+  font-weight: 600;
+  cursor: pointer;
+}
+.ui-switch__track {
+  position: relative;
+  flex: 0 0 auto;
+  width: 34px;
+  height: 20px;
+  border-radius: var(--radius-full);
+  background: #3a4459;
+  transition: background-color 0.15s ease;
+}
+.ui-switch__thumb {
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: #fff;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.35);
+  transition: transform 0.15s ease;
+}
+.ui-switch[aria-checked='true'] .ui-switch__track { background: var(--accent-primary); }
+.ui-switch[aria-checked='true'] .ui-switch__thumb { transform: translateX(14px); }
+.ui-switch[aria-checked='true'] { color: var(--text-main); }
+.ui-switch--muted[aria-checked='true'] .ui-switch__track { background: rgba(59, 130, 246, 0.4); }
+.ui-switch:focus-visible { outline: none; }
+.ui-switch:focus-visible .ui-switch__track { box-shadow: var(--control-focus-ring); }
+.ui-switch:disabled { opacity: var(--control-disabled-opacity); cursor: not-allowed; }
+
+/* ===========================================================================
+   Form fields — label, control, helper/error. One spacing for every form.
+   =========================================================================== */
+.ui-field { display: flex; flex-direction: column; gap: var(--field-gap); min-width: 0; }
+.ui-field + .ui-field { margin-top: 0.85rem; }
+.ui-field__label { font-size: 0.8rem; font-weight: 600; color: var(--text-main); }
+.ui-field__required { margin-left: 0.2rem; color: #f87171; }
+.ui-field__optional { margin-left: 0.35rem; font-weight: 400; color: var(--text-subtle); }
+.ui-field__helper { margin: 0; font-size: 0.75rem; color: var(--text-muted); }
+.ui-field__error { display: flex; align-items: center; gap: 0.3rem; margin: 0; font-size: 0.75rem; color: #f87171; }
+.ui-form-actions { display: flex; justify-content: flex-end; gap: 0.5rem; margin-top: 1rem; }
+
+/* ===========================================================================
+   Menus and popovers — FacetMenu is the one dropdown; these are its states.
+   =========================================================================== */
+.facet__option:focus-visible,
+.facet__option--focus { outline: none; background: var(--control-ambient-hover); }
+.facet__option[aria-selected='true'] { background: var(--control-selected-bg); }
+.facet__empty { padding: 0.6rem 0.75rem; font-size: 0.78rem; color: var(--text-subtle); }
+
+/* --- Menu (actions) ------------------------------------------------------- */
+.ui-menu { position: relative; display: inline-flex; }
+.ui-menu__list {
+  position: absolute;
+  top: calc(100% + 4px);
+  z-index: 1000;
+  min-width: 220px;
+  max-width: 320px;
+  display: flex;
+  flex-direction: column;
+  padding: 0.3rem;
+  background: #161b26;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: var(--control-radius);
+  box-shadow: 0 12px 28px -6px rgba(0, 0, 0, 0.75);
+}
+.ui-menu__list--end { right: 0; }
+.ui-menu__list--start { left: 0; }
+.ui-menu__item {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.55rem;
+  width: 100%;
+  padding: 0.5rem 0.6rem;
+  border: none;
+  border-radius: var(--control-radius-compact);
+  background: transparent;
+  color: var(--control-text);
+  font-family: inherit;
+  font-size: var(--control-font-size-compact);
+  font-weight: 500;
+  text-align: left;
+  cursor: pointer;
+}
+.ui-menu__item:hover:not(:disabled),
+.ui-menu__item:focus-visible { outline: none; background: var(--control-ambient-hover); }
+.ui-menu__item:disabled { opacity: var(--control-disabled-opacity); cursor: not-allowed; }
+.ui-menu__item--danger { color: #f87171; }
+.ui-menu__icon { flex: 0 0 auto; margin-top: 0.1rem; color: var(--text-subtle); }
+.ui-menu__item--danger .ui-menu__icon { color: inherit; }
+.ui-menu__text { display: flex; flex-direction: column; gap: 0.1rem; }
+.ui-menu__description { font-size: 0.7rem; font-weight: 400; color: var(--text-subtle); }
+
+/* Library card controls on the shared tokens. */
+.library-card__status { flex: 1; min-width: 0; }
+.library-card__sources { color: var(--accent-light); padding-left: 0.3rem; }
+
+/* --- Erase my data (Settings → Privacy) ----------------------------------- */
+.erase-data { display: flex; flex-direction: column; gap: .85rem; }
+.erase-data__areas {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+  gap: .55rem .9rem;
+}
+.erase-data__count {
+  margin-left: .4rem;
+  padding: 0 .4rem;
+  border-radius: 999px;
+  background: var(--control-bg);
+  color: var(--text-muted);
+  font-size: .72rem;
+  font-variant-numeric: tabular-nums;
+}
+.erase-data__files {
+  padding: .6rem .7rem;
+  border-radius: var(--control-radius);
+  background: var(--control-danger-soft);
+}
+.erase-data__kept {
+  display: flex;
+  gap: .55rem;
+  align-items: flex-start;
+  padding: .6rem .7rem;
+  border-radius: var(--control-radius);
+  background: rgba(34, 197, 94, .07);
+  color: var(--text-muted);
+  font-size: .8rem;
+}
+.erase-data__kept svg { flex: none; margin-top: .15rem; color: #4ade80; }
+.erase-data__kept strong { display: block; color: var(--text-main); font-weight: 600; margin-bottom: .1rem; }
+.erase-data__note { margin: 0; color: var(--text-muted); font-size: .8rem; }
+.erase-data__note code { font-size: .74rem; word-break: break-all; }
+.erase-data__warning { margin: 0; color: #fca5a5; font-size: .82rem; }
+
+/* Text for assistive technology only: a heading the eye does not need. */
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+/* --- search toolbar --------------------------------------------------------
+   Tabs and a quiet count on the left; the source filter, Save and a "more"
+   menu on the right — all compact, none louder than the results. */
+.search-toolbar {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 0.75rem 1rem;
+  flex-wrap: wrap;
+}
+.search-toolbar__start {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  min-width: 0;
+  flex: 1 1 22rem;
+}
+.search-toolbar__meta {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  flex-wrap: wrap;
+  margin: 0;
+  font-size: 0.74rem;
+  color: var(--text-subtle);
+}
+.search-toolbar__scope {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  max-width: 28rem;
+  padding: 0.05rem 0.45rem;
+  border-radius: 999px;
+  background: rgba(59, 130, 246, 0.1);
+  color: #93c5fd;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.search-toolbar__actions {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  flex: none;
+}
+.search-toolbar__saved { color: #93c5fd; }
+
+/* "View all" collections on the detail page. */
+.collection-dialog__grid { display: grid; gap: 1rem; padding-bottom: 0.5rem; }
+.collection-dialog__grid--posters { grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); }
+.collection-dialog__grid--wide { grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); }
+.collection-dialog__grid--people { grid-template-columns: repeat(auto-fill, minmax(120px, 1fr)); }
+.collection-dialog__grid--wide .video-card { width: 100%; }
+.collection-dialog__grid--people .credit-card { width: 100%; }

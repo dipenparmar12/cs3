@@ -36,6 +36,11 @@ export class MediaRatingService {
     this.cache.setDirectory(dir);
   }
 
+  /** Empties the ratings cache; the next request asks the providers again. */
+  public clearCache(): void {
+    this.cache.clear();
+  }
+
   public setDatastore(datastore: DatastoreManager): void {
     this.datastore = datastore;
   }

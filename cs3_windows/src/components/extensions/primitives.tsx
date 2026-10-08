@@ -1,10 +1,9 @@
 import React from 'react';
+import { Switch } from '../ui/Choice';
 import {
   CheckSquare,
   Square,
   Minus,
-  ToggleLeft,
-  ToggleRight,
   ChevronRight,
   ChevronDown,
 } from 'lucide-react';
@@ -64,20 +63,17 @@ export const Toggle: React.FC<{
   suppressedReason?: string;
   disabled?: boolean;
 }> = ({ on, onChange, label, suppressedReason, disabled }) => (
-  <button
-    type="button"
-    className={`ext-toggle${on && !suppressedReason ? ' ext-toggle--on' : ''}`}
-    title={suppressedReason ? `${label} — ${suppressedReason}` : label}
-    aria-label={label}
-    aria-pressed={on}
+  // The shared switch: its own state always shown, dimmed when an ancestor
+  // has silenced it so the tooltip, not the track, carries the "why".
+  <Switch
+    checked={on}
+    onChange={onChange}
+    label={label}
+    stateLabel={null}
+    muted={Boolean(on && suppressedReason)}
     disabled={disabled}
-    onClick={(event) => {
-      event.stopPropagation();
-      onChange(!on);
-    }}
-  >
-    {on ? <ToggleRight size={20} /> : <ToggleLeft size={20} />}
-  </button>
+    title={suppressedReason ? `${label} — ${suppressedReason}` : label}
+  />
 );
 
 export const Disclosure: React.FC<{

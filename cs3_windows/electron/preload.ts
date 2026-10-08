@@ -35,6 +35,7 @@ import type { BackupAnalysis, RestorePlan, RestoreSummary } from '../src/types/b
 import type { SwarmReport } from '../src/types/torrent';
 import type { TorrentContents } from './torrent/torrentContents';
 import type { TorrentImportRecord } from './torrent/torrentImport';
+import type { StorageReport } from './storage/appStorage.ts';
 import type { SitePlugin, PluginCompatibilityReport, ProviderTreeRepository } from '../src/types/plugin';
 import type {
   IndexerConfig,
@@ -45,11 +46,12 @@ import type {
   TorrentStreamStats,
 } from '../src/types/torrent';
 import type { OfficialRepository } from './officialRepositories';
-import type { ExtensionJobRequest, ExtensionJobsSnapshot } from './cs3/extensionJobs';
+import type { ExtensionJobRequest, ExtensionJobsSnapshot, RefusedRequest } from './cs3/extensionJobs';
 import type { SaveSearchInput, SavedSearch, SavedSearchSummary } from './savedSearches';
 import type { MetadataDetail } from './metadataProvider';
 import type { ExtendedMetadata, PromoResolution, TitleVideo } from '../src/types/metadata';
 import type { RelatedMediaResult, RelatedMediaSearchRequest } from '../src/types/relatedMedia';
+import type { Filmography, FilmographyRequest } from '../src/types/filmography';
 import type { CanonicalMediaIdentity, MediaRating } from '../src/types/ratings';
 import type {
   TitleInteraction,
@@ -94,7 +96,12 @@ import type {
 import type { BatchDownloadRequest, BatchProgress } from './cs3/batchDownloader';
 import type { BootstrapProgress, RegionAffectedRepository, RegionState } from './cs3/bootstrap';
 import type { TitleOutcome, TitleOutcomeKind } from './cs3/titleOutcomes';
-import type { StoredSource, PlayedSource } from '../src/types/library';
+import type { UserDataResetRequest, UserDataResetResult, UserDataSummary } from '../src/types/userData';
+import type {
+  StoredSource,
+  PlayedSource,
+  PlaybackPreferences,
+} from '../src/types/library';
 import type {
   HistoryEvent,
   HistoryFilter,
@@ -286,6 +293,10 @@ export interface CloudStreamElectronAPI {
   /** Searches public repositories (YouTube) keylessly for trailers and promos of any content. */
   findTrailers: (title: string, year?: number) => Promise<Envelope & { videos: TitleVideo[] }>;
   /** Discovers on-demand reviews, explanations, recaps, and related media from public sources. */
+  /** Everything else a person or studio made — see `metadata/filmography.ts`. */
+  getFilmography: (request: FilmographyRequest) => Promise<Envelope & { filmography: Filmography | null }>;
+  /** Forgets the reviews and explanations found for one title. */
+  forgetRelatedMedia: (request: RelatedMediaSearchRequest) => Promise<Envelope & { removed: boolean }>;
   findRelatedMedia: (
     request: RelatedMediaSearchRequest
   ) => Promise<Envelope & { results: RelatedMediaResult[]; cached?: boolean }>;
@@ -431,7 +442,7 @@ export interface CloudStreamElectronAPI {
      * `persistent`: keep trying on its own — every source in turn, then every
      * provider and indexer — instead of stopping to ask. Standard mode.
      */
-    options?: { persistent?: boolean; resumeKey?: string }
+    options?: { persistent?: boolean; resumeKey?: string; preferSource?: StoredSource }
   ) => Promise<Envelope & { snapshot: PlaybackSnapshot | null }>;
   /** Starts the best source found so far instead of waiting for every indexer. */
   /** Abandons a source that started but will not play, and tries the next. */
@@ -803,6 +814,24 @@ export interface CloudStreamElectronAPI {
 
   getSourceCacheStats: () => Promise<{ entries: number; sources: number }>;
   clearSourceCache: () => Promise<Envelope>;
+
+  // Storage — where cache, temp, downloads and data live (storage/appStorage.ts)
+  getStorageReport: () => Promise<Envelope & Partial<StorageReport>>;
+  /** Empties one cache area through its owning service. */
+  clearStorageArea: (id: string) => Promise<Envelope>;
+  /** Removes the folders earlier builds left in the system temp directory. */
+  removeLegacyTemp: () => Promise<Envelope & { removed?: number }>;
+  openStorageLocation: (which: 'data' | 'cache' | 'temp' | 'downloads' | 'logs') => Promise<Envelope>;
+  /** Where new downloads are written; `isDefault` when the viewer has not chosen one. */
+  getDownloadDirectory: () => Promise<Envelope & { directory: string; isDefault: boolean }>;
+  /** Sets the folder for new downloads; null returns to the default. */
+  setDownloadDirectory: (directory: string | null) => Promise<Envelope & { directory: string }>;
+  /** Clears the cached sources of one title or episode only; `removed` counts them. */
+  clearCachedSourcesFor: (request: {
+    mediaUrl: string;
+    season?: number;
+    episode?: number;
+  }) => Promise<Envelope & { removed: number }>;
 
   /**
    * Opening a `.torrent` or a magnet as browsable content.
@@ -1311,6 +1340,10 @@ export interface CloudStreamElectronAPI {
     input: Omit<Bookmark, 'id' | 'savedAt' | 'openCount'>
   ) => Promise<Envelope & { saved: boolean; bookmark: Bookmark | null }>;
   removeBookmark: (mediaUrl: string) => Promise<Envelope & { removed: boolean }>;
+  /** Saves or updates without toggling — the player's "keep this playback". */
+  saveBookmark: (
+    input: Omit<Bookmark, 'id' | 'savedAt' | 'openCount'>
+  ) => Promise<Envelope & { bookmark: Bookmark | null }>;
   setBookmarkNote: (
     mediaUrl: string,
     note?: string
@@ -1598,7 +1631,7 @@ export interface CloudStreamElectronAPI {
    */
   enqueueExtensionJobs: (
     requests: ExtensionJobRequest[]
-  ) => Promise<Envelope & { snapshot: ExtensionJobsSnapshot }>;
+  ) => Promise<Envelope & { snapshot: ExtensionJobsSnapshot; refused?: RefusedRequest[] }>;
   getExtensionJobs: () => Promise<ExtensionJobsSnapshot>;
   cancelExtensionJob: (id: string) => Promise<ExtensionJobsSnapshot>;
   cancelQueuedExtensionJobs: () => Promise<ExtensionJobsSnapshot>;
@@ -1647,6 +1680,8 @@ export interface CloudStreamElectronAPI {
      * page — the episode on screen — so the sources found for it are saved too.
      */
     sourceQuery?: { mediaUrl: string; season?: number; episode?: number };
+    /** Where the title was found (provider), kept so it can be found again. */
+    metadata?: { provider?: string };
   }) => Promise<LibraryEntry | null>;
   setLibraryStatus: (key: string, status: WatchStatus) => Promise<LibraryEntry | null>;
   setLibraryUserRating: (key: string, rating?: number) => Promise<LibraryEntry | null>;
@@ -1726,7 +1761,21 @@ export interface CloudStreamElectronAPI {
     source: TorrentResult;
     positionSeconds?: number;
     durationSeconds?: number;
+    provenance?: { provider?: string; extensionName?: string; repositoryName?: string };
+    originalTitle?: string;
+    posterUrl?: string;
+    imdbId?: string;
+    preferences?: PlaybackPreferences;
   }) => Promise<Envelope & { record: PlayedSource | null }>;
+  /** Updates the track choices (and position) on the record for what is playing. */
+  updatePlayedSourcePreferences: (input: {
+    title: string;
+    year?: number;
+    season?: number;
+    episode?: number;
+    preferences?: PlaybackPreferences;
+    positionSeconds?: number;
+  }) => Promise<Envelope & { updated: boolean }>;
   getPlayedSource: (
     key: string,
     season?: number,
@@ -1844,6 +1893,16 @@ export interface CloudStreamElectronAPI {
   inspectBackup: () => Promise<Envelope & { cancelled?: boolean; analysis?: BackupAnalysis }>;
   restoreUserData: (filePath: string, plan: RestorePlan) => Promise<RestoreSummary>;
   undoRestore: () => Promise<RestoreSummary>;
+
+  /**
+   * "Erase my data": what each area holds, and erasing the chosen ones.
+   * Infrastructure (media tools, the JVM, extensions, settings) is never in
+   * the list — see `cs3/userDataReset.ts`.
+   */
+  getUserDataSummary: () => Promise<Envelope & UserDataSummary>;
+  /** Developer mode UI inspector: opens a source file at a line in the chosen editor. */
+  openInEditor: (file: string, line?: number, column?: number, editor?: string) => Promise<Envelope>;
+  eraseUserData: (request: UserDataResetRequest) => Promise<UserDataResetResult>;
 
   /**
    * Making a provider a saved page names answer again.
@@ -2007,6 +2066,8 @@ const api: CloudStreamElectronAPI = {
   clearExtendedMetadata: () => ipcRenderer.invoke('metadata:clearCache'),
   findTrailers: (title, year) => ipcRenderer.invoke('metadata:findTrailers', title, year),
   findRelatedMedia: (request) => ipcRenderer.invoke('metadata:findRelatedMedia', request),
+  forgetRelatedMedia: (request) => ipcRenderer.invoke('metadata:forgetRelatedMedia', request),
+  getFilmography: (request) => ipcRenderer.invoke('metadata:filmography', request),
   getMediaRatings: (identity) => ipcRenderer.invoke('ratings:get', identity),
   refreshMediaRatings: (identity) => ipcRenderer.invoke('ratings:refresh', identity),
   resolvePromoVideo: (pageUrl) => ipcRenderer.invoke('videos:resolve', pageUrl),
@@ -2166,6 +2227,13 @@ const api: CloudStreamElectronAPI = {
 
   getSourceCacheStats: () => ipcRenderer.invoke('sources:getCacheStats'),
   clearSourceCache: () => ipcRenderer.invoke('sources:clearCache'),
+  getStorageReport: () => ipcRenderer.invoke('storage:getReport'),
+  clearStorageArea: (id) => ipcRenderer.invoke('storage:clearArea', id),
+  removeLegacyTemp: () => ipcRenderer.invoke('storage:removeLegacyTemp'),
+  openStorageLocation: (which) => ipcRenderer.invoke('storage:openLocation', which),
+  getDownloadDirectory: () => ipcRenderer.invoke('download:getDirectory'),
+  setDownloadDirectory: (directory) => ipcRenderer.invoke('download:setDirectory', directory),
+  clearCachedSourcesFor: (request) => ipcRenderer.invoke('sources:clearForMedia', request),
 
   getPathForFile: (file) => {
     try {
@@ -2295,6 +2363,7 @@ const api: CloudStreamElectronAPI = {
   listBookmarks: () => ipcRenderer.invoke('bookmarks:list'),
   getBookmark: (mediaUrl) => ipcRenderer.invoke('bookmarks:get', mediaUrl),
   toggleBookmark: (input) => ipcRenderer.invoke('bookmarks:toggle', input),
+  saveBookmark: (input) => ipcRenderer.invoke('bookmarks:save', input),
   removeBookmark: (mediaUrl) => ipcRenderer.invoke('bookmarks:remove', mediaUrl),
   setBookmarkNote: (mediaUrl, note) => ipcRenderer.invoke('bookmarks:setNote', mediaUrl, note),
   markBookmarkOpened: (mediaUrl) => ipcRenderer.invoke('bookmarks:markOpened', mediaUrl),
@@ -2413,6 +2482,8 @@ const api: CloudStreamElectronAPI = {
   clearWatchProgress: (key, season, episode) =>
     ipcRenderer.invoke('library:clearProgress', key, season, episode),
   recordPlayedSource: (input) => ipcRenderer.invoke('library:recordPlayedSource', input),
+  updatePlayedSourcePreferences: (input) =>
+    ipcRenderer.invoke('library:updatePlayedSourcePreferences', input),
   getPlayedSource: (key, season, episode) =>
     ipcRenderer.invoke('library:getPlayedSource', key, season, episode),
   listPlayedSources: (limit) => ipcRenderer.invoke('library:listPlayedSources', limit),
@@ -2456,6 +2527,10 @@ const api: CloudStreamElectronAPI = {
   inspectBackup: () => ipcRenderer.invoke('backup:inspect'),
   restoreUserData: (filePath, plan) => ipcRenderer.invoke('backup:restore', filePath, plan),
   undoRestore: () => ipcRenderer.invoke('backup:undoRestore'),
+  getUserDataSummary: () => ipcRenderer.invoke('userData:summary'),
+  openInEditor: (file, line, column, editor) =>
+    ipcRenderer.invoke('dev:openInEditor', file, line, column, editor),
+  eraseUserData: (request) => ipcRenderer.invoke('userData:erase', request),
   planProviderRecovery: (provider) =>
     ipcRenderer.invoke('extension:planProviderRecovery', provider),
   recoverProvider: (provider) => ipcRenderer.invoke('extension:recoverProvider', provider),

@@ -98,6 +98,13 @@ export class RelatedMediaService {
     this.store.schedule();
   }
 
+  /** Forgets what was found for one title, so its section starts over. */
+  forget(request: RelatedMediaSearchRequest): boolean {
+    const removed = this.cache.delete(this.buildCacheKey(request));
+    if (removed) this.store.schedule();
+    return removed;
+  }
+
   /**
    * Checks if cached results are already present for the given request.
    */

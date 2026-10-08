@@ -3708,36 +3708,8 @@
   border: 1px solid rgba(245, 158, 11, 0.4);
 }
 
-.settings__find {
-  display: flex;
-  align-items: center;
-  gap: 0.45rem;
-  padding: 0.45rem 0.6rem;
-  border: 1px solid var(--border-color);
-  border-radius: var(--radius-md);
-  background: var(--bg-input);
-  color: var(--text-subtle);
-}
-.settings__find:focus-within { border-color: var(--accent-primary); color: var(--accent-light); }
-.settings__find input {
-  flex: 1;
-  min-width: 0;
-  border: none;
-  outline: none;
-  background: none;
-  color: var(--text-main);
-  font-size: 0.82rem;
-}
-.settings__find input::-webkit-search-cancel-button { display: none; }
-.settings__find-clear {
-  display: inline-flex;
-  padding: 0;
-  border: none;
-  background: none;
-  color: var(--text-subtle);
-  cursor: pointer;
-}
-.settings__find-clear:hover { color: #fff; }
+/* The find field is the shared SearchInput (compact); this only places it. */
+.settings__find { width: 100%; }
 
 .settings__content { display: flex; flex-direction: column; gap: 1.1rem; min-width: 0; }
 .settings-found { display: contents; }
@@ -3895,21 +3867,7 @@
   font-variant-numeric: tabular-nums;
 }
 
-.settings__switch {
-  display: inline-flex;
-  align-items: center;
-  gap: 0.45rem;
-  cursor: pointer;
-  font-size: 0.82rem;
-  font-weight: 600;
-  color: #fff;
-}
-.settings__switch input {
-  width: 17px;
-  height: 17px;
-  accent-color: var(--accent-primary);
-  cursor: pointer;
-}
+/* .settings__switch is gone: settings use the shared Switch (src/components/ui/Choice.tsx). */
 
 /* The explanation, only when asked for. */
 .hint {
@@ -5546,54 +5504,6 @@
   background: rgba(255, 255, 255, 0.045);
 }
 
-/* --- Download Manager Filters & Actions ------------------------------------ */
-
-.download-manager__header-row {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  flex-wrap: wrap;
-  gap: 1rem;
-}
-
-.download-manager__toolbar {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 0.75rem;
-  flex-wrap: wrap;
-  padding: 0.25rem 0;
-}
-
-.download-tabs {
-  display: flex;
-  align-items: center;
-  gap: 0.4rem;
-  flex-wrap: wrap;
-}
-
-.download-tab {
-  display: inline-flex;
-  align-items: center;
-  gap: 0.45rem;
-  padding: 0.42rem 0.85rem;
-  background: var(--bg-card, #161b26);
-  border: 1px solid var(--border-color, rgba(255, 255, 255, 0.1));
-  border-radius: 8px;
-  color: var(--text-muted, #9ca3af);
-  font-size: 0.8rem;
-  font-weight: 600;
-  cursor: pointer;
-  transition: all 0.15s ease;
-  user-select: none;
-}
-
-.download-tab:hover {
-  color: #fff;
-  border-color: rgba(255, 255, 255, 0.25);
-  background: rgba(255, 255, 255, 0.05);
-}
-
 .download-tab--active {
   background: rgba(59, 130, 246, 0.18);
   border-color: var(--accent-primary, #3b82f6);
@@ -5623,76 +5533,6 @@
 .download-tab--active .download-tab__badge--error {
   background: #ef4444;
   color: #fff;
-}
-
-.download-search-input {
-  display: flex;
-  align-items: center;
-  gap: 0.5rem;
-  background: var(--bg-card, #161b26);
-  border: 1px solid var(--border-color, rgba(255, 255, 255, 0.1));
-  border-radius: 8px;
-  padding: 0.35rem 0.75rem;
-  color: #fff;
-  font-size: 0.8rem;
-}
-
-.download-search-input input {
-  background: transparent;
-  border: none;
-  outline: none;
-  color: #fff;
-  font-size: 0.8rem;
-  width: 170px;
-}
-
-.download-search-input input::placeholder {
-  color: var(--text-subtle, #6b7280);
-}
-
-.download-sort-select {
-  display: flex;
-  align-items: center;
-  gap: 0.4rem;
-  background: var(--bg-card, #161b26);
-  border: 1px solid var(--border-color, rgba(255, 255, 255, 0.1));
-  border-radius: 8px;
-  padding: 0.35rem 0.65rem;
-  color: var(--text-muted, #9ca3af);
-  font-size: 0.8rem;
-}
-
-.download-sort-select select {
-  background: transparent;
-  border: none;
-  color: #fff;
-  font-size: 0.8rem;
-  outline: none;
-  cursor: pointer;
-}
-
-.download-sort-select select option {
-  background: #161b26;
-  color: #fff;
-}
-
-.download-actions-row {
-  display: flex;
-  align-items: center;
-  gap: 0.5rem;
-  flex-wrap: wrap;
-}
-
-.download-stats-bar {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  background: rgba(255, 255, 255, 0.02);
-  border: 1px solid var(--border-color, rgba(255, 255, 255, 0.07));
-  border-radius: 8px;
-  padding: 0.55rem 1rem;
-  font-size: 0.78rem;
-  color: var(--text-muted, #9ca3af);
 }
 
 .download-stats-bar__item {
@@ -6116,7 +5956,6 @@
 }
 .native-stage__why { font-size: 0.8rem; color: var(--text-muted); max-width: 52ch; }
 
-
 /* Audio and subtitle pickers, and fullscreening mpv's own window — the only
    things the player's control bar cannot do for this engine. They live in the
    surface rather than in a bar of their own: a second bar along the bottom was
@@ -6173,10 +6012,7 @@
    Two choices presented as equal-weight targets rather than an OK/Cancel pair,
    because they are genuinely different actions and neither is "the default".
    The destructive one is coloured, not hidden — the risk is worth seeing. */
-.delete-download { max-width: 460px; display: flex; flex-direction: column; gap: 1rem; padding: 1.25rem; }
-
-.delete-download__head { display: flex; align-items: flex-start; justify-content: space-between; gap: 1rem; }
-.delete-download__head h3 { margin: 0; font-size: 1.02rem; }
+/* .delete-download is a ui-dialog now; its layout comes from there. */
 
 .delete-download__choices { display: flex; flex-direction: column; gap: .55rem; }
 
@@ -6232,6 +6068,28 @@
 .player__title-search:focus-visible { opacity: 1; background: rgba(255, 255, 255, .16); color: #fff; }
 .player--mini .player__title-search { display: none; }
 
+/* What is playing, on one quiet line under the title: provider, extension,
+   repository, then the release's own facts. Separated by dots rather than
+   boxed, because five coloured chips under a film title read as a debug
+   overlay. */
+.player__provenance {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  margin-top: .2rem;
+  max-width: 560px;
+  font-size: .72rem;
+  color: rgba(255, 255, 255, .62);
+}
+.player__provenance > span + span::before {
+  content: '·';
+  margin: 0 .4rem;
+  color: rgba(255, 255, 255, .35);
+}
+.player__provenance-provider { color: rgba(255, 255, 255, .9); font-weight: 600; }
+.player__provenance-codec { text-transform: uppercase; }
+.player--mini .player__provenance { display: none; }
+
 /* --- player toasts --------------------------------------------------------
    Routine download state changes get a toast, never a modal: a dialog over a
    playing film to confirm a background transfer is a worse interruption than
@@ -6268,7 +6126,6 @@
 @media (prefers-reduced-motion: reduce) {
   .player__toast { animation: none; }
 }
-
 
 /* --- player copy menu -----------------------------------------------------
    One quiet affordance for everything technical. Seven copy buttons along the
@@ -6499,7 +6356,6 @@
   color: var(--text-muted);
   max-width: 46ch;
 }
-
 
 /* --- Home catalogue picker -------------------------------------------------
    Radio rows rather than a `<select>`, because the choice is not just a name:
@@ -6779,7 +6635,6 @@
   text-overflow: ellipsis;
 }
 .source-picker__toolbar-actions { display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap; }
-
 
 /* --- Player message stacks -------------------------------------------------
    Two anchors, each a flow column: transient messages sit beside each other
@@ -7225,7 +7080,6 @@
   color: var(--accent-light, #60a5fa);
   text-decoration: none;
 }
-
 
 /* Stated, never raised. A catalogue being unreachable is not worth an error
    state on a page the viewer opened to watch something — but it is the first
@@ -8898,7 +8752,6 @@ video::cue {
 .adult-setting__session .btn { display: inline-flex; align-items: center; gap: .3rem; }
 .adult-setting__current { font-size: .78rem; margin-top: .5rem; }
 
-
 /*
   Share, wherever it appears.
   Sized to sit in a `.detail-actions` row without a class of its own, and to
@@ -10454,6 +10307,69 @@ video::cue {
   width: 100%;
   accent-color: var(--accent-light, #60a5fa);
   cursor: pointer;
+  height: 4px;
+  margin: 0.2rem 0;
+}
+.subtitle-panel__config-panel .sub-choices {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.3rem;
+  justify-content: flex-start;
+}
+.subtitle-panel__config-panel .sub-choices--compact {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.25rem;
+  justify-content: flex-start;
+  margin-top: 0.2rem;
+}
+.sub-chip {
+  appearance: none;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  background: rgba(255, 255, 255, 0.05);
+  color: var(--text-muted, #94a3b8);
+  font-size: 0.68rem;
+  font-weight: 500;
+  padding: 0.18rem 0.45rem;
+  border-radius: 4px;
+  cursor: pointer;
+  transition: all 0.15s ease;
+  line-height: 1.15;
+  user-select: none;
+}
+.sub-chip:hover {
+  background: rgba(255, 255, 255, 0.12);
+  color: #fff;
+  border-color: rgba(255, 255, 255, 0.22);
+}
+.sub-chip--on {
+  background: rgba(96, 165, 250, 0.18) !important;
+  border-color: var(--accent-light, #60a5fa) !important;
+  color: var(--accent-light, #60a5fa) !important;
+  font-weight: 600;
+}
+.subtitle-panel__config-panel .sub-choice {
+  appearance: none;
+  font-size: 0.72rem;
+  padding: 0.22rem 0.5rem;
+  border-radius: 4px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  background: rgba(255, 255, 255, 0.05);
+  color: var(--text-muted, #94a3b8);
+  cursor: pointer;
+  transition: all 0.15s ease;
+  line-height: 1.2;
+}
+.subtitle-panel__config-panel .sub-choice:hover:not(:disabled) {
+  background: rgba(255, 255, 255, 0.12);
+  color: #fff;
+  border-color: rgba(255, 255, 255, 0.22);
+}
+.subtitle-panel__config-panel .sub-choice--on {
+  background: rgba(96, 165, 250, 0.18) !important;
+  border-color: var(--accent-light, #60a5fa) !important;
+  color: var(--accent-light, #60a5fa) !important;
+  font-weight: 600;
 }
 .subtitle-panel__config-footer {
   display: flex;
@@ -10702,3 +10618,878 @@ video::cue {
   font-weight: 600;
   margin-top: 1px;
 }
+
+/* --- Find on this screen (ScreenSearch) ------------------------------------
+   Quieter than the navbar's media search on purpose: an icon until wanted, a
+   short translucent field when it is. It filters what is on screen and must
+   not read as a second way to search for films. */
+.screen-search {
+  display: inline-flex;
+  align-items: center;
+  height: 32px;
+  border-radius: var(--radius-full);
+  color: var(--text-muted);
+  flex: 0 0 auto;
+}
+.screen-search--closed {
+  width: 32px;
+  justify-content: center;
+  background: transparent;
+  border: 1px solid transparent;
+  cursor: pointer;
+  transition: var(--transition);
+}
+.screen-search--closed:hover,
+.screen-search--closed:focus-visible {
+  color: var(--text-main);
+  background: rgba(255, 255, 255, 0.06);
+  border-color: rgba(255, 255, 255, 0.08);
+}
+.screen-search--open {
+  width: min(280px, 60vw);
+  min-height: 32px;
+  animation: screen-search-open 0.16s ease-out;
+}
+@keyframes screen-search-open {
+  from { width: 32px; opacity: 0.4; }
+  to { width: min(280px, 60vw); opacity: 1; }
+}
+
+/* A screen heading with its find control on the right. */
+.screen-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 1rem;
+}
+.screen-head__titles { min-width: 0; }
+
+/* What a screen search left, said under the controls it narrows. */
+.screen-search-note {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  font-size: 0.78rem;
+  color: var(--text-muted);
+}
+.screen-search-note strong { color: var(--text-main); font-weight: 600; }
+.screen-search-note__action {
+  background: none;
+  border: none;
+  padding: 0;
+  font: inherit;
+  color: var(--accent-light);
+  cursor: pointer;
+}
+.screen-search-note__action:hover { text-decoration: underline; }
+
+/* --- Where a result came from ----------------------------------------------
+   Secondary to the title by design: small, muted, one line, ellipsised. The
+   leading dot and the +N say "there is more about where to watch this" without
+   reading as another result. */
+.poster-source {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  min-width: 0;
+  max-width: 70%;
+  padding: 0.05rem 0.4rem 0.05rem 0.35rem;
+  border-radius: var(--radius-full);
+  background: rgba(96, 165, 250, 0.08);
+  border: 1px solid rgba(96, 165, 250, 0.16);
+  color: #93c5fd;
+  font-size: 0.68rem;
+  line-height: 1.4;
+  cursor: default;
+}
+.poster-source::before {
+  content: '';
+  flex: 0 0 auto;
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: var(--accent-light);
+  opacity: 0.8;
+}
+.poster-source__name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.poster-source__more {
+  flex: 0 0 auto;
+  font-weight: 700;
+  color: var(--accent-light);
+}
+
+/* The per-source band under search results: noticeable, never a result. */
+.search-sources__summary {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.35rem 0.6rem;
+  padding: 0.55rem 0.8rem !important;
+  list-style: none;
+  border-radius: var(--radius-md);
+  background: rgba(255, 255, 255, 0.025);
+  border: 1px solid var(--border-color);
+  border-left: 3px solid rgba(96, 165, 250, 0.55);
+  color: var(--text-muted);
+  transition: var(--transition);
+}
+.search-sources__summary::-webkit-details-marker { display: none; }
+.search-sources__summary:hover { background: rgba(255, 255, 255, 0.045); }
+.search-sources__icon { color: var(--accent-light); }
+.search-sources__label {
+  font-weight: 700;
+  font-size: 0.72rem;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--text-main);
+}
+.search-sources__stat {
+  font-size: 0.74rem;
+  font-variant-numeric: tabular-nums;
+}
+.search-sources__stat + .search-sources__stat::before {
+  content: '·';
+  margin-right: 0.6rem;
+  color: var(--text-subtle);
+}
+.search-sources__stat--ok { color: #6ee7b7; }
+.search-sources__stat--failed { color: #f87171; }
+.search-sources__toggle {
+  margin-left: auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.2rem;
+  font-size: 0.74rem;
+  color: var(--accent-light);
+}
+.search-sources__toggle svg { transition: transform 0.15s ease; }
+.search-sources__chevron--open { transform: rotate(180deg); }
+
+/* "from 12 sources" in the results heading: opens the band above. */
+.search-head__sources-link {
+  background: none;
+  border: none;
+  padding: 0;
+  font: inherit;
+  color: var(--accent-light);
+  text-decoration: underline dotted rgba(96, 165, 250, 0.5);
+  text-underline-offset: 2px;
+  cursor: pointer;
+}
+.search-head__sources-link:hover { text-decoration-style: solid; }
+
+.source-picker__notice {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  margin: 0;
+  padding: 0.45rem 1.25rem;
+  font-size: 0.78rem;
+  color: var(--text-muted);
+  background: rgba(96, 165, 250, 0.06);
+  border-bottom: 1px solid var(--border-color);
+}
+
+/* Storage panel (Settings → Advanced → Storage). */
+.storage-path {
+  display: block;
+  margin-top: 0.15rem;
+  font-size: 0.68rem;
+  color: var(--text-subtle);
+  word-break: break-all;
+  user-select: text;
+}
+.storage-message { margin: 0.4rem 0 0; font-size: 0.78rem; color: var(--text-muted); }
+
+/* "Resumed at 47:12 · Start over" — bottom-left, above the seek bar, gone in
+   a few seconds. A notice, not a question: the resume already happened. */
+.player__resume-notice {
+  position: absolute;
+  left: 1.25rem;
+  bottom: 6.5rem;
+  z-index: 6;
+  display: inline-flex;
+  align-items: center;
+  gap: .6rem;
+  padding: .4rem .45rem .4rem .8rem;
+  border-radius: 999px;
+  background: rgba(15, 17, 21, .78);
+  border: 1px solid rgba(255, 255, 255, .12);
+  color: rgba(255, 255, 255, .88);
+  font-size: .8rem;
+  backdrop-filter: blur(8px);
+  animation: player-resume-notice-in .25s ease-out;
+}
+.player__resume-notice button {
+  border: 0;
+  border-radius: 999px;
+  padding: .25rem .7rem;
+  background: rgba(255, 255, 255, .14);
+  color: #fff;
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+}
+.player__resume-notice button:hover,
+.player__resume-notice button:focus-visible { background: rgba(255, 255, 255, .24); }
+@keyframes player-resume-notice-in {
+  from { opacity: 0; transform: translateY(6px); }
+  to { opacity: 1; transform: none; }
+}
+
+/* --- detail masthead, cinema layout --------------------------------------
+   The backdrop fills the masthead edge to edge and is shaded only where the
+   text sits (left and bottom), so the artwork is seen rather than implied.
+   Bleeds into the viewport's padding so it reads as the page's own top. */
+.detail-hero--cinema {
+  position: relative;
+  isolation: isolate;
+  z-index: 6;
+  display: block;
+  margin: -1.5rem -2rem 0;
+  padding: 2.25rem 2rem 1.75rem;
+  min-height: 0;
+  overflow: visible;
+}
+.detail-hero--cinema.detail-hero--with-backdrop { min-height: 440px; padding-top: 4.5rem; }
+.detail-hero--cinema .detail-hero__backdrop {
+  position: absolute;
+  inset: 0;
+  height: auto;
+  z-index: -2;
+  background-position: center 20%;
+  background-size: cover;
+  background-repeat: no-repeat;
+  opacity: 1;
+  border-radius: 0;
+  -webkit-mask-image: none;
+  mask-image: none;
+}
+.detail-hero--cinema .detail-hero__shade {
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  pointer-events: none;
+  background:
+    linear-gradient(90deg, var(--bg-dark) 0%, rgba(12, 15, 23, 0.94) 30%, rgba(12, 15, 23, 0.72) 52%, rgba(12, 15, 23, 0.3) 74%, rgba(12, 15, 23, 0.08) 100%),
+    linear-gradient(0deg, var(--bg-dark) 0%, rgba(12, 15, 23, 0) 38%);
+}
+.detail-hero--cinema:not(.detail-hero--with-backdrop) .detail-hero__shade { display: none; }
+.detail-hero__inner {
+  display: flex;
+  align-items: flex-end;
+  gap: 2rem;
+  max-width: 1280px;
+}
+.detail-hero--cinema .detail-art { width: 200px; border-radius: 10px; box-shadow: 0 22px 50px rgba(0, 0, 0, 0.6); }
+.detail-hero--cinema .detail-art__play { width: 54px; height: 54px; background: rgba(59, 130, 246, 0.92); }
+.detail-hero--cinema .detail-art:hover .detail-art__play,
+.detail-hero--cinema .detail-art:focus-visible .detail-art__play { background: var(--accent-primary); }
+.detail-hero--cinema .detail-hero__body {
+  flex: 1;
+  min-width: 0;
+  max-width: 760px;
+  gap: 0.65rem;
+}
+.detail-hero__title-row { display: flex; align-items: center; gap: 0.6rem; min-width: 0; }
+.detail-hero--cinema .detail-hero__title-row h1 {
+  margin: 0;
+  font-size: clamp(1.7rem, 2.6vw, 2.5rem);
+  line-height: 1.12;
+  font-weight: 800;
+  letter-spacing: -0.01em;
+  color: #fff;
+  text-shadow: 0 2px 18px rgba(0, 0, 0, 0.45);
+}
+.detail-hero__title-search {
+  flex: none;
+  width: 34px;
+  height: 34px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 999px;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  background: rgba(255, 255, 255, 0.06);
+  color: rgba(255, 255, 255, 0.8);
+  cursor: pointer;
+  transition: background 0.15s ease, color 0.15s ease;
+}
+.detail-hero__title-search:hover,
+.detail-hero__title-search:focus-visible { background: rgba(255, 255, 255, 0.16); color: #fff; }
+.detail-hero__original { margin: -0.35rem 0 0; font-size: 0.85rem; color: var(--text-muted); font-style: italic; }
+.detail-hero--cinema .detail-hero__meta {
+  flex-wrap: wrap;
+  gap: 0.25rem 0.9rem;
+  font-size: 0.86rem;
+  color: rgba(255, 255, 255, 0.82);
+}
+.detail-hero--cinema .detail-hero__meta > span { display: inline-flex; align-items: center; gap: 0.3rem; }
+.detail-hero__type {
+  padding: 0.05rem 0.45rem;
+  border-radius: 4px;
+  border: 1px solid rgba(255, 255, 255, 0.25);
+  font-size: 0.74rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.detail-hero--cinema .detail-hero__tags { gap: 0.4rem; }
+.detail-hero__tag {
+  padding: 0.18rem 0.6rem;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.08);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  color: rgba(255, 255, 255, 0.85);
+  font-size: 0.75rem;
+}
+.detail-hero__tag--more { color: var(--text-muted); cursor: help; }
+.detail-hero--cinema .detail-hero__plot { margin: 0; font-size: 0.93rem; line-height: 1.6; color: rgba(255, 255, 255, 0.86); max-width: 70ch; }
+.detail-hero__plot--clamped {
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.detail-hero__plot-toggle {
+  align-self: flex-start;
+  margin-top: -0.35rem;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--accent-light);
+  font-size: 0.8rem;
+  font-weight: 600;
+  cursor: pointer;
+}
+.detail-hero__cta { display: flex; align-items: center; flex-wrap: wrap; gap: 0.6rem; margin-top: 0.35rem; }
+.detail-play {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.55rem;
+  height: 46px;
+  padding: 0 1.4rem 0 1.15rem;
+  border: 0;
+  border-radius: 10px;
+  background: #fff;
+  color: #0b0d12;
+  font-size: 0.98rem;
+  font-weight: 700;
+  cursor: pointer;
+  box-shadow: 0 10px 28px rgba(0, 0, 0, 0.35);
+  transition: transform 0.15s ease, background 0.15s ease;
+}
+.detail-play:hover:not(:disabled),
+.detail-play:focus-visible { background: #e5e7eb; transform: translateY(-1px); }
+.detail-play:disabled { opacity: 0.7; cursor: progress; }
+.detail-cta {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45rem;
+  height: 46px;
+  padding: 0 1.1rem;
+  border-radius: 10px;
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  background: rgba(255, 255, 255, 0.12);
+  backdrop-filter: blur(8px);
+  color: #fff;
+  font-size: 0.92rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.15s ease;
+}
+.detail-cta:hover,
+.detail-cta:focus-visible { background: rgba(255, 255, 255, 0.2); }
+.detail-hero__icons { display: inline-flex; align-items: center; gap: 0.4rem; margin-left: 0.2rem; }
+.detail-icon {
+  position: relative;
+  width: 40px;
+  height: 40px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 999px;
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  background: rgba(12, 15, 23, 0.45);
+  backdrop-filter: blur(8px);
+  color: rgba(255, 255, 255, 0.86);
+  cursor: pointer;
+  transition: background 0.15s ease, color 0.15s ease, border-color 0.15s ease;
+}
+.detail-icon:hover,
+.detail-icon:focus-visible { background: rgba(255, 255, 255, 0.16); color: #fff; border-color: rgba(255, 255, 255, 0.35); }
+.detail-icon--on { color: #93c5fd; border-color: rgba(147, 197, 253, 0.55); background: rgba(59, 130, 246, 0.2); }
+.detail-icon__badge {
+  position: absolute;
+  top: -4px;
+  right: -4px;
+  min-width: 18px;
+  height: 18px;
+  padding: 0 4px;
+  border-radius: 999px;
+  background: var(--accent-primary);
+  color: #fff;
+  font-size: 0.62rem;
+  font-weight: 700;
+  line-height: 18px;
+  text-align: center;
+}
+/* ShareButton draws its own button; in the hero it takes the icon shape. */
+.detail-hero__icons .share-button {
+  width: 40px;
+  height: 40px;
+  padding: 0;
+  justify-content: center;
+  border-radius: 999px;
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  background: rgba(12, 15, 23, 0.45);
+  color: rgba(255, 255, 255, 0.86);
+}
+.detail-menu--end { left: auto; right: 0; }
+.detail-hero--cinema .detail-origin { margin-top: 0.2rem; color: rgba(255, 255, 255, 0.5); }
+
+@media (max-width: 860px) {
+  .detail-hero__inner { flex-direction: column; align-items: flex-start; }
+  .detail-hero--cinema .detail-art { width: 150px; }
+}
+
+/* --- detail page sections (DetailSection) ---------------------------------
+   One header for every section: the whole heading folds it, a chevron says
+   which way, and the section's own actions appear only when it is pointed at. */
+.detail-view > .detail-section { margin-top: 0.5rem; }
+.detail-section {
+  position: relative;
+  padding-top: 1.1rem;
+  border-top: 1px solid rgba(255, 255, 255, 0.07);
+  scroll-margin-top: 4.5rem;
+}
+.detail-section__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  min-height: 2rem;
+}
+.detail-section__toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.55rem;
+  min-width: 0;
+  padding: 0.15rem 0.35rem 0.15rem 0;
+  border: 0;
+  background: none;
+  color: var(--text-main);
+  cursor: pointer;
+  text-align: left;
+}
+.detail-section__icon { display: inline-flex; color: var(--text-subtle); }
+.detail-section__title {
+  margin: 0;
+  font-size: 1.08rem;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+  color: #f3f4f6;
+}
+.detail-section__count {
+  padding: 0.02rem 0.45rem;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.07);
+  color: var(--text-muted);
+  font-size: 0.72rem;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+.detail-section__chevron { color: var(--text-subtle); transition: transform 0.18s ease, color 0.15s ease; }
+.detail-section--collapsed .detail-section__chevron { transform: rotate(-90deg); }
+.detail-section__toggle:hover .detail-section__chevron,
+.detail-section__toggle:focus-visible .detail-section__chevron { color: var(--text-main); }
+.detail-section--collapsed .detail-section__title { color: var(--text-muted); }
+.detail-section__actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  opacity: 0;
+  transition: opacity 0.15s ease;
+}
+.detail-section:hover .detail-section__actions,
+.detail-section:focus-within .detail-section__actions { opacity: 1; }
+.detail-section__action {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  height: 28px;
+  padding: 0 0.55rem;
+  border: 0;
+  border-radius: 6px;
+  background: none;
+  color: var(--text-muted);
+  font-size: 0.76rem;
+  cursor: pointer;
+}
+.detail-section__action:hover,
+.detail-section__action:focus-visible { background: var(--control-ambient-hover); color: var(--text-main); }
+.detail-section__action:disabled { opacity: 0.5; cursor: default; }
+.detail-section__action--danger:hover { color: #fca5a5; }
+.detail-section__body { padding-top: 0.85rem; }
+/* The legacy section frame, now drawn by DetailSection. */
+.detail-section.detail-facts,
+.detail-section.reviews-section { margin-top: 0; }
+
+/* Top bar: Back, then jump links to the sections on this page. Sticky so the
+   page can be crossed from anywhere in it. */
+.detail-view__topbar {
+  position: sticky;
+  top: -1.5rem;
+  z-index: 9;
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  margin: -1.5rem -2rem -3.25rem;
+  padding: 0.6rem 2rem;
+  pointer-events: none;
+}
+.detail-view__topbar > * { pointer-events: auto; }
+/* Drawn by a pseudo-element so gaining it never changes the bar's height. */
+.detail-view__topbar::before {
+  content: '';
+  position: absolute;
+  inset: 0 0 -1rem;
+  z-index: -1;
+  background: linear-gradient(var(--bg-dark) 65%, rgba(12, 15, 23, 0));
+  opacity: 0;
+  transition: opacity 0.2s ease;
+}
+.detail-view__topbar--stuck::before { opacity: 1; }
+.detail-view__back {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  height: 32px;
+  padding: 0 0.75rem 0 0.55rem;
+  border-radius: 999px;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  background: rgba(12, 15, 23, 0.6);
+  backdrop-filter: blur(10px);
+  color: #fff;
+  font-size: 0.82rem;
+  cursor: pointer;
+}
+.detail-view__back:hover,
+.detail-view__back:focus-visible { background: rgba(255, 255, 255, 0.14); }
+.detail-nav {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.1rem;
+  padding: 0.15rem;
+  border-radius: 999px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  background: rgba(12, 15, 23, 0.6);
+  backdrop-filter: blur(10px);
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+.detail-nav__link {
+  flex: none;
+  height: 26px;
+  padding: 0 0.65rem;
+  border: 0;
+  border-radius: 999px;
+  background: none;
+  color: rgba(255, 255, 255, 0.72);
+  font-size: 0.76rem;
+  cursor: pointer;
+}
+.detail-nav__link:hover,
+.detail-nav__link:focus-visible { background: rgba(255, 255, 255, 0.12); color: #fff; }
+.detail-nav__link--icon { display: inline-flex; align-items: center; padding: 0 0.45rem; }
+.detail-nav__sep { width: 1px; height: 16px; margin: 0 0.2rem; background: rgba(255, 255, 255, 0.14); }
+.detail-hero--cinema { padding-top: 3.75rem; }
+.detail-hero--cinema.detail-hero--with-backdrop { padding-top: 5rem; }
+
+/* Episodes: a toolbar, then a list that scrolls on its own when long. */
+.episode-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 0.75rem; flex-wrap: wrap; margin-bottom: 0.75rem; }
+.episode-toolbar .season-tabs { margin-bottom: 0; }
+.episode-toolbar__find { width: 200px; }
+.episode-list--bounded {
+  max-height: min(62vh, 640px);
+  overflow-y: auto;
+  padding-right: 0.35rem;
+  scrollbar-width: thin;
+}
+.episode-row__number {
+  display: inline-block;
+  min-width: 1.6rem;
+  margin-right: 0.35rem;
+  color: var(--text-subtle);
+  font-variant-numeric: tabular-nums;
+}
+.episode-row__progress {
+  height: 3px;
+  margin-top: 0.4rem;
+  max-width: 220px;
+  border-radius: 2px;
+  background: rgba(255, 255, 255, 0.12);
+  overflow: hidden;
+}
+.episode-row__progress > div { height: 100%; background: var(--accent-primary); }
+.episode-row--watched .episode-row__title { color: var(--text-muted); }
+
+/* Franchise rail: poster cards, numbered, the page in view outlined. */
+.franchise-card { position: relative; display: flex; flex-direction: column; gap: 0.3rem; }
+.franchise-card__index {
+  position: absolute;
+  top: 6px;
+  left: 6px;
+  z-index: 5;
+  min-width: 22px;
+  height: 22px;
+  padding: 0 6px;
+  border-radius: 999px;
+  background: rgba(0, 0, 0, 0.72);
+  color: #fff;
+  font-size: 0.7rem;
+  font-weight: 700;
+  line-height: 22px;
+  text-align: center;
+  pointer-events: none;
+}
+.franchise-card--current .poster-card { border-color: rgba(96, 165, 250, 0.75); box-shadow: 0 0 0 1px rgba(96, 165, 250, 0.4); }
+.franchise-card__relation { margin: 0; font-size: 0.7rem; color: var(--text-subtle); padding-left: 0.2rem; min-height: 1em; }
+.franchise-card--current .franchise-card__relation { color: #93c5fd; font-weight: 600; }
+
+/* Names on the page that open a person's or studio's other work. */
+.metadata-facts__link,
+.detail-facts__person-link {
+  padding: 0;
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-decoration: underline dotted rgba(255, 255, 255, 0.3);
+  text-underline-offset: 3px;
+  cursor: pointer;
+}
+.metadata-facts__link:hover,
+.detail-facts__person-link:hover { color: #93c5fd; text-decoration-color: currentColor; }
+button.credit-card { border: 0; background: none; padding: 0; font: inherit; color: inherit; text-align: inherit; cursor: pointer; }
+
+/* "More from" a person or studio. */
+.filmography__head { display: flex; align-items: center; gap: 1rem; margin-bottom: 0.9rem; }
+.filmography__photo { width: 72px; height: 72px; flex: none; border-radius: 999px; object-fit: cover; }
+.filmography__photo--empty {
+  display: grid;
+  place-items: center;
+  background: rgba(255, 255, 255, 0.08);
+  color: var(--text-muted);
+  font-size: 1.5rem;
+  font-weight: 700;
+}
+.filmography__about { display: flex; flex-direction: column; gap: 0.2rem; min-width: 0; }
+.filmography__description { margin: 0; color: var(--text-muted); font-size: 0.85rem; }
+.filmography__count { margin: 0; color: var(--text-subtle); font-size: 0.78rem; }
+.filmography__profile { display: inline-flex; align-items: center; gap: 0.25rem; color: var(--accent-light); font-size: 0.78rem; }
+.filmography__filters { display: flex; flex-wrap: wrap; gap: 0.5rem 1rem; margin-bottom: 0.9rem; }
+.filmography__empty { color: var(--text-muted); font-size: 0.88rem; }
+.filmography__work { display: flex; flex-direction: column; gap: 0.25rem; }
+.filmography__roles { margin: 0; padding-left: 0.2rem; font-size: 0.72rem; color: var(--text-subtle); }
+
+/* --- seek bar, quieter --------------------------------------------------
+   Thin until pointed at, a small playhead, played/buffered/unplayed told
+   apart by shade alone — the way people already read a timeline. The frame
+   preview is the large thing while seeking, with its time printed on it. */
+.player__seek { height: 18px; }
+.player__seek-track,
+.player__seek-torrent, .player__seek-buffer, .player__seek-played { height: 3px; border-radius: 1.5px; }
+.player__seek-track { background: rgba(255, 255, 255, 0.2); }
+.player__seek-torrent { background: rgba(255, 255, 255, 0.28); }
+.player__seek-buffer { background: rgba(255, 255, 255, 0.42); }
+.player__seek:hover .player__seek-track,
+.player__seek:hover .player__seek-torrent,
+.player__seek:hover .player__seek-buffer,
+.player__seek:hover .player__seek-played { height: 5px; }
+.player__seek-handle {
+  width: 9px;
+  height: 9px;
+  box-shadow: 0 0 0 1.5px rgba(0, 0, 0, 0.45);
+}
+.player__seek:hover .player__seek-handle { transform: translateX(-50%) scale(1.45); }
+.player__preview {
+  bottom: 22px;
+  padding: 0;
+  gap: 0;
+  background: transparent;
+  border: 0;
+  max-width: min(260px, 44vw);
+}
+.player__preview-frame {
+  position: relative;
+  border-radius: 6px;
+  overflow: hidden;
+  border: 2px solid rgba(255, 255, 255, 0.85);
+  box-shadow: 0 10px 28px rgba(0, 0, 0, 0.55);
+  background: #000;
+}
+.player__preview img,
+.player__preview-placeholder { width: 256px; max-width: 100%; border-radius: 0; }
+.player__preview-placeholder { height: 144px; }
+.player__preview-time {
+  position: absolute;
+  left: 50%;
+  bottom: 6px;
+  transform: translateX(-50%);
+  display: inline-flex;
+  align-items: baseline;
+  gap: 0.35rem;
+  padding: 0.1rem 0.45rem;
+  border-radius: 4px;
+  background: rgba(0, 0, 0, 0.72);
+  color: #fff;
+  font-size: 0.78rem;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.player__preview-time .player__preview-delta {
+  display: inline;
+  margin: 0;
+  font-style: normal;
+  font-size: 0.66rem;
+  font-weight: 500;
+  color: rgba(255, 255, 255, 0.7);
+}
+
+/* The download button's word for this video's download ("42%"). */
+.icon-button__progress {
+  position: absolute;
+  bottom: -6px;
+  left: 50%;
+  transform: translateX(-50%);
+  padding: 0 4px;
+  border-radius: 6px;
+  background: var(--accent-primary);
+  color: #fff;
+  font-size: 0.58rem;
+  font-weight: 700;
+  line-height: 13px;
+  white-space: nowrap;
+}
+.icon-button__badge--count {
+  top: -4px;
+  right: -4px;
+  background: #ef4444;
+}
+.icon-button--on { color: #93c5fd; }
+
+/* "This video" at the top of the player's downloads panel. */
+.player-dl-current {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  margin: 0.75rem 1rem 0.25rem;
+  padding: 0.75rem 0.85rem;
+  border-radius: 10px;
+  border: 1px solid rgba(59, 130, 246, 0.35);
+  background: rgba(59, 130, 246, 0.1);
+}
+.player-dl-current__text { display: flex; flex-direction: column; gap: 0.1rem; min-width: 0; }
+.player-dl-current__label { font-size: 0.66rem; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase; color: #93c5fd; }
+.player-dl-current__title { font-size: 0.86rem; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.player-dl-current__detail { font-size: 0.72rem; color: var(--text-muted); }
+.player-dl-current__progress { display: inline-flex; align-items: center; gap: 0.3rem; }
+.player-dl-current__state { display: inline-flex; align-items: center; gap: 0.3rem; font-size: 0.8rem; font-weight: 600; color: #bfdbfe; white-space: nowrap; }
+.player-dl-current__state--done { color: #86efac; }
+
+/* Drawn flags in the subtitle panel. */
+.flag-icon { display: inline-block; flex: none; vertical-align: -3px; border-radius: 2px; }
+.flag-icon--code {
+  min-width: 18px;
+  height: 12px;
+  padding: 0 2px;
+  border-radius: 2px;
+  background: rgba(255, 255, 255, 0.14);
+  color: rgba(255, 255, 255, 0.85);
+  font-size: 0.55rem;
+  font-weight: 700;
+  line-height: 12px;
+  text-align: center;
+  letter-spacing: 0.02em;
+}
+.subtitle-panel__flag { margin-right: 0.35rem; }
+.subtitle-panel__current-heading { margin: 0.75rem 1rem 0.25rem; }
+
+/* The More menu: a hint line under each everyday item, and a quiet
+   divider before the Developer-mode copies. */
+.player-copy__menu button { flex-direction: column; align-items: flex-start; }
+.player-copy__hint { display: block; font-style: normal; font-size: .68rem; color: rgba(255, 255, 255, .5); margin-top: .1rem; }
+.player-copy__heading--sub { margin-top: .35rem; border-top: 1px solid rgba(255, 255, 255, .08); padding-top: .5rem; }
+
+.player__title-search--on { opacity: 1; color: #93c5fd; border-color: rgba(147, 197, 253, .5); }
+
+/* What a source has done this session: a quiet check or warning before its
+   title, never a banner. A failed row dims a little and stays selectable. */
+.source-outcome { flex: none; margin-right: 0.3rem; vertical-align: -1px; }
+.source-outcome--ok { color: #4ade80; }
+.source-outcome--before { color: rgba(74, 222, 128, 0.65); }
+.source-outcome--failed { color: #fbbf24; }
+.player-panel__source-row--failed .player-panel__source-body { opacity: 0.72; }
+.player-panel__source-row--failed:hover .player-panel__source-body { opacity: 1; }
+
+/* --- trailer, minimised ---------------------------------------------------
+   A corner card that keeps playing while the rest of the app is used. The
+   host lets clicks through everywhere but the card itself. */
+.trailer-mini-host {
+  position: fixed;
+  inset: auto 1.25rem 1.25rem auto;
+  z-index: 1200;
+  pointer-events: none;
+}
+.trailer-popup--mini {
+  pointer-events: auto;
+  width: min(380px, 42vw);
+  max-height: none;
+  border-radius: 12px;
+  box-shadow: 0 18px 44px rgba(0, 0, 0, 0.6);
+  animation: trailer-mini-in 0.2s ease-out;
+}
+.trailer-popup--mini .trailer-popup__head { padding: 0.4rem 0.5rem 0.4rem 0.75rem; gap: 0.5rem; }
+.trailer-popup--mini .trailer-popup__label { font-size: 0.8rem; }
+.trailer-popup--mini .trailer-popup__context { display: none; }
+.trailer-popup--mini .trailer-popup__scrubber,
+.trailer-popup--mini .trailer-popup__volume-slider,
+.trailer-popup--mini .trailer-popup__time { display: none; }
+@keyframes trailer-mini-in {
+  from { opacity: 0; transform: translateY(10px) scale(0.98); }
+  to { opacity: 1; transform: none; }
+}
+
+/* One header shape for the list screens: a compact title, an optional muted
+   line of counts, and the screen's few actions on the right. */
+.screen-head { align-items: center; flex-wrap: wrap; }
+.screen-head__title { margin: 0; font-size: 1.3rem; font-weight: 700; color: #fff; letter-spacing: -0.01em; }
+.screen-head__meta { margin: 0.15rem 0 0; font-size: 0.78rem; color: var(--text-subtle); }
+.screen-head__meta-warn { color: #fbbf24; }
+.screen-head__actions { display: inline-flex; align-items: center; gap: 0.35rem; flex-wrap: wrap; }
+
+/* Who wrote the description, when more than one catalogue did. Quiet on
+   purpose: the text is the content, its source is a footnote. */
+.detail-hero__plot-foot { display: flex; align-items: center; gap: 0.75rem; flex-wrap: wrap; margin-top: 0.15rem; }
+.detail-hero__plot-foot .detail-hero__plot-toggle { margin: 0; }
+.detail-hero__plot-sources { display: inline-flex; align-items: center; gap: 0.15rem; flex-wrap: wrap; font-size: 0.72rem; }
+.detail-hero__plot-sources-label { color: var(--text-subtle); margin-right: 0.2rem; }
+.detail-hero__plot-source {
+  background: none; border: 0; padding: 0.1rem 0.4rem; border-radius: 999px;
+  color: var(--text-muted); font: inherit; cursor: pointer;
+}
+.detail-hero__plot-source:hover { color: var(--text-primary); background: rgba(255, 255, 255, 0.06); }
+.detail-hero__plot-source--on { color: var(--text-primary); background: rgba(255, 255, 255, 0.1); }
+.detail-hero__plot-source:focus-visible { outline: 2px solid var(--accent-primary); outline-offset: 1px; }
+
+/* The row under a list screen's header: view/status tabs on the left, sort
+   and view options on the right. History, Downloads and Library share it. */
+.screen-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 0.6rem; flex-wrap: wrap; }
+.screen-toolbar__group { display: inline-flex; align-items: center; gap: 0.4rem; flex-wrap: wrap; }

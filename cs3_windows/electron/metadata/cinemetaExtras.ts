@@ -70,6 +70,8 @@ export interface CinemetaExtraFields {
   genre?: string[];
   /** `"167 min"`. A string, always — measured on every title checked. */
   runtime?: string;
+  /** The synopsis, plain text. */
+  description?: string;
   /** Series only: `"Ended"`, `"Continuing"`. Absent on films. */
   status?: string;
   /** Series only: one entry per episode, which is where the counts come from. */
@@ -94,6 +96,7 @@ export interface CinemetaExtras {
   status?: TitleStatus;
   seasonCount?: number;
   episodeCount?: number;
+  plot?: string;
 }
 
 /**
@@ -291,6 +294,7 @@ export function parseCinemetaExtras(meta: CinemetaExtraFields | null | undefined
     genres: meta.genres ?? meta.genre ?? [],
     posterUrl: meta.poster,
     runtimeMinutes: parseRuntimeMinutes(meta.runtime),
+    plot: meta.description?.trim() || undefined,
     status: normaliseStatus(meta.status),
     seasonCount: seasons.size || undefined,
     episodeCount: episodes.length || undefined,

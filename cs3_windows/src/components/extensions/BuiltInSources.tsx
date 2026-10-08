@@ -1,4 +1,5 @@
 import React, { useCallback, useEffect, useState } from 'react';
+import { InfoHint } from '../settings/InfoHint';
 import { Library, Loader2, Plus, Trash2 } from 'lucide-react';
 import { Badge, Toggle } from './primitives';
 import type { NativeProviderSummary } from '../../types/plugin';
@@ -232,11 +233,11 @@ export const BuiltInSources: React.FC = () => {
             {adding ? <Loader2 size={14} className="spin" /> : <Plus size={14} />}
             {adding ? 'Checking…' : 'Add'}
           </button>
+          <InfoHint label="About adding an addon">
+            The manifest is read and checked before it is saved. Catalogue, metadata, stream and
+            subtitle addons all work.
+          </InfoHint>
         </div>
-        <p className="ext-builtin__hint">
-          The manifest is read and checked before it is saved. Catalogue, metadata, stream and
-          subtitle addons all work.
-        </p>
         {added ? <p className="ext-builtin__ok">{added}</p> : null}
       </div>
 
@@ -276,11 +277,11 @@ export const BuiltInSources: React.FC = () => {
             {addingServer ? <Loader2 size={14} className="spin" /> : <Plus size={14} />}
             {addingServer ? 'Checking…' : 'Add'}
           </button>
+          <InfoHint label="About the API key">
+            Create a key in your server&apos;s Dashboard → API Keys. It is stored on this machine
+            and never leaves it except to reach the server you named.
+          </InfoHint>
         </div>
-        <p className="ext-builtin__hint">
-          Create a key in your server&apos;s Dashboard → API Keys. It is stored on this machine
-          and never leaves it except to reach the server you named.
-        </p>
       </div>
     </section>
   );

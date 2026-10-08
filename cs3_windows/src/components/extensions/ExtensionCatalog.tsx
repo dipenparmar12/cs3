@@ -29,6 +29,7 @@ import {
   X,
 } from 'lucide-react';
 import { Badge, ProgressBar, TriStateCheckbox } from './primitives';
+import { Button } from '../ui/Button';
 import { CompatibilityReport } from './CompatibilityReport';
 import { matchesQuery, matchesTags, tagLabel, type FilterState } from './useExtensionFilters';
 import type { PluginCompatibilityReport, SitePlugin } from '../../types/plugin';
@@ -56,7 +57,8 @@ interface ExtensionCatalogProps {
    */
   embedded?: boolean;
   onInstall(plugins: SitePlugin[]): void;
-  onUninstall(internalName: string): void;
+  /** Opens the uninstall confirmation for these; the screen runs it through the queue. */
+  onUninstall(internalNames: string[]): void;
   onCancelJob(id: string): void;
   onRetryJob(id: string): void;
 }
@@ -91,7 +93,7 @@ const RowAction: React.FC<{
     return (
       <button
         type="button"
-        className="ext-btn ext-item__action"
+        className="btn btn-secondary btn-sm ext-item__action"
         title="Waiting for a free slot — click to cancel"
         onClick={() => onCancel(job.id)}
       >
@@ -101,7 +103,7 @@ const RowAction: React.FC<{
   }
   if (job?.state === 'running') {
     return (
-      <button type="button" className="ext-btn ext-item__action" disabled>
+      <button type="button" className="btn btn-secondary btn-sm ext-item__action" disabled>
         <Loader2 size={13} className="spin" />
         {job.kind === 'update' ? 'Updating' : 'Installing'}
         {job.percent ? ` ${Math.round(job.percent)}%` : '…'}
@@ -110,7 +112,7 @@ const RowAction: React.FC<{
   }
   if (job?.state === 'failed' && !installed) {
     return (
-      <button type="button" className="ext-btn ext-item__action" onClick={() => onRetry(job.id)}>
+      <button type="button" className="btn btn-secondary btn-sm ext-item__action" onClick={() => onRetry(job.id)}>
         <RotateCcw size={13} /> Retry
       </button>
     );
@@ -121,7 +123,7 @@ const RowAction: React.FC<{
         <Check size={13} /> Installed
         <button
           type="button"
-          className="ext-btn ext-btn--icon ext-btn--danger"
+          className="btn btn-ghost btn-sm btn-icon btn--danger-text"
           title={`Uninstall ${plugin.name}`}
           aria-label={`Uninstall ${plugin.name}`}
           disabled={uninstalling || !installed}
@@ -133,7 +135,7 @@ const RowAction: React.FC<{
     );
   }
   return (
-    <button type="button" className="ext-btn ext-btn--primary ext-item__action" onClick={onInstall}>
+    <button type="button" className="btn btn-primary btn-sm ext-item__action" onClick={onInstall}>
       <Download size={13} /> Install
     </button>
   );
@@ -192,16 +194,26 @@ export const ExtensionCatalog: React.FC<ExtensionCatalogProps> = ({
     [plugins, filters, installedNames]
   );
 
+  /**
+   * Rows that can be selected: shown, and not held by a job. Installed rows are
+   * selectable too — a mixed selection offers Install for the ones that are not
+   * installed and Uninstall for the ones that are, each with its own count.
+   * A selection the filters hide stays selected and is never acted on.
+   */
+  const selectable = useMemo(
+    () => visible.filter((plugin) => !isActive(jobFor(plugin.internalName))),
+    [visible, jobFor]
+  );
   /** Rows that an Install would actually do something for. */
   const installable = useMemo(
-    () =>
-      visible.filter(
-        (plugin) => !installedNames.has(plugin.internalName) && !isActive(jobFor(plugin.internalName))
-      ),
-    [visible, installedNames, jobFor]
+    () => selectable.filter((plugin) => !installedNames.has(plugin.internalName)),
+    [selectable, installedNames]
   );
-  const pickedInstallable = installable.filter((plugin) => picked.has(plugin.internalName));
-  const allPicked = installable.length > 0 && pickedInstallable.length === installable.length;
+  const pickedShown = selectable.filter((plugin) => picked.has(plugin.internalName));
+  const pickedInstallable = pickedShown.filter((plugin) => !installedNames.has(plugin.internalName));
+  const pickedInstalled = pickedShown.filter((plugin) => installedNames.has(plugin.internalName));
+  const pickedHidden = [...picked].filter((name) => !pickedShown.some((plugin) => plugin.internalName === name)).length;
+  const allPicked = selectable.length > 0 && pickedShown.length === selectable.length;
 
   const togglePick = (name: string) =>
     setPicked((current) => {
@@ -251,35 +263,48 @@ export const ExtensionCatalog: React.FC<ExtensionCatalogProps> = ({
       {!loading && plugins.length > 0 ? (
         <div className="ext-list__toolbar">
           <TriStateCheckbox
-            state={
-              allPicked ? 'checked' : pickedInstallable.length > 0 ? 'indeterminate' : 'unchecked'
-            }
-            title={allPicked ? 'Clear selection' : 'Select everything not installed'}
+            state={allPicked ? 'checked' : pickedShown.length > 0 ? 'indeterminate' : 'unchecked'}
+            title={allPicked ? 'Clear selection' : 'Select everything shown'}
             onChange={() =>
-              setPicked(
-                allPicked ? new Set() : new Set(installable.map((plugin) => plugin.internalName))
-              )
+              setPicked(allPicked ? new Set() : new Set(selectable.map((plugin) => plugin.internalName)))
             }
           />
           <span className="ext-list__count">
-            {visible.length} of {plugins.length} · {installedHere} installed
+            {pickedShown.length > 0 ? `${pickedShown.length} selected · ` : ''}
+            {visible.length} of {plugins.length} shown · {installedHere} installed
+            {pickedHidden > 0 ? ` · ${pickedHidden} selected but hidden (not included)` : ''}
           </span>
+          <Button size="compact" variant="ambient" onClick={() => setPicked(new Set(selectable.map((p) => p.internalName)))}
+            disabled={selectable.length === 0} title="Select every row the search and filters show">
+            Select all shown ({selectable.length})
+          </Button>
+          <Button size="compact" variant="ambient"
+            onClick={() => setPicked(new Set(selectable.filter((p) => !picked.has(p.internalName)).map((p) => p.internalName)))}
+            disabled={selectable.length === 0}>
+            Invert
+          </Button>
+          <Button size="compact" variant="ambient" onClick={() => setPicked(new Set())} disabled={picked.size === 0}>
+            None
+          </Button>
           <span className="ext-bulk__spacer" />
+          {pickedInstalled.length > 0 ? (
+            <Button size="compact" variant="destructive" icon={Trash2}
+              onClick={() => onUninstall(pickedInstalled.map((plugin) => plugin.internalName))}>
+              Uninstall {pickedInstalled.length}
+            </Button>
+          ) : null}
           {pickedInstallable.length > 0 ? (
-            <button
-              type="button"
-              className="ext-btn ext-btn--primary"
+            <Button size="compact" variant="prominent" icon={Download}
               onClick={() => {
                 onInstall(pickedInstallable);
                 setPicked(new Set());
-              }}
-            >
-              <Download size={13} /> Install {pickedInstallable.length} selected
-            </button>
-          ) : installable.length > 1 ? (
-            <button type="button" className="ext-btn" onClick={() => onInstall(installable)}>
-              <Download size={13} /> Install all {installable.length} shown
-            </button>
+              }}>
+              Install {pickedInstallable.length}
+            </Button>
+          ) : pickedShown.length === 0 && installable.length > 1 ? (
+            <Button size="compact" icon={Download} onClick={() => onInstall(installable)}>
+              Install all {installable.length} shown
+            </Button>
           ) : null}
         </div>
       ) : null}
@@ -291,7 +316,7 @@ export const ExtensionCatalog: React.FC<ExtensionCatalogProps> = ({
             const status = STATUS[plugin.status];
             const job = jobFor(plugin.internalName);
             const report = reports[plugin.internalName];
-            const selectable = !installed && !isActive(job);
+            const rowSelectable = !isActive(job);
             const meta = [
               plugin.version ? `v${plugin.version}` : null,
               plugin.language ? plugin.language.toUpperCase() : null,
@@ -302,10 +327,10 @@ export const ExtensionCatalog: React.FC<ExtensionCatalogProps> = ({
             return (
               <li
                 key={plugin.internalName}
-                className={`ext-item${picked.has(plugin.internalName) && selectable ? ' ext-item--picked' : ''}`}
+                className={`ext-item${picked.has(plugin.internalName) && rowSelectable ? ' ext-item--picked' : ''}`}
               >
                 <span className="ext-item__check">
-                  {selectable ? (
+                  {rowSelectable ? (
                     <TriStateCheckbox
                       state={picked.has(plugin.internalName) ? 'checked' : 'unchecked'}
                       title="Select"
@@ -359,7 +384,7 @@ export const ExtensionCatalog: React.FC<ExtensionCatalogProps> = ({
                   {!installed && !report ? (
                     <button
                       type="button"
-                      className="ext-btn ext-btn--icon"
+                      className="btn btn-secondary btn-sm btn-icon"
                       title={
                         technical
                           ? 'Check what this archive needs before installing it'
@@ -378,7 +403,7 @@ export const ExtensionCatalog: React.FC<ExtensionCatalogProps> = ({
                     job={job}
                     uninstalling={busy === `uninstall:${plugin.internalName}`}
                     onInstall={() => onInstall([plugin])}
-                    onUninstall={() => onUninstall(plugin.internalName)}
+                    onUninstall={() => onUninstall([plugin.internalName])}
                     onCancel={onCancelJob}
                     onRetry={onRetryJob}
                   />

@@ -15,6 +15,9 @@ import type { TitleInteraction } from '../types/interactions';
 import { CardBadge, badgeLabel, badgeTooltip, cardStateFor, primaryBadge } from '../utils/cardState';
 import { ContentHoverCard } from './ContentHoverCard';
 import { LibraryBucketSelector } from './LibraryBucketSelector';
+import { resultSources } from '../utils/resultSources';
+import type { VariantInfo } from '../utils/variantGroups';
+import { VariantChip } from './search/VariantChip';
 
 interface PosterCardProps {
   item: SearchResponse;
@@ -45,6 +48,15 @@ interface PosterCardProps {
    * one.
    */
   outcome?: { kind: 'played' | 'no-sources' | 'app-error'; reason?: string };
+  /**
+   * Other releases of this title from the same source (`variantGroups.ts`).
+   * More than one turns on the variants chip; the card itself is `item`.
+   */
+  variants?: VariantInfo[];
+  variantSummary?: string;
+  variantsIdentical?: boolean;
+  /** The caption to show instead of `item.name` — the title without file tags. */
+  displayName?: string;
 }
 
 /** The glyph for each state. Small, monochrome, and never a colour on its own. */
@@ -70,6 +82,10 @@ export const PosterCard: React.FC<PosterCardProps> = ({
   showBucketButton = true,
   interaction,
   outcome,
+  variants,
+  variantSummary,
+  variantsIdentical = false,
+  displayName,
 }) => {
   const cardRef = useRef<HTMLDivElement | null>(null);
   const [hoverCardOpen, setHoverCardOpen] = useState(false);
@@ -120,8 +136,10 @@ export const PosterCard: React.FC<PosterCardProps> = ({
    * rather than "Untitled" under every one; assistive tech still gets a label.
    */
   const hasName = Boolean(item?.name?.trim());
+  const sources = item ? resultSources(item) : [];
+  const grouped = (variants?.length ?? 0) > 1;
   const titleText = hasName
-    ? (item?.name ?? '')
+    ? (grouped && displayName ? displayName : (item?.name ?? ''))
     : item?.apiName
       ? `a title from ${item.apiName}`
       : 'this title';
@@ -221,6 +239,21 @@ export const PosterCard: React.FC<PosterCardProps> = ({
         )}
       </div>
 
+      {/*
+        Library buckets as a corner control on the poster, outside the poster
+        frame so its menu is not clipped by the artwork's rounded crop. It was a
+        full-width row under every card — the tallest part of the card for an
+        action most viewers never take from a grid.
+      */}
+      {showBucketButton && item?.url && (
+        <LibraryBucketSelector
+          item={item}
+          variant="poster"
+          known={interaction ? (interaction.library ?? null) : undefined}
+          deferFetch
+        />
+      )}
+
       <div className="poster-info">
         {hasName && (
           <h4 className="poster-title" title={titleText} onClick={handleCardClick}>
@@ -228,27 +261,42 @@ export const PosterCard: React.FC<PosterCardProps> = ({
           </h4>
         )}
         <div className="poster-meta">
-          {item?.year && <span>{item.year}</span>}
-          {item?.apiName && (
-            <span style={{ color: 'var(--accent-light)', fontSize: '0.72rem' }}>{item.apiName}</span>
+          {item?.year ? <span>{item.year}</span> : <span />}
+          {/*
+            Where the title was found, as a quiet tag rather than a second
+            caption: the title is what the card is about. A merged row says how
+            many other providers had it too, which is otherwise invisible until
+            the details page — the tooltip names them.
+          */}
+          {sources.length > 0 && (
+            <span
+              className="poster-source"
+              title={
+                sources.length > 1
+                  ? `Found on ${sources.length} sources: ${sources.join(', ')}. Open the title to compare them.`
+                  : `Found on ${sources[0]}`
+              }
+            >
+              <span className="poster-source__name">{sources[0]}</span>
+              {sources.length > 1 && <span className="poster-source__more">+{sources.length - 1}</span>}
+            </span>
           )}
         </div>
+
+        {grouped && variants && (
+          <VariantChip
+            variants={variants}
+            summary={variantSummary ?? ''}
+            identical={variantsIdentical}
+            onOpen={onSelectMedia}
+            onPlay={onPlayDirectly}
+          />
+        )}
 
         {/* Where the viewer left off. Supplied by the library and continue-watching
             rows, which is the only place a resume point is meaningful. */}
         {watchedText && <p className="poster-watched">{watchedText}</p>}
 
-        {showBucketButton && item?.url && (
-          <div style={{ marginTop: '0.4rem' }}>
-            <LibraryBucketSelector
-              item={item}
-              size="sm"
-              showLabel={false}
-              known={interaction ? (interaction.library ?? null) : undefined}
-              deferFetch
-            />
-          </div>
-        )}
       </div>
 
       {ENABLE_HOVER_CARD_PREVIEW && hoverCardOpen && (

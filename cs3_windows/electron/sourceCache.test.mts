@@ -217,6 +217,37 @@ test('a screen of cards parses the cache once, and still sees the next write', (
   assert.equal(cache.peek('cs3meta://tt7').hit, true, 'a write must not be hidden by the memo');
 });
 
+// --- clearing one title ---------------------------------------------------
+
+test('forgetting a title removes both scopes of that title and nothing else', () => {
+  const cache = makeCache();
+  cache.write(MEDIA, [magnet('a'), providerLink('b')]);
+  cache.write(`${MEDIA}#all`, [magnet('c')]);
+  cache.write('cs3meta://tt0000001', [magnet('other')]);
+
+  assert.equal(cache.forget([MEDIA, `${MEDIA}#all`]), 3);
+  assert.equal(cache.peek(MEDIA).hit, false);
+  assert.equal(cache.peek(`${MEDIA}#all`).hit, false);
+  assert.equal(cache.peek('cs3meta://tt0000001').fresh.length, 1);
+});
+
+test('forgetting one episode leaves the rest of the series', () => {
+  const cache = makeCache();
+  cache.write(MEDIA, [magnet('e1')], 1, 1);
+  cache.write(MEDIA, [magnet('e2')], 1, 2);
+
+  assert.equal(cache.forget([MEDIA], 1, 1), 1);
+  assert.equal(cache.peek(MEDIA, 1, 1).hit, false);
+  assert.equal(cache.peek(MEDIA, 1, 2).hit, true);
+});
+
+test('forgetting a title with nothing cached is a quiet zero', () => {
+  const cache = makeCache();
+  cache.write('cs3meta://tt0000001', [magnet('other')]);
+  assert.equal(cache.forget([MEDIA, `${MEDIA}#all`]), 0);
+  assert.equal(cache.stats().entries, 1);
+});
+
 // --- runner ----------------------------------------------------------------
 
 let failed = 0;

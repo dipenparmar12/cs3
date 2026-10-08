@@ -1,6 +1,9 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { originNameFor } from '../utils/originName';
+import { useSessionState } from '../utils/useSessionState';
+import type { PlaybackPreferences, StoredSource } from '../types/library';
 import {
-  Play, ArrowLeft, Loader2, AlertTriangle, ListVideo, Search,
+  Play, ArrowLeft, Loader2, AlertTriangle, ListVideo, Search, Sparkles, Tv, ChevronsDownUp, ChevronsUpDown,
 } from 'lucide-react';
 import type { SearchResponse, Episode, ProviderTrailerData } from '../types/api';
 import { TvType } from '../types/api';
@@ -12,11 +15,12 @@ import type { TorrentResult } from '../types/torrent';
 import type { PlaybackSnapshot } from '../../electron/playbackSession';
 import { SourcePicker, type SourcePickerData } from '../components/SourcePicker';
 import {
+  episodeKey,
   loadWatchState,
   type EpisodeWatchState,
   type SeriesContext,
 } from '../components/player/seriesContext';
-import { pickResumePoint, resumeSeconds } from '../utils/resumePoint';
+import { pickResumePoint, playLabel, resumeSeconds } from '../utils/resumePoint';
 import { SeasonDownloadDialog } from '../components/SeasonDownloadDialog';
 import { LibraryBucketSelector } from '../components/LibraryBucketSelector';
 import { PosterCard } from '../components/PosterCard';
@@ -37,7 +41,12 @@ import { useTitleInteractions } from '../components/useTitleInteractions';
 import { shouldRetryOnOpen } from '../utils/cardState';
 import type { ExtendedMetadata, TitleVideo } from '../types/metadata';
 import { MetadataSource, TitleVideoKind } from '../types/metadata';
-import { formatRuntimeMinutes } from '../utils/metadataDisplay';
+import { formatRuntimeMinutes, formatSeasonCount, parseRuntimeMinutes, plotChoices } from '../utils/metadataDisplay';
+import { DetailSection, setSectionsCollapsed } from '../components/detail/DetailSection';
+import { CollectionDialog } from '../components/detail/CollectionDialog';
+import { FilmographyDialog } from '../components/detail/FilmographyDialog';
+import type { FilmographyRequest } from '../types/filmography';
+import type { CreditPerson } from '../types/metadata';
 import { mergeVideos, youTubeIdFrom, youTubeThumbnail } from '../utils/videoGallery';
 import { ShareButton } from '../components/ShareButton';
 import type { PrefetchState } from '../../electron/cs3/sourcePrefetcher';
@@ -47,6 +56,23 @@ import { FranchiseRail } from '../components/detail/FranchiseRail';
 
 /** Cards the rail is sized for before "Show all" is worth offering. */
 const RAIL_PREVIEW = 8;
+
+/**
+ * How long what is about to play should run: the length this episode or film
+ * measured last time it played, else the provider's or catalogue's runtime.
+ * Used only to notice a source that serves a clip instead (`mediaSanity.ts`).
+ */
+function expectedRuntimeSeconds(
+  detail: { duration?: string },
+  extended: { runtimeMinutes?: number } | null | undefined,
+  episode: { season?: number; episode?: number } | null,
+  watchState: Record<string, { durationSeconds: number }>
+): number | undefined {
+  const measured = watchState[episodeKey(episode?.season, episode?.episode)]?.durationSeconds;
+  if (measured && measured > 0) return measured;
+  const minutes = parseRuntimeMinutes(detail.duration) ?? extended?.runtimeMinutes;
+  return minutes ? minutes * 60 : undefined;
+}
 
 export interface PlaybackRequest {
   streamUrl: string;
@@ -128,6 +154,8 @@ export interface PlaybackSessionRequest {
     season?: number;
     episode?: number;
     resumeAt?: number;
+    /** How long the title should run, for spotting a source that plays an advert instead. */
+    expectedDurationSeconds?: number;
   };
   onRequestEpisode?: (episode: Episode) => Promise<void>;
   /** Fired once a source actually starts, so the choice can be remembered. */
@@ -136,6 +164,18 @@ export interface PlaybackSessionRequest {
   onDownloadSource?: (source: TorrentResult) => void;
   /** Identity for online subtitle search, which is keyed on the IMDb id. */
   subtitleContext?: { imdbId?: string; season?: number; episode?: number };
+  /** A source to start from and re-find, outranking the remembered one (a saved playback). */
+  preferSource?: StoredSource;
+  /** Track choices to apply (a saved playback); otherwise the played-source record's. */
+  preferences?: PlaybackPreferences;
+  /**
+   * The library key whose played source this session should prefer.
+   *
+   * Defaults to `canonicalKey(title, progress.year)` — the key the player
+   * records under — so only a caller that already holds a different, exact key
+   * (a library card) needs to set it.
+   */
+  resumeKey?: string;
 }
 
 interface DetailViewProps {
@@ -149,6 +189,13 @@ interface DetailViewProps {
   onSearch?: (query: string) => void;
   /** Opens another title — a related one from this page's recommendations. */
   onSelectMedia?: (item: SearchResponse) => void;
+  /** Plays another title straight away (related titles, a person's work). */
+  onPlayDirectly?: (item: SearchResponse) => void;
+  /**
+   * Plays a trailer in the app shell, where it can be minimised and keep
+   * playing after this page is left. Without it the page shows its own popup.
+   */
+  onPlayTrailer?: (videos: TitleVideo[], startId: string, titleName: string) => void;
   /** The query that produced this item, recorded on a bookmark so it can be re-run. */
   searchQuery?: string;
 }
@@ -221,6 +268,8 @@ export const DetailView: React.FC<DetailViewProps> = ({
   onEnqueueDownload,
   onSearch,
   onSelectMedia,
+  onPlayDirectly,
+  onPlayTrailer,
   searchQuery,
 }) => {
   const [detail, setDetail] = useState<DetailData | null>(null);
@@ -243,6 +292,44 @@ export const DetailView: React.FC<DetailViewProps> = ({
 
   /** The catalogues are being asked and have not finished. See the effect. */
   const [metadataPending, setMetadataPending] = useState(false);
+
+  /**
+   * Where the viewer is in this title — for the Play label ("Resume S2 · E4")
+   * and the progress line on each episode. Read once per page, locally.
+   */
+  const [watchState, setWatchState] = useState<Record<string, EpisodeWatchState>>({});
+  /** A person or studio whose other work is open. */
+  const [filmography, setFilmography] = useState<{ request: FilmographyRequest; hint?: { imageUrl?: string; subtitle?: string } } | null>(null);
+  /** "View all" for related titles. */
+  const [moreLikeThisOpen, setMoreLikeThisOpen] = useState(false);
+  /** A trailer goes to the app shell when it can be minimised there. */
+  const allVideosRef = useRef<TitleVideo[]>([]);
+  const openTrailer = useCallback(
+    (id: string, videos?: TitleVideo[]) => {
+      if (onPlayTrailer && detail) onPlayTrailer(videos ?? allVideosRef.current, id, detail.name);
+      else setTrailerId(id);
+    },
+    [onPlayTrailer, detail]
+  );
+
+  /** Narrows a long episode list. */
+  const [episodeQuery, setEpisodeQuery] = useState('');
+
+  /*
+   * The top bar floats over the artwork at the top of the page and gains a
+   * background once the page has scrolled under it, so headings passing
+   * beneath do not show through.
+   */
+  const topbarRef = useRef<HTMLDivElement | null>(null);
+  const [topbarStuck, setTopbarStuck] = useState(false);
+  useEffect(() => {
+    const scroller = topbarRef.current?.closest('.view-viewport');
+    if (!scroller) return;
+    const onScroll = () => setTopbarStuck(scroller.scrollTop > 160);
+    onScroll();
+    scroller.addEventListener('scroll', onScroll, { passive: true });
+    return () => scroller.removeEventListener('scroll', onScroll);
+  }, [detail?.url]);
 
   /** Public trailers found on-demand via YouTube fallback. */
   const [discoveredVideos, setDiscoveredVideos] = useState<TitleVideo[]>([]);
@@ -287,11 +374,15 @@ export const DetailView: React.FC<DetailViewProps> = ({
   const [servedFromSnapshot, setServedFromSnapshot] = useState<string | null>(null);
 
   const [activeSeason, setActiveSeason] = useState<number>(1);
+  /*
+   * The season the viewer picked on this page, kept for the session: coming
+   * back to a series from another screen lands on the season they were
+   * reading, not season 1.
+   */
+  const [chosenSeason, setChosenSeason] = useSessionState<number | null>(`detail.season:${mediaItem.url}`, null);
   const [selectedEpisode, setSelectedEpisode] = useState<Episode | null>(null);
 
   const [pickerOpen, setPickerOpen] = useState(false);
-  const [showAllRecommendations, setShowAllRecommendations] = useState(false);
-  useEffect(() => setShowAllRecommendations(false), [mediaItem.url]);
   // Providers repeat a title across their own rows; one card per address.
   const recommendations = useMemo(() => {
     const seen = new Set<string>();
@@ -304,6 +395,8 @@ export const DetailView: React.FC<DetailViewProps> = ({
   }, [detail?.recommendations]);
   const [pickerData, setPickerData] = useState<SourcePickerData | null>(null);
   const [pickerError, setPickerError] = useState<string | undefined>();
+  /** One line under the picker's heading — what clearing the cache did. */
+  const [pickerNotice, setPickerNotice] = useState<string | undefined>();
 
   /**
    * The running cross-provider search behind the picker.
@@ -432,7 +525,8 @@ export const DetailView: React.FC<DetailViewProps> = ({
         setIsLoading(false);
         const seasons = groupBySeason(stored.episodes ?? []);
         const first = [...seasons.keys()].sort((a, b) => a - b)[0];
-        if (first !== undefined) setActiveSeason(first);
+        if (chosenSeason !== null && seasons.has(chosenSeason)) setActiveSeason(chosenSeason);
+        else if (first !== undefined) setActiveSeason(first);
       }
 
       /**
@@ -550,7 +644,8 @@ export const DetailView: React.FC<DetailViewProps> = ({
 
           const seasons = groupBySeason(data.episodes ?? []);
           const first = [...seasons.keys()].sort((a, b) => a - b)[0];
-          if (first !== undefined) setActiveSeason(first);
+          if (chosenSeason !== null && seasons.has(chosenSeason)) setActiveSeason(chosenSeason);
+          else if (first !== undefined) setActiveSeason(first);
           setIsLoading(false);
           return;
         }
@@ -769,6 +864,7 @@ export const DetailView: React.FC<DetailViewProps> = ({
   const allVideos = useMemo<TitleVideo[]>(() => {
     return mergeVideos([extended?.videos, providerVideos, discoveredVideos]);
   }, [extended?.videos, providerVideos, discoveredVideos]);
+  allVideosRef.current = allVideos;
 
   /**
    * Cast, crew, ratings and production notes, fetched after the page is drawn.
@@ -879,6 +975,62 @@ export const DetailView: React.FC<DetailViewProps> = ({
     [seasons]
   );
   const isSeries = (detail?.episodes?.length ?? 0) > 0;
+
+  useEffect(() => {
+    if (!detail?.url) return;
+    let active = true;
+    void loadWatchState(detail.url, { title: detail.name, year: detail.year }).then((state) => {
+      if (active) setWatchState(state);
+    });
+    return () => {
+      active = false;
+    };
+  }, [detail?.url, detail?.name, detail?.year]);
+
+  const heroPlayLabel = useMemo(() => {
+    if (!detail) return undefined;
+    return playLabel(
+      pickResumePoint(detail.episodes ?? [], watchState, { isLive: detail.isLive }),
+      watchState,
+      { isSeries }
+    );
+  }, [detail, watchState, isSeries]);
+
+  /** The provider's description first, then each catalogue's that says something else. */
+  const heroPlotChoices = useMemo(
+    () => plotChoices(detail?.plot || undefined, provenance.provider, extended?.plots),
+    [detail?.plot, provenance.provider, extended?.plots]
+  );
+
+  /** The person behind a credit, looked up by id where the catalogue gave one. */
+  const openPerson = useCallback(
+    (person: CreditPerson) =>
+      setFilmography({
+        request: {
+          kind: 'person',
+          name: person.name,
+          profileUrl: person.profileUrl,
+          contextImdbId: detail?.imdbId || extended?.ids?.imdb,
+        },
+        hint: {
+          imageUrl: person.imageUrl,
+          subtitle: person.character ? `${person.character} in ${detail?.name ?? 'this title'}` : person.job,
+        },
+      }),
+    [detail?.imdbId, detail?.name, extended?.ids?.imdb]
+  );
+  const openStudio = useCallback(
+    (studio: { name: string; url?: string }) =>
+      setFilmography({
+        request: {
+          kind: 'studio',
+          name: studio.name,
+          profileUrl: studio.url,
+          contextImdbId: detail?.imdbId || extended?.ids?.imdb,
+        },
+      }),
+    [detail?.imdbId, extended?.ids?.imdb]
+  );
 
   // --- sources -------------------------------------------------------------
 
@@ -995,11 +1147,17 @@ export const DetailView: React.FC<DetailViewProps> = ({
   const openSources = useCallback(
     async (
       episode: Episode | null,
-      options: { refresh?: boolean; quiet?: boolean } = {}
+      /**
+       * `cleared`: the cache for this target was just emptied, so nothing held
+       * on this page — retained rows or the prefetch's — may be drawn either;
+       * they are exactly what the viewer asked to be rid of.
+       */
+      options: { refresh?: boolean; quiet?: boolean; cleared?: boolean } = {}
     ) => {
       if (!window.cloudstream || !detail) return;
 
       stopDiscovery();
+      if (!options.cleared) setPickerNotice(undefined);
 
       setPendingEpisode(episode);
       // `quiet` is the automatic retry below: it wants the search, not the
@@ -1009,7 +1167,9 @@ export const DetailView: React.FC<DetailViewProps> = ({
       setPickerError(undefined);
       const key = `${episode?.url ?? detail.url}|${episode?.season ?? ''}|${episode?.episode ?? ''}`;
       sourceTargetRef.current = { key, refresh: Boolean(options.refresh) };
+      if (options.cleared) retainedSources.current.delete(key);
       const prefetchMatch =
+        !options.cleared &&
         prefetch?.sources &&
         (episode?.url ?? detail.url) === prefetch.mediaUrl &&
         episode?.season === prefetch.season &&
@@ -1086,6 +1246,45 @@ export const DetailView: React.FC<DetailViewProps> = ({
     [applySnapshot, detail, prefetch, stopDiscovery]
   );
 
+  /**
+   * Media Details → Sources → Clear cached.
+   *
+   * Clears only this title's (or this episode's) cache entries in the main
+   * process, drops every copy this page holds, then asks afresh — so what
+   * appears next was resolved now, never served from what was just cleared.
+   */
+  const clearCachedSources = useCallback(async () => {
+    if (!window.cloudstream?.clearCachedSourcesFor || !detail) return;
+    const episode = pendingEpisode;
+    const request = {
+      mediaUrl: episode?.url ?? detail.url,
+      season: episode?.season,
+      episode: episode?.episode,
+    };
+    stopDiscovery();
+    setPickerData(null);
+    setDiscovery(null);
+    setPrefetch((current) =>
+      current &&
+      current.mediaUrl === request.mediaUrl &&
+      current.season === request.season &&
+      current.episode === request.episode
+        ? null
+        : current
+    );
+    const result = await window.cloudstream.clearCachedSourcesFor(request);
+    if (!result.ok) {
+      setPickerNotice(`Could not clear the cached sources: ${result.error ?? 'unknown error'}`);
+      return;
+    }
+    setPickerNotice(
+      result.removed > 0
+        ? `Cleared ${result.removed} cached source${result.removed === 1 ? '' : 's'}. Looking for fresh ones…`
+        : 'Nothing was cached for this. Looking for fresh sources…'
+    );
+    await openSources(episode, { refresh: true, cleared: true });
+  }, [detail, openSources, pendingEpisode, stopDiscovery]);
+
   useEffect(() => {
     const buffered = snapshotsById.current;
     const dispose = window.cloudstream?.onPlaybackUpdate((snapshot) => {
@@ -1122,24 +1321,24 @@ export const DetailView: React.FC<DetailViewProps> = ({
     if (!url) return;
 
     void (async () => {
-      const [bookmark, origin] = await Promise.all([
-        window.cloudstream?.getBookmark?.(url),
-        mediaItem.apiName
-          ? window.cloudstream?.getProviderProvenance?.(mediaItem.apiName)
-          : Promise.resolve(undefined),
-      ]);
+      // A screen name ("Library", "Continue watching") is not a provider; the
+      // address or the saved page says which one it really was.
+      const bookmark = await window.cloudstream?.getBookmark?.(url);
+      const named =
+        originNameFor(mediaItem.apiName, url) ?? bookmark?.bookmark?.origin.provider ?? undefined;
+      const origin = named ? await window.cloudstream?.getProviderProvenance?.(named) : undefined;
       if (cancelled) return;
 
       setSaved(Boolean(bookmark?.bookmark));
       setProvenance({
-        provider: origin?.provenance?.provider ?? mediaItem.apiName,
-        extensionName: origin?.provenance?.extensionName,
-        repositoryName: origin?.provenance?.repositoryName,
+        provider: origin?.provenance?.provider ?? named,
+        extensionName: origin?.provenance?.extensionName ?? bookmark?.bookmark?.origin.extensionName,
+        repositoryName: origin?.provenance?.repositoryName ?? bookmark?.bookmark?.origin.repositoryName,
         repositoryId: origin?.provenance?.repositoryId,
         // A catalogue result has no extension behind it; naming the catalogue
         // is what stops the origin line reading as "unknown" for half the app.
-        metadataSource: origin?.provenance?.extensionName ? undefined : mediaItem.apiName,
-        searchQuery,
+        metadataSource: origin?.provenance?.extensionName ? undefined : named,
+        searchQuery: searchQuery ?? bookmark?.bookmark?.origin.searchQuery,
       });
 
       // Reopening from the saved list is what makes "most used" meaningful.
@@ -1421,7 +1620,7 @@ export const DetailView: React.FC<DetailViewProps> = ({
           episode: episode?.episode,
         },
         title: detail.name,
-        originalTitle: mediaItem.originalTitle || (detail as any)?.originalTitle || searchQuery,
+        originalTitle: mediaItem.originalTitle || (detail as any)?.originalTitle,
         providerProvenance: {
           provider: provenance.provider,
           repositoryName: provenance.repositoryName,
@@ -1462,10 +1661,11 @@ export const DetailView: React.FC<DetailViewProps> = ({
           season: episode?.season,
           episode: episode?.episode,
           resumeAt: resumeSeconds(watchState, episode, { isLive: detail.isLive }),
+          expectedDurationSeconds: expectedRuntimeSeconds(detail, extended, episode, watchState),
         },
       });
     },
-    [detail, onStartSession, rememberChoice, seriesContextFor, downloadSource]
+    [detail, extended, onStartSession, rememberChoice, seriesContextFor, downloadSource]
   );
 
   // The handler is embedded in the request it produces, so it needs a stable
@@ -1529,7 +1729,7 @@ export const DetailView: React.FC<DetailViewProps> = ({
     const firstTrailer =
       allVideos.find((v) => v.kind === TitleVideoKind.Trailer) || allVideos[0];
     if (firstTrailer) {
-      setTrailerId(firstTrailer.id);
+      openTrailer(firstTrailer.id);
       return;
     }
 
@@ -1539,7 +1739,7 @@ export const DetailView: React.FC<DetailViewProps> = ({
         const response = await window.cloudstream.findTrailers(detail.name, detail.year);
         if (response?.ok && response.videos?.length) {
           setDiscoveredVideos((prev) => mergeVideos([prev, response.videos]));
-          setTrailerId(response.videos[0].id);
+          openTrailer(response.videos[0].id, mergeVideos([allVideos, response.videos]));
         } else {
           flash('No trailers found for this title.');
         }
@@ -1551,7 +1751,7 @@ export const DetailView: React.FC<DetailViewProps> = ({
     } else {
       flash('No trailers available.');
     }
-  }, [allVideos, detail?.name, detail?.year, flash]);
+  }, [allVideos, detail?.name, detail?.year, flash, openTrailer]);
 
   /**
    * On-demand search to expand the trailer gallery with more public YouTube trailers.
@@ -1776,9 +1976,12 @@ export const DetailView: React.FC<DetailViewProps> = ({
 
   return (
     <div className="detail-view">
-      <button className="btn btn-ghost detail-view__back" onClick={onBack}>
-        <ArrowLeft size={16} /> Back
-      </button>
+      <div className={`detail-view__topbar${topbarStuck ? ' detail-view__topbar--stuck' : ''}`} ref={topbarRef}>
+        <button className="detail-view__back" onClick={onBack} title="Back (Alt+←)">
+          <ArrowLeft size={16} /> Back
+        </button>
+        <DetailSectionNav />
+      </div>
 
       {/*
         The page is the saved copy, and that is said out loud.
@@ -1838,7 +2041,7 @@ export const DetailView: React.FC<DetailViewProps> = ({
       <DetailHero
         shareControl={
           <ShareButton
-            className="detail-action"
+            compact
             media={{
               url: mediaItem.url,
               id: detail.imdbId ?? mediaItem.imdbId,
@@ -1875,10 +2078,40 @@ export const DetailView: React.FC<DetailViewProps> = ({
         posterUrl={detail.posterUrl || extended?.posterUrl}
         backdropUrl={extended?.backdropUrl}
         plot={detail.plot || extended?.plot}
+        plotChoices={heroPlotChoices}
         rating={detail.rating}
-        duration={detail.duration || formatRuntimeMinutes(extended?.runtimeMinutes) || undefined}
+        /*
+          One spelling for every provider's duration ("136 min", "2h 16m",
+          "PT2H16M" all read "2 h 16 min"); the catalogue's runtime fills in
+          when the provider had none. A series' runtime is per episode.
+        */
+        duration={(() => {
+          const minutes = parseRuntimeMinutes(detail.duration) ?? extended?.runtimeMinutes;
+          const formatted = formatRuntimeMinutes(minutes) ?? detail.duration ?? undefined;
+          return formatted && isSeries ? `${formatted} per episode` : formatted;
+        })()}
+        seriesSummary={
+          isSeries
+            ? formatSeasonCount(seasonNumbers.length, detail.episodes?.length) ?? undefined
+            : undefined
+        }
+        playLabel={heroPlayLabel}
         tmdbId={extended?.ids?.tmdb || (detail as any)?.tmdbId}
-        tags={detail.tags}
+        /*
+          Genres from the provider first (it describes the release on screen),
+          then whatever the catalogues add, without repeats.
+        */
+        tags={(() => {
+          const seen = new Set<string>();
+          const merged: string[] = [];
+          for (const tag of [...(detail.tags ?? []), ...(extended?.genres ?? [])]) {
+            const key = tag.trim().toLowerCase();
+            if (!key || seen.has(key)) continue;
+            seen.add(key);
+            merged.push(tag.trim());
+          }
+          return merged;
+        })()}
         fallbackNote={
           fellBackTo
             ? `The listed source could not open this, so these details came from ${fellBackTo}.`
@@ -1919,76 +2152,127 @@ export const DetailView: React.FC<DetailViewProps> = ({
             item={{ ...detail, apiName: mediaItem.apiName }}
             sources={pickerData?.sources || undefined}
             sourceQuery={playTarget ?? undefined}
-            size="sm"
-            variant="detail-action"
-            openOnHover
+            variant="icon"
           />
         }
       />
 
       {isSeries && (
-        <section className="episode-section">
-          {seasonNumbers.length > 1 && (
-            <div className="season-tabs" role="tablist">
-              {seasonNumbers.map((season) => (
-                <button
-                  key={season}
-                  role="tab"
-                  aria-selected={season === activeSeason}
-                  className={`season-tab${season === activeSeason ? ' season-tab--active' : ''}`}
-                  onClick={() => setActiveSeason(season)}
-                >
-                  Season {season}
-                </button>
-              ))}
-            </div>
-          )}
-
-          <ul className="episode-list">
-            {episodesInSeason.map((episode) => (
-              <li
-                key={episode.url}
-                className={`episode-row${selectedEpisode?.url === episode.url ? ' episode-row--active' : ''}`}
-              >
-                {episode.posterUrl && (
-                  <Poster
-                    src={episode.posterUrl}
-                    title={episode.name ?? ''}
-                    decorative
-                    className="episode-row__thumb"
-                    fallback={null}
-                  />
-                )}
-                <div className="episode-row__body">
-                  <p className="episode-row__title">{episode.name}</p>
-                  {episode.date && <span className="muted">{episode.date}</span>}
-                  {episode.description && (
-                    <p className="episode-row__desc">{episode.description}</p>
-                  )}
-                </div>
-                <div className="episode-row__actions">
+        <DetailSection
+          id="episodes"
+          title="Episodes"
+          icon={<Tv size={16} />}
+          count={detail.episodes?.length}
+          className="episode-section"
+        >
+          <div className="episode-toolbar">
+            {seasonNumbers.length > 1 && (
+              <div className="season-tabs" role="tablist">
+                {seasonNumbers.map((season) => (
                   <button
-                    className="btn btn-primary btn-sm"
-                    onClick={() => playNow(episode)}
-                  >
-                    <Play size={14} />
-                    Play
-                  </button>
-                  <button
-                    className="btn btn-sm"
+                    key={season}
+                    role="tab"
+                    aria-selected={season === activeSeason}
+                    className={`season-tab${season === activeSeason ? ' season-tab--active' : ''}`}
                     onClick={() => {
-                      setSelectedEpisode(episode);
-                      openSources(episode);
+                      setActiveSeason(season);
+                      setChosenSeason(season);
                     }}
-                    title="Pick a source by hand"
                   >
-                    <ListVideo size={14} />
+                    Season {season}
                   </button>
-                </div>
-              </li>
-            ))}
+                ))}
+              </div>
+            )}
+            {/* A long season is found by number or name, not by scrolling. */}
+            {episodesInSeason.length > 12 && (
+              <input
+                type="search"
+                className="ui-input ui-input--compact episode-toolbar__find"
+                placeholder="Find an episode"
+                aria-label="Find an episode"
+                value={episodeQuery}
+                onChange={(event) => setEpisodeQuery(event.target.value)}
+              />
+            )}
+          </div>
+
+          {/*
+            Bounded and scrolled on its own when a season is long, so a
+            hundred-episode series does not push the cast, the trailers and
+            everything else a page's length below the fold.
+          */}
+          <ul className={`episode-list${episodesInSeason.length > 8 ? ' episode-list--bounded' : ''}`}>
+            {episodesInSeason
+              .filter((episode) => {
+                const query = episodeQuery.trim().toLowerCase();
+                if (!query) return true;
+                return (
+                  String(episode.episode ?? '') === query.replace(/^e/, '') ||
+                  (episode.name ?? '').toLowerCase().includes(query)
+                );
+              })
+              .map((episode) => {
+                const state = watchState[episodeKey(episode.season, episode.episode)];
+                const percent = state?.completed
+                  ? 100
+                  : state && state.durationSeconds > 0
+                    ? Math.min(100, (state.positionSeconds / state.durationSeconds) * 100)
+                    : 0;
+                return (
+                  <li
+                    key={episode.url}
+                    className={`episode-row${selectedEpisode?.url === episode.url ? ' episode-row--active' : ''}${state?.completed ? ' episode-row--watched' : ''}`}
+                  >
+                    {episode.posterUrl && (
+                      <Poster
+                        src={episode.posterUrl}
+                        title={episode.name ?? ''}
+                        decorative
+                        className="episode-row__thumb"
+                        fallback={null}
+                      />
+                    )}
+                    <div className="episode-row__body">
+                      <p className="episode-row__title">
+                        {episode.episode !== undefined && <span className="episode-row__number">{episode.episode}</span>}
+                        {episode.name}
+                      </p>
+                      {episode.date && <span className="muted">{episode.date}</span>}
+                      {episode.description && (
+                        <p className="episode-row__desc">{episode.description}</p>
+                      )}
+                      {percent > 0 && (
+                        <div className="episode-row__progress" title={state?.completed ? 'Watched' : `${Math.round(percent)}% watched`}>
+                          <div style={{ width: `${percent}%` }} />
+                        </div>
+                      )}
+                    </div>
+                    <div className="episode-row__actions">
+                      <button
+                        className="btn btn-primary btn-sm"
+                        onClick={() => playNow(episode)}
+                      >
+                        <Play size={14} />
+                        {percent > 0 && percent < 100 ? 'Resume' : 'Play'}
+                      </button>
+                      <button
+                        className="btn btn-sm"
+                        onClick={() => {
+                          setSelectedEpisode(episode);
+                          openSources(episode);
+                        }}
+                        title="Pick a source by hand"
+                        aria-label={`Choose a source for ${episode.name ?? 'this episode'}`}
+                      >
+                        <ListVideo size={14} />
+                      </button>
+                    </div>
+                  </li>
+                );
+              })}
           </ul>
-        </section>
+        </DetailSection>
       )}
 
       {/*
@@ -2017,9 +2301,10 @@ export const DetailView: React.FC<DetailViewProps> = ({
       <TrailerGallery
         videos={allVideos}
         pending={metadataPending || searchingTrailers}
-        onPlay={(video) => setTrailerId(video.id)}
+        onPlay={(video) => openTrailer(video.id)}
         onSearchMore={handleFindMoreTrailers}
         searchingMore={searchingTrailers}
+        onClearFound={discoveredVideos.length > 0 ? () => setDiscoveredVideos([]) : undefined}
       />
 
       {/* On-demand reviews, explanations, recaps and related media */}
@@ -2031,7 +2316,7 @@ export const DetailView: React.FC<DetailViewProps> = ({
         episode={selectedEpisode?.episode}
         onPlayVideo={(video) => {
           setDiscoveredVideos((prev) => mergeVideos([prev, [video]]));
-          setTrailerId(video.id);
+          openTrailer(video.id);
         }}
       />
 
@@ -2040,18 +2325,27 @@ export const DetailView: React.FC<DetailViewProps> = ({
         metadata={extended}
         fallbackActors={detail.actors}
         pending={metadataPending}
+        onSelectPerson={onSelectMedia ? openPerson : undefined}
       />
 
       {/* About */}
       <TitleAbout
         metadata={extended}
-        providerTags={detail.tags}
+        providerTags={[...(detail.tags ?? []), ...(extended?.genres ?? [])]}
         pending={metadataPending}
+        onSelectPerson={onSelectMedia ? openPerson : undefined}
+        onSelectStudio={onSelectMedia ? openStudio : undefined}
       />
 
       {/* Franchise rail..., in release order */}
       {extended?.franchise && onSelectMedia && (
-        <FranchiseRail franchise={extended.franchise} currentTitle={detail.name} onSelectMedia={onSelectMedia} />
+        <FranchiseRail
+          franchise={extended.franchise}
+          currentTitle={detail.name}
+          onSelectMedia={onSelectMedia}
+          onPlayDirectly={onPlayDirectly}
+          interactionFor={interactionFor}
+        />
       )}
 
       {/* Behind the scenes */}
@@ -2061,40 +2355,50 @@ export const DetailView: React.FC<DetailViewProps> = ({
 
       {/* Related recommendations */}
       {recommendations.length > 0 && onSelectMedia && (
-        <section className="detail-facts">
-          <div className="detail-facts__head-row">
-            <h2 className="detail-facts__heading">
-              More like this
-              <span className="detail-facts__count">{recommendations.length}</span>
-            </h2>
-            {/* The provider answers one list with no paging, so Show all lays
-                out everything it gave rather than promising more it cannot fetch. */}
-            {recommendations.length > RAIL_PREVIEW && (
-              <button
-                type="button"
-                className="btn btn-ghost btn-sm trailer-gallery__more-btn"
-                onClick={() => setShowAllRecommendations((v) => !v)}
-                aria-expanded={showAllRecommendations}
-              >
-                {showAllRecommendations ? 'Show less' : 'Show all'}
-              </button>
-            )}
-          </div>
-          <div className={showAllRecommendations ? 'poster-grid' : 'detail-facts__rail'}>
+        <DetailSection
+          id="related"
+          title="More like this"
+          icon={<Sparkles size={16} />}
+          count={recommendations.length}
+          onViewAll={recommendations.length > RAIL_PREVIEW ? () => setMoreLikeThisOpen(true) : undefined}
+        >
+          <div className="detail-facts__rail">
             {recommendations.map((item) => (
               <PosterCard
                 key={`${item.apiName}:${item.url}`}
                 item={item}
                 onSelectMedia={onSelectMedia}
-                // The bucket control needs a library identity this row does not
-                // reliably have — a recommendation is a pointer, not a result
-                // the user searched for.
+                onPlayDirectly={onPlayDirectly}
+                // A recommendation is a pointer, not a result the user searched
+                // for; the bucket control needs an identity it may not have.
                 showBucketButton={false}
                 interaction={interactionFor(item)}
               />
             ))}
           </div>
-        </section>
+          {moreLikeThisOpen && (
+            <CollectionDialog
+              title="More like this"
+              count={recommendations.length}
+              icon={<Sparkles size={18} />}
+              onClose={() => setMoreLikeThisOpen(false)}
+            >
+              {recommendations.map((item) => (
+                <PosterCard
+                  key={`${item.apiName}:${item.url}`}
+                  item={item}
+                  onSelectMedia={(chosen) => {
+                    setMoreLikeThisOpen(false);
+                    onSelectMedia(chosen);
+                  }}
+                  onPlayDirectly={onPlayDirectly}
+                  showBucketButton={false}
+                  interaction={interactionFor(item)}
+                />
+              ))}
+            </CollectionDialog>
+          )}
+        </DetailSection>
       )}
 
       {/* Metadata Provenance */}
@@ -2125,6 +2429,8 @@ export const DetailView: React.FC<DetailViewProps> = ({
         onPlay={handlePlaySource}
         onDownload={handleDownloadSource}
         onRetry={() => openSources(pendingEpisode, { refresh: true })}
+        onClearCache={() => void clearCachedSources()}
+        notice={pickerNotice}
         onWiden={widenSources}
         canWiden={discovery?.canWiden ?? false}
         widened={discovery?.widened ?? false}
@@ -2155,7 +2461,7 @@ export const DetailView: React.FC<DetailViewProps> = ({
         and scrolled where it was, which is the whole difference between
         glancing at a trailer and committing to watch something.
       */}
-      {trailerId && (
+      {trailerId && !onPlayTrailer && (
         <TrailerPopup
           videos={allVideos}
           startId={trailerId}
@@ -2164,7 +2470,92 @@ export const DetailView: React.FC<DetailViewProps> = ({
         />
       )}
 
+      {filmography && onSelectMedia && (
+        <FilmographyDialog
+          request={filmography.request}
+          hint={filmography.hint}
+          onClose={() => setFilmography(null)}
+          onSelectMedia={onSelectMedia}
+          onPlayDirectly={onPlayDirectly}
+          onSearch={onSearch}
+        />
+      )}
+
       {toast && <div className="toast">{toast}</div>}
     </div>
+  );
+};
+
+/**
+ * Jump links to the page's sections, and fold or unfold them all.
+ *
+ * Built from the sections actually on the page (they mark themselves with
+ * `data-section`), so a title with no trailers offers no "Trailers" link. It
+ * matters most on a long series, where the cast is otherwise a hundred
+ * episodes down.
+ */
+const SECTION_LABELS: Record<string, string> = {
+  episodes: 'Episodes',
+  trailers: 'Trailers',
+  reviews: 'Reviews',
+  cast: 'Cast',
+  about: 'About',
+  franchise: 'Collection',
+  behind: 'Behind the scenes',
+  related: 'More like this',
+};
+
+const DetailSectionNav: React.FC = () => {
+  const [present, setPresent] = useState<string[]>([]);
+  useEffect(() => {
+    const read = () => {
+      const ids = [...document.querySelectorAll<HTMLElement>('.detail-view [data-section]')]
+        .map((node) => node.dataset.section ?? '')
+        .filter((id) => id in SECTION_LABELS);
+      setPresent((current) => (current.join() === ids.join() ? current : ids));
+    };
+    read();
+    const root = document.querySelector('.detail-view');
+    if (!root) return;
+    const observer = new MutationObserver(read);
+    observer.observe(root, { childList: true, subtree: true });
+    return () => observer.disconnect();
+  }, []);
+
+  if (present.length < 3) return null;
+  return (
+    <nav className="detail-nav" aria-label="Sections on this page">
+      {present.map((id) => (
+        <button
+          key={id}
+          type="button"
+          className="detail-nav__link"
+          onClick={() =>
+            document.getElementById(`section-${id}`)?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+          }
+        >
+          {SECTION_LABELS[id]}
+        </button>
+      ))}
+      <span className="detail-nav__sep" aria-hidden />
+      <button
+        type="button"
+        className="detail-nav__link detail-nav__link--icon"
+        title="Collapse every section"
+        aria-label="Collapse every section"
+        onClick={() => setSectionsCollapsed(present, true)}
+      >
+        <ChevronsDownUp size={14} />
+      </button>
+      <button
+        type="button"
+        className="detail-nav__link detail-nav__link--icon"
+        title="Expand every section"
+        aria-label="Expand every section"
+        onClick={() => setSectionsCollapsed(present, false)}
+      >
+        <ChevronsUpDown size={14} />
+      </button>
+    </nav>
   );
 };

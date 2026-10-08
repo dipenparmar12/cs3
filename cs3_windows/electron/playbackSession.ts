@@ -109,6 +109,8 @@ export interface PlaybackSnapshot {
   tried: number;
   title: string;
   episodeTitle?: string;
+  /** Per source (by infoHash): played or failed in this session. */
+  sourceStates?: Record<string, { state: 'played' | 'failed'; reason?: string }>;
 }
 
 interface Session {
@@ -173,6 +175,18 @@ interface Session {
   inFlight?: AbortController;
   disposed: boolean;
   resume?: ResumePreference;
+  /**
+   * What happened to each source tried in this session — the source list's
+   * quiet ✓ and ⚠. Accumulated, unlike `attempts`, which each start replaces.
+   * A source only the viewer *chose* and never failed carries nothing.
+   */
+  sourceStates: Map<string, SourceState>;
+}
+
+/** One source's outcome in this session: it played, or it was tried and failed. */
+export interface SourceState {
+  state: 'played' | 'failed';
+  reason?: string;
 }
 
 /**
@@ -224,6 +238,7 @@ export class PlaybackSessionManager {
       tried: session.unplayable.size,
       title: session.title,
       episodeTitle: session.episodeTitle,
+      sourceStates: Object.fromEntries(session.sourceStates),
     };
   }
 
@@ -268,6 +283,7 @@ export class PlaybackSessionManager {
       autoWidened: false,
       retryingElsewhere: false,
       unplayable: new Set<string>(),
+      sourceStates: new Map<string, SourceState>(),
       generation: 0,
       started: false,
       disposed: false,
@@ -355,6 +371,7 @@ export class PlaybackSessionManager {
       autoWidened: false,
       retryingElsewhere: false,
       unplayable: new Set<string>(),
+      sourceStates: new Map<string, SourceState>(),
       generation: 0,
       // Nothing will auto-start, and nothing should: the viewer opened this to
       // look at the list, not to be dropped into whatever ranked first.
@@ -560,6 +577,7 @@ export class PlaybackSessionManager {
     const current = session.activeInfoHash;
     if (current) {
       session.unplayable.add(current);
+      session.sourceStates.set(current, { state: 'failed', reason });
       const source = session.sources.find((s) => s.infoHash === current);
       if (source) {
         session.attempts.push({
@@ -854,6 +872,12 @@ export class PlaybackSessionManager {
       session.handle = result.handle;
       session.activeInfoHash = result.handle.infoHash;
       session.attempts = result.attempts;
+      for (const attempt of result.attempts) {
+        if (attempt.infoHash && attempt.infoHash !== result.handle.infoHash) {
+          session.sourceStates.set(attempt.infoHash, { state: 'failed', reason: attempt.error });
+        }
+      }
+      session.sourceStates.set(result.handle.infoHash, { state: 'played' });
       session.phase = 'playing';
       session.retryingElsewhere = false;
       this.emit(session);
@@ -892,6 +916,18 @@ export class PlaybackSessionManager {
        * runs once — a second failure is a real failure, not a stale URL, and
        * retrying forever would just hide it.
        */
+      /*
+       * The remembered link has just failed, so it stops being pinned to the
+       * head of the list — `keepPinned` would otherwise put the dead link back in
+       * front of every refreshed answer. Its `match` stays: the same release,
+       * freshly resolved, is still what a resume should start.
+       */
+      const pinned = session.resume?.start;
+      if (pinned && candidates.some((c) => c.infoHash === pinned.infoHash)) {
+        session.resume = { ...session.resume, start: undefined };
+        session.sources = session.sources.filter((s) => s.infoHash !== pinned.infoHash);
+      }
+
       const wasDirect = candidates.some((c) => c.directUrl);
       if (wasDirect && !options.isRecovery) {
         session.error = undefined;
@@ -903,7 +939,10 @@ export class PlaybackSessionManager {
         if (session.disposed || generation !== session.generation) return;
 
         if (session.sources.length > 0) {
-          await this.beginStream(session, session.sources, { ...options, isRecovery: true });
+          await this.beginStream(session, this.preferResumed(session, session.sources), {
+            ...options,
+            isRecovery: true,
+          });
           return;
         }
       }
@@ -945,6 +984,11 @@ export class PlaybackSessionManager {
        * ride on the error for exactly this.
        */
       const attempted = (error as { attempts?: StreamAttempt[] })?.attempts ?? [];
+      for (const attempt of attempted) {
+        if (attempt.infoHash) {
+          session.sourceStates.set(attempt.infoHash, { state: 'failed', reason: attempt.error });
+        }
+      }
       const attemptedHashes = attempted
         .map((attempt) => attempt.infoHash)
         .filter((hash): hash is string => Boolean(hash));

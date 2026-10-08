@@ -7,8 +7,12 @@
 # "configuration has an unknown property '//extraResources'". YAML has real
 # comments; JSON does not.
 #
-# Build with `bun run dist:win` (tools/package/build-installer.mjs), which
-# produces everything referenced here before invoking electron-builder.
+# Build with `bun run dist` (tools/package/build-installer.mjs) on the OS you
+# are packaging for; it produces everything referenced here before invoking
+# electron-builder. The release workflow runs it once per OS and architecture.
+#
+# Every artifact is named CS3-<version>-<os>-<arch>[-<kind>].<ext>, so a release
+# page reads as a table: which file is mine is answered by the name alone.
 
 appId: com.lagradost.cloudstream3.desktop
 productName: CloudStream 3 Desktop
@@ -50,6 +54,54 @@ win:
       arch: [x64]
     - target: portable
       arch: [x64]
+    - target: zip
+      arch: [x64]
+  # The zip of the unpacked app, for machines whose policy forbids running a
+  # self-extracting portable exe. Same contents as the portable build.
+  artifactName: CS3-${version}-windows-${arch}-portable.${ext}
+
+# macOS: a dmg to drag into Applications and a zip of the same .app. Built
+# unsigned by default (`identity: null`); `tools/package/after-pack.cjs` gives
+# the bundle an ad-hoc signature so it launches on Apple silicon, and a real
+# Developer ID is used when CSC_LINK is provided. An app downloaded without
+# notarisation is quarantined by Gatekeeper — the release notes say how to
+# open it (right-click → Open, or `xattr -dr com.apple.quarantine`).
+mac:
+  category: public.app-category.entertainment
+  target:
+    - dmg
+    - zip
+  identity: null
+  hardenedRuntime: false
+  gatekeeperAssess: false
+  artifactName: CS3-${version}-macos-${arch}.${ext}
+dmg:
+  artifactName: CS3-${version}-macos-${arch}.${ext}
+
+# Linux: an AppImage that runs on any distribution, a deb for Debian/Ubuntu,
+# and a tarball. mpv and aria2 are the distribution's packages rather than
+# bundled copies (the packaged mpv is the one wired to VA-API/VDPAU), so the
+# deb recommends them and the app tells an AppImage user how to install them.
+linux:
+  category: AudioVideo
+  synopsis: Stream and download with CloudStream extensions
+  description: Desktop CloudStream 3 — runs community .cs3 extensions, streams torrents and plays everything through ffmpeg and mpv.
+  maintainer: CloudStream Desktop contributors
+  executableName: cloudstream3-desktop
+  target:
+    - AppImage
+    - deb
+    - tar.gz
+  artifactName: CS3-${version}-linux-${arch}.${ext}
+deb:
+  recommends:
+    - mpv
+    - aria2
+  artifactName: CS3-${version}-linux-${arch}.${ext}
+appImage:
+  artifactName: CS3-${version}-linux-${arch}.${ext}
+
+afterPack: ../tools/package/after-pack.cjs
 
 # oneClick:false with perMachine:false is what makes this installable by
 # anyone on any machine: a per-user install needs no administrator and raises
@@ -89,14 +141,14 @@ nsis:
   shortcutName: CloudStream 3 Desktop
   deleteAppDataOnUninstall: false
   runAfterFinish: true
-  artifactName: CloudStream-Desktop-${version}-${arch}-setup.${ext}
+  artifactName: CS3-${version}-windows-${arch}-installer.${ext}
 
 # The portable target unpacks to a fixed directory name so successive runs
 # reuse one extraction rather than filling %TEMP% with ~400 MB copies.
 portable:
   unpackDirName: CloudStream3Desktop
   requestExecutionLevel: user
-  artifactName: CloudStream-Desktop-${version}-${arch}-portable.${ext}
+  artifactName: CS3-${version}-windows-${arch}-portable.${ext}
 
 # The payload is dominated by a jlinked JRE, ffmpeg and mpv — all highly
 # compressible and all shipped on every download.

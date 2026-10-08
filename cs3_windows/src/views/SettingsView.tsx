@@ -20,7 +20,7 @@ import {
   Sparkles,
   Trash2,
   Wrench,
-  X,
+  Crosshair,
   Zap,
 } from 'lucide-react';
 import { InfoHint } from '../components/settings/InfoHint';
@@ -48,7 +48,9 @@ import { StartupProfilePanel } from '../components/settings/StartupProfilePanel'
 import { CardStatusLegend } from '../components/settings/CardStatusLegend';
 import { ExtensionIssuesPanel } from '../components/settings/ExtensionIssuesPanel';
 import { AboutPanel } from '../components/settings/AboutPanel';
+import { StoragePanel } from '../components/settings/StoragePanel';
 import { BackupPanel } from '../components/settings/BackupPanel';
+import { Button, SearchInput, Switch } from '../components/ui';
 
 /**
  * `all` is a view, not a category.
@@ -108,7 +110,16 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ initialTab }) => {
   const level: SettingsLevel = settingsLevelFor(mode);
   const changeLevel = (next: SettingsLevel) =>
     setMode(next === 'everything' ? 'developer' : 'standard');
-  const [downloadDir, setDownloadDir] = useState('%USERPROFILE%\\Downloads\\CloudStream');
+  /** The real folder, asked of the main process — no longer a placeholder string. */
+  const [downloadDir, setDownloadDir] = useState('');
+  const [downloadDirIsDefault, setDownloadDirIsDefault] = useState(true);
+  useEffect(() => {
+    void window.cloudstream?.getDownloadDirectory?.().then((answer) => {
+      if (!answer?.ok) return;
+      setDownloadDir(answer.directory);
+      setDownloadDirIsDefault(answer.isDefault);
+    });
+  }, []);
   /**
    * The delete-behaviour preference, resettable here.
    *
@@ -241,12 +252,14 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ initialTab }) => {
     );
   };
 
-  const handleSelectDirectory = async () => {
-    const path = await window.cloudstream?.selectDirectory();
-    if (path) {
-      setDownloadDir(path);
-      flash('Download folder updated.');
-    }
+  const handleSelectDirectory = async (reset = false) => {
+    const chosen = reset ? null : await window.cloudstream?.selectDirectory();
+    if (!reset && !chosen) return;
+    const answer = await window.cloudstream?.setDownloadDirectory?.(chosen ?? null);
+    if (!answer) return;
+    setDownloadDir(answer.directory);
+    setDownloadDirIsDefault(reset);
+    flash(answer.ok ? 'Download folder updated.' : `Could not use that folder: ${answer.error ?? 'not writable'}`);
   };
 
   const handleImportBackup = async () => {
@@ -359,7 +372,6 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ initialTab }) => {
       <header className="settings__head">
         <div className="settings__head-text">
           <h2>Settings</h2>
-          <p>Sensible defaults throughout — change only what you need.</p>
         </div>
         {/*
           The level switch. It stopped being about this screen — it decides
@@ -402,37 +414,16 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ initialTab }) => {
           Sticky, so it is there however far down a section goes.
         */}
         <nav className="settings__nav" aria-label="Settings sections">
-          <div className="settings__find" onClick={() => searchInputRef.current?.focus()}>
-            <Search size={14} aria-hidden />
-            <input
-              ref={searchInputRef}
-              type="search"
-              value={query}
-              placeholder="Find a setting (Ctrl+F)"
-              aria-label="Find a setting"
-              onChange={(event) => setQuery(event.target.value)}
-              onKeyDown={(event) => {
-                if (event.key === 'Escape' && query) {
-                  event.stopPropagation();
-                  setQuery('');
-                }
-              }}
-            />
-            {query ? (
-              <button
-                type="button"
-                className="settings__find-clear"
-                aria-label="Clear search"
-                onClick={(e) => {
-                  e.stopPropagation();
-                  setQuery('');
-                  searchInputRef.current?.focus();
-                }}
-              >
-                <X size={13} />
-              </button>
-            ) : null}
-          </div>
+          <SearchInput
+            ref={searchInputRef}
+            className="settings__find"
+            variant="compact"
+            label="Find a setting"
+            placeholder="Find a setting"
+            shortcut="Ctrl F"
+            value={query}
+            onChange={setQuery}
+          />
 
           <div role="tablist" aria-orientation="vertical" className="settings__nav-list">
             {tabs.map((entry) => (
@@ -532,19 +523,17 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ initialTab }) => {
                 </>
               }
             >
-              <label className="settings__switch">
-                <input
-                  type="checkbox"
-                  checked={prefetchSources}
-                  onChange={async (event) => {
+              <Switch
+                checked={prefetchSources}
+                onChange={async (checked) => {
                     const response = await window.cloudstream?.setSourcePrefetchSetting?.(
-                      event.target.checked
+                      checked
                     );
                     if (response?.ok) setPrefetchSources(response.enabled);
                   }}
-                />
-                <span>{prefetchSources ? 'Enabled' : 'Disabled'}</span>
-              </label>
+                label="Load sources while you read"
+                stateLabel={prefetchSources ? 'Enabled' : 'Disabled'}
+              />
             </SettingRow>
           </SettingGroup>
 
@@ -637,9 +626,14 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ initialTab }) => {
               stacked
               hint="Where finished downloads are written. Existing downloads stay where they are; this only affects new ones."
             >
-              <button onClick={handleSelectDirectory} className="btn btn-secondary">
+              <button onClick={() => void handleSelectDirectory()} className="btn btn-secondary">
                 Change folder
               </button>
+              {!downloadDirIsDefault && (
+                <button onClick={() => void handleSelectDirectory(true)} className="btn btn-ghost">
+                  Use default
+                </button>
+              )}
             </SettingRow>
           </SettingGroup>
 
@@ -760,14 +754,12 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ initialTab }) => {
               note={torrentMirrors ? 'On' : 'DHT and trackers only'}
               hint="Asks itorrents.org and btcache.me for a magnet's file list over HTTPS while the swarm is still being found, which usually saves five to thirty seconds before playback can start. It sends them the infohash — the same identifier the DHT and every tracker already receive when you press Play. Turn it off to keep torrent activity to the BitTorrent network alone; startup is slower and nothing else changes."
             >
-              <label className="settings__switch">
-                <input
-                  type="checkbox"
-                  checked={torrentMirrors}
-                  onChange={(event) => handleToggleTorrentMirrors(event.target.checked)}
-                />
-                <span>{torrentMirrors ? 'On' : 'Off'}</span>
-              </label>
+              <Switch
+                checked={torrentMirrors}
+                onChange={(checked) => handleToggleTorrentMirrors(checked)}
+                label="Fetch torrent details from public mirrors"
+                stateLabel={torrentMirrors ? 'On' : 'Off'}
+              />
             </SettingRow>
 
             <SettingRow
@@ -776,14 +768,12 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ initialTab }) => {
               note={showTorrentAttachment ? 'Visible when search is empty' : 'Hidden'}
               hint="Displays a paperclip icon in the search bar to pick and open .torrent files from disk when the search bar is empty. When disabled, you can still open torrents by dragging and dropping them into the app window."
             >
-              <label className="settings__switch">
-                <input
-                  type="checkbox"
-                  checked={showTorrentAttachment}
-                  onChange={(event) => handleToggleTorrentAttachment(event.target.checked)}
-                />
-                <span>{showTorrentAttachment ? 'On' : 'Off'}</span>
-              </label>
+              <Switch
+                checked={showTorrentAttachment}
+                onChange={(checked) => handleToggleTorrentAttachment(checked)}
+                label="Show torrent file attachment button in search bar"
+                stateLabel={showTorrentAttachment ? 'On' : 'Off'}
+              />
             </SettingRow>
           </SettingGroup>
         </>
@@ -822,15 +812,29 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ initialTab }) => {
                 'way; this only decides how much of it you are shown.'
               }
             >
-              <label className="settings__switch">
-                <input
-                  type="checkbox"
-                  checked={mode === 'developer'}
-                  onChange={(event) => setMode(event.target.checked ? 'developer' : 'standard')}
-                />
-                <span>{mode === 'developer' ? 'On' : 'Off'}</span>
-              </label>
+              <Switch
+                checked={mode === 'developer'}
+                onChange={(checked) => setMode(checked ? 'developer' : 'standard')}
+                label="Show how the app works"
+                stateLabel={mode === 'developer' ? 'On' : 'Off'}
+              />
             </SettingRow>
+            {mode === 'developer' && (
+              <SettingRow
+                label="UI inspector"
+                note="Ctrl+Shift+C, or Alt+click anything"
+                hint="Point at any part of the app to see the component that draws it, its source file and line, its place in the component tree, its props and state. Copy inspection puts a self-contained reference on the clipboard for an AI coding agent. Source locations are available when the app runs from source (bun run dev)."
+                keywords="inspector component source file debug ui element react"
+              >
+                <Button
+                  size="compact"
+                  icon={Crosshair}
+                  onClick={() => window.dispatchEvent(new CustomEvent('cs3:ui-inspector'))}
+                >
+                  Inspect
+                </Button>
+              </SettingRow>
+            )}
           </SettingGroup>
           {/*
             The tally first, then the transcript.
@@ -853,6 +857,14 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ initialTab }) => {
             </SettingsSection>
           )}
 
+          <SettingGroup
+            title="Storage"
+            icon={<HardDrive size={15} />}
+            keywords="storage cache temp temporary disk space folder location downloads clear"
+          >
+            <StoragePanel />
+          </SettingGroup>
+
           <SettingGroup title="Migration" icon={<RefreshCw size={15} />} level="advanced">
             <SettingRow
               label="Import an Android backup"
@@ -870,14 +882,12 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ initialTab }) => {
               note={useLiveStreams ? 'Live' : 'Demo fallback'}
               hint="Off replaces real source discovery with offline demo streams, for developing without hitting third-party sites. Leave this on unless you are working on the app itself."
             >
-              <label className="settings__switch">
-                <input
-                  type="checkbox"
-                  checked={useLiveStreams}
-                  onChange={(event) => handleToggleLiveStreams(event.target.checked)}
-                />
-                <span>{useLiveStreams ? 'On' : 'Off'}</span>
-              </label>
+              <Switch
+                checked={useLiveStreams}
+                onChange={(checked) => handleToggleLiveStreams(checked)}
+                label="Live streaming sources"
+                stateLabel={useLiveStreams ? 'On' : 'Off'}
+              />
             </SettingRow>
           </SettingGroup>
 

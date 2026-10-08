@@ -69,12 +69,17 @@ export interface SeriesContext {
  */
 export async function loadWatchState(
   mediaUrl: string,
-  identity?: { title?: string; year?: number }
+  identity?: { title?: string; year?: number; key?: string }
 ): Promise<Record<string, EpisodeWatchState>> {
   if (!window.cloudstream) return {};
 
-  const entry = await window.cloudstream.getLibraryEntryForUrl(mediaUrl);
-  const key = entry?.key ?? (identity?.title ? canonicalKey(identity.title, identity.year) : null);
+  // A caller holding the key already (a Continue watching row, a library card)
+  // skips the address lookup: the row *is* the progress record.
+  const entry = identity?.key ? null : await window.cloudstream.getLibraryEntryForUrl(mediaUrl);
+  const key =
+    identity?.key ??
+    entry?.key ??
+    (identity?.title ? canonicalKey(identity.title, identity.year) : null);
   if (!key) return {};
 
   const rows = await window.cloudstream.getProgressForKey(key);

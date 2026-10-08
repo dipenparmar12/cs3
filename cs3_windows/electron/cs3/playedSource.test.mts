@@ -16,7 +16,7 @@
  * it alone can never re-find one.
  */
 import assert from 'node:assert/strict';
-import { isLinkUsable, matchesRelease, pickReplacement } from './playedSource.ts';
+import { isLinkUsable, matchesRelease, pickReplacement, pickSibling } from './playedSource.ts';
 import type { StoredSource } from '../../src/types/library.ts';
 import type { TorrentResult } from '../../src/types/torrent.ts';
 
@@ -151,6 +151,27 @@ test('nothing matching returns null rather than a nearby release', () => {
    */
   assert.equal(pickReplacement(saved(), [candidate({ indexerName: 'Somewhere Else' })]), null);
   assert.equal(pickReplacement(saved(), []), null);
+});
+
+// --- the next episode, chosen the way the last one was ----------------------
+
+test('the next episode prefers the provider, resolution and dub that played', () => {
+  const played = saved({ title: 'Show S01E04 720p Hindi', resolution: 720, languages: ['Hindi'] });
+  const english1080 = candidate({ title: 'Show S01E05 1080p', parsed: { resolution: 1080, languages: ['English'] } as never });
+  const hindi720 = candidate({ title: 'Show S01E05 720p Hindi', parsed: { resolution: 720, languages: ['Hindi'] } as never });
+  const english720 = candidate({ title: 'Show S01E05 720p', parsed: { resolution: 720, languages: ['English'] } as never });
+  assert.equal(pickSibling(played, [english1080, english720, hindi720]), hindi720);
+});
+
+test('a sibling from another provider is never preferred', () => {
+  // The provider is the one part of the choice that is always meaningful.
+  assert.equal(pickSibling(saved(), [candidate({ indexerName: 'Elsewhere' })]), null);
+});
+
+test('with nothing to tell candidates apart, the ranker order stands', () => {
+  const first = candidate({ title: 'Show S01E05 a', parsed: {} as never });
+  const second = candidate({ title: 'Show S01E05 b', parsed: {} as never });
+  assert.equal(pickSibling(saved({ resolution: undefined }), [first, second]), first);
 });
 
 // --- runner ----------------------------------------------------------------

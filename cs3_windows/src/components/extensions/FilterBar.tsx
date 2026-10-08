@@ -1,7 +1,8 @@
 import React, { useState } from 'react';
-import { Search, X, SlidersHorizontal } from 'lucide-react';
+import { X, SlidersHorizontal } from 'lucide-react';
 import { Chip } from './primitives';
 import { isAdultTag, type FacetOption, type StatusFilter } from './useExtensionFilters';
+import { SearchInput, Select } from '../ui';
 
 /**
  * Search, status, and the multi-select tag filter.
@@ -83,34 +84,27 @@ export const FilterBar: React.FC<Props> = ({
   return (
     <div className="ext-panel ext-filters">
       <div className="ext-filters__row">
-        <div className="ext-search">
-          <Search size={14} className="ext-search__icon" />
-          <input
-            className="ext-search__input"
-            type="text"
-            value={query}
-            placeholder="Search repositories, extensions and providers…"
-            onChange={(event) => onQuery(event.target.value)}
-          />
-        </div>
+        <SearchInput
+          className="ext-search"
+          variant="compact"
+          label="Search repositories, extensions and providers"
+          placeholder="Search repositories, extensions and providers…"
+          value={query}
+          onChange={onQuery}
+        />
 
-        <select
-          className="ext-select"
+        <Select
+          size="compact"
           value={status}
           aria-label="Status filter"
           onChange={(event) => onStatus(event.target.value as StatusFilter)}
-        >
-          {STATUS_OPTIONS[scope].map((option) => (
-            <option key={option.value} value={option.value}>
-              {option.label}
-            </option>
-          ))}
-        </select>
+          options={STATUS_OPTIONS[scope].map((option) => ({ value: option.value, label: option.label }))}
+        />
 
         {hasSecondary && (
           <button
             type="button"
-            className="ext-btn"
+            className="btn btn-secondary btn-sm"
             aria-pressed={showMore}
             onClick={() => setShowMore((open) => !open)}
           >
@@ -123,7 +117,7 @@ export const FilterBar: React.FC<Props> = ({
         )}
 
         {activeCount > 0 && (
-          <button type="button" className="ext-btn" onClick={onReset}>
+          <button type="button" className="btn btn-secondary btn-sm" onClick={onReset}>
             <X size={12} />
             Clear {activeCount}
           </button>

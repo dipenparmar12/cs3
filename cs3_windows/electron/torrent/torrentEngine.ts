@@ -1409,6 +1409,15 @@ export class TorrentEngine {
     return this.downloadPath;
   }
 
+  /**
+   * Whether a top-level entry of the piece cache belongs to a torrent this
+   * client has open — the cleanup sweep's "in use" test, the same one
+   * {@link clearCache} applies.
+   */
+  public isCacheEntryActive(entryName: string): boolean {
+    return Boolean(this.client?.torrents.some((torrent) => torrent.name === entryName));
+  }
+
   /** Clears the on-disk piece cache for torrents that are no longer active. */
   public async clearCache(): Promise<number> {
     const activeNames = new Set(this.client?.torrents.map((t) => t.name) ?? []);

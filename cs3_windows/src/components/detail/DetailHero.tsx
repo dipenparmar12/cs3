@@ -1,10 +1,9 @@
-import React, { useCallback, useEffect, useRef, useState } from 'react';
+import React, { useCallback, useMemo, useRef, useState } from 'react';
 import { useIsDeveloper } from '../../utils/ExperienceModeContext';
 import { Poster } from '../Poster';
 import {
   Bookmark as BookmarkIcon,
   BookmarkCheck,
-  Calendar,
   Clock,
   Download,
   Film,
@@ -12,7 +11,6 @@ import {
   ListVideo,
   MoreHorizontal,
   Play,
-  RefreshCw,
   Search,
   SearchCheck,
   Star,
@@ -21,36 +19,32 @@ import {
 } from 'lucide-react';
 import { useDismissable } from '../../utils/useDismissable';
 import { MediaRatings } from './MediaRatings';
+import type { PlotChoice } from '../../utils/metadataDisplay';
 
 /**
  * The detail page's masthead.
  *
- * ## What changed and why
+ * ## Hierarchy, in the order the eye should take it
  *
- * The page used to be a title, a plot, and then a wall of six equally-weighted
- * buttons: Play, Add to Library, Choose Source, Download, Find More Sources,
- * Search Title — plus Download Season on a series. Every one the same size and
- * the same colour, so the page read as a control panel rather than as a thing
- * you were about to watch, and the single action ninety per cent of visits want
- * had to be found among six.
+ * 1. **The artwork.** The wide backdrop fills the masthead and is shaded only
+ *    on the side the text sits — it used to be a 32%-opacity strip faded to
+ *    nothing, so a film's best image read as a smudge behind the type. The
+ *    poster stays beside it, smaller, as the thing you click to play.
+ * 2. **The title**, with search as an icon at the end of its row: searching for
+ *    this title is about the title, so it lives on it rather than in a menu.
+ * 3. **What it is**: year, runtime, type, rating, genres, then the plot —
+ *    clamped, with More for the rest.
+ * 4. **One primary action.** Play — labelled with what it will actually do
+ *    ("Resume S2 · E4", "Resume · 43 min left").
+ * 5. **Secondary actions as icons** with tooltips: trailer, save, library,
+ *    download, share, sources. A row of six labelled buttons is what made the
+ *    page read as a control panel.
+ * 6. **One overflow item**, "Search again for sources" (and download season
+ *    on a series). "Find more" and "Refresh" ran the same search and are one
+ *    entry now; "Search this title" became the title's own icon.
  *
- * Three changes:
- *
- * 1. **Play lives on the artwork.** It is the reason the page exists, and the
- *    poster is the largest, most obviously clickable thing on it. The whole
- *    artwork is the target, not a small button on top of it.
- * 2. **One row of small secondary actions.** Save, library, view sources,
- *    download — the ones people reach for often enough to want visible.
- *    "View sources" came back out of the menu because looking at what is
- *    available is how anyone decides what to play; it is the second most
- *    common thing done on this page, not an overflow action.
- * 3. **The rest go in an overflow menu.** Find more sources, refresh, search
- *    title, download season. Each re-scrapes or leaves the page, so none is
- *    rare enough to remove and none is common enough to earn permanent space.
- *
- * Provenance is on the page rather than buried, because a title that will not
- * play is a question about *which* provider served it — and that was previously
- * unanswerable without opening the diagnostics panel.
+ * Provenance stays on the page, small, because a title that will not play is a
+ * question about *which* provider served it.
  */
 
 export interface DetailHeroProvenance {
@@ -77,40 +71,31 @@ interface DetailHeroProps {
   year?: number;
   type: string;
   posterUrl?: string;
-  /**
-   * Wide artwork behind the masthead.
-   *
-   * Cinemeta has published a `background` for every title checked and the
-   * enrichment record has carried it since that module was written — it was
-   * fetched, cached, sent across the IPC boundary and drawn by nothing. This is
-   * the entry point it never had.
-   *
-   * Decorative, so it is a background rather than an `<img>`: it carries no
-   * information the page does not already state in words, and announcing it to
-   * a screen reader would put "backdrop image" between the title and the play
-   * control.
-   */
+  /** Wide artwork behind the masthead; decorative, so a background. */
   backdropUrl?: string;
   plot?: string;
+  /**
+   * Other descriptions of the title, provider's first (`plotChoices`). With
+   * two or more, a quiet switch under the plot says who wrote each.
+   */
+  plotChoices?: PlotChoice[];
   rating?: number;
+  /** Already formatted ("2 h 16 min"). */
   duration?: string;
   tmdbId?: number;
+  /** Genres merged from the provider and the catalogues, provider first. */
   tags?: string[];
+  /** Series: "3 seasons · 30 episodes". */
+  seriesSummary?: string;
   /** Shown above the meta line when details came from a fallback source. */
   fallbackNote?: string;
   isSeries: boolean;
   provenance: DetailHeroProvenance;
   saved: boolean;
   busy?: boolean;
-  /**
-   * How the background source search is getting on.
-   *
-   * Shown because the work is otherwise invisible, and invisible work is
-   * indistinguishable from no work: someone who does not know sources are
-   * already loading has no reason to expect Play to be instant, and someone
-   * whose providers found nothing should learn it here rather than by pressing
-   * Play and waiting for the same answer.
-   */
+  /** What Play will do: "Resume S2 · E4", "Resume · 43 min left", "Play". */
+  playLabel?: string;
+  /** Background source search progress, shown on the artwork. */
   sourceReadiness?: {
     status: 'idle' | 'waiting' | 'searching' | 'ready' | 'empty' | 'failed' | 'disabled';
     count: number;
@@ -121,37 +106,22 @@ interface DetailHeroProps {
 
   onPlay: () => void;
   onToggleSave: () => void;
-  /**
-   * Opens the list of sources for this title.
-   *
-   * A first-class button rather than an overflow entry, and shown whether or
-   * not anything has been found yet. Seeing what is available *is* the way
-   * someone chooses what to play, so hiding it behind a menu — beside two
-   * entries that throw the found sources away and scrape again — made the
-   * readiness badge announce work the page would not show. When the list comes
-   * up empty the picker says why and offers to search again, which is the same
-   * action the menu used to offer and a better place to be offered it.
-   */
+  /** Opens the list of sources for this title. */
   onChooseSource: () => void;
   onDownload: () => void;
+  /** Searches every provider again, past the cache. */
   onFindMoreSources: () => void;
-  onRefreshSources: () => void;
+  /** Kept for callers; the menu offers one combined entry. */
+  onRefreshSources?: () => void;
   onSearchTitle?: () => void;
-  /** Opens the trailer viewer for this title. */
   onWatchTrailer?: () => void;
-  /**
-   * The share control, passed in rather than built here.
-   *
-   * `DetailHero` renders a page; it does not know the media's identity in the
-   * shape a link needs (the address, the imdb id, the season the viewer has
-   * open). The owner does, so it hands the finished control down — the same
-   * arrangement `libraryControl` already uses two rows below.
-   */
   shareControl?: React.ReactNode;
   onDownloadSeason?: () => void;
-  /** Rendered inside the secondary row; the library bucket selector. */
+  /** The library bucket selector, rendered as an icon. */
   libraryControl?: React.ReactNode;
 }
+
+const PLOT_CLAMP = 280;
 
 export const DetailHero: React.FC<DetailHeroProps> = ({
   title,
@@ -160,23 +130,25 @@ export const DetailHero: React.FC<DetailHeroProps> = ({
   type,
   posterUrl,
   backdropUrl,
-  plot,
+  plot: providedPlot,
+  plotChoices,
   rating,
   duration,
   tmdbId,
   tags,
+  seriesSummary,
   fallbackNote,
   isSeries,
   provenance,
   saved,
   busy = false,
+  playLabel,
   sourceReadiness,
   onPlay,
   onToggleSave,
   onChooseSource,
   onDownload,
   onFindMoreSources,
-  onRefreshSources,
   onSearchTitle,
   onWatchTrailer,
   shareControl,
@@ -185,36 +157,14 @@ export const DetailHero: React.FC<DetailHeroProps> = ({
 }) => {
   const isDeveloper = useIsDeveloper();
   const [menuOpen, setMenuOpen] = useState(false);
+  const [plotOpen, setPlotOpen] = useState(false);
+  const [plotChoiceId, setPlotChoiceId] = useState<string | null>(null);
+  const choices = plotChoices ?? [];
+  const chosenPlot = choices.find((choice) => choice.id === plotChoiceId) ?? choices[0];
+  const plot = chosenPlot?.text ?? providedPlot;
   const menuWrapper = useRef<HTMLDivElement | null>(null);
-  const hoverTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-
   const closeMenu = useCallback(() => setMenuOpen(false), []);
   useDismissable(menuOpen, menuWrapper, closeMenu);
-
-  const handleMouseEnter = useCallback(() => {
-    if (hoverTimeoutRef.current) {
-      clearTimeout(hoverTimeoutRef.current);
-      hoverTimeoutRef.current = null;
-    }
-    setMenuOpen(true);
-  }, []);
-
-  const handleMouseLeave = useCallback(() => {
-    if (hoverTimeoutRef.current) {
-      clearTimeout(hoverTimeoutRef.current);
-    }
-    hoverTimeoutRef.current = setTimeout(() => {
-      setMenuOpen(false);
-    }, 180);
-  }, []);
-
-  useEffect(() => {
-    return () => {
-      if (hoverTimeoutRef.current) {
-        clearTimeout(hoverTimeoutRef.current);
-      }
-    };
-  }, []);
 
   const run = (action: () => void) => () => {
     setMenuOpen(false);
@@ -225,15 +175,7 @@ export const DetailHero: React.FC<DetailHeroProps> = ({
     Boolean
   ) as string[];
 
-  /**
-   * One short phrase, or nothing.
-   *
-   * `waiting` and `idle` say nothing on purpose: the prefetcher holds off for a
-   * moment to see whether the page is actually being read, and announcing that
-   * pause would put a label on screen for every title someone merely glanced
-   * at. A badge that appears and disappears as you scroll is worse than no
-   * badge.
-   */
+  /** One short phrase on the artwork, or nothing — see `sourceReadiness`. */
   const readinessLabel = (() => {
     if (!sourceReadiness) return null;
     switch (sourceReadiness.status) {
@@ -242,9 +184,7 @@ export const DetailHero: React.FC<DetailHeroProps> = ({
           ? 'Ready to play'
           : `${sourceReadiness.count} source${sourceReadiness.count === 1 ? '' : 's'} ready`;
       case 'searching':
-        return sourceReadiness.count > 0
-          ? `${sourceReadiness.count} found…`
-          : 'Finding sources…';
+        return sourceReadiness.count > 0 ? `${sourceReadiness.count} found…` : 'Finding sources…';
       case 'empty':
         return 'No sources found';
       default:
@@ -252,17 +192,21 @@ export const DetailHero: React.FC<DetailHeroProps> = ({
     }
   })();
 
+  const shownTags = useMemo(() => (tags ?? []).slice(0, 6), [tags]);
+  const hiddenTags = (tags?.length ?? 0) - shownTags.length;
+  const longPlot = Boolean(plot && plot.length > PLOT_CLAMP);
+  const label = playLabel ?? (isSeries ? 'Play first episode' : 'Play');
+  const showOriginal =
+    originalTitle && originalTitle.toLowerCase().trim() !== title.toLowerCase().trim();
+  const sourceCount = sourceReadiness && sourceReadiness.count > 0 ? sourceReadiness.count : 0;
+
   return (
-    <header
-      className={`detail-hero detail-hero--v2${backdropUrl ? ' detail-hero--backdrop' : ''}`}
-    >
+    <header className={`detail-hero detail-hero--cinema${backdropUrl ? ' detail-hero--with-backdrop' : ''}`}>
       {backdropUrl && (
         /*
-          Loaded through an ordinary style rather than a CSS custom property
-          holding a whole `url()`: a scraped artwork URL can contain quotes and
-          parentheses, and interpolating one into a CSS value is the one place
-          in this component where a third-party string becomes syntax.
-          `encodeURI` leaves a working URL alone and neutralises the rest.
+          A style rather than a CSS custom property holding `url()`: a scraped
+          artwork URL can contain quotes and parentheses, and `encodeURI` keeps
+          it a URL rather than syntax.
         */
         <span
           className="detail-hero__backdrop"
@@ -270,259 +214,251 @@ export const DetailHero: React.FC<DetailHeroProps> = ({
           style={{ backgroundImage: `url("${encodeURI(backdropUrl)}")` }}
         />
       )}
-      {/*
-        The artwork is the play button.
+      <span className="detail-hero__shade" aria-hidden="true" />
 
-        A `button` rather than a div with a handler: it has to be reachable by
-        keyboard and announce itself, and this is the primary action on the page.
-      */}
-      <button
-        type="button"
-        className="detail-art"
-        onClick={onPlay}
-        disabled={busy}
-        aria-label={isSeries ? `Play the first episode of ${title}` : `Play ${title}`}
-        title={isSeries ? 'Play the first episode' : 'Play'}
-      >
-        <Poster
-          src={posterUrl}
-          title={title}
-          decorative
-          className="detail-art__image"
-          fallback={<div className="detail-art__placeholder" aria-hidden />}
-        />
-        <span className="detail-art__scrim" aria-hidden />
-        <span className="detail-art__play" aria-hidden>
-          <Play size={26} fill="currentColor" />
-        </span>
-        <span className="detail-art__caption" aria-hidden>
-          {isSeries ? 'Play first episode' : 'Play'}
-        </span>
-
-        {/*
-          Sits on the artwork rather than beside the buttons, because it is
-          about what the artwork does. Only ever a state, never a spinner
-          blocking anything — the page is fully usable throughout and Play works
-          at any point, joining whatever is already running.
-        */}
-        {readinessLabel && (
-          <span
-            className={`detail-art__ready detail-art__ready--${sourceReadiness!.status}`}
-            aria-hidden
-          >
-            {sourceReadiness!.status === 'searching' && <Loader2 size={11} className="spin" />}
-            {sourceReadiness!.status === 'ready' && <Zap size={11} />}
-            {readinessLabel}
+      <div className="detail-hero__inner">
+        <button
+          type="button"
+          className="detail-art"
+          onClick={onPlay}
+          disabled={busy}
+          aria-label={`${label}: ${title}`}
+          title={label}
+        >
+          <Poster
+            src={posterUrl}
+            title={title}
+            decorative
+            className="detail-art__image"
+            fallback={<div className="detail-art__placeholder" aria-hidden />}
+          />
+          <span className="detail-art__scrim" aria-hidden />
+          <span className="detail-art__play" aria-hidden>
+            <Play size={24} fill="currentColor" />
           </span>
-        )}
-      </button>
-
-      <div className="detail-hero__body">
-        <h1>{title}</h1>
-
-        {originalTitle && originalTitle.toLowerCase().trim() !== title.toLowerCase().trim() && (
-          <p
-            className="detail-hero__original-title"
-            style={{
-              fontSize: '0.82rem',
-              color: 'var(--text-subtle, #9ca3af)',
-              margin: '-0.25rem 0 0.5rem 0',
-              fontStyle: 'italic',
-              display: 'flex',
-              alignItems: 'center',
-              gap: '0.35rem',
-            }}
-          >
-            <span style={{ opacity: 0.75 }}>Original release:</span>
-            <span style={{ color: 'var(--text-muted, #d1d5db)', fontWeight: 500 }}>"{originalTitle}"</span>
-          </p>
-        )}
-
-        {fallbackNote && <p className="detail-hero__fallback">{fallbackNote}</p>}
-
-        <div className="detail-hero__meta">
-          {year && (
-            <span>
-              <Calendar size={14} /> {year}
+          {readinessLabel && (
+            <span
+              className={`detail-art__ready detail-art__ready--${sourceReadiness!.status}`}
+              aria-hidden
+            >
+              {sourceReadiness!.status === 'searching' && <Loader2 size={11} className="spin" />}
+              {sourceReadiness!.status === 'ready' && <Zap size={11} />}
+              {readinessLabel}
             </span>
           )}
-          {rating !== undefined && (
-            <span>
-              <Star size={14} /> {rating.toFixed(1)}
-            </span>
-          )}
-          {duration && (
-            <span>
-              <Clock size={14} /> {duration}
-            </span>
-          )}
-          <span className="badge badge--muted">{type}</span>
-        </div>
+        </button>
 
-        <MediaRatings
-          identity={{
-            title,
-            originalTitle,
-            imdbId: provenance.imdbId,
-            tmdbId,
-            year,
-            type: isSeries ? 'series' : 'movie',
-          }}
-        />
-
-        {tags && tags.length > 0 && (
-          <div className="detail-hero__tags">
-            {tags.slice(0, 6).map((tag) => (
-              <span key={tag} className="badge badge--muted">
-                {tag}
-              </span>
-            ))}
+        <div className="detail-hero__body">
+          <div className="detail-hero__title-row">
+            <h1>{title}</h1>
+            {onSearchTitle && (
+              <button
+                type="button"
+                className="detail-hero__title-search"
+                onClick={onSearchTitle}
+                aria-label={`Search for ${title}`}
+                title={`Search every source for “${title}”`}
+              >
+                <Search size={18} />
+              </button>
+            )}
           </div>
-        )}
 
-        {plot && <p className="detail-hero__plot">{plot}</p>}
+          {showOriginal && <p className="detail-hero__original">{originalTitle}</p>}
+          {fallbackNote && <p className="detail-hero__fallback">{fallbackNote}</p>}
 
-        {/*
-          Where this page came from.
-
-          Small and quiet, but present. Without it a title that returns no
-          sources is a dead end with no name attached to it — the user cannot
-          tell whether to disable a provider, a whole extension, or nothing.
-        */}
-        {(chain.length > 0 || provenance.metadataSource) && (
-          <p className="detail-origin" title="Where these details came from">
-            {chain.length > 0 && (
-              <span className="detail-origin__chain">
-                {chain.map((part, index) => (
-                  <React.Fragment key={`${part}-${index}`}>
-                    {index > 0 && <span className="detail-origin__sep">▸</span>}
-                    <span>{part}</span>
-                  </React.Fragment>
-                ))}
+          <div className="detail-hero__meta">
+            {year && <span>{year}</span>}
+            {duration && (
+              <span title="Running time">
+                <Clock size={13} aria-hidden /> {duration}
               </span>
             )}
-            {provenance.metadataSource && (
-              <span className="detail-origin__meta">metadata: {provenance.metadataSource}</span>
+            {seriesSummary && <span>{seriesSummary}</span>}
+            <span className="detail-hero__type">{type}</span>
+            {rating !== undefined && (
+              <span title="Provider rating">
+                <Star size={13} aria-hidden /> {rating.toFixed(1)}
+              </span>
             )}
-            {provenance.imdbId && (
-              <span className="detail-origin__meta">{provenance.imdbId}</span>
-            )}
-          </p>
-        )}
+          </div>
 
-        <div className="detail-actions">
-          <button
-            type="button"
-            className={`detail-action${saved ? ' detail-action--on' : ''}`}
-            onClick={onToggleSave}
-            title={
-              saved
-                ? 'Remove this page from your saved list'
-                : 'Save this page so you can come back to it without searching again'
-            }
-          >
-            {saved ? <BookmarkCheck size={15} /> : <BookmarkIcon size={15} />}
-            <span>{saved ? 'Saved' : 'Save'}</span>
-          </button>
+          <MediaRatings
+            identity={{
+              title,
+              originalTitle,
+              imdbId: provenance.imdbId,
+              tmdbId,
+              year,
+              type: isSeries ? 'series' : 'movie',
+            }}
+          />
 
-          {libraryControl}
-
-          {shareControl}
-
-          {onWatchTrailer && (
-            <button
-              type="button"
-              className="detail-action detail-action--trailer"
-              onClick={onWatchTrailer}
-              title="Watch trailer"
-            >
-              <Film size={15} />
-              <span>Trailer</span>
-            </button>
+          {shownTags.length > 0 && (
+            <div className="detail-hero__tags">
+              {shownTags.map((tag) => (
+                <span key={tag} className="detail-hero__tag">
+                  {tag}
+                </span>
+              ))}
+              {hiddenTags > 0 && (
+                <span className="detail-hero__tag detail-hero__tag--more" title={(tags ?? []).slice(6).join(', ')}>
+                  +{hiddenTags}
+                </span>
+              )}
+            </div>
           )}
 
-          <button
-            type="button"
-            className="detail-action"
-            onClick={onChooseSource}
-            title="Show every source found for this title"
-          >
-            <ListVideo size={15} />
-            <span>
-              {sourceReadiness && sourceReadiness.count > 0
-                ? `View ${sourceReadiness.count} source${sourceReadiness.count === 1 ? '' : 's'}`
-                : 'View sources'}
-            </span>
-          </button>
+          {plot && (
+            <p className={`detail-hero__plot${longPlot && !plotOpen ? ' detail-hero__plot--clamped' : ''}`}>
+              {plot}
+            </p>
+          )}
+          {(longPlot || choices.length > 1) && (
+            <div className="detail-hero__plot-foot">
+              {longPlot && (
+                <button
+                  type="button"
+                  className="detail-hero__plot-toggle"
+                  onClick={() => setPlotOpen((open) => !open)}
+                  aria-expanded={plotOpen}
+                >
+                  {plotOpen ? 'Less' : 'More'}
+                </button>
+              )}
+              {choices.length > 1 && (
+                <div className="detail-hero__plot-sources" role="group" aria-label="Description from">
+                  <span className="detail-hero__plot-sources-label">Description:</span>
+                  {choices.map((choice) => (
+                    <button
+                      key={choice.id}
+                      type="button"
+                      className={`detail-hero__plot-source${choice === chosenPlot ? ' detail-hero__plot-source--on' : ''}`}
+                      aria-pressed={choice === chosenPlot}
+                      onClick={() => {
+                        setPlotChoiceId(choice.id);
+                        setPlotOpen(false);
+                      }}
+                    >
+                      {choice.label}
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
 
-          <button type="button" className="detail-action" onClick={onDownload}>
-            <Download size={15} />
-            <span>{isSeries ? 'Download episode' : 'Download'}</span>
-          </button>
-
-          <div
-            className="detail-action__more"
-            ref={menuWrapper}
-            onMouseEnter={handleMouseEnter}
-            onMouseLeave={handleMouseLeave}
-          >
-            <button
-              type="button"
-              className="detail-action"
-              onClick={() => setMenuOpen((open) => !open)}
-              aria-haspopup="menu"
-              aria-expanded={menuOpen}
-              aria-label="More actions"
-              title="More actions"
-            >
-              <MoreHorizontal size={15} />
+          <div className="detail-hero__cta">
+            <button type="button" className="detail-play" onClick={onPlay} disabled={busy}>
+              {busy ? <Loader2 size={18} className="spin" /> : <Play size={18} fill="currentColor" />}
+              <span>{label}</span>
             </button>
 
-            {menuOpen && (
-              <div className="detail-menu" role="menu">
-                <button role="menuitem" onClick={run(onFindMoreSources)}>
-                  <SearchCheck size={14} />
-                  <span>
-                    <strong>Find more sources</strong>
-                    <em>
-                      {isDeveloper
-                        ? 'Ask every enabled provider again, ignoring the cache.'
-                        : 'Look for this everywhere, not just where it was found.'}
-                    </em>
-                  </span>
+            {onWatchTrailer && (
+              <button type="button" className="detail-cta" onClick={onWatchTrailer} title="Watch the trailer">
+                <Film size={16} />
+                <span>Trailer</span>
+              </button>
+            )}
+
+            <div className="detail-hero__icons">
+              <button
+                type="button"
+                className={`detail-icon${saved ? ' detail-icon--on' : ''}`}
+                onClick={onToggleSave}
+                aria-pressed={saved}
+                aria-label={saved ? 'Saved — remove from saved pages' : 'Save this page'}
+                title={saved ? 'Saved — click to remove from your saved pages' : 'Save this page to come back to'}
+              >
+                {saved ? <BookmarkCheck size={17} /> : <BookmarkIcon size={17} />}
+              </button>
+
+              {libraryControl}
+
+              <button
+                type="button"
+                className="detail-icon"
+                onClick={onDownload}
+                aria-label={isSeries ? 'Download an episode' : 'Download'}
+                title={isSeries ? 'Download this episode' : 'Download'}
+              >
+                <Download size={17} />
+              </button>
+
+              {shareControl}
+
+              <button
+                type="button"
+                className="detail-icon detail-icon--sources"
+                onClick={onChooseSource}
+                aria-label={sourceCount ? `View ${sourceCount} sources` : 'View sources'}
+                title={sourceCount ? `${sourceCount} sources found — choose one` : 'Choose a source by hand'}
+              >
+                <ListVideo size={17} />
+                {sourceCount > 0 && <span className="detail-icon__badge">{sourceCount > 99 ? '99+' : sourceCount}</span>}
+              </button>
+
+              <div className="detail-action__more" ref={menuWrapper}>
+                <button
+                  type="button"
+                  className="detail-icon"
+                  onClick={() => setMenuOpen((open) => !open)}
+                  aria-haspopup="menu"
+                  aria-expanded={menuOpen}
+                  aria-label="More actions"
+                  title="More"
+                >
+                  <MoreHorizontal size={17} />
                 </button>
-                <button role="menuitem" onClick={run(onRefreshSources)}>
-                  <RefreshCw size={14} />
-                  <span>
-                    <strong>Refresh sources</strong>
-                    <em>
-                      {isDeveloper
-                        ? 'Replace expired links, keeping the ones that still work.'
-                        : 'Check the sources still work, and replace the ones that do not.'}
-                    </em>
-                  </span>
-                </button>
-                {onSearchTitle && (
-                  <button role="menuitem" onClick={run(onSearchTitle)}>
-                    <Search size={14} />
-                    <span>
-                      <strong>Search this title</strong>
-                      <em>Search “{title}” across every enabled source.</em>
-                    </span>
-                  </button>
-                )}
-                {isSeries && onDownloadSeason && (
-                  <button role="menuitem" onClick={run(onDownloadSeason)}>
-                    <Layers size={14} />
-                    <span>
-                      <strong>Download season</strong>
-                      <em>Queue every episode in the current season.</em>
-                    </span>
-                  </button>
+
+                {menuOpen && (
+                  <div className="detail-menu detail-menu--end" role="menu">
+                    <button role="menuitem" onClick={run(onFindMoreSources)}>
+                      <SearchCheck size={14} />
+                      <span>
+                        <strong>Search again for sources</strong>
+                        <em>
+                          {isDeveloper
+                            ? 'Ask every enabled provider again, ignoring the cache — finds more and replaces expired links.'
+                            : 'Look everywhere again — finds more, and replaces links that stopped working.'}
+                        </em>
+                      </span>
+                    </button>
+                    {isSeries && onDownloadSeason && (
+                      <button role="menuitem" onClick={run(onDownloadSeason)}>
+                        <Layers size={14} />
+                        <span>
+                          <strong>Download season</strong>
+                          <em>Queue every episode in the current season.</em>
+                        </span>
+                      </button>
+                    )}
+                  </div>
                 )}
               </div>
-            )}
+            </div>
           </div>
+
+          {(chain.length > 0 || provenance.metadataSource) && (
+            <p className="detail-origin" title="Where these details came from">
+              {chain.length > 0 && (
+                <span className="detail-origin__chain">
+                  {chain.map((part, index) => (
+                    <React.Fragment key={`${part}-${index}`}>
+                      {index > 0 && <span className="detail-origin__sep">▸</span>}
+                      <span>{part}</span>
+                    </React.Fragment>
+                  ))}
+                </span>
+              )}
+              {provenance.metadataSource && (
+                <span className="detail-origin__meta">metadata: {provenance.metadataSource}</span>
+              )}
+              {isDeveloper && provenance.imdbId && (
+                <span className="detail-origin__meta">{provenance.imdbId}</span>
+              )}
+            </p>
+          )}
         </div>
       </div>
     </header>

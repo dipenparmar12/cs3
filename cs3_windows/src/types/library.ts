@@ -143,7 +143,24 @@ export interface PlayedSource {
     title: string;
     year?: number;
     episodeTitle?: string;
+    /**
+     * Where the source came from, as the player knew it at the time.
+     *
+     * The provider name alone is on `source`; the extension and repository are
+     * not, and they are what a viewer needs to find the title again after a
+     * provider is renamed or an extension is removed. Optional: records written
+     * before this existed have none and resolve the chain on demand.
+     */
+    provider?: string;
+    extensionName?: string;
+    repositoryName?: string;
+    originalTitle?: string;
+    posterUrl?: string;
+    imdbId?: string;
   };
+
+  /** The audio and subtitle choices made while it played, re-applied on resume. */
+  preferences?: PlaybackPreferences;
 
   /**
    * When it last actually played — not when it was chosen.
@@ -158,6 +175,41 @@ export interface PlayedSource {
   durationSeconds?: number;
   /** Bumped each time it plays; a source that keeps working is worth ranking up. */
   playCount: number;
+}
+
+/**
+ * The track choices that made a source right for this viewer.
+ *
+ * A release with three dubs and eight subtitle languages is not "the same
+ * source" if it comes back in the wrong language. Labels are kept beside
+ * languages because a provider track often has only a label.
+ */
+export interface PlaybackPreferences {
+  audioLanguage?: string;
+  audioLabel?: string;
+  /** `off` is a choice, distinct from never having chosen. */
+  subtitleMode?: 'off' | 'track';
+  subtitleLanguage?: string;
+  subtitleLabel?: string;
+}
+
+/**
+ * A playback someone chose to keep: the episode, the place, the exact source
+ * and the tracks — saved from the player's bookmark button.
+ *
+ * The link inside `source` will expire; what lasts is its identity (provider,
+ * release, resolution, languages), which a resume uses to find the same
+ * release again. See `cs3/playedSource.ts`.
+ */
+export interface SavedPlayback {
+  season?: number;
+  episode?: number;
+  episodeTitle?: string;
+  positionSeconds?: number;
+  durationSeconds?: number;
+  source?: StoredSource;
+  preferences?: PlaybackPreferences;
+  savedAt: number;
 }
 
 /** Why a saved source could not simply be reused. */

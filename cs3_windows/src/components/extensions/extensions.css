@@ -59,7 +59,6 @@
 .ext-tab:hover { color: var(--text-main); }
 .ext-tab--on { color: var(--text-main); border-bottom-color: var(--accent-primary); }
 .ext-tab__label { font-size: 0.9rem; font-weight: 600; }
-.ext-tab__hint { font-size: 0.72rem; color: var(--text-subtle); }
 
 /* --- rows, shared by the tree and the cards --- */
 
@@ -129,9 +128,7 @@
 /* --- primitives --- */
 
 .ext-check,
-.ext-disclosure,
-.ext-toggle,
-.ext-icon-button {
+.ext-disclosure {
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -146,8 +143,7 @@
 }
 
 .ext-check:hover,
-.ext-disclosure:hover,
-.ext-icon-button:hover:not(:disabled) { color: var(--text-main); background: var(--bg-input); }
+.ext-disclosure:hover { color: var(--text-main); background: var(--bg-input); }
 
 .ext-check--on { color: var(--accent-primary); }
 .ext-check__partial { display: inline-flex; align-items: center; justify-content: center; border: 1.5px solid currentColor; border-radius: 3px; }
@@ -159,15 +155,8 @@
  */
 .ext-disclosure--placeholder { visibility: hidden; pointer-events: none; }
 
-.ext-toggle { color: var(--text-subtle); }
-.ext-toggle--on { color: var(--accent-primary); }
-.ext-toggle:disabled { opacity: 0.45; cursor: not-allowed; }
-.ext-toggle:focus-visible,
 .ext-check:focus-visible,
 .ext-disclosure:focus-visible { outline: 2px solid var(--accent-light); outline-offset: 1px; }
-
-.ext-icon-button--danger:hover:not(:disabled) { color: var(--status-error); }
-.ext-icon-button:disabled { opacity: 0.4; cursor: not-allowed; }
 
 .ext-badge {
   display: inline-flex;
@@ -227,27 +216,7 @@
 
 .ext-link:hover { color: var(--accent-light); }
 
-/* --- buttons --- */
-
-.ext-btn {
-  display: inline-flex;
-  align-items: center;
-  gap: 0.35rem;
-  padding: 0.38rem 0.7rem;
-  border-radius: var(--radius-sm);
-  border: 1px solid var(--border-color);
-  background: var(--bg-input);
-  color: var(--text-main);
-  font-size: 0.8rem;
-  cursor: pointer;
-  transition: var(--transition);
-}
-
-.ext-btn:hover:not(:disabled) { background: var(--bg-card-hover); }
-.ext-btn:disabled { opacity: 0.5; cursor: not-allowed; }
-.ext-btn--primary { background: var(--accent-primary); border-color: var(--accent-primary); color: #fff; }
-.ext-btn--primary:hover:not(:disabled) { background: var(--accent-hover); }
-.ext-btn--danger { color: var(--status-error); }
+/* Buttons: the shared .btn family (src/styles/ui.css). The old .ext-btn set is gone. */
 
 /* --- filter bar --- */
 
@@ -264,39 +233,8 @@
 .ext-filters__row { display: flex; gap: 0.5rem; flex-wrap: wrap; align-items: center; }
 .ext-filters__label { font-size: 0.7rem; color: var(--text-subtle); text-transform: uppercase; letter-spacing: 0.05em; }
 
-.ext-search {
-  display: flex;
-  align-items: center;
-  gap: 0.4rem;
-  padding: 0.35rem 0.6rem;
-  border-radius: var(--radius-sm);
-  background: var(--bg-input);
-  border: 1px solid var(--border-color);
-  flex: 1;
-  min-width: 190px;
-}
-
-.ext-search__icon { color: var(--text-subtle); flex-shrink: 0; }
-
-.ext-search__input {
-  flex: 1;
-  background: transparent;
-  border: none;
-  outline: none;
-  color: var(--text-main);
-  font-size: 0.83rem;
-  min-width: 0;
-}
-
-.ext-select {
-  padding: 0.35rem 0.5rem;
-  border-radius: var(--radius-sm);
-  background: var(--bg-input);
-  border: 1px solid var(--border-color);
-  color: var(--text-main);
-  font-size: 0.8rem;
-  cursor: pointer;
-}
+/* The shared SearchInput and Select (compact); layout only. */
+.ext-search { flex: 1; min-width: 190px; }
 
 /* --- bulk action bar --- */
 
@@ -351,21 +289,6 @@
 .ext-panel--pad { padding: 0.75rem; background: var(--bg-card); border: 1px solid var(--border-color); border-radius: var(--radius-md); }
 .ext-panel__head { display: flex; flex-direction: column; gap: 0.15rem; }
 .ext-panel__head h4 { margin: 0; color: var(--text-main); font-size: 0.98rem; }
-
-.ext-custom-url { display: flex; gap: 0.5rem; }
-
-.ext-custom-url input {
-  flex: 1;
-  padding: 0.4rem 0.6rem;
-  border-radius: var(--radius-sm);
-  background: var(--bg-input);
-  border: 1px solid var(--border-color);
-  color: var(--text-main);
-  font-size: 0.83rem;
-  outline: none;
-}
-
-.ext-custom-url input:focus { border-color: var(--accent-primary); }
 
 .ext-hint { margin: 0; font-size: 0.74rem; color: var(--text-subtle); }
 .ext-hint code { background: var(--bg-input); padding: 0 0.25rem; border-radius: 3px; }
@@ -433,10 +356,6 @@
 
 .ext-warnings li { display: flex; align-items: center; gap: 0.35rem; font-size: 0.76rem; color: var(--status-warning); }
 
-/* --- footer --- */
-
-.ext-footer { border-top: 1px solid var(--border-color); padding-top: 0.9rem; }
-
 .ext-adult {
   display: flex;
   align-items: flex-start;
@@ -451,9 +370,8 @@
 .ext-adult em { font-style: normal; font-size: 0.72rem; color: var(--text-subtle); }
 
 @media (prefers-reduced-motion: reduce) {
-  .ext-btn,
+  .btn,
   .ext-chip,
-  .ext-toggle,
   .ext-check,
   .ext-progress__fill {
     transition: none;
@@ -468,16 +386,6 @@
  * list would render inside one 290px column and read as belonging to the card's
  * neighbours; `1 / -1` gives it the whole row, immediately after its own card.
  */
-.ext-card__panel {
-  grid-column: 1 / -1;
-  margin: -0.2rem 0 0.35rem;
-  border: 1px solid var(--accent-primary);
-  border-top-width: 2px;
-  border-radius: var(--radius-md);
-  background: var(--bg-input);
-  overflow: hidden;
-}
-
 /* The open card and its panel read as one object. */
 .ext-card--open {
   border-color: var(--accent-primary);
@@ -554,29 +462,7 @@
 .ext-builtin__hint { margin: 0.45rem 0 0; font-size: 0.74rem; opacity: 0.6; }
 .ext-builtin__ok { margin: 0.35rem 0 0; font-size: 0.78rem; color: var(--success, #4ade80); }
 
-/* How extension updates happen — the one control that makes them hands-free. */
-.ext-update-policy {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 0.4rem 1.1rem;
-  margin-top: 0.45rem;
-  font-size: 0.74rem;
-  color: var(--text-muted);
-}
-.ext-update-policy label { display: inline-flex; align-items: center; gap: 0.4rem; cursor: pointer; }
-.ext-update-policy select {
-  background: var(--bg-input);
-  color: var(--text-main);
-  border: 1px solid var(--border-color);
-  border-radius: var(--radius-sm);
-  padding: 0.15rem 0.35rem;
-  font-size: 0.74rem;
-}
-
 /* --- a repository's extensions, as a list --- */
-
-.ext-btn--icon { padding: 0.32rem 0.42rem; }
 
 .ext-list__toolbar {
   display: flex;
@@ -715,8 +601,6 @@
 }
 .ext-job--failed .ext-job__note { color: var(--status-error); }
 
-.ext-footer { display: flex; align-items: center; gap: 0.35rem; }
-
 /* --- built-in callout banner --- */
 
 .ext-builtin-banner {
@@ -790,21 +674,6 @@
   flex-wrap: wrap;
 }
 
-.ext-btn--accent {
-  background: var(--accent-primary);
-  border-color: var(--accent-primary);
-  color: #fff;
-}
-
-.ext-btn--accent:hover {
-  background: var(--accent-hover, #2563eb);
-}
-
-.ext-btn--sm {
-  padding: 0.22rem 0.5rem;
-  font-size: 0.73rem;
-}
-
 /* --- parent card job status --- */
 
 .ext-card__job-status {
@@ -872,30 +741,6 @@
   border: 1px solid var(--border-color, rgba(255, 255, 255, 0.15));
 }
 
-.ext-updates-container {
-  display: flex;
-  flex-direction: column;
-  gap: 1rem;
-}
-
-.ext-updates-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  flex-wrap: wrap;
-  gap: 0.75rem;
-  padding: 0.75rem 1rem;
-  background: var(--bg-card);
-  border: 1px solid var(--border-color);
-  border-radius: var(--radius-md);
-}
-
-.ext-updates-section {
-  display: flex;
-  flex-direction: column;
-  gap: 0.5rem;
-}
-
 .ext-updates-section__title {
   display: flex;
   align-items: center;
@@ -904,22 +749,6 @@
   font-weight: 600;
   color: var(--text-main);
   padding: 0.2rem 0;
-}
-
-.ext-update-card {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 0.65rem 0.85rem;
-  border-radius: var(--radius-md);
-  background: var(--bg-card);
-  border: 1px solid var(--border-color);
-  gap: 0.75rem;
-  transition: var(--transition);
-}
-
-.ext-update-card:hover {
-  border-color: var(--border-hover, #475569);
 }
 
 .ext-update-card--failed {
@@ -933,16 +762,115 @@
   opacity: 0.85;
 }
 
-.ext-ignored-banner {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 0.6rem 0.85rem;
-  border-radius: var(--radius-md);
-  background: rgba(245, 158, 11, 0.08);
-  border: 1px solid rgba(245, 158, 11, 0.25);
-  font-size: 0.78rem;
-  color: var(--text-main);
+/* --- bulk selection (bulkSelection.ts) --- */
+.ext-bulk { flex-wrap: wrap; border-color: var(--border-color); background: var(--bg-card); }
+.ext-bulk--active { border-color: var(--accent-primary); background: var(--bg-card-hover); }
+.ext-bulk__hidden {
+  margin-left: 0.5rem;
+  padding: 0.05rem 0.45rem;
+  border: 1px dashed rgba(245, 158, 11, 0.5);
+  border-radius: var(--radius-full);
+  background: transparent;
+  color: #fbbf24;
+  font: inherit;
+  font-size: 0.74rem;
   cursor: pointer;
 }
+.ext-bulk__busy { font-size: 0.74rem; color: var(--text-subtle); }
 
+.bulk-confirm__groups, .bulk-confirm__groups ul { list-style: none; margin: 0; padding: 0; }
+.bulk-confirm__groups > li + li { margin-top: 0.6rem; }
+.bulk-confirm__repo {
+  display: block;
+  font-size: 0.7rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--text-subtle);
+  margin-bottom: 0.25rem;
+}
+.bulk-confirm__groups ul > li {
+  display: flex;
+  flex-direction: column;
+  padding: 0.35rem 0.6rem;
+  border-left: 2px solid var(--border-color);
+}
+.bulk-confirm__groups strong { color: var(--text-main); font-weight: 600; }
+.bulk-confirm__providers { font-size: 0.76rem; color: var(--text-subtle); }
+.bulk-confirm__note { display: flex; gap: 0.4rem; margin: 0; font-size: 0.78rem; color: var(--text-muted); }
+.bulk-confirm__note--warn { color: #fbbf24; }
+
+/* Updates: one summary line, compact rows, small groups below. */
+.ext-updates { display: flex; flex-direction: column; gap: 0.75rem; }
+.ext-updates__summary { display: flex; align-items: center; gap: 0.65rem; flex-wrap: wrap; padding: 0.7rem 0.9rem; background: var(--bg-card); border: 1px solid var(--border-color); border-radius: var(--radius-md); }
+.ext-updates__icon--pending { color: var(--accent-light); }
+.ext-updates__icon--ok { color: var(--status-success, #10b981); }
+.ext-updates__status { display: flex; flex-direction: column; min-width: 0; flex: 1; }
+.ext-updates__status strong { font-size: 0.9rem; color: var(--text-primary); }
+.ext-updates__meta { font-size: 0.72rem; color: var(--text-subtle); }
+.ext-updates__actions, .ext-updates__row-actions { display: inline-flex; align-items: center; gap: 0.35rem; }
+.ext-updates__message, .ext-updates__notice { display: flex; align-items: center; gap: 0.4rem; margin: 0; font-size: 0.78rem; color: var(--text-muted); }
+.ext-updates__message--error { color: #fca5a5; }
+.ext-updates__notice svg { color: #f59e0b; flex-shrink: 0; }
+.ext-updates__list { list-style: none; margin: 0; padding: 0; border: 1px solid var(--border-color); border-radius: var(--radius-md); overflow: hidden; }
+.ext-updates__row { display: grid; grid-template-columns: minmax(8rem, 14rem) 1fr auto; align-items: center; gap: 0.75rem; padding: 0.45rem 0.75rem; font-size: 0.8rem; }
+.ext-updates__row + .ext-updates__row { border-top: 1px solid var(--border-color); }
+.ext-updates__name { font-weight: 600; color: var(--text-primary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ext-updates__version, .ext-updates__reason { color: var(--text-subtle); font-size: 0.74rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ext-updates__group { display: flex; flex-direction: column; gap: 0.4rem; }
+.ext-updates__group-head { display: flex; align-items: center; justify-content: space-between; }
+.ext-updates__group-title { font-size: 0.78rem; font-weight: 600; color: var(--text-muted); }
+.ext-updates__group-title--error { color: #fca5a5; }
+.ext-updates__disclosure { align-self: flex-start; display: inline-flex; align-items: center; gap: 0.3rem; background: none; border: 0; padding: 0.15rem 0; font: inherit; font-size: 0.78rem; color: var(--text-muted); cursor: pointer; }
+.ext-updates__disclosure:hover { color: var(--text-primary); }
+
+/* Browse: the viewer's own repositories, above the catalogue. */
+.ext-custom-repos { display: flex; flex-direction: column; }
+.add-repository { display: flex; flex-direction: column; gap: 0.4rem; }
+.add-repository__label { display: inline-flex; align-items: center; gap: 0.35rem; font-size: 0.8rem; color: var(--text-muted); }
+
+/* Browse sections: a quiet disclosure line, never a heading block. */
+.ext-section-toggle { display: inline-flex; align-items: center; gap: 0.35rem; align-self: flex-start; margin: 0.35rem 0 0.5rem; padding: 0.15rem 0; background: none; border: 0; font: inherit; font-size: 0.78rem; font-weight: 600; color: var(--text-muted); cursor: pointer; }
+.ext-section-toggle:hover { color: var(--text-primary); }
+.ext-section-toggle span { font-weight: 400; color: var(--text-subtle); }
+.ext-custom-list { list-style: none; margin: 0; padding: 0; border: 1px solid var(--border-color); border-radius: var(--radius-md); }
+.ext-custom-list__row { display: flex; align-items: center; gap: 0.5rem; padding: 0.35rem 0.6rem; font-size: 0.8rem; }
+.ext-custom-list__row + .ext-custom-list__row { border-top: 1px solid var(--border-color); }
+.ext-custom-list__name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-primary); }
+.ext-empty .btn { margin-top: 0.5rem; }
+
+/* Browse: the grid never moves; a repository's details slide in over it. */
+.ext-browse { position: relative; }
+.ext-card--selectable { cursor: pointer; }
+.ext-card--selectable:hover { border-color: rgba(255, 255, 255, 0.18); }
+.ext-card--open { border-color: var(--accent-primary); box-shadow: 0 0 0 1px var(--accent-primary) inset; }
+.ext-card__actions { align-items: center; }
+.ext-card__state { display: inline-flex; align-items: center; gap: 0.3rem; font-size: 0.74rem; color: var(--text-subtle); }
+.ext-card__open { margin-left: auto; }
+
+.ext-drawer {
+  position: fixed; top: 0; right: 0; bottom: 0; z-index: 60;
+  width: clamp(420px, 50vw, 780px); max-width: 100vw;
+  display: flex; flex-direction: column;
+  background: var(--bg-card); border-left: 1px solid var(--border-color);
+  box-shadow: -18px 0 40px rgba(0, 0, 0, 0.45);
+  animation: ext-drawer-in 0.22s cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+@keyframes ext-drawer-in { from { transform: translateX(100%); } to { transform: translateX(0); } }
+@media (prefers-reduced-motion: reduce) { .ext-drawer { animation: none; } }
+.ext-drawer__head { display: flex; align-items: center; gap: 0.35rem; padding: 0.85rem 1rem 0.6rem; }
+.ext-drawer__title { flex: 1; min-width: 0; display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap; }
+.ext-drawer__title strong { font-size: 1.05rem; color: var(--text-primary); }
+.ext-drawer__badges { display: inline-flex; gap: 0.3rem; }
+.ext-drawer__status { display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap; padding: 0 1rem 0.75rem; font-size: 0.8rem; color: var(--text-muted); border-bottom: 1px solid var(--border-color); }
+.ext-drawer__status > span { margin-right: auto; }
+.ext-drawer__ok { display: inline-flex; align-items: center; gap: 0.35rem; color: var(--status-success, #10b981); }
+.ext-drawer__search { padding: 0.6rem 1rem 0; }
+.ext-drawer__body { flex: 1; overflow: auto; padding: 0.6rem 1rem 1rem; }
+.ext-drawer__about { margin-top: 0.75rem; border-top: 1px solid var(--border-color); padding-top: 0.4rem; }
+.ext-drawer__facts { display: grid; grid-template-columns: max-content 1fr; gap: 0.35rem 0.9rem; margin: 0.25rem 0 0; font-size: 0.78rem; }
+.ext-drawer__facts dt { color: var(--text-subtle); }
+.ext-drawer__facts dd { margin: 0; color: var(--text-muted); overflow-wrap: anywhere; }
+.ext-drawer__facts code { font-size: 0.72rem; }
+.ext-drawer__foot { display: flex; justify-content: flex-end; padding: 0.55rem 1rem; border-top: 1px solid var(--border-color); }
+.ext-drawer__foot .btn:hover { color: #fca5a5; }

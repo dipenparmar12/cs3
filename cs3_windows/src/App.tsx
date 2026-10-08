@@ -31,17 +31,30 @@ import type { HistoryEvent } from './types/history';
 import type { DownloadRequestResult, DownloadTask } from './types/download';
 import { buildDownloadTask } from './utils/downloadIdentity';
 import type { TorrentResult } from './types/torrent';
+import type { ResumeTarget } from './types/player';
+import type { TitleVideo } from './types/metadata';
 import type { PlaybackSnapshot } from '../electron/playbackSession';
 import type { SearchSnapshot } from '../electron/searchSession';
 import { describeError } from './utils/errors';
 import { pickResumePoint, resumeSeconds } from './utils/resumePoint';
 import { historyEventForTask } from './utils/historyEvent';
 import { decodeShareLink, SHARE_SCHEME } from './utils/shareLink';
-import { loadWatchState } from './components/player/seriesContext';
+import { episodeKey, loadWatchState } from './components/player/seriesContext';
 import { usePrivacy } from './utils/usePrivacy';
 import { ScrollToTop } from './components/ScrollToTop';
 import { durableAddress } from './utils/durableAddress';
 import { canonicalKey } from '../electron/cs3/libraryStore';
+import { SCREEN_SEARCH_FOCUS_EVENT, screenSearchAvailable } from './utils/screenSearch';
+import {
+  depthOf,
+  emptyNavigation,
+  pop,
+  push,
+  reset,
+  scrollKey,
+  topOf,
+  type TabNavigationState,
+} from './utils/tabNavigation';
 
 /**
  * Every screen except Home, loaded when it is opened.
@@ -59,6 +72,11 @@ import { canonicalKey } from '../electron/cs3/libraryStore';
  * imports above stay static and cost nothing — types are erased, and a
  * `import type` does not pull the module in.
  */
+const TrailerPopup = lazy(() =>
+  import('./components/detail/TrailerPopup').then((m) => ({ default: m.TrailerPopup }))
+);
+/** Developer mode only, and its own chunk: standard mode never loads it. */
+const UiInspector = lazy(() => import('./components/devtools/UiInspector'));
 const VideoPlayer = lazy(() =>
   import('./components/VideoPlayer').then((m) => ({ default: m.VideoPlayer }))
 );
@@ -92,6 +110,12 @@ const DownloadCenter = lazy(() =>
   import('./components/DownloadCenter').then((m) => ({ default: m.DownloadCenter }))
 );
 
+
+/** The year `canonicalKey` appended, for rows (Continue watching) that carry only the key. */
+function yearFromKey(key: string | undefined): number | undefined {
+  const match = key?.match(/:(\d{4})$/);
+  return match ? Number(match[1]) : undefined;
+}
 
 /** One live playback session: its id, what asked for it, and its latest state. */
 interface ActiveSession {
@@ -172,9 +196,81 @@ export const App: React.FC = () => {
   const [homeCategory, setHomeCategory] = useState<HomeCategoryState | null>(null);
   /** The main scroller, so returning from a title lands where you left. */
   const viewportRef = useRef<HTMLElement | null>(null);
-  const savedScroll = useRef(0);
 
-  const [selectedMedia, setSelectedMedia] = useState<SearchResponse | null>(null);
+  /**
+   * Each screen's own place: its stack of opened pages and a scroll position
+   * per level (`utils/tabNavigation.ts`). One global `selectedMedia` that
+   * every sidebar click cleared is how a page opened from Search was gone
+   * after a glance at History.
+   */
+  const [navigation, setNavigation] = useState<TabNavigationState<SearchResponse>>(emptyNavigation);
+  const navigationRef = useRef(navigation);
+  navigationRef.current = navigation;
+  const activeTabRef = useRef(activeTab);
+  activeTabRef.current = activeTab;
+  const scrollMemory = useRef(new Map<string, number>());
+  const selectedMedia = topOf(navigation, activeTab);
+
+  /*
+   * Restored after paint rather than immediately: the screen being returned
+   * to does not exist yet when the state changes, so setting `scrollTop`
+   * before layout scrolls a shorter page and clamps to whatever fits.
+   */
+  const scrollAfterPaint = useCallback((target: number) => {
+    requestAnimationFrame(() => {
+      requestAnimationFrame(() => {
+        if (viewportRef.current) viewportRef.current.scrollTop = target;
+      });
+    });
+  }, []);
+  const rememberScroll = useCallback((tab: string) => {
+    scrollMemory.current.set(
+      scrollKey(tab, depthOf(navigationRef.current, tab)),
+      viewportRef.current?.scrollTop ?? 0
+    );
+  }, []);
+
+  /** Opens a title's page on the current screen, keeping the place under it. */
+  const openDetail = useCallback(
+    (item: SearchResponse) => {
+      const tab = activeTabRef.current;
+      rememberScroll(tab);
+      setNavigation((current) => push(current, tab, item));
+      scrollAfterPaint(0);
+    },
+    [rememberScroll, scrollAfterPaint]
+  );
+
+  /** One step back on the current screen, to the scroll that level had. */
+  const goBack = useCallback(() => {
+    const tab = activeTabRef.current;
+    const depth = depthOf(navigationRef.current, tab);
+    if (depth === 0) return;
+    setNavigation((current) => pop(current, tab));
+    scrollAfterPaint(scrollMemory.current.get(scrollKey(tab, depth - 1)) ?? 0);
+  }, [scrollAfterPaint]);
+
+  /** Back to a screen's root, forgetting the pages opened on it. */
+  const resetScreen = useCallback((tab: string) => {
+    setNavigation((current) => reset(current, tab));
+    for (const key of [...scrollMemory.current.keys()]) {
+      if (key.startsWith(`${tab}:`)) scrollMemory.current.delete(key);
+    }
+  }, []);
+
+  /** Another screen, exactly as it was left. */
+  const switchTab = useCallback(
+    (next: ActiveTab) => {
+      const current = activeTabRef.current;
+      if (next === current) return;
+      rememberScroll(current);
+      setActiveTab(next);
+      scrollAfterPaint(
+        scrollMemory.current.get(scrollKey(next, depthOf(navigationRef.current, next))) ?? 0
+      );
+    },
+    [rememberScroll, scrollAfterPaint]
+  );
   /**
    * Why a shared link did not open, if it did not.
    *
@@ -183,6 +279,13 @@ export const App: React.FC = () => {
    * kind of wrong it is — resend, or update.
    */
   const [shareProblem, setShareProblem] = useState<string | null>(null);
+  /**
+   * A trailer, owned here rather than by the detail page so it can be
+   * minimised and keep playing while the viewer goes elsewhere. Ended when
+   * real playback starts — two soundtracks at once is never what was meant.
+   */
+  const [trailer, setTrailer] = useState<{ videos: TitleVideo[]; startId: string; titleName: string; key: number } | null>(null);
+  const [trailerMini, setTrailerMini] = useState(false);
   const [playback, setPlayback] = useState<PlaybackRequest | null>(null);
   const [switchingTo, setSwitchingTo] = useState<Episode | null>(null);
   const [switchError, setSwitchError] = useState<string | null>(null);
@@ -552,18 +655,24 @@ export const App: React.FC = () => {
       // Cmd+, or Ctrl+, opens Settings and focuses settings search
       if ((e.ctrlKey || e.metaKey) && e.key === ',') {
         e.preventDefault();
-        setActiveTab('settings');
+        switchTab('settings');
         setTimeout(() => {
           window.dispatchEvent(new CustomEvent('cs3:focus-settings-search'));
         }, 50);
         return;
       }
 
-      // Ctrl+F, Cmd+F, or Ctrl+K focuses settings search (when in Settings) or navbar search
+      // Ctrl+F finds on the current screen where it has a find control
+      // (Library, History, Settings) and is the media search elsewhere. Ctrl+K
+      // is always the media search, so that one is never out of reach.
       if ((e.ctrlKey || e.metaKey) && (e.key.toLowerCase() === 'f' || e.key.toLowerCase() === 'k')) {
+        const find = e.key.toLowerCase() === 'f';
         if (activeTab === 'settings') {
           e.preventDefault();
           window.dispatchEvent(new CustomEvent('cs3:focus-settings-search'));
+        } else if (find && screenSearchAvailable() && !document.fullscreenElement) {
+          e.preventDefault();
+          window.dispatchEvent(new CustomEvent(SCREEN_SEARCH_FOCUS_EVENT));
         } else if (!document.fullscreenElement) {
           e.preventDefault();
           window.dispatchEvent(new CustomEvent('cs3:focus-navbar-search'));
@@ -579,7 +688,7 @@ export const App: React.FC = () => {
     });
 
     const disposeSettings = window.cloudstream?.onOpenSettings?.(() => {
-      setActiveTab('settings');
+      switchTab('settings');
       setTimeout(() => {
         window.dispatchEvent(new CustomEvent('cs3:focus-settings-search'));
       }, 50);
@@ -588,7 +697,7 @@ export const App: React.FC = () => {
     // Help → Licences. A menu item that does nothing is worse than no menu item.
     const disposeLicences = window.cloudstream?.onShowLicences?.(() => {
       setSettingsTab('advanced');
-      setActiveTab('settings');
+      switchTab('settings');
     });
 
     return () => {
@@ -753,7 +862,7 @@ export const App: React.FC = () => {
     }
     const { payload } = result;
     setShareProblem(null);
-    setSelectedMedia({
+    openDetail({
       name: payload.title,
       originalTitle: payload.originalTitle,
       url: payload.url,
@@ -763,7 +872,7 @@ export const App: React.FC = () => {
       year: payload.year,
       imdbId: payload.id,
     });
-  }, []);
+  }, [openDetail]);
 
   useEffect(() => {
     return window.cloudstream?.onOpenShareLink?.(handleShareLink);
@@ -913,13 +1022,13 @@ export const App: React.FC = () => {
     lastQuery.current = { query, options };
     setSavedView(null);
     setSearchQuery(query);
-    setSelectedMedia(null); // Instantly dismiss open DetailView overlay
     setSearch(null); // Instantly clear old search results
-    // A new query is a new question, so the previous answer's filters and
-    // disclosure state say nothing about it.
+    // A new query is a new question, so the previous answer's filters,
+    // disclosure state and opened pages say nothing about it.
     setSearchUi(EMPTY_SEARCH_UI);
-    savedScroll.current = 0;
-    setActiveTab('search');
+    resetScreen('search');
+    switchTab('search');
+    scrollAfterPaint(0);
     setSearchError(null);
 
     if (!window.cloudstream) return;
@@ -930,7 +1039,7 @@ export const App: React.FC = () => {
     } catch (err) {
       setSearchError(describeError(err));
     }
-  }, [handleShareLink]);
+  }, [handleShareLink, resetScreen, switchTab, scrollAfterPaint]);
 
   /**
    * Abandons the running search, keeping whatever it has already found.
@@ -979,10 +1088,9 @@ export const App: React.FC = () => {
       query: saved.query,
       options: saved.providers.length > 0 ? { providers: saved.providers } : undefined,
     };
-    setSelectedMedia(null);
+    resetScreen('search');
     setSearchError(null);
     setSearchUi(EMPTY_SEARCH_UI);
-    savedScroll.current = 0;
     setSearchQuery(saved.query);
     setSearch({
       id: `saved:${saved.id}`,
@@ -1002,8 +1110,9 @@ export const App: React.FC = () => {
       cancelled: false,
     });
     setSavedView({ id: saved.id, savedAt: saved.savedAt });
-    setActiveTab('search');
-  }, []);
+    switchTab('search');
+    scrollAfterPaint(0);
+  }, [resetScreen, switchTab, scrollAfterPaint]);
 
   /** Keeps the live search's results to reopen later. */
   const handleSaveSearch = useCallback(async (): Promise<boolean> => {
@@ -1115,8 +1224,6 @@ export const App: React.FC = () => {
   const handleSearchFromPlayer = useCallback(
     (query: string) => {
       void handleClosePlayer();
-      setSelectedMedia(null);
-      setActiveTab('search');
       setSearchQuery(query);
       void handleSearch(query);
     },
@@ -1124,38 +1231,45 @@ export const App: React.FC = () => {
     [handleSearch]
   );
 
+  /**
+   * Opens the detail page of what is playing, from wherever it was started.
+   *
+   * History, Downloads and Continue watching start playback without ever
+   * passing through the title's page, so there is nothing to go "back" to. The
+   * page address is the one progress is recorded against, so it is always at
+   * hand. The player shrinks rather than closes, as in `handleLeavePlayer`: the
+   * viewer asked to look at the title, not to stop watching it.
+   */
+  const handleOpenDetailFromPlayer = useCallback(() => {
+    const context = session?.context;
+    const title = context?.title ?? playback?.title ?? preparing?.title;
+    const progress = context?.progress ?? playback?.progress;
+    if (!title || !progress?.mediaUrl) return;
+    setPlayerMini(true);
+    setPlayerHidden(false);
+    openDetail({
+      name: title,
+      url: progress.mediaUrl,
+      apiName: context?.providerProvenance?.provider ?? 'Library',
+      posterUrl: progress.posterUrl,
+      year: progress.year,
+      imdbId: context?.subtitleContext?.imdbId,
+    } as SearchResponse);
+  }, [session, playback, preparing, openDetail]);
+
+
   const handleSearchFromDetail = useCallback(
     (query: string) => {
-      setSelectedMedia(null);
-      setActiveTab('search');
       setSearchQuery(query);
       void handleSearch(query);
     },
     [handleSearch]
   );
 
-  const handleSelectMedia = (item: SearchResponse) => {
-    savedScroll.current = viewportRef.current?.scrollTop ?? 0;
-    setSelectedMedia(item);
-  };
+  const handleSelectMedia = openDetail;
 
-  /**
-   * Back to the list, at the place it was left.
-   *
-   * Restored after paint rather than immediately: the results grid does not
-   * exist yet at the moment `selectedMedia` clears, so setting `scrollTop`
-   * before the browser has laid it out scrolls a shorter page and clamps to
-   * whatever fits.
-   */
-  const handleBackToResults = useCallback(() => {
-    setSelectedMedia(null);
-    const target = savedScroll.current;
-    requestAnimationFrame(() => {
-      requestAnimationFrame(() => {
-        if (viewportRef.current) viewportRef.current.scrollTop = target;
-      });
-    });
-  }, []);
+  /** Back one page on this screen — to the list, or the title before this one. */
+  const handleBackToResults = goBack;
 
   /**
    * Tears down the stream that was playing before the current one.
@@ -1187,6 +1301,7 @@ export const App: React.FC = () => {
    */
   const startSession = useCallback(async (context: PlaybackSessionRequest) => {
     if (!window.cloudstream) return;
+    setTrailer(null);
 
     setPlayback(null);
     setSwitchError(null);
@@ -1204,12 +1319,13 @@ export const App: React.FC = () => {
       // failed. See `persistent` in `playbackSession.ts`.
       {
         persistent: !isDeveloper,
-        // A resume asks for the source the saved position was reached on, so
-        // the timeline it belongs to is the one that plays.
-        resumeKey:
-          context.progress?.resumeAt && context.progress.resumeAt > 0
-            ? canonicalKey(context.title, context.progress.year)
-            : undefined,
+        // Every Play asks for the source that played last time, not only a
+        // resume with a position: gating this on `resumeAt > 0` is what made a
+        // second Play of a short watch, a finished film or the next episode
+        // start whatever ranked first. No record → the main process answers
+        // undefined and discovery orders the list as usual.
+        resumeKey: context.resumeKey ?? canonicalKey(context.title, context.progress?.year),
+        preferSource: context.preferSource,
       }
     );
     if (!response.ok || !response.snapshot) {
@@ -1291,80 +1407,143 @@ export const App: React.FC = () => {
     // thing to tell someone about a film they were watching a second ago.
     setPlayerMini(true);
     setPlayerHidden(false);
-    setSelectedMedia(null);
-    setActiveTab(tab);
+    switchTab(tab);
   };
 
   /**
-   * Quick-play straight from a card.
+   * Play or Resume from anywhere that is not the detail page — one path.
    *
-   * The player is shown on the click, before anything is known about the title,
-   * because resolving the detail is a network round trip and a card that
-   * appears to do nothing for half a second reads as broken. `preparing` holds
-   * the player open in its resolving state until the real session exists.
+   * Cards, Continue watching, Library and History each had their own copy of
+   * this, and they disagreed: the Continue watching and Library cards drew a
+   * Play button wired to nothing, so the press fell through to the card and
+   * opened the detail page (labelled "Continue watching" / "Library" as if
+   * those were providers); History resumed the position but never asked for
+   * the source; Home asked for the source only when a position existed. That
+   * is the whole of "Resume sometimes works".
    *
-   * A series resolves to a specific episode rather than to the series URL:
-   * handing a series URL to source discovery finds season packs at best, and
-   * nothing at all more often.
+   * The player is shown on the click, before anything is known, because a card
+   * that appears to do nothing for half a second reads as broken. What plays:
    *
-   * **Which** episode is the viewer's watch history, not always the first. This
-   * path started every series at its pilot, which is right exactly once and
-   * wrong on every visit after — someone six episodes in pressed Play on the
-   * poster and got episode one. Nothing errors and nothing looks broken, so it
-   * is absorbed as "this app does not remember where I was", which is the one
-   * thing a streaming app is expected to do. The detail page had always read
-   * this history; only the card path never asked. See `pickResumePoint`.
+   *  1. which episode — the caller's when it knows (a Continue watching row),
+   *     otherwise the viewer's history over the title's episode list
+   *     (`pickResumePoint`), never "the first one";
+   *  2. which source — the one recorded as having played this exact
+   *     title/season/episode (`playedSource`), started at once while its link
+   *     holds and re-found by release identity when it has expired; for a
+   *     never-played episode, the provider/resolution/dub of the last one;
+   *  3. where — the stored position.
+   *
+   * The source list is only shown when none of that can be recovered.
    */
-  const handleQuickPlay = useCallback(
-    async (item: SearchResponse) => {
-      setSelectedMedia(null);
+  const handleResume = useCallback(
+    async (target: ResumeTarget) => {
       setPlayerHidden(false);
       setPlayerMini(false);
-      setPreparing({ title: item.name });
+      setPreparing({ title: target.title });
 
       try {
-        const response = await window.cloudstream?.loadMedia(item.url);
-        const detail = response?.ok ? response.detail : null;
+        const knowsEpisode = target.season !== undefined || target.episode !== undefined;
 
-        // Both reads are local — the datastore, not a provider — so they cost
-        // nothing against the round trip that just resolved the detail.
-        const watchState = await loadWatchState(item.url, {
-          title: detail?.name ?? item.name,
-          year: detail?.year ?? item.year,
-        });
-        const { episode: first, resumeAt } = pickResumePoint(detail?.episodes ?? [], watchState, {
-          isLive: detail?.isLive,
-        });
+        // The detail is needed only to choose an episode, and costs a provider
+        // round trip — a row that already names its episode skips it.
+        const response = knowsEpisode ? null : await window.cloudstream?.loadMedia(target.mediaUrl);
+        const detail = response?.ok ? response.detail : null;
+        const title = detail?.name ?? target.title;
+        const year = detail?.year ?? target.year ?? yearFromKey(target.key);
+        const key = target.key ?? canonicalKey(title, year);
+
+        const watchState = await loadWatchState(target.mediaUrl, { title, year, key });
+        let episode: Episode | null;
+        let resumeAt: number | undefined;
+        if (knowsEpisode && target.resumeAt !== undefined) {
+          // A saved playback carries its own place.
+          episode = {
+            season: target.season,
+            episode: target.episode,
+            name: target.episodeTitle,
+            url: '',
+          } as Episode;
+          resumeAt = target.resumeAt;
+        } else if (knowsEpisode) {
+          episode = {
+            season: target.season,
+            episode: target.episode,
+            name: target.episodeTitle,
+            url: '',
+          } as Episode;
+          resumeAt = resumeSeconds(watchState, episode);
+        } else {
+          ({ episode, resumeAt } = pickResumePoint(detail?.episodes ?? [], watchState, {
+            isLive: detail?.isLive,
+          }));
+        }
+
+        /*
+         * What played here last time also says where it came from. A resume
+         * surface (Continue watching, Library, History) replays the page that
+         * source was found on, so the same provider is asked again; a search
+         * card keeps the provider the viewer just clicked.
+         */
+        const played = (
+          await window.cloudstream?.getPlayedSource?.(key, episode?.season, episode?.episode)
+        )?.record;
+        const pageUrl =
+          target.preferRecordedOrigin && played?.origin.mediaUrl ? played.origin.mediaUrl : target.mediaUrl;
+        const provider =
+          played?.origin.provider ??
+          played?.source.providerName ??
+          played?.source.indexerName ??
+          target.provenance?.provider;
+        let provenance: NonNullable<PlaybackSessionRequest['providerProvenance']> = {
+          ...target.provenance,
+          ...(played?.origin.extensionName ? { extensionName: played.origin.extensionName } : {}),
+          ...(played?.origin.repositoryName ? { repositoryName: played.origin.repositoryName } : {}),
+          provider,
+        };
+        if (provider && !provenance.extensionName) {
+          const chain = (await window.cloudstream?.getProviderProvenanceMap?.([provider]))?.provenance?.[
+            provider
+          ];
+          if (chain) provenance = { ...provenance, ...chain };
+        }
 
         await startSession({
           request: {
-            mediaUrl: first?.url ?? item.url,
-            season: first?.season,
-            episode: first?.episode,
+            // An episode's own links handle when the list gave one; otherwise
+            // the page plus season/episode, which the provider resolves itself.
+            mediaUrl: episode?.url || pageUrl,
+            season: episode?.season,
+            episode: episode?.episode,
+            titleOverride: title,
           },
-          title: detail?.name ?? item.name,
-          originalTitle: item.originalTitle || (detail as any)?.originalTitle,
-          providerProvenance: item.apiName ? { provider: item.apiName } : undefined,
-          episodeTitle: first?.name,
+          title,
+          originalTitle:
+            target.originalTitle || (detail as { originalTitle?: string } | null)?.originalTitle,
+          providerProvenance: provenance.provider ? provenance : undefined,
+          episodeTitle: episode?.name ?? played?.origin.episodeTitle,
+          resumeKey: key,
+          preferSource: target.preferSource,
+          preferences: target.preferences,
           progress: {
             // The **page**, never the episode's playback handle — the same rule
-            // `DetailView.playEpisodeDirectly` documents at length. `first.url`
-            // is the opaque blob `loadLinks` wants, which for much of the corpus
-            // is JSON; storing it here writes it into the library and Continue
-            // Watching, and reopening that row calls `load()` on a links handle
-            // and comes up blank. It also silently disables the next-episode
-            // prefetch, which refuses a links handle by design.
-            mediaUrl: item.url,
-            year: detail?.year ?? item.year,
-            posterUrl: detail?.posterUrl ?? item.posterUrl,
-            season: first?.season,
-            episode: first?.episode,
+            // `DetailView.playEpisodeDirectly` documents at length. A links
+            // handle written here reopens as a blank page.
+            mediaUrl: pageUrl,
+            year,
+            posterUrl: detail?.posterUrl ?? target.posterUrl,
+            season: episode?.season,
+            episode: episode?.episode,
             resumeAt,
+            // What this release measured last time, else what the title should run.
+            expectedDurationSeconds:
+              played?.durationSeconds ??
+              watchState[episodeKey(episode?.season, episode?.episode)]?.durationSeconds ??
+              undefined,
           },
           subtitleContext: {
             imdbId: (detail as { imdbId?: string } | null)?.imdbId,
-            season: first?.season,
-            episode: first?.episode,
+            season: episode?.season,
+            episode: episode?.episode,
           },
         });
       } finally {
@@ -1374,65 +1553,42 @@ export const App: React.FC = () => {
     [startSession]
   );
 
-  const handlePlayFromHistory = useCallback(
-    async (item: HistoryEvent) => {
-      setSelectedMedia(null);
-      setPlayerHidden(false);
-      setPlayerMini(false);
-      setPreparing({ title: item.title });
+  /** The Play button on any search or catalogue card. */
+  const handleQuickPlay = useCallback(
+    (item: SearchResponse) =>
+      handleResume({
+        title: item.name,
+        year: item.year,
+        mediaUrl: item.url,
+        posterUrl: item.posterUrl,
+        originalTitle: item.originalTitle,
+        provenance: item.apiName ? { provider: item.apiName } : undefined,
+      }),
+    [handleResume]
+  );
 
-      try {
+  const handlePlayFromHistory = useCallback(
+    (item: HistoryEvent) =>
+      handleResume({
         // Rows written before loopback addresses were refused still carry
-        // one; the parent page is the durable route back. The title travels
-        // too, so a widened search looks for this work rather than guessing.
-        const mediaUrl = durableAddress(item.mediaUrl, item.parentMediaUrl) || item.mediaUrl;
-        // Where the viewer stopped. This path never asked, so every title
-        // reopened from History started at 0:00 with its position sitting in
-        // the store — reported on Extraction II, saved at 18 minutes in.
-        const watchState = await loadWatchState(mediaUrl, {
-          title: item.parentTitle || item.title,
-          year: item.year,
-        });
-        const resumeAt = resumeSeconds(
-          watchState,
-          item.season !== undefined || item.episode !== undefined
-            ? ({ season: item.season, episode: item.episode } as Episode)
-            : null
-        );
-        await startSession({
-          request: {
-            mediaUrl,
-            season: item.season,
-            episode: item.episode,
-            titleOverride: item.parentTitle || item.title,
-          },
-          title: item.title,
-          originalTitle: item.source?.sourceName !== item.title ? item.source?.sourceName : undefined,
-          providerProvenance: {
-            provider: item.source?.providerName,
-            repositoryName: item.source?.repository,
-            extensionName: item.source?.extension,
-            indexerName: item.source?.indexerName,
-          },
-          episodeTitle: item.episodeTitle,
-          progress: {
-            mediaUrl,
-            year: item.year,
-            posterUrl: item.posterUrl,
-            season: item.season,
-            episode: item.episode,
-            resumeAt,
-          },
-          subtitleContext: {
-            season: item.season,
-            episode: item.episode,
-          },
-        });
-      } finally {
-        setPreparing(null);
-      }
-    },
-    [startSession]
+        // one; the parent page is the durable route back.
+        mediaUrl: durableAddress(item.mediaUrl, item.parentMediaUrl) || item.mediaUrl,
+        title: item.parentTitle || item.title,
+        year: item.year,
+        posterUrl: item.posterUrl,
+        originalTitle: item.originalTitle,
+        season: item.season,
+        episode: item.episode,
+        episodeTitle: item.episodeTitle,
+        preferRecordedOrigin: true,
+        provenance: {
+          provider: item.source?.providerName,
+          repositoryName: item.source?.repository,
+          extensionName: item.source?.extension,
+          indexerName: item.source?.indexerName,
+        },
+      }),
+    [handleResume]
   );
 
   /**
@@ -1762,6 +1918,33 @@ export const App: React.FC = () => {
     setHasBinaries(true);
   };
 
+
+  /*
+   * Back like a browser: the mouse's back button and Alt+←, one page on the
+   * current screen. Not while the player is in front — there, Back belongs to
+   * the player.
+   */
+  const playerInFront = Boolean((session || playback || preparing) && !playerHidden && !playerMini);
+  useEffect(() => {
+    const canGoBack = () => !playerInFront && depthOf(navigationRef.current, activeTabRef.current) > 0;
+    const onMouse = (event: MouseEvent) => {
+      if (event.button !== 3 || !canGoBack()) return;
+      event.preventDefault();
+      goBack();
+    };
+    const onKey = (event: KeyboardEvent) => {
+      if (!event.altKey || event.key !== 'ArrowLeft' || !canGoBack()) return;
+      event.preventDefault();
+      goBack();
+    };
+    window.addEventListener('mouseup', onMouse);
+    window.addEventListener('keydown', onKey);
+    return () => {
+      window.removeEventListener('mouseup', onMouse);
+      window.removeEventListener('keydown', onKey);
+    };
+  }, [goBack, playerInFront]);
+
   const isIncognitoBorderActive = incognito && !isFullscreen;
 
   return (
@@ -1770,13 +1953,19 @@ export const App: React.FC = () => {
       <Sidebar
         activeTab={activeTab}
         setActiveTab={(tab) => {
-          setActiveTab(tab);
-          setSelectedMedia(null);
-          // Home in the sidebar means the home rows, including from inside a
-          // "Show all" grid.
+          if (tab !== activeTab) {
+            // Another screen, exactly as it was left — its open page, its
+            // grid, its scroll.
+            switchTab(tab);
+            return;
+          }
+          // The screen you are already on means its root, as tapping the
+          // current tab does everywhere: Home's rows (from inside "Show all"
+          // too), a streaming service's own page, Search's result grid.
+          resetScreen(tab);
           if (tab === 'home') setHomeCategory(null);
-          // Same for a streaming service: its sidebar row means its own page.
           if (tab.startsWith('ott:')) setOttCategory(null);
+          scrollAfterPaint(0);
         }}
         downloadCount={downloadQueue.filter((t) => t.state === 'Downloading' || t.state === 'Queued').length}
         missingComponentCount={missingComponents}
@@ -1892,6 +2081,7 @@ export const App: React.FC = () => {
               subtitles={session.snapshot.handle?.subtitleUrls ?? []}
               onBack={handleClosePlayer}
               onSearchTitle={handleSearchFromPlayer}
+              onOpenDetail={handleOpenDetailFromPlayer}
               hidden={playerHidden}
               mini={playerMini}
               onMinimize={handleMinimizePlayer}
@@ -1899,6 +2089,7 @@ export const App: React.FC = () => {
               onOpenDownloads={() => handleLeavePlayer('downloads')}
               series={session.context.series}
               progress={session.context.progress}
+              playbackPreferences={session.context.preferences}
               switchingTo={switchingTo}
               switchError={switchError}
               subtitleContext={session.context.subtitleContext}
@@ -1948,6 +2139,7 @@ export const App: React.FC = () => {
                 widened: session.snapshot.widened,
                 retryingElsewhere: session.snapshot.retryingElsewhere,
                 tried: session.snapshot.tried,
+                sourceStates: session.snapshot.sourceStates,
                 onRestart: () => void startSession(session.context),
                 onCancelSearch: handleCancelSourceSearch,
                 onSourceUnplayable: handleSourceUnplayable,
@@ -1965,6 +2157,7 @@ export const App: React.FC = () => {
               subtitles={[]}
               onBack={handleClosePlayer}
               onSearchTitle={handleSearchFromPlayer}
+              onOpenDetail={handleOpenDetailFromPlayer}
               hidden={playerHidden}
               mini={playerMini}
               onMinimize={handleMinimizePlayer}
@@ -1992,6 +2185,7 @@ export const App: React.FC = () => {
               subtitles={playback.subtitles}
               onBack={handleClosePlayer}
               onSearchTitle={handleSearchFromPlayer}
+              onOpenDetail={handleOpenDetailFromPlayer}
               hidden={playerHidden}
               mini={playerMini}
               onMinimize={handleMinimizePlayer}
@@ -2088,6 +2282,7 @@ export const App: React.FC = () => {
           {/* Media Details View Overlay */}
           {selectedMedia ? (
             <DetailView
+              key={`${activeTab}:${depthOf(navigation, activeTab)}:${selectedMedia.url}`}
               mediaItem={selectedMedia}
               onBack={handleBackToResults}
               onPlay={(request) => {
@@ -2101,6 +2296,11 @@ export const App: React.FC = () => {
               // search result, so it reuses the same handler and the same
               // scroll-restore behaviour.
               onSelectMedia={handleSelectMedia}
+              onPlayDirectly={handleQuickPlay}
+              onPlayTrailer={(videos, startId, titleName) => {
+                setTrailerMini(false);
+                setTrailer({ videos, startId, titleName, key: Date.now() });
+              }}
               // Recorded on a bookmark, so a saved page remembers the search
               // that found it and can be reached that way again.
               searchQuery={searchQuery}
@@ -2123,6 +2323,7 @@ export const App: React.FC = () => {
                   <HomeView
                     onSelectMedia={handleSelectMedia}
                     onPlayDirectly={handleQuickPlay}
+                    onResume={handleResume}
                     // Trending anime carries no IMDb id, so those cards open
                     // through a search rather than straight into a detail page.
                     onSearch={handleSearchFromDetail}
@@ -2153,11 +2354,11 @@ export const App: React.FC = () => {
                         onScopedSearch={(query, providers) =>
                           void handleSearch(query, { providers })
                         }
-                        onOpenExtensions={() => setActiveTab('extensions')}
+                        onOpenExtensions={() => switchTab('extensions')}
                         onInventoryChanged={() => void refreshOttPlatforms()}
                         category={ottCategory}
                         onCategoryChange={setOttCategory}
-                        onLeave={() => setActiveTab('home')}
+                        onLeave={() => switchTab('home')}
                       />
                     );
                   })()}
@@ -2186,9 +2387,10 @@ export const App: React.FC = () => {
                 <ErrorBoundary>
                   <LibraryView
                     onSelectMedia={handleSelectMedia}
+                    onResume={handleResume}
                     onSearch={handleSearchFromDetail}
                     onPlaySavedSource={handlePlaySavedSource}
-                    onBrowse={() => setActiveTab('home')}
+                    onBrowse={() => switchTab('home')}
                     onOpenSavedSearch={handleOpenSavedSearch}
                   />
                 </ErrorBoundary>
@@ -2342,6 +2544,31 @@ export const App: React.FC = () => {
         >
           {actionNotice}
         </div>
+      )}
+
+      {trailer && (
+        <Suspense fallback={null}>
+          <TrailerPopup
+            key={trailer.key}
+            videos={trailer.videos}
+            startId={trailer.startId}
+            titleName={trailer.titleName}
+            mini={trailerMini}
+            onMinimize={() => setTrailerMini(true)}
+            onExpand={() => setTrailerMini(false)}
+            onClose={() => {
+              setTrailer(null);
+              setTrailerMini(false);
+            }}
+          />
+        </Suspense>
+      )}
+
+      {/* Point at any UI and learn which component draws it (Ctrl+Shift+C). */}
+      {isDeveloper && (
+        <Suspense fallback={null}>
+          <UiInspector />
+        </Suspense>
       )}
     </div>
   );

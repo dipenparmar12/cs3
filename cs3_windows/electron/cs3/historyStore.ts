@@ -8,9 +8,41 @@ import type {
 } from '../../src/types/history';
 import { canonicalKey } from './libraryStore.ts';
 import { isPrivateSession } from './privacyMode.ts';
+import { episodeTerms, matchesScreenQuery } from '../../src/utils/screenSearch.ts';
 
 const HISTORY_KEY = 'media_history_events_v1';
 const MAX_HISTORY_EVENTS = 10_000;
+
+/**
+ * Whether a history row answers the History screen's find query.
+ *
+ * The same rule the Library's find uses (`matchesScreenQuery`): every word of
+ * the query somewhere in the row, so `dune 1080p` and `severance s1e2` find
+ * what they name. Matches what the row already says — titles, the episode,
+ * year, type, status, who served it, quality and the failure reason.
+ */
+export function historyEventMatches(item: HistoryEvent, query: string): boolean {
+  const source = item.source;
+  return matchesScreenQuery(query, [
+    item.title,
+    item.parentTitle,
+    item.originalTitle,
+    item.episodeTitle,
+    episodeTerms(item.season, item.episode),
+    item.year,
+    item.type,
+    item.status,
+    source?.providerName,
+    source?.indexerName,
+    source?.extension,
+    source?.repository,
+    source?.sourceName,
+    source?.quality,
+    source?.resolution ? `${source.resolution}p` : undefined,
+    source?.languages,
+    item.failureReason,
+  ]);
+}
 
 export class HistoryStore {
   private datastore: DatastoreManager;
@@ -142,28 +174,10 @@ export class HistoryStore {
     let result = [...this.events];
 
     if (filter) {
-      // 1. Text search across title, provider, sourceName, resolution, failure reason
+      // 1. Find on the History screen: every word somewhere in what the row says.
       if (filter.query && filter.query.trim()) {
-        const q = filter.query.trim().toLowerCase();
-        result = result.filter((item) => {
-          const matchTitle = item.title.toLowerCase().includes(q);
-          const matchOriginal = item.originalTitle?.toLowerCase().includes(q);
-          const matchEpisode = item.episodeTitle?.toLowerCase().includes(q);
-          const matchProvider = item.source?.providerName?.toLowerCase().includes(q) ||
-            item.source?.indexerName?.toLowerCase().includes(q);
-          const matchSource = item.source?.sourceName?.toLowerCase().includes(q);
-          const matchError = item.failureReason?.toLowerCase().includes(q);
-          const matchResolution = item.source?.resolution ? String(item.source.resolution).includes(q) : false;
-          return (
-            matchTitle ||
-            matchOriginal ||
-            matchEpisode ||
-            matchProvider ||
-            matchSource ||
-            matchError ||
-            matchResolution
-          );
-        });
+        const query = filter.query;
+        result = result.filter((item) => historyEventMatches(item, query));
       }
 
       // 2. Status filter

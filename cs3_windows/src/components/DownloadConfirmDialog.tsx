@@ -1,5 +1,6 @@
-import React, { useEffect, useState } from 'react';
-import { Download, FolderOpen, HardDrive, X } from 'lucide-react';
+import React, { useState } from 'react';
+import { Button, Checkbox, Dialog, DialogActions } from './ui';
+import { Download, FolderOpen, HardDrive } from 'lucide-react';
 import type { DownloadTask } from '../types/download';
 import { formatReleaseSize } from '../utils/format';
 
@@ -44,18 +45,8 @@ export const DownloadConfirmDialog: React.FC<{
 }> = ({ task, preview, onConfirm, onCancel }) => {
   const [remember, setRemember] = useState(false);
 
-  // Escape cancels. Nothing has started, so cancelling costs nothing.
-  useEffect(() => {
-    const onKey = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') {
-        event.stopPropagation();
-        onCancel();
-      }
-    };
-    window.addEventListener('keydown', onKey, true);
-    return () => window.removeEventListener('keydown', onKey, true);
-  }, [onCancel]);
-
+  // Escape cancels — nothing has started, so cancelling costs nothing. The
+  // shared Dialog handles it (capture phase, consumed).
   const episode =
     task.seasonNumber !== undefined && task.episodeNumber !== undefined
       ? `S${String(task.seasonNumber).padStart(2, '0')}E${String(task.episodeNumber).padStart(2, '0')}`
@@ -90,28 +81,30 @@ export const DownloadConfirmDialog: React.FC<{
   const alreadyDone = preview?.existingState === 'Completed';
 
   return (
-    <div className="modal-backdrop" onClick={onCancel} role="presentation">
-      <div
-        className="modal download-confirm"
-        onClick={(event) => event.stopPropagation()}
-        role="dialog"
-        aria-modal="true"
-        aria-labelledby="download-confirm-title"
-      >
-        <div className="download-confirm__head">
-          <h3 id="download-confirm-title">
-            {resuming ? 'Resume this download?' : 'Download this?'}
-          </h3>
-          <button
-            type="button"
-            className="btn btn-secondary btn-icon"
-            onClick={onCancel}
-            title="Cancel"
-          >
-            <X size={15} />
-          </button>
-        </div>
-
+    <Dialog
+      title={resuming ? 'Resume this download?' : 'Download this?'}
+      icon={<Download size={18} />}
+      size="sm"
+      className="download-confirm"
+      onClose={onCancel}
+      initialFocus='[data-autofocus="confirm"]'
+      footer={
+        <DialogActions
+          start={
+            <Checkbox
+              checked={remember}
+              onChange={setRemember}
+              label="Don’t ask again — start downloads straight away"
+            />
+          }
+        >
+          <Button onClick={onCancel}>Cancel</Button>
+          <Button variant="prominent" icon={Download} onClick={() => onConfirm(remember)} data-autofocus="confirm">
+            {resuming ? 'Resume' : 'Download now'}
+          </Button>
+        </DialogActions>
+      }
+    >
         <p className="download-confirm__title">
           {task.parentTitle || task.title}
           {episode && <span className="download-confirm__episode">{episode}</span>}
@@ -155,30 +148,6 @@ export const DownloadConfirmDialog: React.FC<{
           </p>
         )}
 
-        <label className="download-confirm__remember">
-          <input
-            type="checkbox"
-            checked={remember}
-            onChange={(event) => setRemember(event.target.checked)}
-          />
-          <span>Don’t ask again — start downloads straight away</span>
-        </label>
-
-        <div className="download-confirm__actions">
-          <button type="button" className="btn btn-secondary" onClick={onCancel}>
-            Cancel
-          </button>
-          <button
-            type="button"
-            className="btn btn-primary"
-            onClick={() => onConfirm(remember)}
-            autoFocus
-          >
-            <Download size={15} />
-            {resuming ? 'Resume' : 'Download now'}
-          </button>
-        </div>
-      </div>
-    </div>
+    </Dialog>
   );
 };

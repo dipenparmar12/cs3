@@ -1,0 +1,184 @@
+# Release: every version tag builds every supported OS and architecture,
+# runs the checks, and publishes one GitHub Release with all the packages.
+#
+#   git tag v1.2.3 && git push origin v1.2.3
+#
+# Nothing is published unless every build succeeds: the release job needs all
+# of them, so a failure on one platform leaves no half-populated release. A
+# manual run (workflow_dispatch) builds everything and uploads the artifacts
+# to the run without publishing, for checking a release before tagging it.
+#
+# Artifacts are named CS3-<version>-<os>-<arch>[-<kind>].<ext>
+# (electron-builder.yml), with a SHA256SUMS.txt beside them.
+
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version to name the artifacts (no leading v), e.g. 1.2.3'
+        required: true
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  NODE_VERSION: '22'
+  JAVA_VERSION: '21'
+
+jobs:
+  version:
+    name: Resolve version
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.v.outputs.version }}
+    steps:
+      - id: v
+        shell: bash
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            VERSION="${{ inputs.version }}"
+          else
+            VERSION="${GITHUB_REF_NAME#v}"
+          fi
+          if ! echo "$VERSION" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+([-+][0-9A-Za-z.-]+)?$'; then
+            echo "::error::'$VERSION' is not a semantic version (expected v1.2.3)"
+            exit 1
+          fi
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+
+  checks:
+    name: Checks (${{ matrix.os }})
+    needs: version
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, ubuntu-latest, macos-14]
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+      - uses: oven-sh/setup-bun@v2
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: ${{ env.JAVA_VERSION }}
+          cache: maven
+      - name: Install dependencies
+        working-directory: cs3_windows
+        run: bun install --frozen-lockfile
+      - name: Typecheck (tsc -b)
+        working-directory: cs3_windows
+        run: ./node_modules/.bin/tsc -b
+      - name: Unit tests
+        working-directory: cs3_windows
+        run: bun run test --fast
+      - name: Sidecar tests (mvn test)
+        if: matrix.os == 'ubuntu-latest'
+        run: mvn -B -q -f sidecar/pom.xml test
+
+  build:
+    name: Build ${{ matrix.label }}
+    needs: [version, checks]
+    strategy:
+      # One failure fails the release; finishing the others would only make
+      # artifacts nobody can publish.
+      fail-fast: true
+      matrix:
+        include:
+          - { label: windows-x64, os: windows-latest, arch: x64 }
+          - { label: macos-x64, os: macos-13, arch: x64 }
+          - { label: macos-arm64, os: macos-14, arch: arm64 }
+          - { label: linux-x64, os: ubuntu-22.04, arch: x64 }
+          - { label: linux-arm64, os: ubuntu-24.04-arm, arch: arm64 }
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        shell: bash
+    env:
+      VERSION: ${{ needs.version.outputs.version }}
+      # Signing is opt-in: provide CSC_LINK/CSC_KEY_PASSWORD (and APPLE_* for
+      # notarisation) as repository secrets to sign; without them the macOS
+      # app is ad-hoc signed by tools/package/after-pack.cjs.
+      CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+      - uses: oven-sh/setup-bun@v2
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: ${{ env.JAVA_VERSION }}
+          cache: maven
+      - name: Linux packaging tools
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends fakeroot dpkg rpm libarchive-tools xz-utils
+      - name: Cache media archives
+        uses: actions/cache@v4
+        with:
+          path: .cache/media-runtime
+          key: media-${{ matrix.label }}-${{ hashFiles('tools/package/build-media-runtime.mjs') }}
+      - name: Install dependencies
+        working-directory: cs3_windows
+        run: bun install --frozen-lockfile
+      - name: Build packages
+        # --fast: a fresh checkout's timestamps are all "now", so the
+        # incremental check would rebuild everything; the vendored runtime jars
+        # in sidecar/runtime/ are used as they are (no jitpack round trip). The
+        # sidecar jar and the JRE are still built, because neither is in git.
+        run: node tools/package/build-installer.mjs --fast --arch ${{ matrix.arch }} --version "$VERSION"
+      - name: Check the package carries its runtime
+        run: node tools/package/verify-package.mjs --arch ${{ matrix.arch }}
+      - name: Upload packages
+        uses: actions/upload-artifact@v4
+        with:
+          name: cs3-${{ matrix.label }}
+          if-no-files-found: error
+          path: |
+            cs3_windows/release/CS3-*.exe
+            cs3_windows/release/CS3-*.zip
+            cs3_windows/release/CS3-*.dmg
+            cs3_windows/release/CS3-*.AppImage
+            cs3_windows/release/CS3-*.deb
+            cs3_windows/release/CS3-*.tar.gz
+
+  release:
+    name: Publish release
+    needs: [version, build]
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          pattern: cs3-*
+          merge-multiple: true
+      - name: Checksums
+        working-directory: dist
+        run: sha256sum CS3-* > SHA256SUMS.txt && cat SHA256SUMS.txt
+      - name: Create the release
+        uses: softprops/action-gh-release@v2
+        with:
+          name: CloudStream 3 Desktop ${{ needs.version.outputs.version }}
+          generate_release_notes: true
+          prerelease: ${{ contains(needs.version.outputs.version, '-') }}
+          body_path: .github/release-notes.md
+          files: |
+            dist/CS3-*
+            dist/SHA256SUMS.txt
+          fail_on_unmatched_files: true

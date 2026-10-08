@@ -1,7 +1,8 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { Download, X, Loader2, AlertTriangle, CheckCircle2 } from 'lucide-react';
+import { Download, Loader2, AlertTriangle, CheckCircle2 } from 'lucide-react';
 import type { Episode } from '../types/api';
 import type { BatchProgress } from '../../electron/cs3/batchDownloader';
+import { Button, Dialog, DialogActions } from './ui';
 
 /**
  * One decision, then a whole season downloads.
@@ -69,14 +70,7 @@ export const SeasonDownloadDialog: React.FC<SeasonDownloadDialogProps> = ({
 
   // Escape closes — unless a run is in flight, where a stray keypress would
   // hide the only progress report for something that keeps going regardless.
-  useEffect(() => {
-    if (!open) return;
-    const onKey = (event: KeyboardEvent) => {
-      if (event.key === 'Escape' && !running) onClose();
-    };
-    window.addEventListener('keydown', onKey, true);
-    return () => window.removeEventListener('keydown', onKey, true);
-  }, [open, running, onClose]);
+  // The shared Dialog does both (`dismissable={!running}`).
 
   if (!open) return null;
 
@@ -120,22 +114,35 @@ export const SeasonDownloadDialog: React.FC<SeasonDownloadDialogProps> = ({
       a considered choice. `role="dialog"` also sat on the *backdrop*, which
       makes the accessible dialog region the whole screen.
     */
-    <div className="modal-backdrop" onClick={() => !running && onClose()} role="presentation">
-      <div
-        className="modal"
-        onClick={(event) => event.stopPropagation()}
-        role="dialog"
-        aria-modal="true"
-        aria-labelledby="season-download-title"
-      >
-        <header className="modal__head">
-          <h3 id="season-download-title">
-            <Download size={17} /> Download {scope === 'all' ? 'entire series' : `season ${activeSeason}`}
-          </h3>
-          <button className="icon-button" onClick={onClose} aria-label="Close">
-            <X size={18} />
-          </button>
-        </header>
+    <Dialog
+      title={`Download ${scope === 'all' ? 'entire series' : `season ${activeSeason}`}`}
+      icon={<Download size={18} />}
+      size="md"
+      onClose={onClose}
+      dismissable={!running}
+      footer={
+        <DialogActions>
+          {progress && !progress.finished ? (
+            <Button onClick={cancel}>Cancel remaining</Button>
+          ) : (
+            <Button onClick={onClose}>{progress?.finished ? 'Done' : 'Cancel'}</Button>
+          )}
+          {!progress?.finished && (
+            <Button
+              variant="prominent"
+              icon={Download}
+              loading={running}
+              onClick={start}
+              disabled={selected.length === 0}
+            >
+              {running
+                ? 'Queueing…'
+                : `Download ${selected.length} episode${selected.length === 1 ? '' : 's'}`}
+            </Button>
+          )}
+        </DialogActions>
+      }
+    >
 
         {!progress?.finished && (
           <>
@@ -241,36 +248,6 @@ export const SeasonDownloadDialog: React.FC<SeasonDownloadDialogProps> = ({
           </div>
         )}
 
-        <footer className="modal__foot">
-          {progress && !progress.finished ? (
-            <button className="btn btn-secondary" onClick={cancel}>
-              Cancel remaining
-            </button>
-          ) : (
-            <button className="btn btn-secondary" onClick={onClose}>
-              {progress?.finished ? 'Done' : 'Cancel'}
-            </button>
-          )}
-          {!progress?.finished && (
-            <button
-              className="btn btn-primary"
-              onClick={start}
-              disabled={running || selected.length === 0}
-            >
-              {running ? (
-                <>
-                  <Loader2 className="spin" size={15} /> Queueing…
-                </>
-              ) : (
-                <>
-                  <Download size={15} /> Download {selected.length} episode
-                  {selected.length === 1 ? '' : 's'}
-                </>
-              )}
-            </button>
-          )}
-        </footer>
-      </div>
-    </div>
+    </Dialog>
   );
 };

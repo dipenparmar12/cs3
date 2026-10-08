@@ -97,3 +97,30 @@ export function resumeSeconds(
   if (!match || match.completed) return undefined;
   return match.positionSeconds;
 }
+
+/**
+ * What the detail page's Play button says.
+ *
+ * "Play" on a film someone is halfway through, or on a series they are six
+ * episodes into, promises the wrong thing — the button resumes (see
+ * `pickResumePoint`), so it should say so, and say where: "Resume S2 · E4",
+ * "Resume · 43 min left", "Play S2 · E5" for the next unwatched episode.
+ */
+export function playLabel(
+  point: ResumePoint,
+  watchState: Record<string, EpisodeWatchState> | undefined,
+  options: { isSeries: boolean }
+): string {
+  const episode = point.episode;
+  const where =
+    episode && options.isSeries && (episode.season !== undefined || episode.episode !== undefined)
+      ? `S${episode.season ?? 1} · E${episode.episode ?? 1}`
+      : '';
+  if (point.resumeAt && point.resumeAt > 0) {
+    if (where) return `Resume ${where}`;
+    const state = watchState?.[episodeKey(undefined, undefined)];
+    const left = state && state.durationSeconds > 0 ? Math.round((state.durationSeconds - point.resumeAt) / 60) : 0;
+    return left > 0 ? `Resume · ${left} min left` : 'Resume';
+  }
+  return where ? `Play ${where}` : 'Play';
+}

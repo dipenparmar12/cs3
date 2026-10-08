@@ -1,4 +1,6 @@
 import fs from 'fs';
+import os from 'node:os';
+import { aria2Mirrors, extraSearchDirs, installHint, ytDlpMirrors } from './platform/binarySources.ts';
 import path from 'path';
 import { app } from 'electron';
 import child_process from 'child_process';
@@ -24,17 +26,9 @@ const MIRRORS_FFMPEG = [
   'https://github.com/GyanD/codexffmpeg/releases/download/7.1/ffmpeg-7.1-essentials_build.zip',
 ];
 
-const MIRRORS_ARIA2 = [
-  'https://github.com/aria2/aria2/releases/download/release-1.37.0/aria2-1.37.0-win-64bit-build1.zip',
-  'https://ghproxy.net/https://github.com/aria2/aria2/releases/download/release-1.37.0/aria2-1.37.0-win-64bit-build1.zip',
-  'https://raw.githubusercontent.com/dipenparmar12/cs3/main/bin/aria2c.exe',
-];
-
-const MIRRORS_YTDLP = [
-  'https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp.exe',
-  'https://ghproxy.net/https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp.exe',
-  'https://github.com/yt-dlp/yt-dlp/releases/download/2025.02.19/yt-dlp.exe',
-];
+/** Per-platform sources live in `platform/binarySources.ts`; these are this machine's. */
+const MIRRORS_ARIA2 = aria2Mirrors(process.platform);
+const MIRRORS_YTDLP = ytDlpMirrors(process.platform, process.arch);
 
 export class BinaryDownloader {
   private binDir: string;
@@ -101,8 +95,12 @@ export class BinaryDownloader {
       if (fs.existsSync(candidate)) return candidate;
     }
 
-    // Check system PATH
-    const pathDirs = (process.env.PATH || '').split(path.delimiter);
+    // The system PATH, plus where Homebrew and Linux packages put things that
+    // a GUI app's inherited PATH leaves out (see `extraSearchDirs`).
+    const pathDirs = [
+      ...(process.env.PATH || '').split(path.delimiter),
+      ...extraSearchDirs(process.platform, os.homedir()),
+    ];
     for (const dir of pathDirs) {
       if (!dir) continue;
       const candidate = path.join(dir, exe);
@@ -300,7 +298,7 @@ export class BinaryDownloader {
       }
 
       if (process.platform !== 'win32') {
-        if (onStatus) onStatus('Please install ffmpeg through your system package manager.', 100);
+        if (onStatus) onStatus(installHint('ffmpeg', process.platform), 100);
         return false;
       }
 
@@ -383,6 +381,13 @@ export class BinaryDownloader {
       if (test.ok) {
         if (onStatus) onStatus('aria2c verified and ready.', 100);
         return true;
+      }
+
+      // aria2 publishes Windows builds only; elsewhere it is a system package,
+      // and downloads still work without it through the built-in downloader.
+      if (MIRRORS_ARIA2.length === 0) {
+        if (onStatus) onStatus(installHint('aria2c', process.platform), 100);
+        return false;
       }
 
       const binaryName = process.platform === 'win32' ? 'aria2c.exe' : 'aria2c';
@@ -499,6 +504,15 @@ export class BinaryDownloader {
         return false;
       }
 
+      // A downloaded file is not executable on macOS or Linux until it is made so.
+      if (process.platform !== 'win32' && fs.existsSync(targetBinaryPath)) {
+        try {
+          fs.chmodSync(targetBinaryPath, 0o755);
+        } catch {
+          /* reported by the test below */
+        }
+      }
+
       const verify = await this.testBinary('yt-dlp');
       const installed = Boolean(verify.ok && fs.existsSync(targetBinaryPath));
       if (onStatus) {
@@ -602,14 +616,7 @@ export class BinaryDownloader {
        * cannot open VA-API.
        */
       if (process.platform !== 'win32') {
-        if (onStatus) {
-          onStatus(
-            process.platform === 'darwin'
-              ? 'Install mpv with `brew install mpv`, then reopen this panel.'
-              : 'Install mpv with your package manager (e.g. `apt install mpv`), then reopen this panel.',
-            100
-          );
-        }
+        if (onStatus) onStatus(installHint('mpv', process.platform), 100);
         return false;
       }
 

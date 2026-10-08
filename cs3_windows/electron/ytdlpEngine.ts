@@ -4,6 +4,7 @@ import fs from 'fs';
 import { app } from 'electron';
 import type { YtDlpInfo } from './ytdlpSources.ts';
 import { describeError } from '../src/utils/errors.ts';
+import { appStorage } from './storage/appStorage.ts';
 
 /** How long one page resolve may take before it is abandoned. */
 const RESOLVE_TIMEOUT_MS = 45_000;
@@ -43,6 +44,19 @@ export interface YtDlpDownloadOptions {
 
 export interface YtDlpDownloadHandle {
   cancel(): void;
+}
+
+/**
+ * yt-dlp's own cache (player signatures and the like) goes in the app's
+ * `cache/yt-dlp`, not the per-user `~/.cache/yt-dlp` it picks by default —
+ * re-creatable, and somewhere the Storage panel can show and clear it.
+ */
+function ytdlpCacheArgs(): string[] {
+  try {
+    return ['--cache-dir', appStorage().cacheDir('yt-dlp')];
+  } catch {
+    return [];
+  }
 }
 
 export class YtDlpEngine {
@@ -101,6 +115,7 @@ export class YtDlpEngine {
       '--newline',
       '--no-warnings',
       '--no-playlist',
+      ...ytdlpCacheArgs(),
       // Resume a partially fetched file rather than starting over.
       '--continue',
       '--retries', '10',
@@ -225,6 +240,7 @@ export class YtDlpEngine {
         [
           '--dump-single-json',
           '--no-playlist',
+          ...ytdlpCacheArgs(),
           '--no-warnings',
           '--no-progress',
           pageUrl,

@@ -9,6 +9,8 @@ import { SidecarStderrReader } from './sidecarStderr';
 import { getIssueLog } from './extensionIssues';
 import { describeError } from '../../src/utils/errors.ts';
 import type { RpcResult } from './rpcResult.ts';
+import { appStorage } from '../storage/appStorage.ts';
+import { sweepTemp } from '../storage/storageCleanup.ts';
 
 export type { RpcResult } from './rpcResult.ts';
 export { TRANSPORT_ERROR_KINDS, isTransportFailure } from './rpcResult.ts';
@@ -78,6 +80,9 @@ const REQUIRED_METHODS = [
   'providerMainPageSections',
   'providerMainPage',
 ] as const;
+
+/** Files in the JVM's temp area older than this are removed before it starts. */
+export const JVM_TEMP_MAX_AGE_MS = 30 * 24 * 60 * 60 * 1000;
 
 export class SidecarSupervisor {
   private proc: ChildProcessWithoutNullStreams | null = null;
@@ -199,6 +204,23 @@ export class SidecarSupervisor {
     const classpath = [jarPath, path.join(libDir, '*')].join(path.delimiter);
     const runtimeClasspath = this.resolveRuntimeDir();
 
+    /*
+     * The JVM's temp directory is the app's, not the system's: dex2jar, OkHttp
+     * and plugins that build their own Android context write there. Aged out
+     * here, before the JVM exists, so nothing it holds open can be removed —
+     * the background sweep leaves this area alone while the runtime runs.
+     */
+    const storage = appStorage();
+    const jvmTemp = storage.tempArea('jvm');
+    try {
+      await sweepTemp(storage.tempRoot, {
+        currentPid: storage.processId,
+        areaMaxAgeMs: JVM_TEMP_MAX_AGE_MS,
+      });
+    } catch {
+      // A failed tidy never stops the runtime from starting.
+    }
+
     const totalMem = os.totalmem();
     const maxHeapMb =
       totalMem >= 16 * 1024 * 1024 * 1024
@@ -223,6 +245,7 @@ export class SidecarSupervisor {
           // plugin cannot pull in native code.
           '-Djava.library.path=',
           '-Dfile.encoding=UTF-8',
+          `-Djava.io.tmpdir=${jvmTemp}`,
           '-cp',
           classpath,
           'com.cloudstream.desktop.sidecar.Main',

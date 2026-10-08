@@ -33,6 +33,7 @@ import {
   type CreditPerson,
   type ExtendedMetadata,
   type MetadataSourceOutcome,
+  type TitlePlot,
   type TitleRating,
   type TitleStatus,
 } from '../types/metadata.ts';
@@ -160,6 +161,31 @@ export function formatRuntimeMinutes(minutes: number | undefined): string | null
   const rest = whole % 60;
   if (!hours) return `${rest} min`;
   return rest ? `${hours} h ${rest} min` : `${hours} h`;
+}
+
+/**
+ * A provider's duration string, as minutes.
+ *
+ * Providers write it every way there is — "136 min", "2h 16m", "1 hr 45 mins",
+ * "PT2H16M", a bare "136" — and the page showed whichever arrived. Read once
+ * here so the page can say "2 h 16 min" for all of them. Anything it does not
+ * recognise is `undefined`, and the caller shows the original text.
+ */
+export function parseRuntimeMinutes(value: string | number | undefined): number | undefined {
+  if (typeof value === 'number') return Number.isFinite(value) && value > 0 ? value : undefined;
+  const text = (value ?? '').trim().toLowerCase();
+  if (!text) return undefined;
+  const iso = text.match(/^pt(?:(\d+)h)?(?:(\d+)m)?(?:(\d+)s)?$/);
+  if (iso && (iso[1] || iso[2])) return Number(iso[1] ?? 0) * 60 + Number(iso[2] ?? 0);
+  if (/^\d+$/.test(text)) {
+    const minutes = Number(text);
+    return minutes > 0 && minutes < 1000 ? minutes : undefined;
+  }
+  const hours = text.match(/(\d+(?:\.\d+)?)\s*(?:h|hr|hrs|hour|hours)\b/);
+  const minutes = text.match(/(\d+)\s*(?:m|min|mins|minute|minutes)\b/);
+  if (!hours && !minutes) return undefined;
+  const total = Math.round(Number(hours?.[1] ?? 0) * 60 + Number(minutes?.[1] ?? 0));
+  return total > 0 ? total : undefined;
 }
 
 export interface CastGroups {
@@ -344,4 +370,48 @@ export function answeringSources(outcomes: MetadataSourceOutcome[] | undefined):
   return (outcomes ?? [])
     .filter((entry) => entry.status === 'ok')
     .map((entry) => sourceLabel(entry.source));
+}
+
+
+/** One description the viewer can switch to, labelled by who wrote it. */
+export interface PlotChoice {
+  id: string;
+  label: string;
+  text: string;
+}
+
+const plotPrint = (text: string) =>
+  text
+    .normalize('NFKD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '');
+
+/**
+ * The descriptions a detail page can offer, provider's first.
+ *
+ * The provider's own text leads because it describes the release about to be
+ * played (a dub, a regional cut). A catalogue plot that only repeats it — the
+ * same words, or a truncation either way — is not a second choice; offering
+ * "IMDb" that turns out to be the same paragraph is noise. With one choice or
+ * none, the page shows no switch at all.
+ */
+export function plotChoices(
+  providerPlot: string | undefined,
+  providerLabel: string | undefined,
+  plots: TitlePlot[] | undefined
+): PlotChoice[] {
+  const choices: PlotChoice[] = [];
+  const prints: string[] = [];
+  const add = (id: string, label: string, text: string | undefined) => {
+    const trimmed = text?.trim();
+    if (!trimmed) return;
+    const print = plotPrint(trimmed.replace(/(\.\.\.|…)$/, ''));
+    if (!print || prints.some((seen) => seen.startsWith(print) || print.startsWith(seen))) return;
+    prints.push(print);
+    choices.push({ id, label, text: trimmed });
+  };
+  add('provider', providerLabel?.trim() || sourceLabel('provider'), providerPlot);
+  for (const plot of plots ?? []) add(plot.source, sourceLabel(plot.source), plot.text);
+  return choices;
 }

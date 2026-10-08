@@ -1,10 +1,10 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useSessionState } from '../utils/useSessionState';
 import { useFlash } from '../utils/useFlash';
-import {
+import { Loader2, MoreHorizontal,
   History as HistoryIcon,
   Play,
   Trash2,
-  Search,
   RotateCw,
   Info,
   CheckCircle2,
@@ -14,8 +14,6 @@ import {
   AlertTriangle,
   Film,
   Eye,
-  Filter,
-  ArrowUpDown,
   CheckSquare,
   Square,
   ExternalLink,
@@ -29,8 +27,9 @@ import {
   Sparkles,
   ChevronDown,
   ChevronUp,
-  List,
   FileSpreadsheet,
+  ChevronsDownUp,
+  ChevronsUpDown,
 } from 'lucide-react';
 import type { SearchResponse } from '../types/api';
 import { TvType } from '../types/api';
@@ -48,7 +47,9 @@ import {
   formatEventActionText,
 } from '../utils/historyGrouping';
 import { downloadHistoryCsv, toHistoryCsv } from '../utils/historyExport';
-import { useDismissable } from '../utils/useDismissable';
+import { ScreenSearch } from '../components/ScreenSearch';
+import { Button, Dialog, DialogActions, Menu, Select } from '../components/ui';
+import { useScreenSearch } from '../utils/useScreenSearch';
 
 interface HistoryViewProps {
   onSelectMedia: (item: SearchResponse) => void;
@@ -138,33 +139,38 @@ export const HistoryView: React.FC<HistoryViewProps> = ({ onSelectMedia, onPlayD
   const [refreshing, setRefreshing] = useState(false);
 
   // View Mode: 'grouped' consolidates revisited/duplicate media, 'flat' displays chronological individual logs
-  const [viewMode, setViewMode] = useState<'grouped' | 'flat'>('grouped');
+  const [viewMode, setViewMode] = useSessionState<'grouped' | 'flat'>('history.viewMode', 'grouped');
 
   // Accordion state for grouped view
-  const [expandedGroups, setExpandedGroups] = useState<Set<string>>(new Set());
+  const [expandedGroups, setExpandedGroups] = useSessionState<Set<string>>('history.expanded', () => new Set());
   const [showAllVisitsMap, setShowAllVisitsMap] = useState<Record<string, boolean>>({});
 
-  // Filters & Search
-  const [searchQuery, setSearchQuery] = useState('');
-  const [activeStatus, setActiveStatus] = useState<HistoryStatus | 'All'>('All');
-  const [mediaTypeFilter, setMediaTypeFilter] = useState<'all' | 'movie' | 'series' | 'anime'>('all');
-  const [sortBy, setSortBy] = useState<'recent' | 'oldest' | 'played' | 'failed' | 'downloaded'>('recent');
+  // Filters & find-on-this-screen. The query is applied a beat after typing
+  // stops: the store re-filters up to ten thousand rows, and asking on every
+  // keystroke redrew the list once per letter.
+  const [searchQuery, setSearchQuery] = useScreenSearch('history');
+  const [appliedQuery, setAppliedQuery] = useState(searchQuery);
+  useEffect(() => {
+    if (searchQuery === appliedQuery) return;
+    const timer = setTimeout(() => setAppliedQuery(searchQuery), searchQuery ? 160 : 0);
+    return () => clearTimeout(timer);
+  }, [searchQuery, appliedQuery]);
+  // The full-screen spinner is for the first load only; a re-filter keeps the
+  // rows on screen until the answer replaces them.
+  const loadedOnce = useRef(false);
+  const [activeStatus, setActiveStatus] = useSessionState<HistoryStatus | 'All'>('history.status', 'All');
+  const [mediaTypeFilter, setMediaTypeFilter] = useSessionState<'all' | 'movie' | 'series' | 'anime'>('history.type', 'all');
+  const [sortBy, setSortBy] = useSessionState<'recent' | 'oldest' | 'played' | 'failed' | 'downloaded'>('history.sort', 'recent');
 
   // Multi-selection
   const [selectMode, setSelectMode] = useState(false);
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
 
   // Export CSV State & Dropdown
-  const [exportMenuOpen, setExportMenuOpen] = useState(false);
   const [exporting, setExporting] = useState(false);
   const { message: exportSuccessMessage, flash: setExportSuccessMessage } = useFlash<string>(3500);
-  const exportMenuRef = useRef<HTMLDivElement | null>(null);
-
-  const closeExportMenu = useCallback(() => setExportMenuOpen(false), []);
-  useDismissable(exportMenuOpen, exportMenuRef, closeExportMenu);
 
   const handleExportFilteredCsv = () => {
-    setExportMenuOpen(false);
     if (events.length === 0) return;
     const dateStr = new Date().toISOString().slice(0, 10);
     downloadHistoryCsv(events, `cloudstream-history-filtered-${dateStr}.csv`);
@@ -172,7 +178,6 @@ export const HistoryView: React.FC<HistoryViewProps> = ({ onSelectMedia, onPlayD
   };
 
   const handleExportAllCsv = async () => {
-    setExportMenuOpen(false);
     if (!window.cloudstream) return;
     setExporting(true);
     try {
@@ -190,7 +195,6 @@ export const HistoryView: React.FC<HistoryViewProps> = ({ onSelectMedia, onPlayD
   };
 
   const handleCopyCsvToClipboard = async () => {
-    setExportMenuOpen(false);
     if (events.length === 0) return;
     const csv = toHistoryCsv(events);
     await navigator.clipboard.writeText(csv);
@@ -209,10 +213,10 @@ export const HistoryView: React.FC<HistoryViewProps> = ({ onSelectMedia, onPlayD
       setLoading(false);
       return;
     }
-    setLoading(true);
+    if (!loadedOnce.current) setLoading(true);
     try {
       const filter: HistoryFilter = {
-        query: searchQuery.trim() || undefined,
+        query: appliedQuery.trim() || undefined,
         status: activeStatus,
         type: mediaTypeFilter,
         sortBy,
@@ -231,10 +235,11 @@ export const HistoryView: React.FC<HistoryViewProps> = ({ onSelectMedia, onPlayD
         setStats(statsRes);
       }
     } finally {
+      loadedOnce.current = true;
       setLoading(false);
       setRefreshing(false);
     }
-  }, [searchQuery, activeStatus, mediaTypeFilter, sortBy]);
+  }, [appliedQuery, activeStatus, mediaTypeFilter, sortBy]);
 
   useEffect(() => {
     fetchHistory();
@@ -484,466 +489,208 @@ export const HistoryView: React.FC<HistoryViewProps> = ({ onSelectMedia, onPlayD
         overflowY: 'auto',
       }}
     >
-      {/* Header & Stats Banner */}
-      <div style={{ display: 'flex', flexDirection: 'column', gap: '1.25rem' }}>
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
-          <div>
-            <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', marginBottom: '0.35rem' }}>
-              <div
-                style={{
-                  width: '36px',
-                  height: '36px',
-                  borderRadius: '10px',
-                  backgroundColor: 'rgba(59, 130, 246, 0.15)',
-                  color: '#60a5fa',
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                  border: '1px solid rgba(59, 130, 246, 0.25)',
-                }}
-              >
-                <HistoryIcon size={20} />
-              </div>
-              <h1 style={{ fontSize: '1.6rem', fontWeight: 800, color: '#fff', letterSpacing: '-0.02em', margin: 0 }}>
-                Media History
-              </h1>
-            </div>
-            <p style={{ margin: 0, fontSize: '0.85rem', color: 'var(--text-muted)' }}>
-              Consolidated playback & download history. Revisit past streams, inspect provider diagnostics, or refresh fresh sources.
+      {/*
+        One quiet header. It was an icon tile, a large "Media History" title, a
+        sentence about diagnostics, five coloured stat cards and five buttons —
+        the most prominent things on the page were the counts and the tools,
+        not the history. Now: the title, the counts as one muted line, find,
+        and everything else (refresh, export, select, clear) in one menu.
+      */}
+      <div className="screen-head">
+        <div className="screen-head__titles">
+          <h2 className="screen-head__title">History</h2>
+          {stats.total > 0 && (
+            <p className="screen-head__meta">
+              {groupedItems.length} title{groupedItems.length === 1 ? '' : 's'} · {stats.played} played
+              {stats.downloaded > 0 && ` · ${stats.downloaded} downloaded`}
+              {stats.failed > 0 && <span className="screen-head__meta-warn"> · {stats.failed} failed</span>}
             </p>
-          </div>
-
-          {/* Action buttons */}
-          <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-            <button
-              type="button"
-              className="btn btn-secondary btn-sm"
-              onClick={() => {
-                setRefreshing(true);
-                fetchHistory();
-              }}
-              disabled={loading || refreshing}
-              title="Refresh history"
-            >
-              <RotateCw size={14} className={refreshing ? 'animate-spin' : ''} />
-              <span>Refresh</span>
-            </button>
-
-            {/* Export CSV Dropdown */}
-            {events.length > 0 && (
-              <div style={{ position: 'relative' }} ref={exportMenuRef}>
-                <button
-                  type="button"
-                  className="btn btn-secondary btn-sm"
-                  onClick={() => setExportMenuOpen((v) => !v)}
-                  disabled={exporting}
-                  title="Export your watch history as a spreadsheet"
-                  style={{ display: 'flex', alignItems: 'center', gap: '0.35rem' }}
-                >
-                  <FileSpreadsheet size={14} />
-                  <span>{exportSuccessMessage ? exportSuccessMessage : 'Export CSV'}</span>
-                  <ChevronDown size={12} />
-                </button>
-
-                {exportMenuOpen && (
-                  <div
-                    style={{
-                      position: 'absolute',
-                      right: 0,
-                      top: 'calc(100% + 4px)',
-                      backgroundColor: '#161b26',
-                      borderRadius: 'var(--radius-md)',
-                      border: '1px solid var(--border-color)',
-                      boxShadow: '0 10px 25px -5px rgba(0, 0, 0, 0.75)',
-                      padding: '0.35rem',
-                      zIndex: 1000,
-                      minWidth: '240px',
-                      display: 'flex',
-                      flexDirection: 'column',
-                      gap: '0.2rem',
-                    }}
-                  >
-                    <button
-                      type="button"
-                      className="btn btn-ghost btn-sm"
-                      onClick={handleExportFilteredCsv}
-                      style={{ justifyContent: 'flex-start', textAlign: 'left', fontSize: '0.78rem', padding: '0.45rem 0.65rem', display: 'flex', alignItems: 'flex-start', gap: '0.5rem' }}
-                    >
-                      <Download size={14} style={{ marginTop: '2px', flexShrink: 0, color: '#60a5fa' }} />
-                      <div>
-                        <div style={{ fontWeight: 600, color: '#fff' }}>Export Current View ({events.length})</div>
-                        <span style={{ fontSize: '0.68rem', color: 'var(--text-subtle)' }}>Filtered & searched items</span>
-                      </div>
-                    </button>
-
-                    <button
-                      type="button"
-                      className="btn btn-ghost btn-sm"
-                      onClick={handleExportAllCsv}
-                      style={{ justifyContent: 'flex-start', textAlign: 'left', fontSize: '0.78rem', padding: '0.45rem 0.65rem', display: 'flex', alignItems: 'flex-start', gap: '0.5rem' }}
-                    >
-                      <FileSpreadsheet size={14} style={{ marginTop: '2px', flexShrink: 0, color: '#34d399' }} />
-                      <div>
-                        <div style={{ fontWeight: 600, color: '#fff' }}>Export All History ({stats.total})</div>
-                        <span style={{ fontSize: '0.68rem', color: 'var(--text-subtle)' }}>Complete durable database logs</span>
-                      </div>
-                    </button>
-
-                    <button
-                      type="button"
-                      className="btn btn-ghost btn-sm"
-                      onClick={handleCopyCsvToClipboard}
-                      style={{ justifyContent: 'flex-start', textAlign: 'left', fontSize: '0.78rem', padding: '0.45rem 0.65rem', display: 'flex', alignItems: 'flex-start', gap: '0.5rem' }}
-                    >
-                      <Copy size={14} style={{ marginTop: '2px', flexShrink: 0, color: '#a78bfa' }} />
-                      <div>
-                        <div style={{ fontWeight: 600, color: '#fff' }}>Copy CSV to Clipboard</div>
-                        <span style={{ fontSize: '0.68rem', color: 'var(--text-subtle)' }}>Paste into Excel, Sheets, or notes</span>
-                      </div>
-                    </button>
-                  </div>
-                )}
-              </div>
-            )}
-
-            {events.length > 0 && (
-              <>
-                <button
-                  type="button"
-                  className={`btn btn-sm ${selectMode ? 'btn-primary' : 'btn-secondary'}`}
-                  onClick={() => {
-                    setSelectMode((v) => !v);
-                    setSelectedIds(new Set());
-                  }}
-                >
-                  {selectMode ? 'Cancel Selection' : 'Select'}
-                </button>
-
-                {selectMode && (
-                  <>
-                    <button type="button" className="btn btn-secondary btn-sm" onClick={selectAll}>
-                      {selectedIds.size === events.length ? 'Deselect All' : 'Select All'}
-                    </button>
-
-                    {selectedIds.size > 0 && (
-                      <button
-                        type="button"
-                        className="btn btn-danger btn-sm"
-                        onClick={handleDeleteSelected}
-                      >
-                        <Trash2 size={14} />
-                        <span>Delete ({selectedIds.size})</span>
-                      </button>
-                    )}
-                  </>
-                )}
-
-                {!selectMode && (
-                  <button
-                    type="button"
-                    className="btn btn-ghost btn-sm"
-                    style={{ color: '#fb7185', borderColor: 'rgba(244, 63, 94, 0.3)' }}
-                    onClick={() => setConfirmClearOpen(true)}
-                  >
-                    <Trash2 size={14} />
-                    <span>Clear All</span>
-                  </button>
-                )}
-              </>
-            )}
-          </div>
-        </div>
-
-        {/* Stats summary cards */}
-        <div
-          style={{
-            display: 'grid',
-            gridTemplateColumns: 'repeat(auto-fit, minmax(130px, 1fr))',
-            gap: '0.75rem',
-          }}
-        >
-          <div
-            style={{
-              padding: '0.75rem 1rem',
-              borderRadius: 'var(--radius-md)',
-              backgroundColor: 'var(--bg-card)',
-              border: '1px solid var(--border-color)',
-            }}
-          >
-            <div style={{ fontSize: '0.72rem', color: 'var(--text-subtle)', fontWeight: 600, textTransform: 'uppercase' }}>
-              Unique Titles
-            </div>
-            <div style={{ fontSize: '1.35rem', fontWeight: 800, color: '#fff', marginTop: '0.2rem' }}>
-              {groupedItems.length}
-            </div>
-            <div style={{ fontSize: '0.68rem', color: 'var(--text-subtle)', marginTop: '0.1rem' }}>
-              ({stats.total} total logs)
-            </div>
-          </div>
-
-          <div
-            style={{
-              padding: '0.75rem 1rem',
-              borderRadius: 'var(--radius-md)',
-              backgroundColor: 'var(--bg-card)',
-              border: '1px solid rgba(16, 185, 129, 0.25)',
-            }}
-          >
-            <div style={{ fontSize: '0.72rem', color: '#34d399', fontWeight: 600, textTransform: 'uppercase' }}>
-              Played
-            </div>
-            <div style={{ fontSize: '1.35rem', fontWeight: 800, color: '#34d399', marginTop: '0.2rem' }}>
-              {stats.played}
-            </div>
-          </div>
-
-          <div
-            style={{
-              padding: '0.75rem 1rem',
-              borderRadius: 'var(--radius-md)',
-              backgroundColor: 'var(--bg-card)',
-              border: '1px solid rgba(244, 63, 94, 0.25)',
-            }}
-          >
-            <div style={{ fontSize: '0.72rem', color: '#fb7185', fontWeight: 600, textTransform: 'uppercase' }}>
-              Failed
-            </div>
-            <div style={{ fontSize: '1.35rem', fontWeight: 800, color: '#fb7185', marginTop: '0.2rem' }}>
-              {stats.failed}
-            </div>
-          </div>
-
-          <div
-            style={{
-              padding: '0.75rem 1rem',
-              borderRadius: 'var(--radius-md)',
-              backgroundColor: 'var(--bg-card)',
-              border: '1px solid rgba(59, 130, 246, 0.25)',
-            }}
-          >
-            <div style={{ fontSize: '0.72rem', color: '#60a5fa', fontWeight: 600, textTransform: 'uppercase' }}>
-              Downloaded
-            </div>
-            <div style={{ fontSize: '1.35rem', fontWeight: 800, color: '#60a5fa', marginTop: '0.2rem' }}>
-              {stats.downloaded}
-            </div>
-          </div>
-
-          <div
-            style={{
-              padding: '0.75rem 1rem',
-              borderRadius: 'var(--radius-md)',
-              backgroundColor: 'var(--bg-card)',
-              border: '1px solid var(--border-color)',
-            }}
-          >
-            <div style={{ fontSize: '0.72rem', color: '#fbbf24', fontWeight: 600, textTransform: 'uppercase' }}>
-              Attempted
-            </div>
-            <div style={{ fontSize: '1.35rem', fontWeight: 800, color: '#fbbf24', marginTop: '0.2rem' }}>
-              {stats.attempted}
-            </div>
-          </div>
-        </div>
-      </div>
-
-      {/* Filter, Search & View Controls Bar */}
-      <div
-        style={{
-          display: 'flex',
-          flexDirection: 'column',
-          gap: '0.85rem',
-          backgroundColor: 'var(--bg-card)',
-          padding: '0.9rem 1.1rem',
-          borderRadius: 'var(--radius-lg)',
-          border: '1px solid var(--border-color)',
-        }}
-      >
-        <div style={{ display: 'flex', gap: '0.75rem', alignItems: 'center', flexWrap: 'wrap' }}>
-          {/* Search Box */}
-          <div style={{ position: 'relative', flex: 1, minWidth: '220px' }}>
-            <Search
-              size={16}
-              style={{ position: 'absolute', left: '0.75rem', top: '50%', transform: 'translateY(-50%)', color: 'var(--text-subtle)' }}
-            />
-            <input
-              type="text"
-              className="input"
-              placeholder="Search history by title, provider, quality, error, or release…"
-              value={searchQuery}
-              onChange={(e) => setSearchQuery(e.target.value)}
-              style={{
-                width: '100%',
-                paddingLeft: '2.2rem',
-                fontSize: '0.85rem',
-                backgroundColor: 'rgba(255, 255, 255, 0.04)',
-              }}
-            />
-            {searchQuery && (
-              <button
-                type="button"
-                onClick={() => setSearchQuery('')}
-                style={{
-                  position: 'absolute',
-                  right: '0.6rem',
-                  top: '50%',
-                  transform: 'translateY(-50%)',
-                  background: 'none',
-                  border: 'none',
-                  color: 'var(--text-subtle)',
-                  cursor: 'pointer',
-                }}
-              >
-                <X size={14} />
-              </button>
-            )}
-          </div>
-
-          {/* View Mode Toggle: Grouped vs Flat */}
-          <div
-            style={{
-              display: 'flex',
-              backgroundColor: 'rgba(255, 255, 255, 0.04)',
-              borderRadius: '6px',
-              padding: '2px',
-              border: '1px solid rgba(255, 255, 255, 0.08)',
-            }}
-          >
-            <button
-              type="button"
-              onClick={() => setViewMode('grouped')}
-              style={{
-                display: 'flex',
-                alignItems: 'center',
-                gap: '0.35rem',
-                padding: '0.3rem 0.65rem',
-                borderRadius: '4px',
-                fontSize: '0.78rem',
-                fontWeight: 600,
-                border: 'none',
-                backgroundColor: viewMode === 'grouped' ? 'var(--accent-primary)' : 'transparent',
-                color: viewMode === 'grouped' ? '#fff' : 'var(--text-muted)',
-                cursor: 'pointer',
-                transition: 'all 0.15s ease',
-              }}
-              title="Consolidate duplicate media visits into single entries with action tags and activity history"
-            >
-              <Layers size={13} />
-              <span>Grouped ({groupedItems.length})</span>
-            </button>
-            <button
-              type="button"
-              onClick={() => setViewMode('flat')}
-              style={{
-                display: 'flex',
-                alignItems: 'center',
-                gap: '0.35rem',
-                padding: '0.3rem 0.65rem',
-                borderRadius: '4px',
-                fontSize: '0.78rem',
-                fontWeight: 600,
-                border: 'none',
-                backgroundColor: viewMode === 'flat' ? 'var(--accent-primary)' : 'transparent',
-                color: viewMode === 'flat' ? '#fff' : 'var(--text-muted)',
-                cursor: 'pointer',
-                transition: 'all 0.15s ease',
-              }}
-              title="Show all individual activity events chronologically"
-            >
-              <List size={13} />
-              <span>Flat Log ({events.length})</span>
-            </button>
-          </div>
-
-          {/* Media Type Dropdown */}
-          <div style={{ display: 'flex', alignItems: 'center', gap: '0.35rem' }}>
-            <Filter size={14} style={{ color: 'var(--text-subtle)' }} />
-            <select
-              value={mediaTypeFilter}
-              onChange={(e) => setMediaTypeFilter(e.target.value as any)}
-              className="input"
-              style={{ fontSize: '0.8rem', padding: '0.35rem 0.6rem', backgroundColor: 'rgba(255, 255, 255, 0.04)' }}
-            >
-              <option value="all">All Types</option>
-              <option value="movie">Movies</option>
-              <option value="series">Series</option>
-              <option value="anime">Anime</option>
-            </select>
-          </div>
-
-          {/* Sort Dropdown */}
-          <div style={{ display: 'flex', alignItems: 'center', gap: '0.35rem' }}>
-            <ArrowUpDown size={14} style={{ color: 'var(--text-subtle)' }} />
-            <select
-              value={sortBy}
-              onChange={(e) => setSortBy(e.target.value as any)}
-              className="input"
-              style={{ fontSize: '0.8rem', padding: '0.35rem 0.6rem', backgroundColor: 'rgba(255, 255, 255, 0.04)' }}
-            >
-              <option value="recent">Most Recent</option>
-              <option value="oldest">Oldest First</option>
-              <option value="played">Recently Played</option>
-              <option value="failed">Recently Failed</option>
-              <option value="downloaded">Recently Downloaded</option>
-            </select>
-          </div>
-
-          {/* Expand/Collapse All (Grouped Mode Only) */}
-          {viewMode === 'grouped' && groupedItems.length > 0 && (
-            <button
-              type="button"
-              className="btn btn-ghost btn-sm"
-              onClick={toggleExpandAll}
-              style={{ fontSize: '0.75rem', padding: '0.3rem 0.5rem', color: 'var(--text-muted)' }}
-              title="Expand or collapse all activity logs"
-            >
-              <span>{expandedGroups.size === groupedItems.length ? 'Collapse All' : 'Expand All'}</span>
-            </button>
           )}
         </div>
 
-        {/* Status Pills */}
-        <div style={{ display: 'flex', gap: '0.4rem', flexWrap: 'wrap' }}>
-          {statusPills.map((pill) => {
-            const isActive = activeStatus === pill.status;
-            return (
+        <div className="screen-head__actions">
+          <ScreenSearch
+            label="history"
+            value={searchQuery}
+            onChange={setSearchQuery}
+            matches={
+              searchQuery === appliedQuery && !loading
+                ? viewMode === 'grouped'
+                  ? groupedItems.length
+                  : events.length
+                : undefined
+            }
+            hint="titles, episodes, years, providers, quality and errors"
+          />
+
+          {selectMode ? (
+            <>
+              <Button size="compact" onClick={selectAll}>
+                {selectedIds.size === events.length ? 'Select none' : 'Select all'}
+              </Button>
+              {selectedIds.size > 0 && (
+                <Button size="compact" variant="destructive" icon={Trash2} onClick={handleDeleteSelected}>
+                  Delete {selectedIds.size}
+                </Button>
+              )}
+              <Button
+                size="compact"
+                variant="ambient"
+                onClick={() => {
+                  setSelectMode(false);
+                  setSelectedIds(new Set());
+                }}
+              >
+                Done
+              </Button>
+            </>
+          ) : (
+            <Menu
+              label="History actions"
+              trigger={(props) => (
+                <Button
+                  {...props}
+                  size="compact"
+                  variant="ambient"
+                  iconOnly
+                  icon={exporting || refreshing ? Loader2 : MoreHorizontal}
+                  aria-label="More history actions"
+                  title={exportSuccessMessage ?? 'More'}
+                />
+              )}
+              items={[
+                {
+                  label: 'Refresh',
+                  icon: RotateCw,
+                  onSelect: () => {
+                    setRefreshing(true);
+                    fetchHistory();
+                  },
+                },
+                ...(events.length > 0
+                  ? [
+                      {
+                        label: 'Select…',
+                        description: 'Pick entries to delete',
+                        icon: CheckSquare,
+                        onSelect: () => {
+                          setSelectMode(true);
+                          setSelectedIds(new Set());
+                        },
+                      },
+                      {
+                        label: `Export current view (${events.length})`,
+                        description: 'The items the find and filters leave, as CSV',
+                        icon: Download,
+                        onSelect: handleExportFilteredCsv,
+                      },
+                      {
+                        label: `Export all history (${stats.total})`,
+                        description: 'Every record, as CSV',
+                        icon: FileSpreadsheet,
+                        onSelect: () => void handleExportAllCsv(),
+                      },
+                      {
+                        label: 'Copy CSV to clipboard',
+                        icon: Copy,
+                        onSelect: () => void handleCopyCsvToClipboard(),
+                      },
+                      {
+                        label: 'Clear all history…',
+                        icon: Trash2,
+                        tone: 'danger' as const,
+                        onSelect: () => setConfirmClearOpen(true),
+                      },
+                    ]
+                  : []),
+              ]}
+            />
+          )}
+        </div>
+      </div>
+
+      {/*
+        One toolbar row, the same shape as Downloads: what to show on the left,
+        how to show it on the right. It was a card holding a segmented view
+        switch, two full-size selects, an Expand All button and a second row
+        of status pills — six kinds of control for one list.
+      */}
+      <div className="screen-toolbar">
+        <div className="type-tabs" role="tablist" aria-label="Show">
+          {statusPills.map((pill) =>
+            pill.status !== 'All' && !pill.count && activeStatus !== pill.status ? null : (
               <button
                 key={pill.status}
                 type="button"
+                role="tab"
+                aria-selected={activeStatus === pill.status}
+                className={`type-tabs__tab${activeStatus === pill.status ? ' type-tabs__tab--on' : ''}`}
                 onClick={() => setActiveStatus(pill.status)}
-                style={{
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: '0.35rem',
-                  padding: '0.3rem 0.65rem',
-                  borderRadius: '20px',
-                  fontSize: '0.75rem',
-                  fontWeight: isActive ? 700 : 500,
-                  cursor: 'pointer',
-                  border: '1px solid',
-                  borderColor: isActive ? 'var(--accent-primary)' : 'rgba(255, 255, 255, 0.08)',
-                  backgroundColor: isActive ? 'rgba(59, 130, 246, 0.2)' : 'rgba(255, 255, 255, 0.02)',
-                  color: isActive ? '#fff' : 'var(--text-muted)',
-                  transition: 'all 0.15s ease',
-                }}
               >
-                <span>{pill.label}</span>
-                {pill.count !== undefined && (
-                  <span
-                    style={{
-                      fontSize: '0.65rem',
-                      padding: '0.05rem 0.35rem',
-                      borderRadius: '10px',
-                      backgroundColor: isActive ? 'var(--accent-primary)' : 'rgba(255, 255, 255, 0.08)',
-                      color: '#fff',
-                    }}
-                  >
-                    {pill.count}
-                  </span>
-                )}
+                {pill.status === 'All' ? 'All' : pill.label} <span>{pill.count ?? 0}</span>
               </button>
-            );
-          })}
+            )
+          )}
+        </div>
+        <div className="screen-toolbar__group">
+          <Select
+            size="compact"
+            aria-label="Type"
+            value={mediaTypeFilter}
+            onChange={(e) => setMediaTypeFilter(e.target.value as typeof mediaTypeFilter)}
+            options={[
+              { value: 'all', label: 'All types' },
+              { value: 'movie', label: 'Movies' },
+              { value: 'series', label: 'Series' },
+              { value: 'anime', label: 'Anime' },
+            ]}
+          />
+          <Select
+            size="compact"
+            aria-label="Sort"
+            value={sortBy}
+            onChange={(e) => setSortBy(e.target.value as typeof sortBy)}
+            options={[
+              { value: 'recent', label: 'Most recent' },
+              { value: 'oldest', label: 'Oldest first' },
+              { value: 'played', label: 'Recently played' },
+              { value: 'failed', label: 'Recently failed' },
+              { value: 'downloaded', label: 'Recently downloaded' },
+            ]}
+          />
+          <div className="type-tabs" role="tablist" aria-label="View">
+            <button
+              type="button"
+              role="tab"
+              aria-selected={viewMode === 'grouped'}
+              className={`type-tabs__tab${viewMode === 'grouped' ? ' type-tabs__tab--on' : ''}`}
+              onClick={() => setViewMode('grouped')}
+              title="One row per title"
+            >
+              By title
+            </button>
+            <button
+              type="button"
+              role="tab"
+              aria-selected={viewMode === 'flat'}
+              className={`type-tabs__tab${viewMode === 'flat' ? ' type-tabs__tab--on' : ''}`}
+              onClick={() => setViewMode('flat')}
+              title="Every visit, stream and download as its own row"
+            >
+              Every visit
+            </button>
+          </div>
+          {viewMode === 'grouped' && groupedItems.length > 1 && (
+            <Button
+              size="compact"
+              variant="ambient"
+              iconOnly
+              icon={expandedGroups.size === groupedItems.length ? ChevronsDownUp : ChevronsUpDown}
+              aria-label={expandedGroups.size === groupedItems.length ? 'Collapse every title' : 'Expand every title'}
+              title={expandedGroups.size === groupedItems.length ? 'Collapse every title' : 'Expand every title'}
+              onClick={toggleExpandAll}
+            />
+          )}
         </div>
       </div>
 
@@ -989,10 +736,19 @@ export const HistoryView: React.FC<HistoryViewProps> = ({ onSelectMedia, onPlayD
               No history found
             </h3>
             <p style={{ margin: 0, fontSize: '0.85rem', color: 'var(--text-muted)', maxWidth: '380px' }}>
-              {searchQuery || activeStatus !== 'All' || mediaTypeFilter !== 'all'
-                ? 'No media activity matches your active search and filter criteria.'
-                : 'Your playback and download attempts will appear here as you discover and stream media.'}
+              {appliedQuery.trim()
+                ? `Nothing in your history matches “${appliedQuery.trim()}”${
+                    activeStatus !== 'All' || mediaTypeFilter !== 'all' ? ' with these filters' : ''
+                  }.`
+                : activeStatus !== 'All' || mediaTypeFilter !== 'all'
+                  ? 'No media activity matches these filters.'
+                  : 'Your playback and download attempts will appear here as you discover and stream media.'}
             </p>
+            {appliedQuery.trim() && (
+              <button type="button" className="btn btn-secondary btn-sm" onClick={() => setSearchQuery('')}>
+                Clear find
+              </button>
+            )}
           </div>
         )}
 
@@ -1130,29 +886,6 @@ export const HistoryView: React.FC<HistoryViewProps> = ({ onSelectMedia, onPlayD
                           </span>
                         )}
 
-                        {/* Visited Repeat Count in Brackets (e.g. [3 visits] or (3)) */}
-                        {group.visitCount > 1 && (
-                          <span
-                            style={{
-                              display: 'inline-flex',
-                              alignItems: 'center',
-                              gap: '0.2rem',
-                              fontSize: '0.7rem',
-                              fontWeight: 800,
-                              padding: '0.12rem 0.45rem',
-                              borderRadius: '10px',
-                              backgroundColor: 'rgba(99, 102, 241, 0.15)',
-                              color: '#a5b4fc',
-                              border: '1px solid rgba(99, 102, 241, 0.35)',
-                              letterSpacing: '0.01em',
-                            }}
-                            title={`Revisited ${group.visitCount} times across streams, downloads & discovery`}
-                          >
-                            <Layers size={11} />
-                            <span>({group.visitCount})</span>
-                          </span>
-                        )}
-
                         {/* Distinct Action Tags / Accents (Streamed, Downloaded, Failed, Refreshed) */}
                         {accents.map((acc) => (
                           <span
@@ -1207,7 +940,7 @@ export const HistoryView: React.FC<HistoryViewProps> = ({ onSelectMedia, onPlayD
                           </span>
                         )}
 
-                        {item.source?.providerName && (
+                        {item.source?.providerName && !latestActionDesc.includes(item.source.providerName) && (
                           <span style={{ color: 'var(--text-subtle)', display: 'flex', alignItems: 'center', gap: '0.25rem' }}>
                             <span style={{ color: '#94a3b8' }}>Provider:</span>
                             <strong style={{ color: 'var(--text-primary)' }}>{item.source.providerName}</strong>
@@ -1242,7 +975,7 @@ export const HistoryView: React.FC<HistoryViewProps> = ({ onSelectMedia, onPlayD
                           </span>
                         )}
 
-                        {!refreshMsg && item.failureReason && (
+                        {!refreshMsg && item.failureReason && !latestActionDesc.includes(item.failureReason) && (
                           <span style={{ color: '#fb7185', fontSize: '0.75rem', fontStyle: 'italic', maxWidth: '280px', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
                             — {item.failureReason}
                           </span>
@@ -1264,69 +997,62 @@ export const HistoryView: React.FC<HistoryViewProps> = ({ onSelectMedia, onPlayD
                       ) : null}
                     </div>
 
-                    {/* Direct Play Button */}
-                    <button
-                      type="button"
-                      className="btn btn-primary btn-sm"
+                    {/*
+                      One prominent action per row. Refresh, Inspect and Delete were
+                      labelled secondary buttons beside it, so every row carried five
+                      equally loud controls; they are quiet icons now, and the visits
+                      toggle says how many there are instead of a separate badge.
+                    */}
+                    <Button
+                      size="compact"
+                      variant="prominent"
+                      icon={Play}
                       onClick={(e) => handlePlayMedia(item, e)}
-                      title="Play stream directly from history"
-                      style={{ padding: '0.35rem 0.65rem', fontSize: '0.75rem', gap: '0.3rem' }}
+                      title="Play, resuming the source that played last"
                     >
-                      <Play size={13} fill="currentColor" />
-                      <span>Play</span>
-                    </button>
-
-                    {/* Refresh Sources Button */}
-                    <button
-                      type="button"
-                      className="btn btn-secondary btn-sm"
+                      Play
+                    </Button>
+                    <Button
+                      size="compact"
+                      variant="ambient"
+                      iconOnly
+                      icon={RotateCw}
+                      loading={isRefreshing}
                       onClick={(e) => handleRefreshSource(item, e)}
-                      disabled={isRefreshing}
+                      aria-label="Find fresh sources"
                       title="Re-check enabled providers and discover fresh sources"
-                      style={{ padding: '0.35rem 0.55rem', fontSize: '0.75rem', gap: '0.3rem' }}
-                    >
-                      <RotateCw size={13} className={isRefreshing ? 'animate-spin' : ''} />
-                      <span>Refresh</span>
-                    </button>
-
-                    {/* Inspector Button */}
-                    <button
-                      type="button"
-                      className="btn btn-secondary btn-sm"
+                    />
+                    <Button
+                      size="compact"
+                      variant="ambient"
+                      iconOnly
+                      icon={Code2}
                       onClick={(e) => {
                         e.stopPropagation();
                         setInspectingItem(item);
                       }}
-                      title="Inspect raw provider metadata, direct links, and diagnostics"
-                      style={{ padding: '0.35rem 0.55rem', fontSize: '0.75rem', gap: '0.3rem' }}
-                    >
-                      <Code2 size={13} />
-                      <span>Inspect</span>
-                    </button>
-
-                    {/* Activity History Expander Toggle (Shows activity logs up to 5 items) */}
-                    <button
-                      type="button"
-                      className={`btn btn-sm ${isExpanded ? 'btn-primary' : 'btn-secondary'}`}
+                      aria-label="Inspect"
+                      title="Inspect provider metadata, links and diagnostics"
+                    />
+                    <Button
+                      size="compact"
+                      variant="ambient"
+                      icon={isExpanded ? ChevronUp : ChevronDown}
                       onClick={(e) => toggleGroupExpand(group.groupKey, e)}
-                      title="View all individual visits and action history for this media"
-                      style={{ padding: '0.35rem 0.55rem', fontSize: '0.75rem', gap: '0.3rem' }}
+                      aria-expanded={isExpanded}
+                      title="Every visit, stream and download for this title"
                     >
-                      <Clock size={13} />
-                      <span>({group.visitCount}) Activity</span>
-                      {isExpanded ? <ChevronUp size={13} /> : <ChevronDown size={13} />}
-                    </button>
-
-                    {/* Delete Group Button */}
-                    <button
-                      type="button"
-                      className="btn btn-ghost btn-sm"
+                      {group.visitCount} visit{group.visitCount === 1 ? '' : 's'}
+                    </Button>
+                    <Button
+                      size="compact"
+                      variant="ambient"
+                      iconOnly
+                      icon={Trash2}
                       onClick={(e) => handleDeleteGroup(group, e)}
-                      title={`Delete all ${group.visitCount} records for this media`}
-                      style={{ padding: '0.35rem 0.45rem', color: 'var(--text-subtle)' }}
-                    >
-                      <Trash2 size={13} />
-                    </button>
+                      aria-label="Remove from history"
+                      title={`Delete all ${group.visitCount} records for this title`}
+                    />
                   </div>
                 </div>
 
@@ -1690,7 +1416,7 @@ export const HistoryView: React.FC<HistoryViewProps> = ({ onSelectMedia, onPlayD
                         </span>
                       )}
 
-                      {!refreshMsg && item.failureReason && (
+                      {!refreshMsg && item.failureReason && !actionDesc.includes(item.failureReason) && (
                         <span style={{ color: '#fb7185', fontSize: '0.75rem', fontStyle: 'italic', maxWidth: '300px', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
                           — {item.failureReason}
                         </span>
@@ -2122,53 +1848,25 @@ export const HistoryView: React.FC<HistoryViewProps> = ({ onSelectMedia, onPlayD
 
       {/* Confirm Clear Modal */}
       {confirmClearOpen && (
-        <div
-          style={{
-            position: 'fixed',
-            inset: 0,
-            zIndex: 99999,
-            backgroundColor: 'rgba(0, 0, 0, 0.75)',
-            backdropFilter: 'blur(6px)',
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            padding: '1.5rem',
-          }}
-          onClick={() => setConfirmClearOpen(false)}
-        >
-          <div
-            style={{
-              width: '100%',
-              maxWidth: '420px',
-              backgroundColor: '#161b26',
-              borderRadius: 'var(--radius-lg)',
-              border: '1px solid var(--border-color)',
-              padding: '1.5rem',
-              display: 'flex',
-              flexDirection: 'column',
-              gap: '1rem',
-            }}
-            onClick={(e) => e.stopPropagation()}
-          >
-            <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', color: '#fb7185' }}>
-              <AlertTriangle size={24} />
-              <h3 style={{ margin: 0, fontSize: '1.1rem', fontWeight: 700, color: '#fff' }}>
-                Clear All Media History?
-              </h3>
-            </div>
-            <p style={{ margin: 0, fontSize: '0.85rem', color: 'var(--text-muted)' }}>
-              This will permanently erase your media activity logs. Your saved Library items, downloads, and cached sources will remain untouched.
-            </p>
-            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '0.6rem', marginTop: '0.5rem' }}>
-              <button type="button" className="btn btn-secondary btn-sm" onClick={() => setConfirmClearOpen(false)}>
+        <Dialog
+          title="Clear all media history?"
+          description="This permanently erases your activity log. Your library, downloads and cached sources are not touched."
+          icon={<AlertTriangle size={18} />}
+          tone="danger"
+          size="sm"
+          onClose={() => setConfirmClearOpen(false)}
+          initialFocus='[data-autofocus="cancel"]'
+          footer={
+            <DialogActions>
+              <Button onClick={() => setConfirmClearOpen(false)} data-autofocus="cancel">
                 Cancel
-              </button>
-              <button type="button" className="btn btn-danger btn-sm" onClick={handleClearAll}>
-                Yes, Clear All History
-              </button>
-            </div>
-          </div>
-        </div>
+              </Button>
+              <Button variant="destructive" icon={Trash2} onClick={handleClearAll}>
+                Clear all history
+              </Button>
+            </DialogActions>
+          }
+        />
       )}
     </div>
   );

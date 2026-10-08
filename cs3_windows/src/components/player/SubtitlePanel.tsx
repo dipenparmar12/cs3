@@ -27,6 +27,9 @@ import {
   type SubtitleStyle,
 } from '../../utils/subtitleStyle';
 import { getLanguageFlag, getLanguageName } from '../../utils/languageFlag';
+import { FlagIcon } from '../FlagIcon';
+import { orderLanguageChips, preferredLanguageKeys } from '../../utils/subtitleLanguageOrder';
+import { Globe } from 'lucide-react';
 
 export { getLanguageFlag, getLanguageName };
 
@@ -191,6 +194,30 @@ export const SubtitlePanel: React.FC<SubtitlePanelProps> = ({
   // In-player subtitle style configuration & compact language selector state
   const [showConfig, setShowConfig] = useState(false);
   const [langMenuOpen, setLangMenuOpen] = useState(false);
+  /**
+   * The languages of the regions the viewer picked (PRD-54), which order the
+   * language list: English, then these, then the rest. Asked when the panel
+   * opens; a failure just means the plain order.
+   */
+  const [regionLanguages, setRegionLanguages] = useState<string[]>([]);
+  useEffect(() => {
+    if (!open) return;
+    let active = true;
+    void window.cloudstream
+      ?.getRegions?.()
+      .then((state) => {
+        if (!active || !state || state.selected.includes('ALL' as never)) return;
+        setRegionLanguages(
+          state.regions
+            .filter((region) => state.selected.includes(region.id))
+            .flatMap((region) => region.languages)
+        );
+      })
+      .catch(() => {});
+    return () => {
+      active = false;
+    };
+  }, [open]);
   const [style, setStyle] = useState<SubtitleStyle>(DEFAULT_SUBTITLE_STYLE);
 
   useEffect(() => {
@@ -212,6 +239,21 @@ export const SubtitlePanel: React.FC<SubtitlePanelProps> = ({
       cancelled = true;
     };
   }, [open]);
+
+  useEffect(() => {
+    const unsubscribe = window.cloudstream?.onPlayerPreferencesChanged?.((p) => {
+      setStyle({
+        scale: p.subtitleScale ?? DEFAULT_SUBTITLE_STYLE.scale,
+        color: p.subtitleColor ?? DEFAULT_SUBTITLE_STYLE.color,
+        background: p.subtitleBackground ?? DEFAULT_SUBTITLE_STYLE.background,
+        weight: p.subtitleWeight ?? DEFAULT_SUBTITLE_STYLE.weight,
+        position: p.subtitlePosition ?? DEFAULT_SUBTITLE_STYLE.position,
+      });
+    });
+    return () => {
+      unsubscribe?.();
+    };
+  }, []);
 
   const updateStyle = (patch: Partial<SubtitleStyle>) => {
     const next = { ...style, ...patch };
@@ -419,13 +461,21 @@ export const SubtitlePanel: React.FC<SubtitlePanelProps> = ({
     }
     if (chips.size === 0) for (const l of COMMON_LANGUAGES) chips.set(l.code, { ...l, count: 0 });
     for (const code of languages) if (!chips.has(code)) chips.set(code, { code, name: code.toUpperCase(), count: 0 });
-    return [...chips.values()].sort((a, b) => (a.code === 'eng' ? -1 : b.code === 'eng' ? 1 : b.count - a.count || a.name.localeCompare(b.name)));
+    return orderLanguageChips([...chips.values()], preferredLanguageKeys(regionLanguages));
   })();
   const showLanguage = (name: string) => languages.length === 0 || languages.includes(codeFor.get(name) ?? '');
 
-  const englishChip = languageChips.find((c) => c.code === 'eng');
-  const activeOtherChips = languageChips.filter((c) => c.code !== 'eng' && languages.includes(c.code));
-  const dropdownChips = languageChips.filter((c) => c.code !== 'eng');
+  /*
+   * The first few in preference order stay on the row — English and the
+   * viewer's region languages — plus anything selected; the rest are one
+   * click away under "More".
+   */
+  const INLINE_CHIPS = 4;
+  const inlineChips = languageChips.filter((c, index) => index < INLINE_CHIPS || languages.includes(c.code));
+  const dropdownChips = languageChips.filter((c) => !inlineChips.includes(c));
+  const flagFor = (code: string, name: string) => (
+    <FlagIcon flag={getLanguageFlag(code, name)} fallback={code || name.slice(0, 2)} size={18} className="subtitle-panel__flag" />
+  );
 
   return (
     <aside
@@ -459,21 +509,6 @@ export const SubtitlePanel: React.FC<SubtitlePanelProps> = ({
             aria-label="Subtitle appearance settings"
           >
             <Sliders size={18} />
-          </button>
-          <button
-            type="button"
-            className="icon-button"
-            onClick={(e) => {
-              e.stopPropagation();
-              void runSearch();
-            }}
-            onPointerDown={(e) => e.stopPropagation()}
-            onMouseDown={(e) => e.stopPropagation()}
-            disabled={loading}
-            title="Search again"
-            aria-label="Search subtitles again"
-          >
-            {loading ? <Loader2 className="spin" size={18} /> : <Search size={18} />}
           </button>
           <button
             type="button"
@@ -530,12 +565,22 @@ export const SubtitlePanel: React.FC<SubtitlePanelProps> = ({
               <span>Size</span>
               <span className="subtitle-panel__config-val">{Math.round(style.scale * 100)}%</span>
             </div>
-            <div className="sub-choices">
+            <input
+              type="range"
+              min={0.5}
+              max={2.5}
+              step={0.05}
+              value={style.scale}
+              onChange={(e) => updateStyle({ scale: Number(e.target.value) })}
+              className="subtitle-panel__range"
+              aria-label="Subtitle size"
+            />
+            <div className="sub-choices--compact" role="group" aria-label="Quick size presets">
               {SUBTITLE_SCALES.map((scale) => (
                 <button
                   key={scale}
                   type="button"
-                  className={`btn btn-secondary sub-choice${style.scale === scale ? ' sub-choice--on' : ''}`}
+                  className={`sub-chip${Math.abs(style.scale - scale) < 0.01 ? ' sub-chip--on' : ''}`}
                   onClick={() => updateStyle({ scale })}
                 >
                   {Math.round(scale * 100)}%
@@ -581,7 +626,7 @@ export const SubtitlePanel: React.FC<SubtitlePanelProps> = ({
                 <button
                   key={option.value}
                   type="button"
-                  className={`btn btn-secondary sub-choice${style.background === option.value ? ' sub-choice--on' : ''}`}
+                  className={`sub-choice${style.background === option.value ? ' sub-choice--on' : ''}`}
                   title={option.hint}
                   onClick={() => updateStyle({ background: option.value as SubtitleBackground })}
                 >
@@ -620,6 +665,7 @@ export const SubtitlePanel: React.FC<SubtitlePanelProps> = ({
               value={style.position}
               onChange={(e) => updateStyle({ position: Number(e.target.value) })}
               className="subtitle-panel__range"
+              aria-label="Raise from bottom"
             />
           </div>
 
@@ -627,7 +673,7 @@ export const SubtitlePanel: React.FC<SubtitlePanelProps> = ({
           <div className="subtitle-panel__config-footer">
             <button
               type="button"
-              className="btn btn-secondary sub-choice"
+              className="sub-choice"
               onClick={() => updateStyle(DEFAULT_SUBTITLE_STYLE)}
             >
               Reset appearance
@@ -636,6 +682,46 @@ export const SubtitlePanel: React.FC<SubtitlePanelProps> = ({
         </div>
       )}
 
+      {/* What this video already has — the choice made most often — before searching. */}
+      <div className="player-panel__sub-heading subtitle-panel__current-heading">On this video</div>
+      <ul className="player-panel__subs">
+        <li>
+          <button
+            className={`player-panel__sub${activeUrl === null ? ' player-panel__sub--current' : ''}`}
+            onClick={() => {
+              onSelect(null, 'Off');
+              onClose();
+            }}
+          >
+            <span className="player-panel__sub-label">Off</span>
+            {activeUrl === null && <Check size={14} />}
+          </button>
+        </li>
+
+        {embedded.map((sub) => {
+          return (
+            <li key={sub.url}>
+              <button
+                className={`player-panel__sub${activeUrl === sub.url ? ' player-panel__sub--current' : ''}`}
+                onClick={() => {
+                  onSelect(sub.url, sub.name, (sub as { detail?: string }).detail);
+                  onClose();
+                }}
+              >
+                {flagFor('', sub.name)}
+                <span className="player-panel__sub-label">{sub.name}</span>
+                {(sub as { detail?: string }).detail && (
+                  <span className="player-panel__sub-tag">{(sub as { detail?: string }).detail}</span>
+                )}
+                {activeUrl === sub.url && <Check size={14} />}
+              </button>
+            </li>
+          );
+        })}
+      </ul>
+
+
+      <div className="player-panel__sub-heading subtitle-panel__current-heading">Find more</div>
       {/* Custom Subtitle Search Form */}
       <form
         className="subtitle-panel__search-form"
@@ -649,7 +735,6 @@ export const SubtitlePanel: React.FC<SubtitlePanelProps> = ({
           onPointerDown={(e) => e.stopPropagation()}
           onMouseDown={(e) => e.stopPropagation()}
         >
-          <Search size={14} style={{ flexShrink: 0, opacity: 0.6 }} />
           <input
             ref={searchInputRef}
             type="text"
@@ -668,7 +753,7 @@ export const SubtitlePanel: React.FC<SubtitlePanelProps> = ({
             onKeyDown={(e) => e.stopPropagation()}
             onPointerDown={(e) => e.stopPropagation()}
             onMouseDown={(e) => e.stopPropagation()}
-            placeholder="Search custom title or IMDb ID (tt...)"
+            placeholder="Search by title or IMDb ID (tt…)"
             aria-label="Custom subtitle search query"
           />
           {searchQuery && (
@@ -798,15 +883,6 @@ export const SubtitlePanel: React.FC<SubtitlePanelProps> = ({
               aria-label="Release year"
             />
           </div>
-          <button
-            type="submit"
-            className="subtitle-panel__search-submit-btn"
-            disabled={loading || !searchQuery.trim()}
-            onPointerDown={(e) => e.stopPropagation()}
-            onMouseDown={(e) => e.stopPropagation()}
-          >
-            {loading ? 'Searching...' : 'Search'}
-          </button>
         </div>
       </form>
 
@@ -817,44 +893,28 @@ export const SubtitlePanel: React.FC<SubtitlePanelProps> = ({
           className={`subtitle-panel__chip${languages.length === 0 ? ' subtitle-panel__chip--on' : ''}`}
           onClick={() => setLanguages([])}
         >
-          <span className="subtitle-panel__chip-flag">🌐</span>
+          <Globe size={14} aria-hidden className="subtitle-panel__flag" />
           All{results.length > 0 ? ` (${results.length})` : ''}
         </button>
 
-        {/* English chip (always offered as top option) */}
-        {englishChip && (
-          <button
-            type="button"
-            className={`subtitle-panel__chip${languages.includes(englishChip.code) ? ' subtitle-panel__chip--on' : ''}`}
-            onClick={() =>
-              setLanguages((current) =>
-                current.includes(englishChip.code)
-                  ? current.filter((c) => c !== englishChip.code)
-                  : [...current, englishChip.code]
-              )
-            }
-            aria-pressed={languages.includes(englishChip.code)}
-          >
-            <span className="subtitle-panel__chip-flag">🇬🇧</span>
-            {englishChip.name}
-            {englishChip.count > 0 ? ` (${englishChip.count})` : ''}
-          </button>
-        )}
-
-        {/* Active chips that aren't English */}
-        {activeOtherChips.map(({ code, name, count }) => (
-          <button
-            key={code}
-            type="button"
-            className="subtitle-panel__chip subtitle-panel__chip--on"
-            onClick={() => setLanguages((current) => current.filter((c) => c !== code))}
-            aria-pressed="true"
-          >
-            <span className="subtitle-panel__chip-flag">{getLanguageFlag(code, name)}</span>
-            {name}
-            {count > 0 ? ` (${count})` : ''}
-          </button>
-        ))}
+        {inlineChips.map(({ code, name, count }) => {
+          const on = languages.includes(code);
+          return (
+            <button
+              key={code}
+              type="button"
+              className={`subtitle-panel__chip${on ? ' subtitle-panel__chip--on' : ''}`}
+              onClick={() =>
+                setLanguages((current) => (on ? current.filter((c) => c !== code) : [...current, code]))
+              }
+              aria-pressed={on}
+            >
+              {flagFor(code, name)}
+              {name}
+              {count > 0 ? ` (${count})` : ''}
+            </button>
+          );
+        })}
 
         {/* Expand / Collapse toggle for remaining languages */}
         {dropdownChips.length > 0 && (
@@ -865,7 +925,7 @@ export const SubtitlePanel: React.FC<SubtitlePanelProps> = ({
             aria-expanded={langMenuOpen}
             aria-label="Show more subtitle languages"
           >
-            <span>{langMenuOpen ? 'Fewer languages' : `More languages (${dropdownChips.length})`}</span>
+            <span>{langMenuOpen ? 'Fewer' : `More (${dropdownChips.length})`}</span>
             {langMenuOpen ? <ChevronUp size={13} /> : <ChevronDown size={13} />}
           </button>
         )}
@@ -887,7 +947,7 @@ export const SubtitlePanel: React.FC<SubtitlePanelProps> = ({
                   }
                   aria-pressed={on}
                 >
-                  <span className="subtitle-panel__chip-flag">{getLanguageFlag(code, name)}</span>
+                  {flagFor(code, name)}
                   {name}
                   {count > 0 ? ` (${count})` : ''}
                 </button>
@@ -909,41 +969,6 @@ export const SubtitlePanel: React.FC<SubtitlePanelProps> = ({
           </span>
         </div>
       )}
-
-      <ul className="player-panel__subs">
-        <li>
-          <button
-            className={`player-panel__sub${activeUrl === null ? ' player-panel__sub--current' : ''}`}
-            onClick={() => {
-              onSelect(null, 'Off');
-              onClose();
-            }}
-          >
-            <span className="player-panel__sub-label">Off</span>
-            {activeUrl === null && <Check size={14} />}
-          </button>
-        </li>
-
-        {embedded.map((sub) => {
-          const flag = getLanguageFlag('', sub.name);
-          return (
-            <li key={sub.url}>
-              <button
-                className={`player-panel__sub${activeUrl === sub.url ? ' player-panel__sub--current' : ''}`}
-                onClick={() => {
-                  onSelect(sub.url, sub.name, 'in stream');
-                  onClose();
-                }}
-              >
-                <span className="subtitle-panel__row-flag">{flag}</span>
-                <span className="player-panel__sub-label">{sub.name}</span>
-                <span className="player-panel__sub-tag">in stream</span>
-                {activeUrl === sub.url && <Check size={14} />}
-              </button>
-            </li>
-          );
-        })}
-      </ul>
 
       <div className="subtitle-panel__sync" aria-label="Subtitle timing">
         <span>Timing</span>
@@ -979,7 +1004,6 @@ export const SubtitlePanel: React.FC<SubtitlePanelProps> = ({
           <div className="player-panel__sub-heading">Saved on this computer</div>
           <ul className="player-panel__subs">
             {saved.map((entry) => {
-              const flag = getLanguageFlag(entry.lang, entry.langName);
               return (
                 <li key={entry.id}>
                   <button
@@ -987,7 +1011,7 @@ export const SubtitlePanel: React.FC<SubtitlePanelProps> = ({
                     onClick={() => void applySaved(entry)}
                     title={entry.filePath}
                   >
-                    <span className="subtitle-panel__row-flag">{flag}</span>
+                    {flagFor(entry.lang, entry.langName)}
                     <span className="player-panel__sub-label">{entry.langName}</span>
                     <span className="player-panel__sub-tag">
                       saved · {entry.origin === 'opensubtitles' ? 'OpenSubtitles' : 'from source'}
@@ -1017,20 +1041,15 @@ export const SubtitlePanel: React.FC<SubtitlePanelProps> = ({
       {[...byLanguage.entries()]
         .filter(([language]) => showLanguage(language))
         .map(([language, items]) => {
-          const groupFlag = getLanguageFlag(codeFor.get(language) || '', language);
           return (
             <div key={language} className="player-panel__sub-group">
               <div className="player-panel__sub-heading">
-                <span className="subtitle-panel__heading-flag">{groupFlag}</span>
+                {flagFor(codeFor.get(language) || '', language)}
                 <span>{language}</span>
               </div>
               <ul className="player-panel__subs">
                 {items.map((item, index) => {
                   const state = downloads[item.id];
-                  const itemFlag = getLanguageFlag(
-                    item.lang,
-                    item.fileName || item.langName || item.releaseName
-                  );
                   return (
                     <li key={item.id} className="subtitle-panel__row">
                       <button
@@ -1048,7 +1067,7 @@ export const SubtitlePanel: React.FC<SubtitlePanelProps> = ({
                         {applying === item.id ? (
                           <Loader2 className="spin" size={13} />
                         ) : (
-                          <span className="subtitle-panel__row-flag">{itemFlag}</span>
+                          flagFor(item.lang, item.langName || item.fileName || item.releaseName || '')
                         )}
                         <span className="subtitle-panel__result-text">
                           <span className="player-panel__sub-label">

@@ -82,7 +82,6 @@ export class ErrorBoundary extends Component<Props, State> {
             <button
               onClick={this.handleReset}
               className="btn btn-primary"
-              style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}
             >
               <RefreshCw size={16} />
               <span>Try Again</span>

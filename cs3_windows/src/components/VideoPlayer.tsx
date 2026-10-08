@@ -1,7 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useFlash } from '../utils/useFlash';
 import { usePrivacy } from '../utils/usePrivacy';
-import { EyeOff } from 'lucide-react';
+import { Download, EyeOff } from 'lucide-react';
 import { historyEventForTask } from '../utils/historyEvent';
 import Hls from 'hls.js';
 import { NativeEngineStage, trackLabel } from './player/NativeEngineStage';
@@ -9,8 +9,8 @@ import {
   Play, Pause, Volume2, VolumeX, Maximize, Minimize, ArrowLeft,
   Loader2, Users, Gauge, Subtitles, AlertTriangle, RotateCcw, RotateCw,
   SkipBack, SkipForward, List, Settings2, MonitorPlay, Radio,
-  HardDriveDownload, FolderDown, GripHorizontal, Maximize2, Minimize2, X,
-  Search, PictureInPicture2,
+  GripHorizontal, Maximize2, Minimize2, X,
+  Search, Info, PictureInPicture2, BookmarkCheck, BookmarkPlus,
 } from 'lucide-react';
 import type { SwarmReport, TorrentStreamStats } from '../types/torrent';
 import type { Episode } from '../types/api';
@@ -29,12 +29,18 @@ import { HoverMenu } from './player/HoverMenu';
 import { EpisodePanel } from './player/EpisodePanel';
 import { SourcePanel } from './player/SourcePanel';
 import { SourceResolveOverlay } from './player/SourceResolveOverlay';
-import { SubtitlePanel, getLanguageFlag, getLanguageName } from './player/SubtitlePanel';
+import { SubtitlePanel } from './player/SubtitlePanel';
 import { PlayerDownloadPanel } from './player/PlayerDownloadPanel';
 import type { PlaybackStreamResponse, SourceCapabilityModel } from '../types/media';
 import { attachClearKey, type ClearKeyAttachment } from '../utils/clearKeySession';
 import { attachShaka, type ShakaAttachment } from '../utils/shakaSession';
 import type { SeriesContext } from './player/seriesContext';
+import type { PlaybackPreferences, StoredSource } from '../types/library';
+import { matchesRelease } from '../../electron/cs3/playedSource';
+import { looksLikeWrongMedia, wrongMediaReason } from '../utils/mediaSanity';
+import { torrentResultToStoredSource } from '../../electron/cs3/libraryStore';
+import { isPlaceholderOrigin } from '../utils/originName';
+import { canonicalKey } from '../../electron/cs3/libraryStore';
 import { UpNextCard } from './player/UpNextCard';
 import { useTimelinePreview } from './player/useTimelinePreview';
 import { useMiniFrame } from './player/useMiniFrame';
@@ -93,6 +99,11 @@ interface VideoPlayerProps {
   switchingTo?: Episode | null;
   /** Reported when resolving the requested episode failed, so the viewer is not stranded. */
   switchError?: string | null;
+  /**
+   * Track choices to apply on this play (a saved playback). Outranks the
+   * played-source record's, which is read when this is absent.
+   */
+  playbackPreferences?: PlaybackPreferences;
   /** Identity for recording watch progress, and where to resume from. */
   progress?: {
     mediaUrl: string;
@@ -102,6 +113,8 @@ interface VideoPlayerProps {
     episode?: number;
     /** Seconds to seek to on load, from a previous session. */
     resumeAt?: number;
+    /** How long the title should run; a much shorter stream is skipped as wrong media. */
+    expectedDurationSeconds?: number;
   };
   /**
    * Live source-resolution state.
@@ -162,6 +175,8 @@ interface VideoPlayerProps {
     searchCancelled?: boolean;
     error?: string;
     attempts: Array<{ title: string; indexerName: string; error: string }>;
+    /** Played / failed per source in this session — the source list's ✓ and ⚠. */
+    sourceStates?: Record<string, { state: 'played' | 'failed'; reason?: string }>;
     onPlayNow: () => void;
     onSelectSource: (source: TorrentResult) => void;
     /**
@@ -212,6 +227,8 @@ interface VideoPlayerProps {
    * there; this makes it a target.
    */
   onSearchTitle?: (query: string) => void;
+  /** Opens this title's detail page, however playback was started. */
+  onOpenDetail?: () => void;
   /** When provided, overrides the stored setting for showing aspect ratio control (default false) */
   showAspectRatioControl?: boolean;
   /** When provided, overrides the stored setting for showing playback speed control (default false) */
@@ -225,6 +242,19 @@ export type PlaybackPhase = 'searching' | 'starting' | 'playing' | 'error';
 /** How often playback position is written. Frequent enough to be useful, rare
  *  enough not to write on every timeupdate tick (which fires ~4x/second). */
 const PROGRESS_SAVE_INTERVAL_MS = 5_000;
+
+/** "42%", "Paused", "Done" — what the download button says about this video. */
+function currentDownloadLabel(task: DownloadTask): string {
+  if (task.state === DownloadState.Completed) return 'Done';
+  if (task.state === DownloadState.Paused) return 'Paused';
+  if (task.state === DownloadState.Failed) return 'Failed';
+  if (task.state === DownloadState.Downloading && task.totalBytes > 0) {
+    return `${Math.min(100, Math.floor((task.bytesDownloaded / task.totalBytes) * 100))}%`;
+  }
+  return '…';
+}
+/** How long "Resumed at … · Start over" stays before getting out of the way. */
+const RESUME_NOTICE_MS = 9_000;
 
 /**
  * How long the pointer may sit still inside the player before the controls go.
@@ -317,9 +347,9 @@ export interface AudioTrackInfo {
 export const VideoPlayer: React.FC<VideoPlayerProps> = ({
   streamUrl, mimeType, title, originalTitle, episodeTitle, providerProvenance,
   infoHash, subtitles, onBack, series, onSelectEpisode, switchingTo, switchError,
-  progress, sourceSession, subtitleContext, onDownloadCurrent, onOpenDownloads,
+  progress, sourceSession, subtitleContext, onDownloadCurrent, onOpenDownloads, playbackPreferences,
   hidden = false, mini = false, onMinimize, onExpand, showAspectRatioControl,
-  showPlaybackSpeedControl, showSubtitlesControl: showSubtitlesControlProp, onSearchTitle,
+  showPlaybackSpeedControl, showSubtitlesControl: showSubtitlesControlProp, onSearchTitle, onOpenDetail,
 }) => {
   /**
    * Whether the viewer has asked to see how the app is built.
@@ -515,8 +545,15 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
     extensionName?: string;
   } | null>(null);
 
+  /*
+   * The source's own provider first: discovery may have widened past the page
+   * the title was opened from, and the header should name what actually plays.
+   * A screen label ("Library") passed as a provider is never shown.
+   */
   const effectiveProvider =
-    providerProvenance?.provider || activeSource?.providerName || activeSource?.indexerName;
+    activeSource?.providerName ||
+    activeSource?.indexerName ||
+    (isPlaceholderOrigin(providerProvenance?.provider) ? undefined : providerProvenance?.provider);
 
   useEffect(() => {
     let active = true;
@@ -791,6 +828,30 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
    * Recorded once per stream. The effect re-runs on every timeupdate, so the
    * ref is what stops this becoming an IPC call four times a second.
    */
+  /**
+   * What History keeps about the source that played.
+   *
+   * It used to keep the provider's *display* name and the film's title as the
+   * "source name" — so a row reopened from History could not say which
+   * extension or repository served it, nor which of a provider's eight
+   * releases was the one watched. The release, its resolution and languages,
+   * and the full origin chain are all known here; History is where they are
+   * needed later.
+   */
+  const historySourceInfo = () => ({
+    providerName:
+      providerProvenance?.provider || activeSource?.indexerName || providerProvenance?.indexerName,
+    extension: providerProvenance?.extensionName,
+    repository: providerProvenance?.repositoryName,
+    indexerName: activeSource?.indexerName ?? providerProvenance?.indexerName,
+    sourceName: activeSource?.title || title,
+    resolution: activeSource?.parsed?.resolution ? Number(activeSource.parsed.resolution) || undefined : undefined,
+    quality: activeSource?.parsed?.source && activeSource.parsed.source !== 'Unknown' ? String(activeSource.parsed.source) : undefined,
+    languages: activeSource?.parsed?.languages?.length ? activeSource.parsed.languages : undefined,
+    sizeBytes: activeSource?.sizeBytes || undefined,
+    directUrl: streamUrl.startsWith('http') ? streamUrl : undefined,
+  });
+
   const recordedSourceFor = useRef<string | null>(null);
   useEffect(() => {
     if (!streamUrl || recordedSourceFor.current === streamUrl) return;
@@ -808,8 +869,112 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
       source: activeSource,
       positionSeconds: currentTime,
       durationSeconds: duration || undefined,
+      // Where it came from, kept with the record: a resume shows the same
+      // provider, extension and repository the viewer saw, not "Library".
+      provenance: providerProvenance
+        ? {
+            provider: providerProvenance.provider ?? providerProvenance.indexerName,
+            extensionName: providerProvenance.extensionName,
+            repositoryName: providerProvenance.repositoryName,
+          }
+        : undefined,
+      originalTitle,
+      posterUrl: progress.posterUrl,
+      imdbId: subtitleContext?.imdbId,
+      preferences: currentTrackChoices.current ?? undefined,
     });
-  }, [streamUrl, currentTime, activeSource, progress, title, episodeTitle, duration]);
+  }, [
+    streamUrl,
+    currentTime,
+    activeSource,
+    progress,
+    title,
+    episodeTitle,
+    duration,
+    providerProvenance,
+    originalTitle,
+    subtitleContext?.imdbId,
+  ]);
+
+  /**
+   * Keeps this exact playback: the page, the episode, the place, the source
+   * and the tracks — the bookmark beside the title. It lands in Library ›
+   * Saved pages with a Resume button that plays it back exactly, re-finding
+   * the same release when its link has expired. Pressing it again updates
+   * the saved place rather than unsaving it.
+   */
+  const [playbackSaved, setPlaybackSaved] = useState(false);
+  useEffect(() => setPlaybackSaved(false), [title, progress?.season, progress?.episode]);
+  const savePlayback = useCallback(async () => {
+    const pageUrl = progress?.mediaUrl;
+    if (!pageUrl || !window.cloudstream?.saveBookmark) return;
+    const response = await window.cloudstream.saveBookmark({
+      mediaUrl: pageUrl,
+      title,
+      originalTitle,
+      year: progress?.year,
+      type: progress?.season !== undefined ? 'TvSeries' : 'Movie',
+      posterUrl: progress?.posterUrl,
+      origin: {
+        provider: providerProvenance?.provider ?? activeSource?.indexerName,
+        extensionName: providerProvenance?.extensionName,
+        repositoryName: providerProvenance?.repositoryName,
+        imdbId: subtitleContext?.imdbId,
+      },
+      playback: {
+        season: progress?.season,
+        episode: progress?.episode,
+        episodeTitle,
+        positionSeconds: Math.floor(currentTime),
+        durationSeconds: duration || undefined,
+        source: activeSource ? torrentResultToStoredSource(activeSource) : undefined,
+        preferences: currentTrackChoices.current ?? undefined,
+        savedAt: Date.now(),
+      },
+    });
+    if (response?.ok) {
+      notify(playbackSaved ? 'Saved playback updated' : 'Playback saved — Library › Saved pages', 'good');
+      setPlaybackSaved(true);
+    } else {
+      notify(response?.error ?? 'Could not save this playback', 'bad');
+    }
+  }, [
+    progress,
+    title,
+    originalTitle,
+    providerProvenance,
+    activeSource,
+    subtitleContext?.imdbId,
+    episodeTitle,
+    currentTime,
+    duration,
+    notify,
+    playbackSaved,
+  ]);
+
+  /**
+   * A source that plays a clip instead of the title — an advert, an "update
+   * your app" notice — is skipped like any source that will not play, with the
+   * reason on its row. Judged once per stream, after it has reported a
+   * duration, so it never delays a working source (`mediaSanity.ts`).
+   */
+  const sanityCheckedFor = useRef<string | null>(null);
+  useEffect(() => {
+    // After this stream has really started: until then `duration` can still be
+    // the previous stream's.
+    if (!streamUrl || !hasStartedPlayback || sanityCheckedFor.current === streamUrl || duration <= 0) return;
+    sanityCheckedFor.current = streamUrl;
+    const expected = progress?.expectedDurationSeconds;
+    if (!looksLikeWrongMedia({ actualSeconds: duration, expectedSeconds: expected })) return;
+    const reason = wrongMediaReason(duration, expected!);
+    if (sourceSession?.onSourceUnplayable) {
+      notify('That source was not the title — trying the next one', 'info');
+      sourceSession.onSourceUnplayable(reason);
+    } else {
+      notify(reason, 'bad');
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [streamUrl, duration, hasStartedPlayback]);
 
   // A new stream is a new question about which source works.
   useEffect(() => {
@@ -1514,15 +1679,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
             action: 'playback_started',
             status: 'Played',
             durationSeconds: video.duration || undefined,
-            source: {
-              providerName:
-                providerProvenance?.provider ||
-                providerProvenance?.extensionName ||
-                providerProvenance?.indexerName,
-              sourceName: title,
-              quality: undefined,
-              directUrl: streamUrl.startsWith('http') ? streamUrl : undefined,
-            },
+            source: historySourceInfo(),
           });
         })
         .catch((err) => {
@@ -1544,14 +1701,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
               action: 'playback_failed',
               status: 'Failed',
               failureReason: err?.message || 'Video element playback rejected',
-              source: {
-                providerName:
-                  providerProvenance?.provider ||
-                  providerProvenance?.extensionName ||
-                  providerProvenance?.indexerName,
-                sourceName: title,
-                directUrl: streamUrl.startsWith('http') ? streamUrl : undefined,
-              },
+              source: historySourceInfo(),
             });
           }
         });
@@ -2033,8 +2183,33 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
     if (resumedRef.current === streamUrl) return;
 
     resumedRef.current = streamUrl;
-    if (resumeAt < duration - 10) video.currentTime = resumeAt;
+    if (resumeAt < duration - 10) {
+      video.currentTime = resumeAt;
+      setResumeNotice(resumeAt);
+    }
   }, [progress?.resumeAt, duration, streamUrl]);
+
+  /**
+   * "Resumed at 47:12 · Start over", for a few seconds.
+   *
+   * The resume itself is automatic — asking first would stop the film to ask a
+   * question whose answer is nearly always yes. What the viewer needs is to
+   * know it happened and a one-press way back to the start; after that the
+   * notice is in the way and goes. It also goes the moment they seek, which is
+   * them answering the question themselves.
+   */
+  const [resumeNotice, setResumeNotice] = useState<number | null>(null);
+  useEffect(() => {
+    if (resumeNotice === null) return;
+    const timer = window.setTimeout(() => setResumeNotice(null), RESUME_NOTICE_MS);
+    return () => window.clearTimeout(timer);
+  }, [resumeNotice]);
+  useEffect(() => {
+    setResumeNotice(null);
+  }, [streamUrl]);
+  // The native engine seeks itself from `startSeconds`; the notice follows its
+  // first real frame rather than the element's metadata.
+  const nativeResumeShown = useRef<string | null>(null);
 
   // --- controls ------------------------------------------------------------
 
@@ -2121,6 +2296,19 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
     },
     [commitSeek]
   );
+
+  useEffect(() => {
+    const at = progress?.resumeAt;
+    if (!isNativeEngine || !hasStartedPlayback || !at || at <= 0) return;
+    if (nativeResumeShown.current === streamUrl) return;
+    nativeResumeShown.current = streamUrl;
+    setResumeNotice(at);
+  }, [isNativeEngine, hasStartedPlayback, progress?.resumeAt, streamUrl]);
+
+  const startOver = useCallback(() => {
+    setResumeNotice(null);
+    seekTo(0);
+  }, [seekTo]);
 
   const seekBy = useCallback(
     (delta: number) => {
@@ -2394,6 +2582,45 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
   const preferredAudioLanguage = useRef<string | null>(null);
   const preferredSubtitleLanguage = useRef<string | null>(null);
   const subtitlesOff = useRef(false);
+
+  /**
+   * The tracks chosen the last time *this* title and episode played.
+   *
+   * Narrower than the global language preference above and wins over it: the
+   * viewer who watches most things in English but this one series in its
+   * Hindi dub with English subtitles should get exactly that back on resume.
+   * Read from the played-source record, which is keyed the way it is written.
+   */
+  const titlePreferences = useRef<PlaybackPreferences | null>(null);
+  /** The source that played this title/episode last time, for the source list's "played before". */
+  const [rememberedSource, setRememberedSource] = useState<StoredSource | null>(null);
+  const currentTrackChoices = useRef<PlaybackPreferences | null>(null);
+  useEffect(() => {
+    titlePreferences.current = playbackPreferences ?? null;
+    currentTrackChoices.current = null;
+    setRememberedSource(null);
+    if (!title || playbackPreferences) return;
+    let cancelled = false;
+    void window.cloudstream
+      ?.getPlayedSource?.(canonicalKey(title, progress?.year), progress?.season, progress?.episode)
+      .then((response) => {
+        if (cancelled) return;
+        titlePreferences.current = response?.record?.preferences ?? null;
+        setRememberedSource(response?.record?.source ?? null);
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, [title, progress?.year, progress?.season, progress?.episode, playbackPreferences]);
+
+  /** Which row in the list is the release that played last time, if it is there. */
+  const rememberedHash = useMemo(() => {
+    if (!rememberedSource || !sourceSession) return undefined;
+    return sourceSession.sources.find((candidate) => matchesRelease(rememberedSource, candidate))?.infoHash;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [rememberedSource, sourceSession?.sources]);
+
   const { active: incognito } = usePrivacy();
 
   /**
@@ -2781,8 +3008,9 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
        * not carry it — which is the correct outcome, not a failure.
        */
       const tracks = response.capability?.metadata?.audio ?? [];
-      const remembered = preferredAudioLanguage.current
-        ? tracks.find((track) => track.language === preferredAudioLanguage.current)
+      const wantedAudio = titlePreferences.current?.audioLanguage ?? preferredAudioLanguage.current;
+      const remembered = wantedAudio
+        ? tracks.find((track) => track.language === wantedAudio)
         : undefined;
       const preferred =
         remembered?.index ?? response.capability?.transformationPlan.selectedAudioIndex ?? -1;
@@ -3119,6 +3347,44 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
   }, [subtitles, fetchedSubtitles, prepared?.subtitles]);
 
   /**
+   * Keeps the played-source record's track choices current.
+   *
+   * The record is written once, ten seconds in; the dub and subtitle a viewer
+   * settles on are usually chosen after that, so each change is written onto
+   * it. Before the record exists the choice is only held, and goes out with
+   * the record itself.
+   */
+  useEffect(() => {
+    const subtitle = activeSubtitle ? allSubtitles.find((s) => s.url === activeSubtitle) : undefined;
+    const audio =
+      audioTracks.find((track) => String(track.id) === String(activeAudioTrack)) ?? undefined;
+    const fileAudio = preparedRef.current?.capability?.metadata?.audio.find(
+      (track) => track.index === selectedAudioIndex
+    );
+    const choices: PlaybackPreferences = {
+      audioLanguage: audio?.language ?? (fileAudio?.language !== 'und' ? fileAudio?.language : undefined),
+      audioLabel: audio?.label,
+      subtitleMode: subtitle ? 'track' : subtitlesOff.current ? 'off' : undefined,
+      subtitleLanguage: subtitle ? (preferredSubtitleLanguage.current ?? subtitle.name) : undefined,
+      subtitleLabel: subtitle?.name,
+    };
+    currentTrackChoices.current = choices;
+
+    if (!streamUrl || recordedSourceFor.current !== streamUrl || !title) return;
+    const timer = window.setTimeout(() => {
+      void window.cloudstream?.updatePlayedSourcePreferences?.({
+        title,
+        year: progress?.year,
+        season: progress?.season,
+        episode: progress?.episode,
+        preferences: choices,
+      });
+    }, 800);
+    return () => window.clearTimeout(timer);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeSubtitle, activeAudioTrack, selectedAudioIndex, audioTracks, streamUrl]);
+
+  /**
    * Applies the selected subtitle by driving `TextTrack.mode` directly.
    *
    * Setting the `default` attribute on a `<track>` only has an effect before
@@ -3240,12 +3506,20 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
   const subtitleDurationRef = useRef(0);
   subtitleDurationRef.current = duration;
   useEffect(() => {
-    if (!prepared || activeSubtitle || subtitlesOff.current || !title) return;
+    const titleChoice = titlePreferences.current;
+    if (!prepared || activeSubtitle || !title) return;
+    if (titleChoice?.subtitleMode === 'off' || (!titleChoice?.subtitleLanguage && subtitlesOff.current)) {
+      return;
+    }
     const key = `${title}|${subtitleContext?.season ?? ''}|${subtitleContext?.episode ?? ''}`;
     if (autoSubtitleKey.current === key) return;
     autoSubtitleKey.current = key;
 
-    const wanted = (preferredSubtitleLanguage.current || 'English').toLowerCase();
+    const wanted = (
+      titleChoice?.subtitleLanguage ||
+      preferredSubtitleLanguage.current ||
+      'English'
+    ).toLowerCase();
     const matches = (label: string) => {
       const l = label.toLowerCase();
       return l.startsWith(wanted) || (wanted === 'english' && /\b(eng|english|en)\b/.test(l));
@@ -4421,6 +4695,17 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
         <div className="player__titles">
           <div className="player__title-row">
             <h2>{title}</h2>
+            {onOpenDetail && progress?.mediaUrl && (
+              <button
+                type="button"
+                className="player__title-search"
+                onClick={onOpenDetail}
+                title="Open title details"
+                aria-label={`Open details for ${title}`}
+              >
+                <Info size={15} />
+              </button>
+            )}
             {onSearchTitle && (
               <button
                 type="button"
@@ -4435,26 +4720,22 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
                 <Search size={15} />
               </button>
             )}
+            {progress?.mediaUrl && (
+              <button
+                type="button"
+                className={`player__title-search${playbackSaved ? ' player__title-search--on' : ''}`}
+                onClick={() => void savePlayback()}
+                title={
+                  playbackSaved
+                    ? 'Saved — press again to update the place'
+                    : 'Keep this playback: the source, the tracks and where you are'
+                }
+                aria-label="Save this playback"
+              >
+                {playbackSaved ? <BookmarkCheck size={15} /> : <BookmarkPlus size={15} />}
+              </button>
+            )}
           </div>
-          {(originalTitle || (activeSource?.title && activeSource.title !== title)) && (
-            <span
-              className="player__original-title"
-              style={{
-                fontSize: '0.74rem',
-                color: 'rgba(255, 255, 255, 0.55)',
-                fontStyle: 'italic',
-                display: 'block',
-                marginTop: '0.1rem',
-                maxWidth: '520px',
-                overflow: 'hidden',
-                textOverflow: 'ellipsis',
-                whiteSpace: 'nowrap',
-              }}
-              title={`Original release: ${originalTitle || activeSource?.title}`}
-            >
-              Refined from: "{originalTitle || activeSource?.title}"
-            </span>
-          )}
           {(episodeTitle || currentEpisode) && (
             <p>
               {/* Where you are in the series belongs on screen, not one click
@@ -4472,83 +4753,35 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
               )}
             </p>
           )}
-          {(effectiveProvider || resolvedProvenance?.repositoryName || activeSource?.parsed?.resolution) && (
+          {/*
+            What is playing, from the source record itself — never from the
+            screen the title was opened on. One quiet line: provider, the
+            extension and repository behind it, then the release's own facts.
+            The release name sits in the tooltip; it used to be a second line
+            labelled "Refined from", which on a title reopened from the library
+            printed the search query of some earlier session.
+          */}
+          {(effectiveProvider || activeSource?.parsed?.resolution) && (
             <div
-              className="player__provenance-badge"
-              style={{
-                display: 'flex',
-                alignItems: 'center',
-                gap: '0.35rem',
-                fontSize: '0.7rem',
-                color: 'rgba(255, 255, 255, 0.75)',
-                marginTop: '0.2rem',
-                flexWrap: 'wrap',
-              }}
+              className="player__provenance"
+              title={activeSource?.title ? `Release: ${activeSource.title}` : undefined}
             >
-              {effectiveProvider && (
-                <span
-                  style={{
-                    padding: '0.08rem 0.35rem',
-                    borderRadius: '4px',
-                    backgroundColor: 'rgba(59, 130, 246, 0.18)',
-                    color: '#93c5fd',
-                    border: '1px solid rgba(59, 130, 246, 0.3)',
-                    fontWeight: 600,
-                  }}
-                >
-                  Provider: {effectiveProvider}
-                </span>
+              {effectiveProvider && <span className="player__provenance-provider">{effectiveProvider}</span>}
+              {(resolvedProvenance?.extensionName ?? providerProvenance?.extensionName) &&
+                (resolvedProvenance?.extensionName ?? providerProvenance?.extensionName) !==
+                  effectiveProvider && (
+                  <span>{resolvedProvenance?.extensionName ?? providerProvenance?.extensionName}</span>
+                )}
+              {(resolvedProvenance?.repositoryName ?? providerProvenance?.repositoryName) && (
+                <span>{resolvedProvenance?.repositoryName ?? providerProvenance?.repositoryName}</span>
               )}
-              {resolvedProvenance?.repositoryName && (
-                <span
-                  style={{
-                    padding: '0.08rem 0.35rem',
-                    borderRadius: '4px',
-                    backgroundColor: 'rgba(255, 255, 255, 0.08)',
-                    color: 'rgba(255, 255, 255, 0.85)',
-                  }}
-                >
-                  Repo: {resolvedProvenance.repositoryName}
-                </span>
+              {activeSource?.parsed?.resolution ? <span>{activeSource.parsed.resolution}p</span> : null}
+              {activeSource?.parsed?.videoCodec && activeSource.parsed.videoCodec !== 'Unknown' && (
+                <span className="player__provenance-codec">{activeSource.parsed.videoCodec}</span>
               )}
-              {activeSource?.indexerName && activeSource.indexerName !== effectiveProvider && (
-                <span
-                  style={{
-                    padding: '0.08rem 0.35rem',
-                    borderRadius: '4px',
-                    backgroundColor: 'rgba(168, 85, 247, 0.15)',
-                    color: '#d8b4fe',
-                  }}
-                >
-                  Indexer: {activeSource.indexerName}
-                </span>
-              )}
-              {activeSource?.parsed?.resolution && (
-                <span
-                  style={{
-                    padding: '0.08rem 0.3rem',
-                    borderRadius: '3px',
-                    backgroundColor: 'rgba(255, 255, 255, 0.1)',
-                    color: '#fff',
-                    fontWeight: 700,
-                  }}
-                >
-                  {activeSource.parsed.resolution}p
-                </span>
-              )}
-              {activeSource?.parsed?.videoCodec && (
-                <span
-                  style={{
-                    padding: '0.08rem 0.3rem',
-                    borderRadius: '3px',
-                    backgroundColor: 'rgba(255, 255, 255, 0.06)',
-                    color: 'rgba(255, 255, 255, 0.7)',
-                    textTransform: 'uppercase',
-                  }}
-                >
-                  {activeSource.parsed.videoCodec}
-                </span>
-              )}
+              {activeSource?.parsed?.languages?.length ? (
+                <span>{activeSource.parsed.languages.slice(0, 3).join(' · ')}</span>
+              ) : null}
             </div>
           )}
         </div>
@@ -4575,6 +4808,21 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
           )}
         </div>
       </header>
+
+      {resumeNotice !== null && !mini && (
+        <div className="player__resume-notice" role="status">
+          <span>Resumed at {formatTimecode(resumeNotice)}</span>
+          <button
+            type="button"
+            onClick={(event) => {
+              event.stopPropagation();
+              startOver();
+            }}
+          >
+            Start over
+          </button>
+        </div>
+      )}
 
       {showUpNext && nextEpisode && (
         <UpNextCard
@@ -4625,6 +4873,8 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
           widened={sourceSession.widened}
           onCancelSearch={sourceSession.onCancelSearch}
           onDownload={sourceSession.onDownloadSource}
+          sourceStates={sourceSession.sourceStates}
+          rememberedHash={rememberedHash}
         />
       )}
 
@@ -4639,7 +4889,10 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
         mediaUrl={progress?.mediaUrl}
         season={subtitleContext?.season}
         episode={subtitleContext?.episode}
-        embedded={subtitles}
+        // Every subtitle the player can show — stream, embedded and fetched —
+        // because choosing one now happens here; the separate subtitle menu
+        // in the control bar is gone.
+        embedded={allSubtitles}
         activeUrl={activeSubtitle}
         onClose={() => setSubtitlePanelOpen(false)}
         onSelect={(url, label, detail) => {
@@ -4675,6 +4928,15 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
       <PlayerDownloadPanel
         open={downloadPanelOpen}
         tasks={downloadQueue}
+        current={currentDownload ?? null}
+        currentTitle={episodeTitle ? `${title} — ${episodeTitle}` : title}
+        currentDetail={[
+          activeSource?.parsed?.resolution ? `${activeSource.parsed.resolution}p` : null,
+          activeSource?.indexerName ?? providerProvenance?.provider ?? null,
+        ]
+          .filter(Boolean)
+          .join(' · ')}
+        onDownloadCurrent={() => void handleDownloadCurrentMedia()}
         onClose={() => setDownloadPanelOpen(false)}
         onPause={(id) => window.cloudstream?.pauseDownload(id)}
         onResume={(id) => window.cloudstream?.resumeDownload(id)}
@@ -4722,33 +4984,34 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
           <div className="player__seek-played" style={{ width: `${progressPercent}%` }} />
           <div className="player__seek-handle" style={{ left: `${progressPercent}%` }} />
 
+          {/*
+            The frame is the answer; the time is its caption. It used to stack a
+            thumbnail, the time, a signed offset and a "Buffered to …" line,
+            which made the tooltip taller than the frame and gave a viewer
+            three numbers to read while trying to land fifteen seconds back.
+            Now: the frame, with the time on it, and the offset in small type.
+          */}
           {hoverTime !== null && (
             <div
               className="player__preview"
               style={{ left: `${hoverX}px` }}
-              // The tooltip sits under the cursor and must not eat the click
-              // that would otherwise seek.
               aria-hidden="true"
             >
-              {preview.image ? (
-                <img src={preview.image} alt="" />
-              ) : (
-                <div className="player__preview-placeholder">
-                  {preview.loading ? <Loader2 className="spin" size={18} /> : <MonitorPlay size={18} />}
-                </div>
-              )}
-              <span>{formatTimecode(hoverTime)}</span>
-              {Math.abs(hoverTime - currentTime) >= 2 && (
-                <span className="player__preview-delta">
-                  {formatDeltaSeconds(hoverTime - currentTime)}
+              <div className="player__preview-frame">
+                {preview.image ? (
+                  <img src={preview.image} alt="" />
+                ) : (
+                  <div className="player__preview-placeholder">
+                    {preview.loading ? <Loader2 className="spin" size={18} /> : <MonitorPlay size={18} />}
+                  </div>
+                )}
+                <span className="player__preview-time">
+                  {formatTimecode(hoverTime)}
+                  {Math.abs(hoverTime - currentTime) >= 2 && (
+                    <em className="player__preview-delta">{formatDeltaSeconds(hoverTime - currentTime)}</em>
+                  )}
                 </span>
-              )}
-              {/* Whether a seek here lands in what is already banked (PRD-051 §31). */}
-              {hoverTime >= currentTime && buffered > currentTime && (
-                <span className="player__preview-buffer">
-                  {hoverTime <= buffered ? 'Buffered' : `Buffered to ${formatTimecode(buffered)}`}
-                </span>
-              )}
+              </div>
             </div>
           )}
 
@@ -4942,90 +5205,13 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
             </button>
           )}
 
-          {/* Button 1: Download Current Media Action Button */}
-          <button
-            className={`icon-button ${currentDownload ? 'active' : ''}`}
-            onClick={(e) => {
-              e.stopPropagation();
-              void handleDownloadCurrentMedia();
-              revealControls();
-            }}
-            aria-label="Download current media"
-            title={
-              currentDownload
-                ? `Downloading current media (${currentDownload.state})`
-                : 'Download current playing media'
-            }
-            disabled={Boolean(
-              currentDownload && currentDownload.state === DownloadState.Completed
-            )}
-          >
-            <HardDriveDownload size={18} />
-          </button>
-
-          {/* Active Download Status Badge for Currently Playing Media */}
-          {currentDownload && (
-            <div
-              style={{
-                display: 'flex',
-                alignItems: 'center',
-                gap: '0.4rem',
-                backgroundColor: 'rgba(59, 130, 246, 0.15)',
-                border: '1px solid rgba(59, 130, 246, 0.3)',
-                padding: '0.2rem 0.6rem',
-                borderRadius: '16px',
-                fontSize: '0.75rem',
-                fontWeight: 600,
-                color: '#60a5fa',
-              }}
-            >
-              <RotateCw
-                size={12}
-                className={
-                  currentDownload.state === DownloadState.Downloading ||
-                  currentDownload.state === DownloadState.RefreshingSource ||
-                  currentDownload.state === DownloadState.Retrying
-                    ? 'spin'
-                    : ''
-                }
-              />
-              <span>
-                {currentDownload.state === DownloadState.Downloading
-                  ? `${currentDownload.totalBytes > 0 ? `${Math.min(100, Math.floor((currentDownload.bytesDownloaded / currentDownload.totalBytes) * 100))}%` : 'Downloading'}`
-                  : currentDownload.state === DownloadState.RefreshingSource
-                  ? 'Refreshing...'
-                  : currentDownload.state === DownloadState.Retrying
-                  ? 'Retrying...'
-                  : currentDownload.state}
-              </span>
-              {currentDownload.state === DownloadState.Downloading && (
-                <button
-                  style={{ background: 'none', border: 'none', color: '#60a5fa', cursor: 'pointer', display: 'flex', padding: 0 }}
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    window.cloudstream?.pauseDownload(currentDownload.id);
-                  }}
-                  title="Pause Download"
-                >
-                  <Pause size={12} />
-                </button>
-              )}
-              {(currentDownload.state === DownloadState.Paused || currentDownload.state === DownloadState.Failed) && (
-                <button
-                  style={{ background: 'none', border: 'none', color: '#60a5fa', cursor: 'pointer', display: 'flex', padding: 0 }}
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    window.cloudstream?.resumeDownload(currentDownload.id);
-                  }}
-                  title="Resume / Retry Download"
-                >
-                  <Play size={12} />
-                </button>
-              )}
-            </div>
-          )}
-
-          {/* Button 2: Downloads Manager Popover Panel Trigger */}
+          {/*
+            One Download button. It used to be two near-identical icons — one
+            downloaded this video, the other opened the downloads list — plus
+            a status pill, and nothing said which was which. The panel it opens
+            leads with "Download this video" (or this video's progress), so the
+            single icon covers both and the difference is explained in words.
+          */}
           <button
             className={`icon-button ${downloadPanelOpen ? 'active' : ''}`}
             data-panel-toggle
@@ -5034,48 +5220,47 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
               setDownloadPanelOpen((v) => !v);
               revealControls();
             }}
-            aria-label="Downloads Manager Panel"
+            aria-label="Downloads"
             title={
-              activeDownloadsCount > 0
-                ? `Downloads Manager (${activeDownloadsCount} active)`
-                : 'Downloads Manager Panel'
+              currentDownload
+                ? `This video: ${currentDownloadLabel(currentDownload)}`
+                : activeDownloadsCount > 0
+                  ? `Downloads (${activeDownloadsCount} active)`
+                  : 'Download this video'
             }
             style={{ position: 'relative' }}
           >
-            <FolderDown size={18} />
-            {activeDownloadsCount > 0 && (
-              <span
-                style={{
-                  position: 'absolute',
-                  top: '-4px',
-                  right: '-4px',
-                  backgroundColor: '#ef4444',
-                  color: '#fff',
-                  fontSize: '0.65rem',
-                  fontWeight: 700,
-                  borderRadius: '10px',
-                  padding: '1px 5px',
-                  lineHeight: 1,
-                }}
-              >
-                {activeDownloadsCount}
+            <Download size={18} />
+            {currentDownload && currentDownload.state !== DownloadState.Completed ? (
+              <span className="icon-button__progress" aria-hidden>
+                {currentDownloadLabel(currentDownload)}
               </span>
-            )}
+            ) : activeDownloadsCount > 0 ? (
+              <span className="icon-button__badge icon-button__badge--count">{activeDownloadsCount}</span>
+            ) : null}
           </button>
 
           {/* Subtitle search sits immediately to the right side of the download panel.
               Optional control: enabled by default, can be toggled via Player Settings. */}
-          {showSubtitlesControl && (
+          {/*
+            One Subtitles button: choose a track, turn them off, or find more
+            online, all in one panel. There were two — a menu that chose and a
+            panel that searched — under the same icon.
+          */}
+          {(showSubtitlesControl || allSubtitles.length > 0) && (
             <button
-              className={`icon-button ${subtitlePanelOpen ? 'active' : ''}`}
+              className={`icon-button ${subtitlePanelOpen ? 'active' : ''}${activeSubtitle ? ' icon-button--on' : ''}`}
               data-panel-toggle
               onClick={(e) => {
                 e.stopPropagation();
                 setSubtitlePanelOpen((v) => !v);
                 revealControls();
               }}
-              aria-label="Search subtitles"
-              title="Search subtitles online"
+              aria-label="Subtitles"
+              title={(() => {
+                const current = activeSubtitle ? allSubtitles.find((sub) => sub.url === activeSubtitle) : null;
+                return current ? `Subtitles: ${current.name} (C to toggle)` : 'Subtitles (C to toggle)';
+              })()}
             >
               <Subtitles size={18} />
             </button>
@@ -5091,72 +5276,6 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
               options={[
                 { value: AUTO_QUALITY, label: 'Auto' },
                 ...qualities.map((q) => ({ value: q.level, label: q.label, detail: q.detail })),
-              ]}
-            />
-          )}
-
-          {allSubtitles.length > 0 && (
-            <HoverMenu
-              icon={<Subtitles size={16} />}
-              label="Subtitles"
-              value={activeSubtitle ?? ''}
-              onOpenChange={onMenuOpenChange}
-              onChange={(next) => {
-                const url = next === '' ? null : String(next);
-                setActiveSubtitle(url);
-                if (isNativeEngine) {
-                  if (!url) {
-                    void window.cloudstream?.mpvSetSubtitleTrack(null);
-                  } else {
-                    const sub = allSubtitles.find((s) => s.url === url);
-                    void window.cloudstream?.mpvAddSubtitle(url, sub?.name);
-                  }
-                }
-                const label = allSubtitles.find((s) => s.url === url)?.name;
-                const language = url
-                  ? getLanguageName('', label) || (label?.split(/[^A-Za-z]+/)[0] ?? '')
-                  : '';
-                void window.cloudstream?.setPlayerPreferences({ subtitleLanguage: language });
-                preferredSubtitleLanguage.current = language || null;
-                subtitlesOff.current = !url;
-              }}
-              triggerText={(() => {
-                if (!activeSubtitle) return 'Off';
-                const found = allSubtitles.find((s) => s.url === activeSubtitle);
-                if (!found) return 'On';
-                const langName = getLanguageName('', found.name);
-                const flag = getLanguageFlag('', found.name);
-                if (langName) {
-                  const sameLang = allSubtitles.filter(
-                    (s) => getLanguageName('', s.name) === langName
-                  );
-                  const suffix =
-                    sameLang.length > 1 ? ` #${sameLang.indexOf(found) + 1}` : '';
-                  return flag && flag !== '🌐'
-                    ? `${flag} ${langName}${suffix}`
-                    : `${langName}${suffix}`;
-                }
-                const rawName =
-                  (found as { displayName?: string; name: string }).displayName || found.name;
-                const clean = (rawName || '')
-                  .replace(/\.(srt|vtt|sub|ass|ssa|idx)$/i, '')
-                  .replace(/[._]+/g, ' ')
-                  .trim();
-                const shortLabel = clean.length > 18 ? `${clean.slice(0, 16)}…` : clean || 'On';
-                return flag && flag !== '🌐' ? `${flag} ${shortLabel}` : shortLabel;
-              })()}
-              options={[
-                { value: '', label: 'Off' },
-                ...allSubtitles.map((sub) => {
-                  const rawName =
-                    (sub as { displayName?: string; name: string }).displayName || sub.name;
-                  const flag = getLanguageFlag('', sub.name || rawName);
-                  return {
-                    value: sub.url,
-                    label: flag && flag !== '🌐' ? `${flag} ${rawName}` : rawName,
-                    detail: (sub as { detail?: string }).detail,
-                  };
-                }),
               ]}
             />
           )}

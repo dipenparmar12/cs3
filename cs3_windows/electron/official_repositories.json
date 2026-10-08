@@ -195,42 +195,6 @@
     ]
   },
   {
-    "id": "cuxplug",
-    "name": "CuxPlug Repo",
-    "internalName": "CuxPlug",
-    "description": "Cux custom extension pack providing multi-server link extraction.",
-    "url": "https://github.com/ycngmn/CuxPlug",
-    "rawRepoUrl": "https://raw.githubusercontent.com/ycngmn/CuxPlug/master/repo.json",
-    "category": "Community",
-    "language": "English",
-    "verified": true,
-    "documentKind": "repository",
-    "regions": [
-      "*"
-    ],
-    "languages": [
-      "en"
-    ]
-  },
-  {
-    "id": "fstream",
-    "name": "FStream French Repo",
-    "internalName": "FStream",
-    "description": "French language streaming providers including FrenchStream, Wawacity, and VoirAnime. Its host now sits behind an Anubis bot wall: the index URL answers HTTP 200 with an HTML interstitial (\"Making sure you're not a bot!\") rather than JSON, measured 2026-09-07, so the app cannot parse it. Unverified until the host serves the document again.",
-    "url": "https://git.disroot.org/ayza/FStream",
-    "rawRepoUrl": "https://git.disroot.org/ayza/FStream/raw/branch/main/repo.json",
-    "category": "Regional",
-    "language": "French (FR)",
-    "verified": false,
-    "documentKind": "repository",
-    "regions": [
-      "EU"
-    ],
-    "languages": [
-      "fr"
-    ]
-  },
-  {
     "id": "indostream",
     "name": "IndoStream Repo",
     "internalName": "IndoStream",
@@ -373,24 +337,6 @@
     ],
     "languages": [
       "en"
-    ]
-  },
-  {
-    "id": "pitipitii",
-    "name": "Pitipitii Repo",
-    "internalName": "Pitipitii",
-    "description": "Pitipitii custom extension pack. The repository is gone: GitHub answers HTTP 451 (unavailable for legal reasons) for it on 2026-09-07, and every branch and filename 404s. Kept listed only so the id stays reserved; it can never resolve and is never offered.",
-    "url": "https://github.com/sarapcanagii/Pitipitii",
-    "rawRepoUrl": "https://raw.githubusercontent.com/sarapcanagii/Pitipitii/master/repo.json",
-    "category": "Community",
-    "language": "Multilingual",
-    "verified": false,
-    "documentKind": "repository",
-    "regions": [
-      "*"
-    ],
-    "languages": [
-      "mul"
     ]
   },
   {
@@ -811,6 +757,288 @@
       "hi",
       "ta",
       "te",
+      "en"
+    ]
+  },
+  {
+    "id": "wiojelt_turksinema",
+    "name": "TurkSinema",
+    "internalName": "TurkSinema",
+    "description": "Türkçe film, dizi ve belgesel sağlayıcıları — 41 extensions no other catalogued repository has. 68 of 68 working, measured 2026-10-08.",
+    "url": "https://github.com/Wiojelt/TurkSinema",
+    "rawRepoUrl": "https://raw.githubusercontent.com/Wiojelt/TurkSinema/builds/repo.json",
+    "category": "Regional",
+    "language": "Turkish (TR) / Multilingual",
+    "verified": true,
+    "documentKind": "repository",
+    "regions": [
+      "ME"
+    ],
+    "languages": [
+      "tr",
+      "en"
+    ]
+  },
+  {
+    "id": "admknight_cloudstreamextensions",
+    "name": "Adam Knight Mega Repo",
+    "internalName": "CloudstreamExtensions",
+    "description": "Dynamic CloudStream mega repository maintained by Adam Knight — a mirror of most community repositories plus 40 extensions found nowhere else; its 82 adult providers are screened by the adult setting one by one. 524 of 542 working, 18 marked down, measured 2026-10-08.",
+    "url": "https://github.com/admknight/CloudstreamExtensions",
+    "rawRepoUrl": "https://raw.githubusercontent.com/admknight/CloudstreamExtensions/builds/repo.json",
+    "category": "Community",
+    "language": "Multilingual",
+    "verified": true,
+    "documentKind": "repository",
+    "regions": [
+      "*"
+    ],
+    "languages": [
+      "mul"
+    ]
+  },
+  {
+    "id": "toxicwind_optimized_cr3_repo",
+    "name": "Optimized CR3 (18+)",
+    "internalName": "optimized-cr3-repo",
+    "description": "ForgeScript V2 generated. All .cs3 hosted in this repo. Enable NSFW in CloudStream. — adult only; 19 extensions found nowhere else. 20 of 20 working, measured 2026-10-08.",
+    "url": "https://github.com/toxicwind/optimized-cr3-repo",
+    "rawRepoUrl": "https://raw.githubusercontent.com/toxicwind/optimized-cr3-repo/master/repo.json",
+    "category": "Adult",
+    "language": "Multilingual",
+    "verified": true,
+    "documentKind": "repository",
+    "adult": true,
+    "regions": [
+      "*"
+    ],
+    "languages": [
+      "en",
+      "vi"
+    ]
+  },
+  {
+    "id": "lawlietbr_lietrepo",
+    "name": "lietrepo",
+    "internalName": "lietrepo",
+    "description": "Repositório Brasileiro para o Cloudstream — Brazilian sources; 9 new. 11 of 11 working, measured 2026-10-08.",
+    "url": "https://github.com/lawlietbr/lietrepo",
+    "rawRepoUrl": "https://raw.githubusercontent.com/lawlietbr/lietrepo/master/builds/repo.json",
+    "category": "Regional",
+    "language": "Portuguese (BR)",
+    "verified": true,
+    "documentKind": "repository",
+    "regions": [
+      "LATAM"
+    ],
+    "languages": [
+      "pt"
+    ]
+  },
+  {
+    "id": "baristomruk_max_btvault",
+    "name": "BTVault",
+    "internalName": "BTVault",
+    "description": "BTVault — 8 new. 25 of 41 working, 16 marked down, measured 2026-10-08.",
+    "url": "https://github.com/baristomruk-max/BTVault",
+    "rawRepoUrl": "https://raw.githubusercontent.com/baristomruk-max/BTVault/builds/plugins.json",
+    "category": "Regional",
+    "language": "Turkish (TR) / Multilingual",
+    "verified": true,
+    "documentKind": "pluginList",
+    "regions": [
+      "ME"
+    ],
+    "languages": [
+      "tr",
+      "en",
+      "hi"
+    ]
+  },
+  {
+    "id": "mrxtron_cloudstream_extension",
+    "name": "XtronRepo",
+    "internalName": "CloudStream-Extension",
+    "description": "CloudStream Extension for seamless streaming. — 6 new. 21 of 21 working, measured 2026-10-08.",
+    "url": "https://github.com/MrXtron/CloudStream-Extension",
+    "rawRepoUrl": "https://raw.githubusercontent.com/MrXtron/CloudStream-Extension/builds/repo.json",
+    "category": "Movies & Shows",
+    "language": "Hindi / English",
+    "verified": true,
+    "documentKind": "repository",
+    "regions": [
+      "IN"
+    ],
+    "languages": [
+      "hi",
+      "en"
+    ]
+  },
+  {
+    "id": "byimam2nd_oce",
+    "name": "OCE",
+    "internalName": "oce",
+    "description": "OCE — 4 new. 9 of 9 working, measured 2026-10-08.",
+    "url": "https://github.com/byimam2nd/oce",
+    "rawRepoUrl": "https://raw.githubusercontent.com/byimam2nd/oce/builds/plugins.json",
+    "category": "Regional",
+    "language": "Indonesian (ID)",
+    "verified": true,
+    "documentKind": "pluginList",
+    "regions": [
+      "SEA"
+    ],
+    "languages": [
+      "id"
+    ]
+  },
+  {
+    "id": "zivalez_zvlzplay",
+    "name": "zvlzPlay",
+    "internalName": "zvlzPlay",
+    "description": "🇮🇩 Indonesian Movie & Series Repository for CloudStream — 3 new; 13 of its 22 extensions are marked down by the maintainer and are not offered to new installs. 9 of 22 working, 13 marked down, measured 2026-10-08.",
+    "url": "https://github.com/Zivalez/zvlzPlay",
+    "rawRepoUrl": "https://raw.githubusercontent.com/Zivalez/zvlzPlay/builds/repo.json",
+    "category": "Regional",
+    "language": "Indonesian (ID)",
+    "verified": true,
+    "documentKind": "repository",
+    "regions": [
+      "SEA"
+    ],
+    "languages": [
+      "id",
+      "en"
+    ]
+  },
+  {
+    "id": "hatsunemikuuwu_animex",
+    "name": "AnimeX",
+    "internalName": "AnimeX",
+    "description": "AnimeX — Indonesian anime; 2 new. 17 of 17 working, measured 2026-10-08.",
+    "url": "https://github.com/HatsuneMikuUwU/AnimeX",
+    "rawRepoUrl": "https://raw.githubusercontent.com/HatsuneMikuUwU/AnimeX/builds/plugins.json",
+    "category": "Anime",
+    "language": "Indonesian (ID)",
+    "verified": true,
+    "documentKind": "pluginList",
+    "regions": [
+      "SEA"
+    ],
+    "languages": [
+      "id"
+    ]
+  },
+  {
+    "id": "extremeboygg_nonton_indo",
+    "name": "Nonton Indo",
+    "internalName": "nonton-indo",
+    "description": "CloudStream 3 Extensions untuk Situs Streaming Indonesia — 2 new. 16 of 16 working, measured 2026-10-08.",
+    "url": "https://github.com/ExtremeBoyGG/nonton-indo",
+    "rawRepoUrl": "https://raw.githubusercontent.com/ExtremeBoyGG/nonton-indo/builds/repo.json",
+    "category": "Regional",
+    "language": "Indonesian (ID)",
+    "verified": true,
+    "documentKind": "repository",
+    "regions": [
+      "SEA"
+    ],
+    "languages": [
+      "id",
+      "en"
+    ]
+  },
+  {
+    "id": "manitux_app_cs_plugins",
+    "name": "Manitux",
+    "internalName": "cs-plugins",
+    "description": "Cloudstream için Manitux eklenti deposu — 1 new. 11 of 11 working, measured 2026-10-08.",
+    "url": "https://github.com/manitux-app/cs-plugins",
+    "rawRepoUrl": "https://raw.githubusercontent.com/manitux-app/cs-plugins/master/repo.json",
+    "category": "Regional",
+    "language": "Turkish (TR) / Multilingual",
+    "verified": true,
+    "documentKind": "repository",
+    "regions": [
+      "ME"
+    ],
+    "languages": [
+      "tr"
+    ]
+  },
+  {
+    "id": "0xopcode_omnibingeverse",
+    "name": "OmniBingeVerse",
+    "internalName": "omnibingeverse",
+    "description": "OmniBingeVerse — 1 new. 2 of 2 working, measured 2026-10-08.",
+    "url": "https://github.com/0xOpCode/omnibingeverse",
+    "rawRepoUrl": "https://raw.githubusercontent.com/0xOpCode/omnibingeverse/builds/plugins.json",
+    "category": "Community",
+    "language": "Hindi / English",
+    "verified": true,
+    "documentKind": "pluginList",
+    "regions": [
+      "IN"
+    ],
+    "languages": [
+      "en",
+      "hi"
+    ]
+  },
+  {
+    "id": "efczpaclasses_boop_brostream_by_faz",
+    "name": "BroStream by Faz (18+)",
+    "internalName": "brostream-by-faz",
+    "description": "Adults-only gay-men CloudStream extension repository — adult only; 1 extension. 1 of 1 working, measured 2026-10-08.",
+    "url": "https://github.com/efczpaclasses-boop/brostream-by-faz",
+    "rawRepoUrl": "https://raw.githubusercontent.com/efczpaclasses-boop/brostream-by-faz/builds/repo.json",
+    "category": "Adult",
+    "language": "English",
+    "verified": true,
+    "documentKind": "repository",
+    "adult": true,
+    "regions": [
+      "*"
+    ],
+    "languages": [
+      "en"
+    ]
+  },
+  {
+    "id": "efczpaclasses_boop_brostream_by_faz_2",
+    "name": "BroStream by Faz 2 (18+)",
+    "internalName": "brostream-by-faz-2",
+    "description": "Adults-only gay-men CloudStream extension repository — adult only; 1 extension. 1 of 1 working, measured 2026-10-08.",
+    "url": "https://github.com/efczpaclasses-boop/brostream-by-faz-2",
+    "rawRepoUrl": "https://raw.githubusercontent.com/efczpaclasses-boop/brostream-by-faz-2/builds/repo.json",
+    "category": "Adult",
+    "language": "English",
+    "verified": true,
+    "documentKind": "repository",
+    "adult": true,
+    "regions": [
+      "*"
+    ],
+    "languages": [
+      "en"
+    ]
+  },
+  {
+    "id": "parabamol63_hentaigasmrepo",
+    "name": "Hentaigasm (18+)",
+    "internalName": "HentaigasmRepo",
+    "description": "Hentaigasm Cloudstream extension repository. — adult only (its plugins do not declare NSFW, so the repository is gated by name); 2 extensions. 2 of 2 working, measured 2026-10-08.",
+    "url": "https://github.com/parabamol63/HentaigasmRepo",
+    "rawRepoUrl": "https://raw.githubusercontent.com/parabamol63/HentaigasmRepo/builds/repo.json",
+    "category": "Adult",
+    "language": "English",
+    "verified": true,
+    "documentKind": "repository",
+    "adult": true,
+    "regions": [
+      "*"
+    ],
+    "languages": [
       "en"
     ]
   }
