@@ -7,6 +7,8 @@ import {
   Copy,
   Crosshair,
   ExternalLink,
+  Pin,
+  PinOff,
   X,
 } from 'lucide-react';
 import {
@@ -40,6 +42,7 @@ const EDITOR_KEY = 'cs3.uiInspector.editor';
 const WIDTH_KEY = 'cs3.uiInspector.width';
 const SECTIONS_KEY = 'cs3.uiInspector.sections';
 const LIBRARY_KEY = 'cs3.uiInspector.showLibrary';
+const PINNED_KEY = 'cs3.uiInspector.pinned';
 export const UI_INSPECTOR_EVENT = 'cs3:ui-inspector';
 
 export type InspectorEditor = 'vscode' | 'vscode-insiders' | 'cursor' | 'windsurf' | 'system';
@@ -210,6 +213,14 @@ export const UiInspector: React.FC = () => {
     ...readStore<Record<string, boolean>>(SECTIONS_KEY, {}),
   }));
   const [showLibrary, setShowLibrary] = useState<boolean>(() => readStore(LIBRARY_KEY, false));
+  /**
+   * Unpinned, the panel is a popover: a press anywhere else in the app closes
+   * it, like every other temporary panel. Pinned, it stays while the app is
+   * used beside it — the way to watch one component across interactions.
+   */
+  const [pinned, setPinned] = useState<boolean>(() => readStore(PINNED_KEY, false));
+  const pinnedRef = useRef(pinned);
+  pinnedRef.current = pinned;
 
   const pickingRef = useRef(picking);
   pickingRef.current = picking;
@@ -288,7 +299,12 @@ export const UiInspector: React.FC = () => {
     };
     const onPress = (event: MouseEvent) => {
       if (isInspectorUi(event.target)) return;
-      if (pickingRef.current || (event.altKey && event.button === 0)) swallow(event);
+      if (pickingRef.current || (event.altKey && event.button === 0)) {
+        swallow(event);
+        return;
+      }
+      // Not swallowed: the press still does what it would have done.
+      if (selectionRef.current && !pinnedRef.current) setSelection(null);
     };
     const onClick = (event: MouseEvent) => {
       if (isInspectorUi(event.target)) return;
@@ -424,6 +440,21 @@ export const UiInspector: React.FC = () => {
           <div className="ui-inspector__resize" onPointerDown={startResize} aria-hidden />
           <header className="ui-inspector__head">
             <span className="ui-inspector__title">UI Inspector</span>
+            <button
+              type="button"
+              className={`ui-inspector__icon${pinned ? ' ui-inspector__icon--on' : ''}`}
+              onClick={() => {
+                setPinned((current) => {
+                  writeStore(PINNED_KEY, !current);
+                  return !current;
+                });
+              }}
+              aria-pressed={pinned}
+              aria-label={pinned ? 'Unpin the inspector' : 'Pin the inspector open'}
+              title={pinned ? 'Pinned: stays open while you use the app' : 'Pin: keep open when clicking elsewhere'}
+            >
+              {pinned ? <Pin size={14} /> : <PinOff size={14} />}
+            </button>
             <button
               type="button"
               className="ui-inspector__icon"

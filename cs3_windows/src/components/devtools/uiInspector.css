@@ -289,3 +289,5 @@
   box-shadow: 0 6px 16px rgba(0, 0, 0, .35);
   pointer-events: none;
 }
+
+.ui-inspector__icon--on { color: var(--accent-light, #60a5fa); }
