@@ -178,6 +178,11 @@ import type { MpvSnapshot } from '../src/types/mpv';
 import { describeError } from '../src/utils/errors.ts';
 import type { TitleInteractionQuery } from '../src/types/interactions';
 import { SHARE_SCHEME } from '../src/utils/shareLink.ts';
+import {
+  subtitleMpvProperties,
+  type SubtitleBackground,
+  type SubtitleWeight,
+} from '../src/utils/subtitleStyle.ts';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -755,6 +760,7 @@ function mpvToExternalSnapshot(snapshot: MpvSnapshot): ExternalPlaybackSnapshot 
 
 const mpvEngine = new MpvEngine({
   resolveBinary: (name) => binaryDownloader.resolveBinary(name),
+  getSubtitleStyle: () => getStoredMpvSubtitleProperties(),
   onUpdate: (snapshot) => {
     mainWindow?.webContents.send('mpv:update', snapshot);
     mainWindow?.webContents.send('external:update', mpvToExternalSnapshot(snapshot));
@@ -4836,6 +4842,20 @@ function sanitizePlayerPreferences(
   return preferences;
 }
 
+function getStoredMpvSubtitleProperties(): Record<string, unknown> {
+  const stored =
+    datastore.getObject<StoredPlayerPreferences>(PLAYER_PREFERENCES_KEY, null, true) ??
+    datastore.getObject<StoredPlayerPreferences>(PLAYER_PREFERENCES_KEY, null, false);
+  const prefs = sanitizePlayerPreferences(stored);
+  return subtitleMpvProperties({
+    scale: prefs.subtitleScale,
+    color: prefs.subtitleColor,
+    background: prefs.subtitleBackground as SubtitleBackground,
+    weight: prefs.subtitleWeight as SubtitleWeight,
+    position: prefs.subtitlePosition,
+  });
+}
+
 ipcMain.handle('player:getPreferences', async () => {
   const stored =
     datastore.getObject<StoredPlayerPreferences>(PLAYER_PREFERENCES_KEY, null, true) ??
@@ -4857,6 +4877,7 @@ ipcMain.handle(
     const merged = sanitizePlayerPreferences({ ...current, ...patch });
     datastore.setObject(PLAYER_PREFERENCES_KEY, merged, true);
     mainWindow?.webContents.send('player:preferencesChanged', merged);
+    void mpvEngine.setSubtitleStyle(getStoredMpvSubtitleProperties());
     return { ok: true };
   }
 );

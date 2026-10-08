@@ -102,9 +102,11 @@ export function subtitleCssVariables(style: SubtitleStyle): Record<string, strin
  * mid-title would resize the text. `sub-border-size` of 0 is how "no outline"
  * is expressed — mpv has no separate toggle.
  */
+export const MPV_BASE_SUB_FONT_SIZE = 42;
+
 export function subtitleMpvProperties(style: SubtitleStyle): Record<string, unknown> {
   return {
-    'sub-font-size': Math.round(55 * style.scale),
+    'sub-font-size': Math.round(MPV_BASE_SUB_FONT_SIZE * style.scale),
     'sub-color': style.color,
     'sub-bold': style.weight === 'bold',
     'sub-border-size': style.background === 'outline' ? 3 : style.background === 'shadow' ? 1 : 0,
@@ -113,5 +115,6 @@ export function subtitleMpvProperties(style: SubtitleStyle): Record<string, unkn
     // mpv measures from the bottom in the same direction the CSS lift does, so
     // one number drives both without a sign flip to get wrong.
     'sub-pos': Math.round(100 - style.position),
+    'sub-ass-override': 'yes',
   };
 }

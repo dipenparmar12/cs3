@@ -13,6 +13,7 @@ import assert from 'node:assert/strict';
 
 import {
   DEFAULT_SUBTITLE_STYLE,
+  MPV_BASE_SUB_FONT_SIZE,
   SUBTITLE_BACKGROUNDS,
   subtitleCssVariables,
   subtitleMpvProperties,
@@ -35,10 +36,9 @@ test('the default is an outline, which costs no picture', () => {
   assert.notEqual(css['--cue-shadow'], 'none');
 });
 
-test('an unscaled default maps to mpv’s own default size', () => {
-  // 55 is mpv's default against its 720-line reference frame. If 1.0 meant
-  // anything else, switching engines mid-title would resize the text.
-  assert.equal(subtitleMpvProperties(DEFAULT_SUBTITLE_STYLE)['sub-font-size'], 55);
+test('an unscaled default maps to mpv’s comfortable default base size', () => {
+  assert.equal(subtitleMpvProperties(DEFAULT_SUBTITLE_STYLE)['sub-font-size'], MPV_BASE_SUB_FONT_SIZE);
+  assert.equal(subtitleMpvProperties(DEFAULT_SUBTITLE_STYLE)['sub-ass-override'], 'yes');
 });
 
 // --- size -------------------------------------------------------------------
@@ -52,7 +52,10 @@ test('scale multiplies rather than replacing the browser default', () => {
 test('scale moves both renderers in the same direction', () => {
   const big = subtitleMpvProperties(style({ scale: 2 }))['sub-font-size'] as number;
   const small = subtitleMpvProperties(style({ scale: 0.75 }))['sub-font-size'] as number;
-  assert.ok(big > 55 && small < 55, `expected 55 to sit between ${small} and ${big}`);
+  assert.ok(
+    big > MPV_BASE_SUB_FONT_SIZE && small < MPV_BASE_SUB_FONT_SIZE,
+    `expected ${MPV_BASE_SUB_FONT_SIZE} to sit between ${small} and ${big}`
+  );
 });
 
 // --- background modes -------------------------------------------------------

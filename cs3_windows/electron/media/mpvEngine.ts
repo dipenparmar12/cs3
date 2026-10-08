@@ -209,6 +209,8 @@ interface Pending {
 export interface MpvEngineDeps {
   /** Where to find mpv. Resolved lazily so provisioning can happen after boot. */
   resolveBinary: (name: string) => string | null;
+  /** Current or default subtitle style properties to apply to the engine. */
+  getSubtitleStyle?: () => Record<string, unknown>;
   /** Snapshots are pushed here; `main.ts` forwards them to the renderer. */
   onUpdate: (snapshot: MpvSnapshot) => void;
   /**
@@ -246,6 +248,7 @@ export class MpvEngine {
 
   /** Last known value of every observed property, keyed by mpv's own name. */
   private properties = new Map<string, unknown>();
+  private currentSubtitleProperties: Record<string, unknown> | null = null;
   private state: MpvSnapshot['state'] = 'idle';
   private lastLoggedState: MpvSnapshot['state'] | null = null;
   private lastError: string | null = null;
@@ -584,6 +587,7 @@ export class MpvEngine {
 
     await this.observeProperties();
     await this.applyKeyBindings();
+    await this.applyStoredSubtitleStyle();
     return { ok: true };
   }
 
@@ -691,6 +695,34 @@ export class MpvEngine {
       '--keep-open=yes',
       `--title=${request.title || 'CloudStream'}`,
     ];
+
+    const subProps = this.currentSubtitleProperties ?? this.deps.getSubtitleStyle?.() ?? null;
+    if (subProps) {
+      if (typeof subProps['sub-font-size'] === 'number') {
+        args.push(`--sub-font-size=${subProps['sub-font-size']}`);
+      }
+      if (typeof subProps['sub-color'] === 'string') {
+        args.push(`--sub-color=${subProps['sub-color']}`);
+      }
+      if (typeof subProps['sub-border-size'] === 'number') {
+        args.push(`--sub-border-size=${subProps['sub-border-size']}`);
+      }
+      if (typeof subProps['sub-shadow-offset'] === 'number') {
+        args.push(`--sub-shadow-offset=${subProps['sub-shadow-offset']}`);
+      }
+      if (typeof subProps['sub-back-color'] === 'string') {
+        args.push(`--sub-back-color=${subProps['sub-back-color']}`);
+      }
+      if (typeof subProps['sub-pos'] === 'number') {
+        args.push(`--sub-pos=${subProps['sub-pos']}`);
+      }
+      if (typeof subProps['sub-bold'] === 'boolean') {
+        args.push(`--sub-bold=${subProps['sub-bold'] ? 'yes' : 'no'}`);
+      }
+      if (typeof subProps['sub-ass-override'] === 'string') {
+        args.push(`--sub-ass-override=${subProps['sub-ass-override']}`);
+      }
+    }
 
     if (process.platform === 'win32') args.push('--gpu-context=d3d11');
 
@@ -912,6 +944,7 @@ export class MpvEngine {
       case 'file-loaded':
       case 'playback-restart': {
         if (this.state !== 'error') this.state = 'playing';
+        void this.applyStoredSubtitleStyle();
         this.emit();
         break;
       }
@@ -1290,8 +1323,12 @@ export class MpvEngine {
    * the list without selecting it, which reads as a subtitle track that does
    * nothing when clicked.
    */
-  public addSubtitle(url: string, title?: string, language?: string): Promise<MpvCommandResult> {
-    return this.command(['sub-add', url, 'select', title ?? 'Subtitles', language ?? '']);
+  public async addSubtitle(url: string, title?: string, language?: string): Promise<MpvCommandResult> {
+    const res = await this.command(['sub-add', url, 'select', title ?? 'Subtitles', language ?? '']);
+    if (res.ok) {
+      void this.applyStoredSubtitleStyle();
+    }
+    return res;
   }
 
   public setSubtitleDelay(seconds: number): Promise<MpvCommandResult> {
@@ -1313,6 +1350,13 @@ export class MpvEngine {
   public async setSubtitleStyle(
     properties: Record<string, unknown>
   ): Promise<MpvCommandResult> {
+    this.currentSubtitleProperties = {
+      ...(this.currentSubtitleProperties ?? {}),
+      ...properties,
+    };
+    if (!this.socket || this.socket.destroyed) {
+      return { ok: true };
+    }
     let applied = 0;
     for (const [name, value] of Object.entries(properties)) {
       const result = await this.command(['set_property', name, value]);
@@ -1321,6 +1365,12 @@ export class MpvEngine {
     return applied > 0
       ? { ok: true }
       : { ok: false, error: 'mpv accepted none of the subtitle style properties.' };
+  }
+
+  private async applyStoredSubtitleStyle(): Promise<void> {
+    const props = this.currentSubtitleProperties ?? this.deps.getSubtitleStyle?.() ?? null;
+    if (!props) return;
+    await this.setSubtitleStyle(props);
   }
 
   /**
