@@ -15,7 +15,7 @@
  * responsible.
  */
 import React, { useState } from 'react';
-import { Package, Layers, Radio, Trash2, AlertTriangle, Info, ChevronsDownUp, ChevronsUpDown } from 'lucide-react';
+import { Package, Layers, Radio, Trash2, AlertTriangle, Info, ChevronsDownUp, ChevronsUpDown, Plus } from 'lucide-react';
 import { Button } from '../ui';
 import {
   Badge,
@@ -51,6 +51,8 @@ interface SourceTreeProps {
   onProviderToggle(name: string, enabled: boolean): void;
   onUninstall(internalName: string): void;
   onRemoveRepository(url: string): void;
+  /** Opens the add-by-address dialog; adding a repository is managing what is installed. */
+  onAddRepository?(): void;
 }
 
 /**
@@ -314,6 +316,7 @@ export const SourceTree: React.FC<SourceTreeProps> = ({
   onProviderToggle,
   onUninstall,
   onRemoveRepository,
+  onAddRepository,
 }) => {
   const [openRepos, setOpenRepos] = useState<Record<string, boolean>>({});
   const anyRepoOpen = Object.values(openRepos).some(Boolean);
@@ -354,12 +357,21 @@ export const SourceTree: React.FC<SourceTreeProps> = ({
     }));
   };
 
+  const addButton = onAddRepository ? (
+    <Button size="compact" icon={Plus} onClick={onAddRepository}>
+      Add repository
+    </Button>
+  ) : null;
+
   if (tree.length === 0) {
     return (
-      <p className="ext-empty">
-        Nothing installed yet. Open <strong>Browse</strong> to pick from the verified catalogue —
-        you can install several at once.
-      </p>
+      <div className="ext-empty">
+        <p>
+          Nothing installed yet. Open <strong>Browse</strong> to pick from the verified catalogue —
+          you can install several at once.
+        </p>
+        {addButton}
+      </div>
     );
   }
 
@@ -390,6 +402,7 @@ export const SourceTree: React.FC<SourceTreeProps> = ({
           >
             {anyRepoOpen ? 'Collapse all' : 'Expand all'}
           </Button>
+          {addButton}
         </div>
       </div>
 

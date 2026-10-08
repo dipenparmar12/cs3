@@ -314,6 +314,10 @@ function repositoryLabel(url: string): string {
   try {
     const parsed = new URL(url);
     const segments = parsed.pathname.split('/').filter(Boolean);
+    // jsDelivr mirrors a GitHub repository as `/gh/owner/repo@branch/…`.
+    if (parsed.hostname.includes('jsdelivr') && segments[0] === 'gh' && segments.length >= 3) {
+      return `${segments[1]}/${segments[2].split('@')[0]}`;
+    }
     if (
       (parsed.hostname.includes('github') ||
         parsed.hostname.includes('gitlab') ||

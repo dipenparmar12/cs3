@@ -835,10 +835,16 @@
 .ext-updates__disclosure:hover { color: var(--text-primary); }
 
 /* Browse: the viewer's own repositories, above the catalogue. */
-.ext-section-title { margin: 0.25rem 0 0.4rem; font-size: 0.72rem; font-weight: 600; letter-spacing: 0.04em; text-transform: uppercase; color: var(--text-subtle); }
 .ext-custom-repos { display: flex; flex-direction: column; }
-.ext-custom-repos .ext-cards { margin-bottom: 0.75rem; }
-.ext-card--compact { display: flex; align-items: center; justify-content: space-between; gap: 0.6rem; }
-.ext-custom-repos__name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 32rem; }
 .add-repository { display: flex; flex-direction: column; gap: 0.4rem; }
 .add-repository__label { display: inline-flex; align-items: center; gap: 0.35rem; font-size: 0.8rem; color: var(--text-muted); }
+
+/* Browse sections: a quiet disclosure line, never a heading block. */
+.ext-section-toggle { display: inline-flex; align-items: center; gap: 0.35rem; align-self: flex-start; margin: 0.35rem 0 0.5rem; padding: 0.15rem 0; background: none; border: 0; font: inherit; font-size: 0.78rem; font-weight: 600; color: var(--text-muted); cursor: pointer; }
+.ext-section-toggle:hover { color: var(--text-primary); }
+.ext-section-toggle span { font-weight: 400; color: var(--text-subtle); }
+.ext-custom-list { list-style: none; margin: 0; padding: 0; border: 1px solid var(--border-color); border-radius: var(--radius-md); }
+.ext-custom-list__row { display: flex; align-items: center; gap: 0.5rem; padding: 0.35rem 0.6rem; font-size: 0.8rem; }
+.ext-custom-list__row + .ext-custom-list__row { border-top: 1px solid var(--border-color); }
+.ext-custom-list__name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-primary); }
+.ext-empty .btn { margin-top: 0.5rem; }

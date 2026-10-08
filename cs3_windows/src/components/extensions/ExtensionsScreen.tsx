@@ -30,6 +30,7 @@ import { useExtensionFilters } from './useExtensionFilters';
 import { FilterBar } from './FilterBar';
 import { ExtensionUpdates } from '../ExtensionUpdates';
 import { Button, Dialog } from '../ui';
+import { AddRepositoryDialog } from './AddRepositoryDialog';
 import { BulkActionBar } from './BulkActionBar';
 import { BulkConfirmDialog, type BulkVerb } from './BulkConfirmDialog';
 import {
@@ -77,6 +78,7 @@ export const ExtensionsScreen: React.FC = () => {
   const browseToken = useRef(0);
   const adult = useAdultState();
   const [adultOpen, setAdultOpen] = useState(false);
+  const [addingRepository, setAddingRepository] = useState(false);
   const jobs = useExtensionJobs();
   // The tree is re-read, never predicted, once background work lands.
   useOnJobsSettled(jobs.snapshot, () => void refresh());
@@ -481,6 +483,7 @@ export const ExtensionsScreen: React.FC = () => {
           ) : null}
 
           <SourceTree
+            onAddRepository={() => setAddingRepository(true)}
             tree={state.tree}
             visible={visibleTree}
             busy={busy}
@@ -571,6 +574,18 @@ export const ExtensionsScreen: React.FC = () => {
         />
       ) : null}
 
+
+      {addingRepository && (
+        <AddRepositoryDialog
+          onAdd={(url) => void jobs.enqueue([{ kind: 'addRepository', url }])}
+          onBrowse={(url) => {
+            // Looking is Browse's job: show it there, opened under its row.
+            setTab('repositories');
+            void browse({ name: url, url });
+          }}
+          onClose={() => setAddingRepository(false)}
+        />
+      )}
 
       {adultOpen && (
         /* The same control as Settings → Adult content, bound to the same state. */
