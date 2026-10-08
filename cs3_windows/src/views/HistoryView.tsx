@@ -1,4 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useSessionState } from '../utils/useSessionState';
 import { useFlash } from '../utils/useFlash';
 import {
   History as HistoryIcon,
@@ -139,10 +140,10 @@ export const HistoryView: React.FC<HistoryViewProps> = ({ onSelectMedia, onPlayD
   const [refreshing, setRefreshing] = useState(false);
 
   // View Mode: 'grouped' consolidates revisited/duplicate media, 'flat' displays chronological individual logs
-  const [viewMode, setViewMode] = useState<'grouped' | 'flat'>('grouped');
+  const [viewMode, setViewMode] = useSessionState<'grouped' | 'flat'>('history.viewMode', 'grouped');
 
   // Accordion state for grouped view
-  const [expandedGroups, setExpandedGroups] = useState<Set<string>>(new Set());
+  const [expandedGroups, setExpandedGroups] = useSessionState<Set<string>>('history.expanded', () => new Set());
   const [showAllVisitsMap, setShowAllVisitsMap] = useState<Record<string, boolean>>({});
 
   // Filters & find-on-this-screen. The query is applied a beat after typing
@@ -158,9 +159,9 @@ export const HistoryView: React.FC<HistoryViewProps> = ({ onSelectMedia, onPlayD
   // The full-screen spinner is for the first load only; a re-filter keeps the
   // rows on screen until the answer replaces them.
   const loadedOnce = useRef(false);
-  const [activeStatus, setActiveStatus] = useState<HistoryStatus | 'All'>('All');
-  const [mediaTypeFilter, setMediaTypeFilter] = useState<'all' | 'movie' | 'series' | 'anime'>('all');
-  const [sortBy, setSortBy] = useState<'recent' | 'oldest' | 'played' | 'failed' | 'downloaded'>('recent');
+  const [activeStatus, setActiveStatus] = useSessionState<HistoryStatus | 'All'>('history.status', 'All');
+  const [mediaTypeFilter, setMediaTypeFilter] = useSessionState<'all' | 'movie' | 'series' | 'anime'>('history.type', 'all');
+  const [sortBy, setSortBy] = useSessionState<'recent' | 'oldest' | 'played' | 'failed' | 'downloaded'>('history.sort', 'recent');
 
   // Multi-selection
   const [selectMode, setSelectMode] = useState(false);

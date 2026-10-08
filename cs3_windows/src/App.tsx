@@ -43,7 +43,17 @@ import { usePrivacy } from './utils/usePrivacy';
 import { ScrollToTop } from './components/ScrollToTop';
 import { durableAddress } from './utils/durableAddress';
 import { canonicalKey } from '../electron/cs3/libraryStore';
-import { SCREEN_SEARCH_FOCUS_EVENT, forgetScreenQueries, screenSearchAvailable } from './utils/screenSearch';
+import { SCREEN_SEARCH_FOCUS_EVENT, screenSearchAvailable } from './utils/screenSearch';
+import {
+  depthOf,
+  emptyNavigation,
+  pop,
+  push,
+  reset,
+  scrollKey,
+  topOf,
+  type TabNavigationState,
+} from './utils/tabNavigation';
 
 /**
  * Every screen except Home, loaded when it is opened.
@@ -182,9 +192,81 @@ export const App: React.FC = () => {
   const [homeCategory, setHomeCategory] = useState<HomeCategoryState | null>(null);
   /** The main scroller, so returning from a title lands where you left. */
   const viewportRef = useRef<HTMLElement | null>(null);
-  const savedScroll = useRef(0);
 
-  const [selectedMedia, setSelectedMedia] = useState<SearchResponse | null>(null);
+  /**
+   * Each screen's own place: its stack of opened pages and a scroll position
+   * per level (`utils/tabNavigation.ts`). One global `selectedMedia` that
+   * every sidebar click cleared is how a page opened from Search was gone
+   * after a glance at History.
+   */
+  const [navigation, setNavigation] = useState<TabNavigationState<SearchResponse>>(emptyNavigation);
+  const navigationRef = useRef(navigation);
+  navigationRef.current = navigation;
+  const activeTabRef = useRef(activeTab);
+  activeTabRef.current = activeTab;
+  const scrollMemory = useRef(new Map<string, number>());
+  const selectedMedia = topOf(navigation, activeTab);
+
+  /*
+   * Restored after paint rather than immediately: the screen being returned
+   * to does not exist yet when the state changes, so setting `scrollTop`
+   * before layout scrolls a shorter page and clamps to whatever fits.
+   */
+  const scrollAfterPaint = useCallback((target: number) => {
+    requestAnimationFrame(() => {
+      requestAnimationFrame(() => {
+        if (viewportRef.current) viewportRef.current.scrollTop = target;
+      });
+    });
+  }, []);
+  const rememberScroll = useCallback((tab: string) => {
+    scrollMemory.current.set(
+      scrollKey(tab, depthOf(navigationRef.current, tab)),
+      viewportRef.current?.scrollTop ?? 0
+    );
+  }, []);
+
+  /** Opens a title's page on the current screen, keeping the place under it. */
+  const openDetail = useCallback(
+    (item: SearchResponse) => {
+      const tab = activeTabRef.current;
+      rememberScroll(tab);
+      setNavigation((current) => push(current, tab, item));
+      scrollAfterPaint(0);
+    },
+    [rememberScroll, scrollAfterPaint]
+  );
+
+  /** One step back on the current screen, to the scroll that level had. */
+  const goBack = useCallback(() => {
+    const tab = activeTabRef.current;
+    const depth = depthOf(navigationRef.current, tab);
+    if (depth === 0) return;
+    setNavigation((current) => pop(current, tab));
+    scrollAfterPaint(scrollMemory.current.get(scrollKey(tab, depth - 1)) ?? 0);
+  }, [scrollAfterPaint]);
+
+  /** Back to a screen's root, forgetting the pages opened on it. */
+  const resetScreen = useCallback((tab: string) => {
+    setNavigation((current) => reset(current, tab));
+    for (const key of [...scrollMemory.current.keys()]) {
+      if (key.startsWith(`${tab}:`)) scrollMemory.current.delete(key);
+    }
+  }, []);
+
+  /** Another screen, exactly as it was left. */
+  const switchTab = useCallback(
+    (next: ActiveTab) => {
+      const current = activeTabRef.current;
+      if (next === current) return;
+      rememberScroll(current);
+      setActiveTab(next);
+      scrollAfterPaint(
+        scrollMemory.current.get(scrollKey(next, depthOf(navigationRef.current, next))) ?? 0
+      );
+    },
+    [rememberScroll, scrollAfterPaint]
+  );
   /**
    * Why a shared link did not open, if it did not.
    *
@@ -562,7 +644,7 @@ export const App: React.FC = () => {
       // Cmd+, or Ctrl+, opens Settings and focuses settings search
       if ((e.ctrlKey || e.metaKey) && e.key === ',') {
         e.preventDefault();
-        setActiveTab('settings');
+        switchTab('settings');
         setTimeout(() => {
           window.dispatchEvent(new CustomEvent('cs3:focus-settings-search'));
         }, 50);
@@ -595,7 +677,7 @@ export const App: React.FC = () => {
     });
 
     const disposeSettings = window.cloudstream?.onOpenSettings?.(() => {
-      setActiveTab('settings');
+      switchTab('settings');
       setTimeout(() => {
         window.dispatchEvent(new CustomEvent('cs3:focus-settings-search'));
       }, 50);
@@ -604,7 +686,7 @@ export const App: React.FC = () => {
     // Help → Licences. A menu item that does nothing is worse than no menu item.
     const disposeLicences = window.cloudstream?.onShowLicences?.(() => {
       setSettingsTab('advanced');
-      setActiveTab('settings');
+      switchTab('settings');
     });
 
     return () => {
@@ -769,7 +851,7 @@ export const App: React.FC = () => {
     }
     const { payload } = result;
     setShareProblem(null);
-    setSelectedMedia({
+    openDetail({
       name: payload.title,
       originalTitle: payload.originalTitle,
       url: payload.url,
@@ -779,7 +861,7 @@ export const App: React.FC = () => {
       year: payload.year,
       imdbId: payload.id,
     });
-  }, []);
+  }, [openDetail]);
 
   useEffect(() => {
     return window.cloudstream?.onOpenShareLink?.(handleShareLink);
@@ -929,13 +1011,13 @@ export const App: React.FC = () => {
     lastQuery.current = { query, options };
     setSavedView(null);
     setSearchQuery(query);
-    setSelectedMedia(null); // Instantly dismiss open DetailView overlay
     setSearch(null); // Instantly clear old search results
-    // A new query is a new question, so the previous answer's filters and
-    // disclosure state say nothing about it.
+    // A new query is a new question, so the previous answer's filters,
+    // disclosure state and opened pages say nothing about it.
     setSearchUi(EMPTY_SEARCH_UI);
-    savedScroll.current = 0;
-    setActiveTab('search');
+    resetScreen('search');
+    switchTab('search');
+    scrollAfterPaint(0);
     setSearchError(null);
 
     if (!window.cloudstream) return;
@@ -946,7 +1028,7 @@ export const App: React.FC = () => {
     } catch (err) {
       setSearchError(describeError(err));
     }
-  }, [handleShareLink]);
+  }, [handleShareLink, resetScreen, switchTab, scrollAfterPaint]);
 
   /**
    * Abandons the running search, keeping whatever it has already found.
@@ -995,10 +1077,9 @@ export const App: React.FC = () => {
       query: saved.query,
       options: saved.providers.length > 0 ? { providers: saved.providers } : undefined,
     };
-    setSelectedMedia(null);
+    resetScreen('search');
     setSearchError(null);
     setSearchUi(EMPTY_SEARCH_UI);
-    savedScroll.current = 0;
     setSearchQuery(saved.query);
     setSearch({
       id: `saved:${saved.id}`,
@@ -1018,8 +1099,9 @@ export const App: React.FC = () => {
       cancelled: false,
     });
     setSavedView({ id: saved.id, savedAt: saved.savedAt });
-    setActiveTab('search');
-  }, []);
+    switchTab('search');
+    scrollAfterPaint(0);
+  }, [resetScreen, switchTab, scrollAfterPaint]);
 
   /** Keeps the live search's results to reopen later. */
   const handleSaveSearch = useCallback(async (): Promise<boolean> => {
@@ -1131,8 +1213,6 @@ export const App: React.FC = () => {
   const handleSearchFromPlayer = useCallback(
     (query: string) => {
       void handleClosePlayer();
-      setSelectedMedia(null);
-      setActiveTab('search');
       setSearchQuery(query);
       void handleSearch(query);
     },
@@ -1142,36 +1222,16 @@ export const App: React.FC = () => {
 
   const handleSearchFromDetail = useCallback(
     (query: string) => {
-      setSelectedMedia(null);
-      setActiveTab('search');
       setSearchQuery(query);
       void handleSearch(query);
     },
     [handleSearch]
   );
 
-  const handleSelectMedia = (item: SearchResponse) => {
-    savedScroll.current = viewportRef.current?.scrollTop ?? 0;
-    setSelectedMedia(item);
-  };
+  const handleSelectMedia = openDetail;
 
-  /**
-   * Back to the list, at the place it was left.
-   *
-   * Restored after paint rather than immediately: the results grid does not
-   * exist yet at the moment `selectedMedia` clears, so setting `scrollTop`
-   * before the browser has laid it out scrolls a shorter page and clamps to
-   * whatever fits.
-   */
-  const handleBackToResults = useCallback(() => {
-    setSelectedMedia(null);
-    const target = savedScroll.current;
-    requestAnimationFrame(() => {
-      requestAnimationFrame(() => {
-        if (viewportRef.current) viewportRef.current.scrollTop = target;
-      });
-    });
-  }, []);
+  /** Back one page on this screen — to the list, or the title before this one. */
+  const handleBackToResults = goBack;
 
   /**
    * Tears down the stream that was playing before the current one.
@@ -1307,8 +1367,7 @@ export const App: React.FC = () => {
     // thing to tell someone about a film they were watching a second ago.
     setPlayerMini(true);
     setPlayerHidden(false);
-    setSelectedMedia(null);
-    setActiveTab(tab);
+    switchTab(tab);
   };
 
   /**
@@ -1338,7 +1397,6 @@ export const App: React.FC = () => {
    */
   const handleResume = useCallback(
     async (target: ResumeTarget) => {
-      setSelectedMedia(null);
       setPlayerHidden(false);
       setPlayerMini(false);
       setPreparing({ title: target.title });
@@ -1804,14 +1862,32 @@ export const App: React.FC = () => {
     setHasBinaries(true);
   };
 
+
   /*
-   * A screen's find-on-this-screen query survives opening a title from it
-   * (that unmounts the screen without changing tab) and is forgotten on
-   * moving to another tab, so a filter never greets the viewer on a later visit.
+   * Back like a browser: the mouse's back button and Alt+←, one page on the
+   * current screen. Not while the player is in front — there, Back belongs to
+   * the player.
    */
+  const playerInFront = Boolean((session || playback || preparing) && !playerHidden && !playerMini);
   useEffect(() => {
-    forgetScreenQueries();
-  }, [activeTab]);
+    const canGoBack = () => !playerInFront && depthOf(navigationRef.current, activeTabRef.current) > 0;
+    const onMouse = (event: MouseEvent) => {
+      if (event.button !== 3 || !canGoBack()) return;
+      event.preventDefault();
+      goBack();
+    };
+    const onKey = (event: KeyboardEvent) => {
+      if (!event.altKey || event.key !== 'ArrowLeft' || !canGoBack()) return;
+      event.preventDefault();
+      goBack();
+    };
+    window.addEventListener('mouseup', onMouse);
+    window.addEventListener('keydown', onKey);
+    return () => {
+      window.removeEventListener('mouseup', onMouse);
+      window.removeEventListener('keydown', onKey);
+    };
+  }, [goBack, playerInFront]);
 
   const isIncognitoBorderActive = incognito && !isFullscreen;
 
@@ -1821,13 +1897,19 @@ export const App: React.FC = () => {
       <Sidebar
         activeTab={activeTab}
         setActiveTab={(tab) => {
-          setActiveTab(tab);
-          setSelectedMedia(null);
-          // Home in the sidebar means the home rows, including from inside a
-          // "Show all" grid.
+          if (tab !== activeTab) {
+            // Another screen, exactly as it was left — its open page, its
+            // grid, its scroll.
+            switchTab(tab);
+            return;
+          }
+          // The screen you are already on means its root, as tapping the
+          // current tab does everywhere: Home's rows (from inside "Show all"
+          // too), a streaming service's own page, Search's result grid.
+          resetScreen(tab);
           if (tab === 'home') setHomeCategory(null);
-          // Same for a streaming service: its sidebar row means its own page.
           if (tab.startsWith('ott:')) setOttCategory(null);
+          scrollAfterPaint(0);
         }}
         downloadCount={downloadQueue.filter((t) => t.state === 'Downloading' || t.state === 'Queued').length}
         missingComponentCount={missingComponents}
@@ -2139,6 +2221,7 @@ export const App: React.FC = () => {
           {/* Media Details View Overlay */}
           {selectedMedia ? (
             <DetailView
+              key={`${activeTab}:${depthOf(navigation, activeTab)}:${selectedMedia.url}`}
               mediaItem={selectedMedia}
               onBack={handleBackToResults}
               onPlay={(request) => {
@@ -2205,11 +2288,11 @@ export const App: React.FC = () => {
                         onScopedSearch={(query, providers) =>
                           void handleSearch(query, { providers })
                         }
-                        onOpenExtensions={() => setActiveTab('extensions')}
+                        onOpenExtensions={() => switchTab('extensions')}
                         onInventoryChanged={() => void refreshOttPlatforms()}
                         category={ottCategory}
                         onCategoryChange={setOttCategory}
-                        onLeave={() => setActiveTab('home')}
+                        onLeave={() => switchTab('home')}
                       />
                     );
                   })()}
@@ -2241,7 +2324,7 @@ export const App: React.FC = () => {
                     onResume={handleResume}
                     onSearch={handleSearchFromDetail}
                     onPlaySavedSource={handlePlaySavedSource}
-                    onBrowse={() => setActiveTab('home')}
+                    onBrowse={() => switchTab('home')}
                     onOpenSavedSearch={handleOpenSavedSearch}
                   />
                 </ErrorBoundary>

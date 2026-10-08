@@ -1,4 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import { useSessionState } from '../utils/useSessionState';
 import type { ResumeTarget } from '../types/player';
 import { providerFromAddress } from '../utils/originName';
 import { useTitleInteractions } from '../components/useTitleInteractions';
@@ -129,13 +130,13 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
   const [query, setQuery] = useScreenSearch('library');
   const searching = query.trim() !== '';
 
-  const [mode, setMode] = useState<LibraryMode>('watching');
+  const [mode, setMode] = useSessionState<LibraryMode>('library.mode', 'watching');
   const [savedSearchCount, setSavedSearchCount] = useState(0);
 
   useEffect(() => {
     void window.cloudstream?.listSavedSearches?.().then((list) => setSavedSearchCount(list?.length ?? 0));
   }, []);
-  const [activeStatus, setActiveStatus] = useState<WatchStatus>('Watching');
+  const [activeStatus, setActiveStatus] = useSessionState<WatchStatus>('library.status', 'Watching');
   const [savedSearchMatches, setSavedSearchMatches] = useState<number | undefined>(undefined);
 
   /** Entries the query leaves, across every bucket — what the bucket chips count. */
@@ -177,7 +178,7 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
 
   const [bookmarks, setBookmarks] = useState<Bookmark[]>([]);
   /** Narrows saved pages to one provider — the "only this source" the brief asks for. */
-  const [providerFilter, setProviderFilter] = useState<string | null>(null);
+  const [providerFilter, setProviderFilter] = useSessionState<string | null>('library.provider', null);
   const [bookmarkFacets, setBookmarkFacets] = useState<{ providers: string[] }>({ providers: [] });
 
   const refreshBookmarks = useCallback(async () => {

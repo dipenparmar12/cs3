@@ -1,4 +1,5 @@
 import React, { useState, useMemo, useCallback, useEffect } from 'react';
+import { useSessionState } from '../utils/useSessionState';
 import { useIsDeveloper } from '../utils/ExperienceModeContext';
 import { plainMessage } from '../utils/experienceMode';
 import { EmptyState } from './EmptyState';
@@ -371,10 +372,10 @@ export const DownloadCenter: React.FC<DownloadCenterProps> = ({
   onPlayFile,
 }) => {
   const isDeveloper = useIsDeveloper();
-  const [collapsedGroups, setCollapsedGroups] = useState<Record<string, boolean>>({});
-  const [activeFilter, setActiveFilter] = useState<DownloadFilterTab>('all');
-  const [searchQuery, setSearchQuery] = useState('');
-  const [sortMode, setSortMode] = useState<DownloadSortMode>('recent');
+  const [collapsedGroups, setCollapsedGroups] = useSessionState<Record<string, boolean>>('downloads.collapsed', {});
+  const [activeFilter, setActiveFilter] = useSessionState<DownloadFilterTab>('downloads.filter', 'all');
+  const [searchQuery, setSearchQuery] = useSessionState('downloads.query', '');
+  const [sortMode, setSortMode] = useSessionState<DownloadSortMode>('downloads.sort', 'recent');
 
   const toggleGroupCollapse = (groupKey: string) => {
     setCollapsedGroups((prev) => ({

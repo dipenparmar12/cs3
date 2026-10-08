@@ -1,5 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { originNameFor } from '../utils/originName';
+import { useSessionState } from '../utils/useSessionState';
 import {
   Play, ArrowLeft, Loader2, AlertTriangle, ListVideo, Search,
 } from 'lucide-react';
@@ -296,6 +297,12 @@ export const DetailView: React.FC<DetailViewProps> = ({
   const [servedFromSnapshot, setServedFromSnapshot] = useState<string | null>(null);
 
   const [activeSeason, setActiveSeason] = useState<number>(1);
+  /*
+   * The season the viewer picked on this page, kept for the session: coming
+   * back to a series from another screen lands on the season they were
+   * reading, not season 1.
+   */
+  const [chosenSeason, setChosenSeason] = useSessionState<number | null>(`detail.season:${mediaItem.url}`, null);
   const [selectedEpisode, setSelectedEpisode] = useState<Episode | null>(null);
 
   const [pickerOpen, setPickerOpen] = useState(false);
@@ -443,7 +450,8 @@ export const DetailView: React.FC<DetailViewProps> = ({
         setIsLoading(false);
         const seasons = groupBySeason(stored.episodes ?? []);
         const first = [...seasons.keys()].sort((a, b) => a - b)[0];
-        if (first !== undefined) setActiveSeason(first);
+        if (chosenSeason !== null && seasons.has(chosenSeason)) setActiveSeason(chosenSeason);
+        else if (first !== undefined) setActiveSeason(first);
       }
 
       /**
@@ -561,7 +569,8 @@ export const DetailView: React.FC<DetailViewProps> = ({
 
           const seasons = groupBySeason(data.episodes ?? []);
           const first = [...seasons.keys()].sort((a, b) => a - b)[0];
-          if (first !== undefined) setActiveSeason(first);
+          if (chosenSeason !== null && seasons.has(chosenSeason)) setActiveSeason(chosenSeason);
+          else if (first !== undefined) setActiveSeason(first);
           setIsLoading(false);
           return;
         }
@@ -1994,7 +2003,10 @@ export const DetailView: React.FC<DetailViewProps> = ({
                   role="tab"
                   aria-selected={season === activeSeason}
                   className={`season-tab${season === activeSeason ? ' season-tab--active' : ''}`}
-                  onClick={() => setActiveSeason(season)}
+                  onClick={() => {
+                    setActiveSeason(season);
+                    setChosenSeason(season);
+                  }}
                 >
                   Season {season}
                 </button>
