@@ -67,14 +67,14 @@ Counted over `src/**/*.tsx` and the four stylesheets, 2026-10-07.
 | Component | What | Notes |
 |---|---|---|
 | `Button` | every button | `variant`, `size="compact"`, `icon` (lucide, sized by `BUTTON_ICON_SIZE`), `loading` (spinner, `aria-busy`, disabled), `iconOnly` (TypeScript requires `aria-label`). |
-| `Dialog`, `DialogActions` | every modal | `title`, `description`, `icon`, `tone`, `size` sm/md/lg, `footer`, `initialFocus`, `dismissable`. |
+| `Dialog`, `DialogActions` | every modal | `title`, `description`, `icon`, `tone`, `size` sm/md/lg/xl (xl: poster grids — "View all", filmography), `footer`, `initialFocus`, `dismissable`. |
 | `FormField` | label + control + helper/error | render-prop gives the control its id and aria wiring. |
 | `Input` | text-like input | `.ui-input`; `size="compact"`; `aria-invalid` turns it red. |
 | `SearchInput` | every search field | variants `default` / `compact` / `ambient`; `meta` (a count), `shortcut` hint, clear button. The navbar's media search is deliberately its own, larger control. |
 | `Select` | native select | `options` or children; `size="compact"`. |
 | `Checkbox`, `RadioGroup` | choices | label + description in one click target; `indeterminate`. |
 | `Switch` | an immediate on/off setting | `muted` for "on, but silenced by an ancestor" (extensions tree). |
-| `Menu` | a list of commands | items with `description`, `icon`, `tone: 'danger'`, `disabled`. |
+| `Menu` | a list of commands | items with `description`, `icon`, `tone: 'danger'`, `disabled`; `trigger` render-prop for an icon-only `Button`. The **list-screen header** pattern (History, Library, Downloads, Extensions): compact title, one muted counts line (`.screen-head__meta`), find, and secondary actions in one `MoreHorizontal` menu. |
 | `FacetMenu` (`components/FacetMenu.tsx`) | dropdown / filter / selector / multi-select | counts, search inside the list, clear on the trigger, `multiple`, `loading`, `emptyLabel`. |
 | `ScreenSearch` (`components/ScreenSearch.tsx`) | find on this screen | `SearchInput` ambient behind an icon; Ctrl+F. |
 

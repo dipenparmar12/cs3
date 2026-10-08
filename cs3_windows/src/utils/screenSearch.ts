@@ -86,8 +86,10 @@ export const SCREEN_SEARCH_FOCUS_EVENT = 'cs3:focus-screen-search';
  * Opening a title unmounts the screen it was opened from — the details page
  * replaces it in the same container — so a filter held in component state was
  * gone by the time the viewer pressed Back, the same reason `searchUiState`
- * is held by App. Leaving the screen for another sidebar tab is a different
- * act, and App clears these on tab change (`forgetScreenQueries`).
+ * is held by App. A sidebar tab change keeps it too: every screen comes back
+ * as it was left (`tabNavigation.ts`), so a find that vanished on the round
+ * trip would be the one exception. `forgetScreenQueries` resets the memory
+ * between test cases.
  */
 const remembered = new Map<string, string>();
 
