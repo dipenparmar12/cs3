@@ -1671,6 +1671,8 @@ export interface CloudStreamElectronAPI {
      * page — the episode on screen — so the sources found for it are saved too.
      */
     sourceQuery?: { mediaUrl: string; season?: number; episode?: number };
+    /** Where the title was found (provider), kept so it can be found again. */
+    metadata?: { provider?: string };
   }) => Promise<LibraryEntry | null>;
   setLibraryStatus: (key: string, status: WatchStatus) => Promise<LibraryEntry | null>;
   setLibraryUserRating: (key: string, rating?: number) => Promise<LibraryEntry | null>;

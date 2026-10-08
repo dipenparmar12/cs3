@@ -1,5 +1,6 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { Bookmark, Check, ChevronDown, Trash2 } from 'lucide-react';
+import { Bookmark, BookmarkCheck, Check, ChevronDown, Trash2 } from 'lucide-react';
+import { isPlaceholderOrigin } from '../utils/originName';
 import { BUCKET_LABELS, WatchStatus, type SearchResponse } from '../types/api';
 import type { TorrentResult } from '../types/torrent';
 import { torrentResultToStoredSource } from '../../electron/cs3/libraryStore';
@@ -34,9 +35,11 @@ interface LibraryBucketSelectorProps {
    */
   openOnHover?: boolean;
   /**
-   * Button and menu visual variant. 'detail-action' strictly conforms to the detail hero action buttons.
+   * Button and menu visual variant. 'detail-action' strictly conforms to the
+   * detail hero action buttons; 'poster' is a small round button that sits in
+   * a poster's corner, so the control costs a card no height at all.
    */
-  variant?: 'default' | 'detail-action';
+  variant?: 'default' | 'detail-action' | 'poster';
 }
 
 const BUCKETS: Array<{ status: WatchStatus; label: string }> = [
@@ -147,6 +150,9 @@ export const LibraryBucketSelector: React.FC<LibraryBucketSelectorProps> = ({
         status,
         sources: storedSources,
         sourceQuery: sourceQuery?.mediaUrl !== item.url ? sourceQuery : undefined,
+        // Where it was found, kept with the entry: a library row that can only
+        // say "Library" cannot be searched for again.
+        metadata: !isPlaceholderOrigin(item.apiName) ? { provider: item.apiName } : undefined,
       });
 
       // Record library added history event
@@ -195,14 +201,34 @@ export const LibraryBucketSelector: React.FC<LibraryBucketSelectorProps> = ({
   };
 
   const isDetailAction = variant === 'detail-action';
+  const isPoster = variant === 'poster';
+  // The poster corner uses the detail menu's look: one dropdown style for the
+  // same five choices wherever they are offered.
+  const menuLikeDetail = isDetailAction || isPoster;
 
   return (
     <div
-      style={{ position: 'relative', display: isDetailAction ? 'inline-flex' : 'inline-block' }}
+      className={isPoster ? `poster-bucket${currentStatus ? ' poster-bucket--on' : ''}${open ? ' poster-bucket--open' : ''}` : undefined}
+      style={isPoster ? undefined : { position: 'relative', display: isDetailAction ? 'inline-flex' : 'inline-block' }}
       onMouseEnter={openOnHover ? handleMouseEnter : undefined}
       onMouseLeave={openOnHover ? handleMouseLeave : undefined}
     >
-      {isDetailAction ? (
+      {isPoster ? (
+        <button
+          type="button"
+          className="poster-bucket__button"
+          onClick={(e) => {
+            e.stopPropagation();
+            setOpen((v) => !v);
+          }}
+          aria-haspopup="menu"
+          aria-expanded={open}
+          aria-label={currentStatus ? `In library: ${BUCKET_LABELS[currentStatus]}` : 'Add to library'}
+          title={currentStatus ? `Library: ${BUCKET_LABELS[currentStatus]}` : 'Add to library'}
+        >
+          {currentStatus ? <BookmarkCheck size={14} /> : <Bookmark size={14} />}
+        </button>
+      ) : isDetailAction ? (
         <button
           type="button"
           className={`detail-action${currentStatus ? ' detail-action--on' : ''}${buttonClassName ? ` ${buttonClassName}` : ''}`}
@@ -249,9 +275,9 @@ export const LibraryBucketSelector: React.FC<LibraryBucketSelectorProps> = ({
       )}
 
       {open && (
-        isDetailAction ? (
+        menuLikeDetail ? (
           <div
-            className="detail-menu detail-menu--bucket"
+            className={`detail-menu detail-menu--bucket${isPoster ? ' poster-bucket__menu' : ''}`}
             role="menu"
             onClick={(e) => e.stopPropagation()}
           >

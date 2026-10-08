@@ -158,7 +158,10 @@ const CopyButton: React.FC<{ value: string; label?: string; onCopied: (what: str
     title={label}
     aria-label={label}
     onClick={() => {
-      void navigator.clipboard.writeText(value).then(() => onCopied('Copied'));
+      void navigator.clipboard.writeText(value).then(
+        () => onCopied('Copied'),
+        () => onCopied('Copy failed')
+      );
     }}
   >
     <Copy size={12} />
@@ -340,8 +343,11 @@ export const UiInspector: React.FC = () => {
       if (!parsed) return;
       const result = await window.cloudstream?.openInEditor?.(parsed.file, parsed.line, parsed.column, editor);
       if (!result?.ok) {
-        await navigator.clipboard.writeText(location ?? '');
-        notify(`${result?.error ?? 'Could not open the editor'} — path copied`);
+        const copied = await navigator.clipboard.writeText(location ?? '').then(
+          () => true,
+          () => false
+        );
+        notify(`${result?.error ?? 'Could not open the editor'}${copied ? ' — path copied' : ''}`);
       }
     },
     [editor, notify]
@@ -667,7 +673,10 @@ export const UiInspector: React.FC = () => {
               onClick={() => {
                 void navigator.clipboard
                   .writeText(formatForAgent(selection.inspection, focused))
-                  .then(() => notify('Inspection copied'));
+                  .then(
+                    () => notify('Inspection copied'),
+                    () => notify('Copy failed')
+                  );
               }}
             >
               {flash === 'Inspection copied' ? <Check size={13} /> : <Copy size={13} />} Copy inspection

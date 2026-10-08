@@ -5,7 +5,7 @@ import type { SearchResponse } from '../types/api';
 import { TYPE_TABS, matchesTab, tabsFor } from '../utils/contentTypes';
 import { groupResults, type ResultGroup, type ResultGroupId } from '../utils/resultGroups';
 import type { SearchSnapshot, SearchSourceOutcome } from '../../electron/searchSession';
-import { AlertTriangle, Bookmark, BookmarkCheck, CheckCircle2, ChevronDown, ChevronRight, Globe, Loader2, RotateCw, Search, SearchX, Server, Target, Trash2, Wrench, X } from 'lucide-react';
+import { AlertTriangle, Bookmark, BookmarkCheck, CheckCircle2, ChevronDown, ChevronRight, Filter, Loader2, MoreHorizontal, RotateCw, Search, SearchX, Server, Target, Trash2, Wrench, X } from 'lucide-react';
 import { PosterCard } from '../components/PosterCard';
 import { partitionDeadRows } from '../utils/deadRows';
 import { resultSources } from '../utils/resultSources';
@@ -16,6 +16,8 @@ import { useTitleEnrichment } from '../components/useTitleEnrichment';
 import { useReveal } from '../utils/ExperienceModeContext';
 import { plainMessage } from '../utils/experienceMode';
 import { type SearchUiState } from './searchUiState';
+import { groupVariants, variantSummary } from '../utils/variantGroups';
+import { Button, Menu } from '../components/ui';
 
 interface SearchViewProps {
   query: string;
@@ -81,35 +83,65 @@ function savedDate(timestamp: number): string {
 }
 
 /**
- * Save, then Saved.
+ * Save, then Saved — at any point, not only once the slowest source answers.
  *
- * Tied to the search it saved: a new search is a new list, so the button goes
- * back to Save for it. Saving the same query again updates the stored copy.
+ * With hundreds of providers a search can run for a minute while the rows the
+ * viewer wanted arrived in the first five seconds; making them wait for the
+ * last scraper before they could keep the list was waiting for nothing. A
+ * save while results are still arriving keeps what is there, and the button
+ * offers to update the saved copy once more have come in. Saving the same
+ * query again updates the stored copy rather than adding a second one.
  */
-const SaveResultsButton: React.FC<{ searchId: string; onSave: () => Promise<boolean> }> = ({
-  searchId,
-  onSave,
-}) => {
-  const [state, setState] = useState<{ id: string; phase: 'saving' | 'saved' } | null>(null);
-  const phase = state?.id === searchId ? state.phase : 'idle';
+const SaveResultsButton: React.FC<{
+  searchId: string;
+  count: number;
+  onSave: () => Promise<boolean>;
+}> = ({ searchId, count, onSave }) => {
+  const [state, setState] = useState<{ id: string; phase: 'saving' | 'saved'; count: number } | null>(null);
+  const mine = state?.id === searchId ? state : null;
+  const stale = mine?.phase === 'saved' && count > mine.count;
+  const saved = mine?.phase === 'saved' && !stale;
   return (
-    <button
-      type="button"
-      className={`btn btn-secondary search-head__save${phase === 'saved' ? ' search-head__save--done' : ''}`}
-      disabled={phase === 'saving'}
-      title="Keep these results to come back to — they appear in the Library and under the search box"
+    <Button
+      size="compact"
+      variant="ambient"
+      icon={saved ? BookmarkCheck : Bookmark}
+      loading={mine?.phase === 'saving'}
+      className={saved ? 'search-toolbar__saved' : undefined}
+      title={
+        stale
+          ? `${count - (mine?.count ?? 0)} more since you saved — update the saved copy`
+          : 'Keep these results to come back to — they appear in the Library and under the search box'
+      }
       onClick={async () => {
-        setState({ id: searchId, phase: 'saving' });
+        setState({ id: searchId, phase: 'saving', count });
         const ok = await onSave();
-        setState(ok ? { id: searchId, phase: 'saved' } : null);
+        setState(ok ? { id: searchId, phase: 'saved', count } : null);
       }}
     >
-      {phase === 'saved' ? <BookmarkCheck size={14} /> : <Bookmark size={14} />}
-      {phase === 'saved' ? 'Saved' : phase === 'saving' ? 'Saving…' : 'Save results'}
-    </button>
+      {saved ? 'Saved' : stale ? 'Update saved' : 'Save'}
+    </Button>
   );
 };
 
+
+/** Clearing the screen is rare and should not sit beside Save at full size. */
+const MoreActions: React.FC<{ onClearResults: () => void }> = ({ onClearResults }) => (
+  <Menu
+    label="More search actions"
+    trigger={(props) => (
+      <Button {...props} size="compact" variant="ambient" iconOnly icon={MoreHorizontal} aria-label="More" title="More" />
+    )}
+    items={[
+      {
+        label: 'Clear results',
+        description: 'Empty this screen. Search history and saved searches are kept.',
+        icon: Trash2,
+        onSelect: onClearResults,
+      },
+    ]}
+  />
+);
 
 /** A row's sources for the Source filter, never empty so every row can be filtered to. */
 function sourcesOf(item: SearchResponse): string[] {
@@ -353,46 +385,74 @@ export const SearchView: React.FC<SearchViewProps> = ({
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: '1.25rem' }}>
-      <header className="search-head">
-        <div className="search-head__titles">
-          <h2>{query ? `Search Results for "${query}"` : 'Search Media'}</h2>
-          {/*
-            Stated outright, always. The failure this prevents is the quiet one:
-            believing you are searching one provider while the app searches
-            everything, or the reverse — and only one of those is visible from
-            the results themselves.
-          */}
-          <p className="search-head__scope">
-            {scoped ? <Target size={12} /> : <Globe size={12} />}
-            <span className="search-head__scope-label">Scope:</span>
-            <span className={scoped ? 'search-head__scope-value--narrow' : undefined}>
-              {scopeLabel}
-            </span>
-            <span className="search-head__dot">·</span>
-            <span>
-              {results.length} title{results.length === 1 ? '' : 's'} from{' '}
-              {showSourceSummary ? (
+      {/*
+        One quiet toolbar instead of a heading, a scope paragraph and three
+        buttons. The query is already in the search box, so "Search Results for
+        …" said nothing; what is left is what a viewer acts on — the type tabs,
+        the source filter, Save — and, small and muted, what was searched and
+        how many answered. The scope line stays (searching fewer sources than
+        you think is this app's worst failure) but no longer shouts.
+      */}
+      <h2 className="sr-only">{query ? `Results for ${query}` : 'Search'}</h2>
+      <div className="search-toolbar">
+        <div className="search-toolbar__start">
+          {typeTabs.length > 1 && (
+            <div className="type-tabs" role="tablist" aria-label="Filter by content type">
+              <button
+                role="tab"
+                aria-selected={activeTab === 'all'}
+                className={`type-tabs__tab${activeTab === 'all' ? ' type-tabs__tab--on' : ''}`}
+                onClick={() => setTypeTab('all')}
+              >
+                All <span>{results.length}</span>
+              </button>
+              {typeTabs.map((tab) => (
                 <button
-                  type="button"
-                  className="search-head__sources-link"
-                  onClick={revealSources}
-                  title="See what each source returned"
+                  key={tab.id}
+                  role="tab"
+                  aria-selected={activeTab === tab.id}
+                  className={`type-tabs__tab${activeTab === tab.id ? ' type-tabs__tab--on' : ''}`}
+                  onClick={() => setTypeTab(tab.id)}
                 >
-                  {sourceOptions.length} source{sourceOptions.length === 1 ? '' : 's'}
+                  {tab.label} <span>{tab.count}</span>
                 </button>
-              ) : (
+              ))}
+            </div>
+          )}
+          <p className="search-toolbar__meta">
+            {scoped && (
+              <span className="search-toolbar__scope" title={`Searching only: ${scopeLabel}`}>
+                <Target size={11} aria-hidden /> {scopeLabel}
+              </span>
+            )}
+            <span>
+              {results.length} title{results.length === 1 ? '' : 's'}
+              {sourceOptions.length > 0 && (
                 <>
-                  {sourceOptions.length} source{sourceOptions.length === 1 ? '' : 's'}
+                  {' · '}
+                  {showSourceSummary ? (
+                    <button
+                      type="button"
+                      className="search-head__sources-link"
+                      onClick={revealSources}
+                      title="See what each source returned"
+                    >
+                      {sourceOptions.length} source{sourceOptions.length === 1 ? '' : 's'}
+                    </button>
+                  ) : (
+                    `${sourceOptions.length} source${sourceOptions.length === 1 ? '' : 's'}`
+                  )}
                 </>
               )}
             </span>
           </p>
         </div>
 
-        <div className="search-head__actions">
+        <div className="search-toolbar__actions">
           {sourceOptions.length > 1 && (
             <FacetMenu
               label="Source"
+              icon={<Filter size={12} aria-hidden />}
               title="Show only titles from one source"
               value={sourceFilter}
               options={sourceOptions}
@@ -400,24 +460,14 @@ export const SearchView: React.FC<SearchViewProps> = ({
               allLabel={`All sources (${results.length})`}
             />
           )}
-          {search?.done && !savedView && results.length > 0 && onSaveResults ? (
-            <SaveResultsButton searchId={search.id} onSave={onSaveResults} />
+          {search && !savedView && results.length > 0 && onSaveResults ? (
+            <SaveResultsButton searchId={search.id} count={results.length} onSave={onSaveResults} />
           ) : null}
           {results.length > 0 && onClearResults && (
-            <button
-              type="button"
-              className="btn btn-secondary"
-              onClick={onClearResults}
-              title="Clear current search results"
-              aria-label="Clear current search results"
-              style={{ display: 'inline-flex', alignItems: 'center', gap: '0.35rem', fontSize: '0.8rem' }}
-            >
-              <Trash2 size={13} />
-              <span>Clear results</span>
-            </button>
+            <MoreActions onClearResults={onClearResults} />
           )}
         </div>
-      </header>
+      </div>
 
       {savedView ? (
         <div className="search-alert search-alert--saved" role="status">
@@ -432,31 +482,6 @@ export const SearchView: React.FC<SearchViewProps> = ({
           ) : null}
         </div>
       ) : null}
-
-      {/* Content-type tabs, directly under the header as on Android. */}
-      {typeTabs.length > 1 && (
-        <div className="type-tabs" role="tablist" aria-label="Filter by content type">
-          <button
-            role="tab"
-            aria-selected={activeTab === 'all'}
-            className={`type-tabs__tab${activeTab === 'all' ? ' type-tabs__tab--on' : ''}`}
-            onClick={() => setTypeTab('all')}
-          >
-            All <span>{results.length}</span>
-          </button>
-          {typeTabs.map((tab) => (
-            <button
-              key={tab.id}
-              role="tab"
-              aria-selected={activeTab === tab.id}
-              className={`type-tabs__tab${activeTab === tab.id ? ' type-tabs__tab--on' : ''}`}
-              onClick={() => setTypeTab(tab.id)}
-            >
-              {tab.label} <span>{tab.count}</span>
-            </button>
-          ))}
-        </div>
-      )}
 
       {search && search.total > 0 && (search.settled < search.total || search.cancelled) && (
         <SourceProgress snapshot={search} onCancel={onCancel} />
@@ -673,6 +698,12 @@ const Grid: React.FC<{
   const { visible, hidden } = partitionDeadRows(items, outcomes, {
     hideDeadRows: !showDead,
   });
+  /*
+   * One card per release family from one source (`variantGroups.ts`): every
+   * row is still here, inside its card. Grouping runs on what is visible so a
+   * hidden dead row is never the one a card opens.
+   */
+  const cards = useMemo(() => groupVariants(visible), [visible]);
 
   return (
     <>
@@ -683,13 +714,17 @@ const Grid: React.FC<{
           gap: '1.25rem',
         }}
       >
-        {visible.map((item, index) => (
+        {cards.map((card, index) => (
           <PosterCard
-            key={`${item.url}-${index}`}
-            item={item}
+            key={`${card.primary.url}-${index}`}
+            item={card.primary}
             onSelectMedia={onSelectMedia}
             onPlayDirectly={onPlayDirectly}
-            interaction={interactionFor(item)}
+            interaction={interactionFor(card.primary)}
+            variants={card.variants}
+            variantSummary={variantSummary(card)}
+            variantsIdentical={card.identical}
+            displayName={card.title}
           />
         ))}
       </div>
