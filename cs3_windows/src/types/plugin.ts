@@ -150,6 +150,12 @@ export interface ProviderTreeRepository {
   enabled?: boolean;
   /** Installed on first launch. Labelled, never hidden, and always removable. */
   bundled?: boolean;
+  /**
+   * Added by the viewer by its address, and known to no catalogue entry.
+   * Theirs to manage: a catalogue or bootstrap update never adds, changes or
+   * removes it, and backups carry it (`installed_repositories_urls`).
+   */
+  userAdded?: boolean;
   description?: string;
   category?: string;
   language?: string;

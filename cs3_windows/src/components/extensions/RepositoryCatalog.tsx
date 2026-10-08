@@ -31,13 +31,14 @@
  * the heavier action and says how many extensions it is about to fetch.
  */
 import React, { useMemo, useState } from 'react';
-import { AlertTriangle, Check, ChevronDown, ChevronUp, Clock, Loader2, Search } from 'lucide-react';
+import { AlertTriangle, Check, ChevronDown, ChevronUp, Clock, Loader2, Plus, Search, Trash2 } from 'lucide-react';
 import { Badge, ExternalLink, ProgressBar } from './primitives';
 import { matchesQuery, type FilterState } from './useExtensionFilters';
 import type { ProviderTreeRepository } from '../../types/plugin';
 import type { OfficialRepository } from './useExtensionCatalog';
 import type { ExtensionJob, RepositoryJobsSummary } from './useExtensionJobs';
-import { InfoHint } from '../settings/InfoHint';
+import { Button } from '../ui';
+import { AddRepositoryDialog } from './AddRepositoryDialog';
 
 interface RepositoryCatalogProps {
   official: OfficialRepository[];
@@ -146,6 +147,11 @@ function normalizeRepoUrl(url: string): string {
   return (url || '').replace(/\/refs\/heads\//, '/').replace(/\/$/, '').toLowerCase();
 }
 
+/** `github.com/owner/repo/…/plugins.json` for an address nobody catalogued. */
+function shortAddress(url: string): string {
+  return url.replace(/^https?:\/\//, '').replace(/^raw\.githubusercontent\.com\//, '').replace(/\/$/, '');
+}
+
 /** A repository is installed if any of the URLs it is known by is. */
 function isInstalled(repository: OfficialRepository, installed: string[]): boolean {
   const normRepoUrl = normalizeRepoUrl(repository.url);
@@ -173,7 +179,23 @@ export const RepositoryCatalog: React.FC<RepositoryCatalogProps> = ({
   onAdd,
   onInstallAll,
 }) => {
-  const [customUrl, setCustomUrl] = useState('');
+  const [adding, setAdding] = useState(false);
+
+  /**
+   * Repositories the viewer added by address that no catalogue entry knows.
+   * They are theirs, not the app's: listed first, labelled as added by them,
+   * and never touched by a catalogue or bootstrap update.
+   */
+  const custom = useMemo(
+    () =>
+      installed.filter(
+        (url) =>
+          !official.some((repository) => isInstalled(repository, [url])) &&
+          matchesQuery(filters.query, url) &&
+          filters.status !== 'available'
+      ),
+    [installed, official, filters.query, filters.status]
+  );
 
   const visible = useMemo(
     () =>
@@ -215,40 +237,13 @@ export const RepositoryCatalog: React.FC<RepositoryCatalogProps> = ({
 
   return (
     <div className="ext-panel">
-      <form
-        className="ext-custom-url"
-        onSubmit={(event) => {
-          event.preventDefault();
-          const url = customUrl.trim();
-          if (url) onBrowse({ name: url, url });
-        }}
-      >
-        <input
-          type="url"
-          value={customUrl}
-          placeholder="https://example.com/repo.json — or a project page"
-          onChange={(event) => setCustomUrl(event.target.value)}
+      {adding && (
+        <AddRepositoryDialog
+          onBrowse={(url) => onBrowse({ name: shortAddress(url), url })}
+          onAdd={(url) => onAdd(url)}
+          onClose={() => setAdding(false)}
         />
-        <button type="submit" className="btn btn-secondary btn-sm" disabled={!customUrl.trim()}>
-          Browse
-        </button>
-        <button
-          type="button"
-          className="btn btn-secondary btn-sm"
-          disabled={!customUrl.trim() || working(jobFor(`repo-add:${customUrl.trim()}`))}
-          title="Keep this repository in your list without installing anything"
-          onClick={() => {
-            onAdd(customUrl.trim());
-            setCustomUrl('');
-          }}
-        >
-          Add
-        </button>
-        <InfoHint label="Which addresses work">
-          Paste a repository link, a project page or a shortcode. There is no fixed place a
-          plugin list lives, so the usual branches and file names are tried for you.
-        </InfoHint>
-      </form>
+      )}
 
       <div className="ext-tree-toolbar">
         <span className="ext-tree-toolbar__count">
@@ -256,17 +251,62 @@ export const RepositoryCatalog: React.FC<RepositoryCatalogProps> = ({
         </span>
         <div className="ext-tree-toolbar__actions">
           {expandedUrl ? (
-            <button
-              type="button"
-              className="btn btn-secondary btn-sm"
-              title="Collapse open repository"
-              onClick={onCollapse}
-            >
-              Collapse open repository
-            </button>
+            <Button size="compact" variant="ambient" icon={ChevronUp} onClick={onCollapse}>
+              Collapse
+            </Button>
           ) : null}
+          <Button size="compact" icon={Plus} onClick={() => setAdding(true)}>
+            Add repository
+          </Button>
         </div>
       </div>
+
+      {custom.length > 0 && (
+        <section className="ext-custom-repos" aria-label="Repositories you added">
+          <h3 className="ext-section-title">Added by you</h3>
+          <ul className="ext-cards">
+            {custom.map((url) => {
+              const open = expandedUrl === url;
+              return (
+                <React.Fragment key={url}>
+                  <li className={`ext-card ext-card--compact${open ? ' ext-card--open' : ''}`}>
+                    <div className="ext-row__title">
+                      <span className="ext-custom-repos__name" title={url}>
+                        {shortAddress(url)}
+                      </span>
+                      <Badge tone="neutral" title="You added this repository by its address">
+                        added by you
+                      </Badge>
+                    </div>
+                    <div className="ext-card__actions">
+                      <Button
+                        size="compact"
+                        variant="ambient"
+                        icon={open ? ChevronUp : ChevronDown}
+                        aria-expanded={open}
+                        onClick={() => (open ? onCollapse() : onBrowse({ name: shortAddress(url), url }))}
+                      >
+                        {open ? 'Hide extensions' : 'Browse extensions'}
+                      </Button>
+                      <Button
+                        size="compact"
+                        variant="ambient"
+                        iconOnly
+                        icon={Trash2}
+                        aria-label="Remove this repository"
+                        title="Remove from your list (installed extensions stay until you uninstall them)"
+                        onClick={() => onRemove(url)}
+                      />
+                    </div>
+                  </li>
+                  {open ? <li className="ext-card__panel" aria-label={`Extensions in ${shortAddress(url)}`}>{renderExpanded()}</li> : null}
+                </React.Fragment>
+              );
+            })}
+          </ul>
+          <h3 className="ext-section-title">Catalogue</h3>
+        </section>
+      )}
 
       <ul className="ext-cards">
         {visible.map((repository) => {

@@ -280,6 +280,8 @@ export interface ProviderTreeRepository {
    * decision about, and every one of these is removable.
    */
   bundled: boolean;
+  /** Added by the viewer's own address; no catalogue entry knows it. */
+  userAdded: boolean;
   /** Present when the catalogue knows this repository; absent for sideloads. */
   description?: string;
   category?: string;
@@ -2323,6 +2325,7 @@ export class PluginManager {
           extensions: [],
           enabled: !disabledRepositories.has(repoId),
           bundled: catalogued?.bundled === true,
+          userAdded: !catalogued && repoId !== SIDELOADED_REPOSITORY_ID,
           description: catalogued?.description,
           category: catalogued?.category,
           language: catalogued?.language,

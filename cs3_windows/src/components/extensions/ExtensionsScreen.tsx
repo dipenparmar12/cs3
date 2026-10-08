@@ -24,12 +24,12 @@
  * reconstruction's plain switch could not.
  */
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Boxes, Library, Loader2, RefreshCw } from 'lucide-react';
+import { Boxes, Eye, EyeOff, Library, Loader2, RefreshCw } from 'lucide-react';
 import { useExtensionCatalog } from './useExtensionCatalog';
 import { useExtensionFilters } from './useExtensionFilters';
 import { FilterBar } from './FilterBar';
 import { ExtensionUpdates } from '../ExtensionUpdates';
-import { Button } from '../ui';
+import { Button, Dialog } from '../ui';
 import { BulkActionBar } from './BulkActionBar';
 import { BulkConfirmDialog, type BulkVerb } from './BulkConfirmDialog';
 import {
@@ -76,6 +76,7 @@ export const ExtensionsScreen: React.FC = () => {
   const { state, busy, refresh, actions, browseRepository, peekRepository } = useExtensionCatalog();
   const browseToken = useRef(0);
   const adult = useAdultState();
+  const [adultOpen, setAdultOpen] = useState(false);
   const jobs = useExtensionJobs();
   // The tree is re-read, never predicted, once background work lands.
   useOnJobsSettled(jobs.snapshot, () => void refresh());
@@ -352,6 +353,20 @@ export const ExtensionsScreen: React.FC = () => {
             </>
           )}
         </p>
+        {/*
+          The adult gate was a full-width panel under every tab — the largest
+          control on the screen for a setting most people touch once. Its state
+          stays visible here; changing it opens the same control.
+        */}
+        <Button
+          size="compact"
+          variant="ambient"
+          icon={adult.mode === 'off' ? EyeOff : Eye}
+          onClick={() => setAdultOpen(true)}
+          title="Adult content: which providers are offered"
+        >
+          Adult: {adult.mode === 'off' ? 'Off' : adult.mode === 'ask' ? (adult.allowed ? 'Shown' : 'Ask') : 'On'}
+        </Button>
         <Button
           size="compact"
           variant="ambient"
@@ -557,11 +572,12 @@ export const ExtensionsScreen: React.FC = () => {
       ) : null}
 
 
-
-      <footer className="ext-footer">
-        {/* The same control as Settings → Adult content, bound to the same state. */}
-        <AdultContentSetting />
-      </footer>
+      {adultOpen && (
+        /* The same control as Settings → Adult content, bound to the same state. */
+        <Dialog size="md" icon={<EyeOff size={18} />} title="Adult content" onClose={() => setAdultOpen(false)}>
+          <AdultContentSetting />
+        </Dialog>
+      )}
     </div>
   );
 };

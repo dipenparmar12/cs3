@@ -15,7 +15,8 @@
  * responsible.
  */
 import React, { useState } from 'react';
-import { Package, Layers, Radio, Trash2, AlertTriangle, Info } from 'lucide-react';
+import { Package, Layers, Radio, Trash2, AlertTriangle, Info, ChevronsDownUp, ChevronsUpDown } from 'lucide-react';
+import { Button } from '../ui';
 import {
   Badge,
   Disclosure,
@@ -315,6 +316,7 @@ export const SourceTree: React.FC<SourceTreeProps> = ({
   onRemoveRepository,
 }) => {
   const [openRepos, setOpenRepos] = useState<Record<string, boolean>>({});
+  const anyRepoOpen = Object.values(openRepos).some(Boolean);
   const [openExtensions, setOpenExtensions] = useState<Record<string, boolean>>({});
   const [details, setDetails] = useState<Record<string, boolean>>({});
 
@@ -371,31 +373,23 @@ export const SourceTree: React.FC<SourceTreeProps> = ({
         <span className="ext-tree-toolbar__count">
           <strong>{visible.length}</strong> {visible.length === 1 ? 'repository' : 'repositories'} installed
         </span>
+        {/*
+          Disclosure is a secondary act: one quiet toggle, not three buttons
+          (one of them primary) above the list it folds. Alt+click opens the
+          providers too, for the rare look at everything at once.
+        */}
         <div className="ext-tree-toolbar__actions">
-          <button
-            type="button"
-            className="btn btn-secondary btn-sm"
-            title="Collapse all repositories and providers"
-            onClick={collapseAll}
+          <Button
+            size="compact"
+            variant="ambient"
+            icon={anyRepoOpen ? ChevronsDownUp : ChevronsUpDown}
+            title={anyRepoOpen ? 'Collapse everything' : 'Expand every repository (Alt+click: providers too)'}
+            onClick={(event) =>
+              anyRepoOpen ? collapseAll() : event.altKey ? expandAllWithProviders() : expandRepositories()
+            }
           >
-            Collapse all
-          </button>
-          <button
-            type="button"
-            className="btn btn-secondary btn-sm"
-            title="Expand all repositories (Level 1)"
-            onClick={expandRepositories}
-          >
-            Expand repositories
-          </button>
-          <button
-            type="button"
-            className="btn btn-primary btn-sm"
-            title="Expand all repositories and all providers (Level 2)"
-            onClick={expandAllWithProviders}
-          >
-            Expand all (+ providers)
-          </button>
+            {anyRepoOpen ? 'Collapse all' : 'Expand all'}
+          </Button>
         </div>
       </div>
 
@@ -455,7 +449,12 @@ export const SourceTree: React.FC<SourceTreeProps> = ({
                     {repository.name}
                     {repository.category ? <Badge tone="neutral">{repository.category}</Badge> : null}
                     {repository.language ? <span className="ext-chip">{repository.language}</span> : null}
-                    {repository.bundled ? <Badge tone="accent">first run</Badge> : null}
+                    {repository.bundled ? (
+                      <Badge tone="accent" title="Installed with the app on first launch">bundled</Badge>
+                    ) : null}
+                    {repository.userAdded ? (
+                      <Badge tone="neutral" title="You added this repository by its address">added by you</Badge>
+                    ) : null}
                     {repository.verified ? <Badge tone="success">verified</Badge> : null}
                   </div>
                   <div className="ext-row__subtitle">
@@ -464,20 +463,17 @@ export const SourceTree: React.FC<SourceTreeProps> = ({
                       {repository.extensions.length === 1 ? 'extension' : 'extensions'}
                     </span>
                     <span>
-                      {providerCount} {providerCount === 1 ? 'provider' : 'providers'}
+                      {repository.enabled === false
+                        ? `${providerCount} ${providerCount === 1 ? 'provider' : 'providers'}, all off`
+                        : `${repository.enabledProviderCount ?? providerCount} of ${providerCount} ${providerCount === 1 ? 'provider' : 'providers'} on`}
                     </span>
                     <ExternalLink url={repository.homepageUrl ?? repository.url} />
                   </div>
                 </div>
                 {expanded && extensions.length > 0 ? (
-                  <button
-                    type="button"
-                    className="btn btn-secondary btn-sm"
-                    title={areAllRepoExtsOpen ? 'Collapse all providers' : 'Expand all providers'}
-                    onClick={toggleAllRepoExts}
-                  >
-                    {areAllRepoExtsOpen ? 'Collapse providers' : 'Expand providers'}
-                  </button>
+                  <Button size="compact" variant="ambient" onClick={toggleAllRepoExts}>
+                    {areAllRepoExtsOpen ? 'Hide providers' : 'Show providers'}
+                  </Button>
                 ) : null}
                 <button
                   type="button"
