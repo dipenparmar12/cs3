@@ -74,7 +74,7 @@ Counted over `src/**/*.tsx` and the four stylesheets, 2026-10-07.
 | `Select` | native select | `options` or children; `size="compact"`. |
 | `Checkbox`, `RadioGroup` | choices | label + description in one click target; `indeterminate`. |
 | `Switch` | an immediate on/off setting | `muted` for "on, but silenced by an ancestor" (extensions tree). |
-| `Menu` | a list of commands | items with `description`, `icon`, `tone: 'danger'`, `disabled`; `trigger` render-prop for an icon-only `Button`. The **list-screen header** pattern (History, Library, Downloads, Extensions): compact title, one muted counts line (`.screen-head__meta`), find, and secondary actions in one `MoreHorizontal` menu. |
+| `Menu` | a list of commands | items with `description`, `icon`, `tone: 'danger'`, `disabled`; `trigger` render-prop for an icon-only `Button`. The **list-screen header** pattern (History, Library, Downloads; Extensions keeps its facet bar): compact title, one muted status line (`.screen-head__meta`), then on the right **find (`ScreenSearch`) first**, the one bulk action that applies now, and the rest in one `MoreHorizontal` menu. Under it, `.screen-toolbar`: `type-tabs` for what to show on the left, compact `Select`s / view tabs on the right. Explanations go in an `InfoHint` (ⓘ), not a paragraph under the control. |
 | `FacetMenu` (`components/FacetMenu.tsx`) | dropdown / filter / selector / multi-select | counts, search inside the list, clear on the trigger, `multiple`, `loading`, `emptyLabel`. |
 | `ScreenSearch` (`components/ScreenSearch.tsx`) | find on this screen | `SearchInput` ambient behind an icon; Ctrl+F. |
 

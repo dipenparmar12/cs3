@@ -14,8 +14,6 @@ import { Loader2, MoreHorizontal,
   AlertTriangle,
   Film,
   Eye,
-  Filter,
-  ArrowUpDown,
   CheckSquare,
   Square,
   ExternalLink,
@@ -29,8 +27,9 @@ import { Loader2, MoreHorizontal,
   Sparkles,
   ChevronDown,
   ChevronUp,
-  List,
   FileSpreadsheet,
+  ChevronsDownUp,
+  ChevronsUpDown,
 } from 'lucide-react';
 import type { SearchResponse } from '../types/api';
 import { TvType } from '../types/api';
@@ -610,164 +609,88 @@ export const HistoryView: React.FC<HistoryViewProps> = ({ onSelectMedia, onPlayD
         </div>
       </div>
 
-      {/* Filter & View Controls Bar (find lives in the header) */}
-      <div
-        style={{
-          display: 'flex',
-          flexDirection: 'column',
-          gap: '0.85rem',
-          backgroundColor: 'var(--bg-card)',
-          padding: '0.9rem 1.1rem',
-          borderRadius: 'var(--radius-lg)',
-          border: '1px solid var(--border-color)',
-        }}
-      >
-        <div style={{ display: 'flex', gap: '0.75rem', alignItems: 'center', flexWrap: 'wrap' }}>
-          {/* View Mode Toggle: Grouped vs Flat */}
-          <div
-            style={{
-              display: 'flex',
-              backgroundColor: 'rgba(255, 255, 255, 0.04)',
-              borderRadius: '6px',
-              padding: '2px',
-              border: '1px solid rgba(255, 255, 255, 0.08)',
-            }}
-          >
-            <button
-              type="button"
-              onClick={() => setViewMode('grouped')}
-              style={{
-                display: 'flex',
-                alignItems: 'center',
-                gap: '0.35rem',
-                padding: '0.3rem 0.65rem',
-                borderRadius: '4px',
-                fontSize: '0.78rem',
-                fontWeight: 600,
-                border: 'none',
-                backgroundColor: viewMode === 'grouped' ? 'var(--accent-primary)' : 'transparent',
-                color: viewMode === 'grouped' ? '#fff' : 'var(--text-muted)',
-                cursor: 'pointer',
-                transition: 'all 0.15s ease',
-              }}
-              title="Consolidate duplicate media visits into single entries with action tags and activity history"
-            >
-              <Layers size={13} />
-              <span>Grouped ({groupedItems.length})</span>
-            </button>
-            <button
-              type="button"
-              onClick={() => setViewMode('flat')}
-              style={{
-                display: 'flex',
-                alignItems: 'center',
-                gap: '0.35rem',
-                padding: '0.3rem 0.65rem',
-                borderRadius: '4px',
-                fontSize: '0.78rem',
-                fontWeight: 600,
-                border: 'none',
-                backgroundColor: viewMode === 'flat' ? 'var(--accent-primary)' : 'transparent',
-                color: viewMode === 'flat' ? '#fff' : 'var(--text-muted)',
-                cursor: 'pointer',
-                transition: 'all 0.15s ease',
-              }}
-              title="Show all individual activity events chronologically"
-            >
-              <List size={13} />
-              <span>Flat Log ({events.length})</span>
-            </button>
-          </div>
-
-          {/* Media Type Dropdown */}
-          <div style={{ display: 'flex', alignItems: 'center', gap: '0.35rem' }}>
-            <Filter size={14} style={{ color: 'var(--text-subtle)' }} />
-            <Select
-              size="compact"
-              aria-label="Type"
-              value={mediaTypeFilter}
-              onChange={(e) => setMediaTypeFilter(e.target.value as typeof mediaTypeFilter)}
-            >
-              <option value="all">All Types</option>
-              <option value="movie">Movies</option>
-              <option value="series">Series</option>
-              <option value="anime">Anime</option>
-            </Select>
-          </div>
-
-          {/* Sort Dropdown */}
-          <div style={{ display: 'flex', alignItems: 'center', gap: '0.35rem' }}>
-            <ArrowUpDown size={14} style={{ color: 'var(--text-subtle)' }} />
-            <Select
-              size="compact"
-              aria-label="Sort"
-              value={sortBy}
-              onChange={(e) => setSortBy(e.target.value as typeof sortBy)}
-            >
-              <option value="recent">Most Recent</option>
-              <option value="oldest">Oldest First</option>
-              <option value="played">Recently Played</option>
-              <option value="failed">Recently Failed</option>
-              <option value="downloaded">Recently Downloaded</option>
-            </Select>
-          </div>
-
-          {/* Expand/Collapse All (Grouped Mode Only) */}
-          {viewMode === 'grouped' && groupedItems.length > 0 && (
-            <button
-              type="button"
-              className="btn btn-ghost btn-sm"
-              onClick={toggleExpandAll}
-              style={{ fontSize: '0.75rem', padding: '0.3rem 0.5rem', color: 'var(--text-muted)' }}
-              title="Expand or collapse all activity logs"
-            >
-              <span>{expandedGroups.size === groupedItems.length ? 'Collapse All' : 'Expand All'}</span>
-            </button>
-          )}
-        </div>
-
-        {/* Status Pills */}
-        <div style={{ display: 'flex', gap: '0.4rem', flexWrap: 'wrap' }}>
-          {statusPills.map((pill) => {
-            const isActive = activeStatus === pill.status;
-            return (
+      {/*
+        One toolbar row, the same shape as Downloads: what to show on the left,
+        how to show it on the right. It was a card holding a segmented view
+        switch, two full-size selects, an Expand All button and a second row
+        of status pills — six kinds of control for one list.
+      */}
+      <div className="screen-toolbar">
+        <div className="type-tabs" role="tablist" aria-label="Show">
+          {statusPills.map((pill) =>
+            pill.status !== 'All' && !pill.count && activeStatus !== pill.status ? null : (
               <button
                 key={pill.status}
                 type="button"
+                role="tab"
+                aria-selected={activeStatus === pill.status}
+                className={`type-tabs__tab${activeStatus === pill.status ? ' type-tabs__tab--on' : ''}`}
                 onClick={() => setActiveStatus(pill.status)}
-                style={{
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: '0.35rem',
-                  padding: '0.3rem 0.65rem',
-                  borderRadius: '20px',
-                  fontSize: '0.75rem',
-                  fontWeight: isActive ? 700 : 500,
-                  cursor: 'pointer',
-                  border: '1px solid',
-                  borderColor: isActive ? 'var(--accent-primary)' : 'rgba(255, 255, 255, 0.08)',
-                  backgroundColor: isActive ? 'rgba(59, 130, 246, 0.2)' : 'rgba(255, 255, 255, 0.02)',
-                  color: isActive ? '#fff' : 'var(--text-muted)',
-                  transition: 'all 0.15s ease',
-                }}
               >
-                <span>{pill.label}</span>
-                {pill.count !== undefined && (
-                  <span
-                    style={{
-                      fontSize: '0.65rem',
-                      padding: '0.05rem 0.35rem',
-                      borderRadius: '10px',
-                      backgroundColor: isActive ? 'var(--accent-primary)' : 'rgba(255, 255, 255, 0.08)',
-                      color: '#fff',
-                    }}
-                  >
-                    {pill.count}
-                  </span>
-                )}
+                {pill.status === 'All' ? 'All' : pill.label} <span>{pill.count ?? 0}</span>
               </button>
-            );
-          })}
+            )
+          )}
+        </div>
+        <div className="screen-toolbar__group">
+          <Select
+            size="compact"
+            aria-label="Type"
+            value={mediaTypeFilter}
+            onChange={(e) => setMediaTypeFilter(e.target.value as typeof mediaTypeFilter)}
+            options={[
+              { value: 'all', label: 'All types' },
+              { value: 'movie', label: 'Movies' },
+              { value: 'series', label: 'Series' },
+              { value: 'anime', label: 'Anime' },
+            ]}
+          />
+          <Select
+            size="compact"
+            aria-label="Sort"
+            value={sortBy}
+            onChange={(e) => setSortBy(e.target.value as typeof sortBy)}
+            options={[
+              { value: 'recent', label: 'Most recent' },
+              { value: 'oldest', label: 'Oldest first' },
+              { value: 'played', label: 'Recently played' },
+              { value: 'failed', label: 'Recently failed' },
+              { value: 'downloaded', label: 'Recently downloaded' },
+            ]}
+          />
+          <div className="type-tabs" role="tablist" aria-label="View">
+            <button
+              type="button"
+              role="tab"
+              aria-selected={viewMode === 'grouped'}
+              className={`type-tabs__tab${viewMode === 'grouped' ? ' type-tabs__tab--on' : ''}`}
+              onClick={() => setViewMode('grouped')}
+              title="One row per title"
+            >
+              By title
+            </button>
+            <button
+              type="button"
+              role="tab"
+              aria-selected={viewMode === 'flat'}
+              className={`type-tabs__tab${viewMode === 'flat' ? ' type-tabs__tab--on' : ''}`}
+              onClick={() => setViewMode('flat')}
+              title="Every visit, stream and download as its own row"
+            >
+              Every visit
+            </button>
+          </div>
+          {viewMode === 'grouped' && groupedItems.length > 1 && (
+            <Button
+              size="compact"
+              variant="ambient"
+              iconOnly
+              icon={expandedGroups.size === groupedItems.length ? ChevronsDownUp : ChevronsUpDown}
+              aria-label={expandedGroups.size === groupedItems.length ? 'Collapse every title' : 'Expand every title'}
+              title={expandedGroups.size === groupedItems.length ? 'Collapse every title' : 'Expand every title'}
+              onClick={toggleExpandAll}
+            />
+          )}
         </div>
       </div>
 

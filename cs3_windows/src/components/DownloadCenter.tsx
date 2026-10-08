@@ -1,5 +1,7 @@
 import React, { useState, useMemo, useCallback, useEffect } from 'react';
-import { Button } from './ui';
+import { Button, Menu, Select } from './ui';
+import { ScreenSearch } from './ScreenSearch';
+import { episodeTerms, matchesScreenQuery } from '../utils/screenSearch';
 import { useSessionState } from '../utils/useSessionState';
 import { useIsDeveloper } from '../utils/ExperienceModeContext';
 import { plainMessage } from '../utils/experienceMode';
@@ -22,12 +24,7 @@ import {
   Layers,
   Copy,
   Check,
-  Search,
-  X,
-  CheckCircle2,
-  PauseCircle,
-  AlertCircle,
-  ArrowUpDown,
+  MoreHorizontal,
 } from 'lucide-react';
 import { formatDownloadSize, formatEtaDuration, formatTransferRate } from '../utils/format';
 import { variantFromTask, variantLabel } from '../utils/downloadIdentity';
@@ -372,7 +369,6 @@ export const DownloadCenter: React.FC<DownloadCenterProps> = ({
   onOpenTitle,
   onPlayFile,
 }) => {
-  const isDeveloper = useIsDeveloper();
   const [collapsedGroups, setCollapsedGroups] = useSessionState<Record<string, boolean>>('downloads.collapsed', {});
   const [activeFilter, setActiveFilter] = useSessionState<DownloadFilterTab>('downloads.filter', 'all');
   const [searchQuery, setSearchQuery] = useSessionState('downloads.query', '');
@@ -542,12 +538,19 @@ export const DownloadCenter: React.FC<DownloadCenterProps> = ({
         if (t.state !== DownloadState.Completed) return false;
       }
 
-      if (searchQuery.trim()) {
-        const q = searchQuery.toLowerCase().trim();
-        const matchTitle = t.title?.toLowerCase().includes(q);
-        const matchProvider = t.providerName?.toLowerCase().includes(q);
-        const matchFile = t.targetFilePath?.toLowerCase().includes(q);
-        if (!matchTitle && !matchProvider && !matchFile) return false;
+      // The same matcher as Library and History: every word, anywhere, accents
+      // and punctuation ignored, episodes by S01E02 / 1x02.
+      if (
+        searchQuery.trim() &&
+        !matchesScreenQuery(searchQuery, [
+          t.title,
+          t.providerName,
+          t.targetFilePath,
+          t.episodeTitle,
+          ...episodeTerms(t.seasonNumber, t.episodeNumber),
+        ])
+      ) {
+        return false;
       }
 
       return true;
@@ -630,227 +633,116 @@ export const DownloadCenter: React.FC<DownloadCenterProps> = ({
     return groupList;
   }, [filteredTasks, sortMode]);
 
+  /*
+   * The same shape as History and Library: title and one muted status line,
+   * then find, the one bulk action that applies now, and a menu for the rest.
+   * The stats bar, a second search box down in the toolbar and four labelled
+   * bulk buttons were three places to look for one screen's controls.
+   */
+  const statusLine = [
+    counts.downloading > 0
+      ? `${counts.downloading} downloading · ${formatTransferRate(totalActiveSpeed)}`
+      : null,
+    counts.completed > 0 ? `${counts.completed} completed` : null,
+    totalBytes > 0 ? `${formatDownloadSize(totalDownloaded)} of ${formatDownloadSize(totalBytes)}` : null,
+  ].filter(Boolean);
+  const moreActions = [
+    ...(counts.failed > 0
+      ? [{ label: `Retry failed (${counts.failed})`, icon: RotateCw, onSelect: handleRetryFailed }]
+      : []),
+    ...(counts.completed > 0
+      ? [{ label: 'Clear completed from the list', icon: Trash2, onSelect: handleClearCompleted }]
+      : []),
+    ...(onReveal ? [{ label: 'Open downloads folder', icon: FolderOpen, onSelect: () => onReveal() }] : []),
+  ];
+
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: '1.25rem' }}>
-      {/* Top Header */}
-      <div className="download-manager__header-row">
+    <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+      <div className="screen-head">
         <div className="screen-head__titles">
           <h2 className="screen-head__title">Downloads</h2>
-          {isDeveloper && (
-            <p className="screen-head__meta">aria2c segmented transfers, HTTP fallback</p>
+          {tasks.length > 0 && (
+            <p className="screen-head__meta">
+              {statusLine.join(' · ') || 'Nothing downloading'}
+              {counts.failed > 0 && <span className="screen-head__meta-warn"> · {counts.failed} failed</span>}
+            </p>
           )}
         </div>
 
         <div className="screen-head__actions">
+          {tasks.length > 0 && (
+            <ScreenSearch
+              label="downloads"
+              value={searchQuery}
+              onChange={setSearchQuery}
+              matches={searchQuery ? filteredTasks.length : undefined}
+              hint="titles, providers and file names"
+            />
+          )}
           {!hasBinaries && onOpenBinarySetup && (
             <Button size="compact" icon={Zap} onClick={onOpenBinarySetup}>
               Set up faster downloads
             </Button>
           )}
-          {onReveal && (
-            <Button
-              size="compact"
-              variant="ambient"
-              icon={FolderOpen}
-              onClick={() => onReveal()}
-              title="Open the downloads folder"
-            >
-              Open folder
+          {counts.downloading > 0 ? (
+            <Button size="compact" variant="ambient" icon={Pause} onClick={handlePauseAll}>
+              Pause all
             </Button>
+          ) : counts.paused > 0 || counts.failed > 0 ? (
+            <Button size="compact" variant="ambient" icon={Play} onClick={handleResumeAll}>
+              Resume all
+            </Button>
+          ) : null}
+          {moreActions.length > 0 && (
+            <Menu
+              label="Download actions"
+              trigger={(props) => (
+                <Button {...props} size="compact" variant="ambient" iconOnly icon={MoreHorizontal} aria-label="More download actions" />
+              )}
+              items={moreActions}
+            />
           )}
         </div>
       </div>
 
-      {/* Filter Tabs & Management Toolbar */}
       {tasks.length > 0 && (
-        <div className="download-manager__toolbar">
-          {/* Filter Tabs in requested order: ALL, Downloading, Paused, Failed, Completed */}
-          <div className="download-tabs">
-            <button
-              type="button"
-              className={`download-tab ${activeFilter === 'all' ? 'download-tab--active' : ''}`}
-              onClick={() => setActiveFilter('all')}
-            >
-              <Layers size={14} />
-              <span>All</span>
-              <span className="download-tab__badge">{counts.all}</span>
-            </button>
-
-            <button
-              type="button"
-              className={`download-tab ${activeFilter === 'downloading' ? 'download-tab--active' : ''}`}
-              onClick={() => setActiveFilter('downloading')}
-            >
-              <RotateCw
-                size={14}
-                className={counts.downloading > 0 ? 'spin' : ''}
-                style={{ color: counts.downloading > 0 ? 'var(--accent-light)' : undefined }}
-              />
-              <span>Downloading</span>
-              <span className="download-tab__badge">{counts.downloading}</span>
-            </button>
-
-            <button
-              type="button"
-              className={`download-tab ${activeFilter === 'paused' ? 'download-tab--active' : ''}`}
-              onClick={() => setActiveFilter('paused')}
-            >
-              <PauseCircle size={14} />
-              <span>Paused</span>
-              <span className="download-tab__badge">{counts.paused}</span>
-            </button>
-
-            <button
-              type="button"
-              className={`download-tab ${activeFilter === 'failed' ? 'download-tab--active' : ''}`}
-              onClick={() => setActiveFilter('failed')}
-            >
-              <AlertCircle size={14} style={{ color: counts.failed > 0 ? 'var(--status-error)' : undefined }} />
-              <span>Failed</span>
-              <span
-                className={`download-tab__badge ${counts.failed > 0 ? 'download-tab__badge--error' : ''}`}
-              >
-                {counts.failed}
-              </span>
-            </button>
-
-            <button
-              type="button"
-              className={`download-tab ${activeFilter === 'completed' ? 'download-tab--active' : ''}`}
-              onClick={() => setActiveFilter('completed')}
-            >
-              <CheckCircle2 size={14} style={{ color: counts.completed > 0 ? 'var(--status-success)' : undefined }} />
-              <span>Completed</span>
-              <span className="download-tab__badge">{counts.completed}</span>
-            </button>
-          </div>
-
-          {/* Search Filter, Sort Order & Quick Actions */}
-          <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem', flexWrap: 'wrap' }}>
-            <div className="download-search-input">
-              <Search size={14} style={{ color: 'var(--text-subtle)' }} />
-              <input
-                type="text"
-                placeholder="Search downloads..."
-                value={searchQuery}
-                onChange={(e) => setSearchQuery(e.target.value)}
-              />
-              {searchQuery && (
+        <div className="screen-toolbar">
+          <div className="type-tabs" role="tablist" aria-label="Show">
+            {(
+              [
+                ['all', 'All', counts.all],
+                ['downloading', 'Downloading', counts.downloading],
+                ['paused', 'Paused', counts.paused],
+                ['failed', 'Failed', counts.failed],
+                ['completed', 'Completed', counts.completed],
+              ] as const
+            ).map(([id, label, count]) =>
+              id !== 'all' && count === 0 && activeFilter !== id ? null : (
                 <button
+                  key={id}
                   type="button"
-                  onClick={() => setSearchQuery('')}
-                  style={{
-                    background: 'none',
-                    border: 'none',
-                    padding: 0,
-                    color: 'var(--text-muted)',
-                    cursor: 'pointer',
-                    display: 'flex',
-                  }}
-                  title="Clear search"
+                  role="tab"
+                  aria-selected={activeFilter === id}
+                  className={`type-tabs__tab${activeFilter === id ? ' type-tabs__tab--on' : ''}`}
+                  onClick={() => setActiveFilter(id)}
                 >
-                  <X size={13} />
+                  {label} <span>{count}</span>
                 </button>
-              )}
-            </div>
-
-            {/* Sort Selector Dropdown */}
-            <div className="download-sort-select" title="Sort download list">
-              <ArrowUpDown size={13} style={{ color: 'var(--text-subtle)' }} />
-              <select
-                value={sortMode}
-                onChange={(e) => setSortMode(e.target.value as DownloadSortMode)}
-                aria-label="Sort downloads"
-              >
-                <option value="recent">Recent First</option>
-                <option value="oldest">Oldest First</option>
-                <option value="name">Title (A-Z)</option>
-                <option value="size">Size (Largest)</option>
-              </select>
-            </div>
-
-            <div className="download-actions-row">
-              {counts.downloading > 0 && (
-                <button
-                  type="button"
-                  className="btn btn-secondary btn-sm"
-                  onClick={handlePauseAll}
-                  title="Pause all active downloads"
-                >
-                  <Pause size={13} />
-                  <span>Pause All</span>
-                </button>
-              )}
-
-              {(counts.paused > 0 || counts.failed > 0) && (
-                <button
-                  type="button"
-                  className="btn btn-secondary btn-sm"
-                  onClick={handleResumeAll}
-                  title="Resume all paused downloads"
-                >
-                  <Play size={13} />
-                  <span>Resume All</span>
-                </button>
-              )}
-
-              {counts.failed > 0 && (
-                <button
-                  type="button"
-                  className="btn btn-secondary btn-sm btn--danger-text"
-                  onClick={handleRetryFailed}
-                  title="Retry all failed downloads"
-                >
-                  <RotateCw size={13} style={{ color: 'var(--status-error)' }} />
-                  <span>Retry Failed</span>
-                </button>
-              )}
-
-              {counts.completed > 0 && (
-                <button
-                  type="button"
-                  className="btn btn-secondary btn-sm"
-                  onClick={handleClearCompleted}
-                  title="Clear finished downloads from list"
-                >
-                  <Trash2 size={13} />
-                  <span>Clear Completed</span>
-                </button>
-              )}
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* Aggregate Stats Bar */}
-      {tasks.length > 0 && (
-        <div className="download-stats-bar">
-          <div className="download-stats-bar__item">
-            <span style={{ fontWeight: 600, color: '#fff' }}>
-              {counts.downloading > 0 ? (
-                <span style={{ color: 'var(--accent-light)', display: 'inline-flex', alignItems: 'center', gap: '0.3rem' }}>
-                  <RotateCw size={12} className="spin" /> Total Speed: {formatTransferRate(totalActiveSpeed)}
-                </span>
-              ) : (
-                'Queue Idle'
-              )}
-            </span>
-            <span>•</span>
-            <span>{counts.downloading} active</span>
-            <span>•</span>
-            <span>{counts.completed} completed</span>
-            {counts.failed > 0 && (
-              <>
-                <span>•</span>
-                <span style={{ color: 'var(--status-error)' }}>{counts.failed} failed</span>
-              </>
+              )
             )}
           </div>
-          <div className="download-stats-bar__item">
-            <span>
-              {formatDownloadSize(totalDownloaded)} {totalBytes > 0 ? `/ ${formatDownloadSize(totalBytes)}` : 'downloaded'}
-            </span>
-          </div>
+          <Select
+            size="compact"
+            aria-label="Sort downloads"
+            value={sortMode}
+            onChange={(event) => setSortMode(event.target.value as DownloadSortMode)}
+            options={[
+              { value: 'recent', label: 'Newest first' },
+              { value: 'oldest', label: 'Oldest first' },
+              { value: 'name', label: 'Title (A–Z)' },
+              { value: 'size', label: 'Largest first' },
+            ]}
+          />
         </div>
       )}
 

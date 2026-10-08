@@ -5504,54 +5504,6 @@
   background: rgba(255, 255, 255, 0.045);
 }
 
-/* --- Download Manager Filters & Actions ------------------------------------ */
-
-.download-manager__header-row {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  flex-wrap: wrap;
-  gap: 1rem;
-}
-
-.download-manager__toolbar {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 0.75rem;
-  flex-wrap: wrap;
-  padding: 0.25rem 0;
-}
-
-.download-tabs {
-  display: flex;
-  align-items: center;
-  gap: 0.4rem;
-  flex-wrap: wrap;
-}
-
-.download-tab {
-  display: inline-flex;
-  align-items: center;
-  gap: 0.45rem;
-  padding: 0.42rem 0.85rem;
-  background: var(--bg-card, #161b26);
-  border: 1px solid var(--border-color, rgba(255, 255, 255, 0.1));
-  border-radius: 8px;
-  color: var(--text-muted, #9ca3af);
-  font-size: 0.8rem;
-  font-weight: 600;
-  cursor: pointer;
-  transition: all 0.15s ease;
-  user-select: none;
-}
-
-.download-tab:hover {
-  color: #fff;
-  border-color: rgba(255, 255, 255, 0.25);
-  background: rgba(255, 255, 255, 0.05);
-}
-
 .download-tab--active {
   background: rgba(59, 130, 246, 0.18);
   border-color: var(--accent-primary, #3b82f6);
@@ -5581,76 +5533,6 @@
 .download-tab--active .download-tab__badge--error {
   background: #ef4444;
   color: #fff;
-}
-
-.download-search-input {
-  display: flex;
-  align-items: center;
-  gap: 0.5rem;
-  background: var(--bg-card, #161b26);
-  border: 1px solid var(--border-color, rgba(255, 255, 255, 0.1));
-  border-radius: 8px;
-  padding: 0.35rem 0.75rem;
-  color: #fff;
-  font-size: 0.8rem;
-}
-
-.download-search-input input {
-  background: transparent;
-  border: none;
-  outline: none;
-  color: #fff;
-  font-size: 0.8rem;
-  width: 170px;
-}
-
-.download-search-input input::placeholder {
-  color: var(--text-subtle, #6b7280);
-}
-
-.download-sort-select {
-  display: flex;
-  align-items: center;
-  gap: 0.4rem;
-  background: var(--bg-card, #161b26);
-  border: 1px solid var(--border-color, rgba(255, 255, 255, 0.1));
-  border-radius: 8px;
-  padding: 0.35rem 0.65rem;
-  color: var(--text-muted, #9ca3af);
-  font-size: 0.8rem;
-}
-
-.download-sort-select select {
-  background: transparent;
-  border: none;
-  color: #fff;
-  font-size: 0.8rem;
-  outline: none;
-  cursor: pointer;
-}
-
-.download-sort-select select option {
-  background: #161b26;
-  color: #fff;
-}
-
-.download-actions-row {
-  display: flex;
-  align-items: center;
-  gap: 0.5rem;
-  flex-wrap: wrap;
-}
-
-.download-stats-bar {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  background: rgba(255, 255, 255, 0.02);
-  border: 1px solid var(--border-color, rgba(255, 255, 255, 0.07));
-  border-radius: 8px;
-  padding: 0.55rem 1rem;
-  font-size: 0.78rem;
-  color: var(--text-muted, #9ca3af);
 }
 
 .download-stats-bar__item {
@@ -6074,7 +5956,6 @@
 }
 .native-stage__why { font-size: 0.8rem; color: var(--text-muted); max-width: 52ch; }
 
-
 /* Audio and subtitle pickers, and fullscreening mpv's own window — the only
    things the player's control bar cannot do for this engine. They live in the
    surface rather than in a bar of their own: a second bar along the bottom was
@@ -6132,7 +6013,6 @@
    because they are genuinely different actions and neither is "the default".
    The destructive one is coloured, not hidden — the risk is worth seeing. */
 /* .delete-download is a ui-dialog now; its layout comes from there. */
-
 
 .delete-download__choices { display: flex; flex-direction: column; gap: .55rem; }
 
@@ -6246,7 +6126,6 @@
 @media (prefers-reduced-motion: reduce) {
   .player__toast { animation: none; }
 }
-
 
 /* --- player copy menu -----------------------------------------------------
    One quiet affordance for everything technical. Seven copy buttons along the
@@ -6477,7 +6356,6 @@
   color: var(--text-muted);
   max-width: 46ch;
 }
-
 
 /* --- Home catalogue picker -------------------------------------------------
    Radio rows rather than a `<select>`, because the choice is not just a name:
@@ -6757,7 +6635,6 @@
   text-overflow: ellipsis;
 }
 .source-picker__toolbar-actions { display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap; }
-
 
 /* --- Player message stacks -------------------------------------------------
    Two anchors, each a flow column: transient messages sit beside each other
@@ -7203,7 +7080,6 @@
   color: var(--accent-light, #60a5fa);
   text-decoration: none;
 }
-
 
 /* Stated, never raised. A catalogue being unreachable is not worth an error
    state on a page the viewer opened to watch something — but it is the first
@@ -8875,7 +8751,6 @@ video::cue {
 }
 .adult-setting__session .btn { display: inline-flex; align-items: center; gap: .3rem; }
 .adult-setting__current { font-size: .78rem; margin-top: .5rem; }
-
 
 /*
   Share, wherever it appears.
@@ -11422,7 +11297,6 @@ button.credit-card { border: 0; background: none; padding: 0; font: inherit; col
 .filmography__work { display: flex; flex-direction: column; gap: 0.25rem; }
 .filmography__roles { margin: 0; padding-left: 0.2rem; font-size: 0.72rem; color: var(--text-subtle); }
 
-
 /* --- seek bar, quieter --------------------------------------------------
    Thin until pointed at, a small playhead, played/buffered/unplayed told
    apart by shade alone — the way people already read a timeline. The frame
@@ -11556,7 +11430,6 @@ button.credit-card { border: 0; background: none; padding: 0; font: inherit; col
 
 .player__title-search--on { opacity: 1; color: #93c5fd; border-color: rgba(147, 197, 253, .5); }
 
-
 /* What a source has done this session: a quiet check or warning before its
    title, never a banner. A failed row dims a little and stays selectable. */
 .source-outcome { flex: none; margin-right: 0.3rem; vertical-align: -1px; }
@@ -11565,7 +11438,6 @@ button.credit-card { border: 0; background: none; padding: 0; font: inherit; col
 .source-outcome--failed { color: #fbbf24; }
 .player-panel__source-row--failed .player-panel__source-body { opacity: 0.72; }
 .player-panel__source-row--failed:hover .player-panel__source-body { opacity: 1; }
-
 
 /* --- trailer, minimised ---------------------------------------------------
    A corner card that keeps playing while the rest of the app is used. The
@@ -11595,7 +11467,6 @@ button.credit-card { border: 0; background: none; padding: 0; font: inherit; col
   to { opacity: 1; transform: none; }
 }
 
-
 /* One header shape for the list screens: a compact title, an optional muted
    line of counts, and the screen's few actions on the right. */
 .screen-head { align-items: center; flex-wrap: wrap; }
@@ -11603,7 +11474,6 @@ button.credit-card { border: 0; background: none; padding: 0; font: inherit; col
 .screen-head__meta { margin: 0.15rem 0 0; font-size: 0.78rem; color: var(--text-subtle); }
 .screen-head__meta-warn { color: #fbbf24; }
 .screen-head__actions { display: inline-flex; align-items: center; gap: 0.35rem; flex-wrap: wrap; }
-
 
 /* Who wrote the description, when more than one catalogue did. Quiet on
    purpose: the text is the content, its source is a footnote. */
@@ -11618,3 +11488,8 @@ button.credit-card { border: 0; background: none; padding: 0; font: inherit; col
 .detail-hero__plot-source:hover { color: var(--text-primary); background: rgba(255, 255, 255, 0.06); }
 .detail-hero__plot-source--on { color: var(--text-primary); background: rgba(255, 255, 255, 0.1); }
 .detail-hero__plot-source:focus-visible { outline: 2px solid var(--accent-primary); outline-offset: 1px; }
+
+/* The row under a list screen's header: view/status tabs on the left, sort
+   and view options on the right. History, Downloads and Library share it. */
+.screen-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 0.6rem; flex-wrap: wrap; }
+.screen-toolbar__group { display: inline-flex; align-items: center; gap: 0.4rem; flex-wrap: wrap; }
