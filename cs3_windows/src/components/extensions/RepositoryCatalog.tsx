@@ -188,24 +188,19 @@ export const RepositoryCatalog: React.FC<RepositoryCatalogProps> = ({
     setAboutOpen(false);
   }, [expandedUrl]);
 
-  // Escape, or a press outside the drawer that is not on another card, closes
-  // it. A press on another card switches the drawer instead, so repositories
-  // can be inspected one after another without closing anything.
+  // Escape closes the drawer. Clicks outside the drawer hit the backdrop overlay,
+  // which invokes onCollapse and prevents interaction with underlying elements.
   useEffect(() => {
     if (!expandedUrl) return;
     const onKey = (event: KeyboardEvent) => {
-      if (event.key === 'Escape' && !event.defaultPrevented) onCollapse();
-    };
-    const onPress = (event: MouseEvent) => {
-      const target = event.target as HTMLElement | null;
-      if (!target?.closest || target.closest('.ext-drawer, .ext-card--selectable, .ext-custom-list__row, [role="dialog"], [role="menu"]')) return;
-      onCollapse();
+      if (event.key === 'Escape' && !event.defaultPrevented) {
+        event.stopPropagation();
+        onCollapse();
+      }
     };
     window.addEventListener('keydown', onKey);
-    window.addEventListener('mousedown', onPress);
     return () => {
       window.removeEventListener('keydown', onKey);
-      window.removeEventListener('mousedown', onPress);
     };
   }, [expandedUrl, onCollapse]);
 
@@ -543,13 +538,25 @@ export const RepositoryCatalog: React.FC<RepositoryCatalogProps> = ({
           ]
         : [['Index', <code key="i">{expandedUrl}</code>], ['Origin', 'Added by you by its address']];
       return (
-        /*
-         * A drawer over the list, never beside or inside it: the catalogue
-         * underneath does not move, resize or re-render, so closing it puts
-         * the viewer back exactly where they were. Not modal — another card
-         * can be opened straight from behind it.
-         */
-        <aside id="ext-browse-details" className="ext-drawer" role="dialog" aria-modal="false" aria-label={`${opened.name} details`}>
+        <>
+          {/*
+           * Backdrop overlay with opacity over the catalogue: dims the background,
+           * intercepts clicks so underlying links/cards are not triggered,
+           * and closes the drawer when clicked.
+           */}
+          <div
+            className="ext-drawer-backdrop"
+            onClick={onCollapse}
+            role="presentation"
+            aria-hidden="true"
+          />
+          <aside
+            id="ext-browse-details"
+            className="ext-drawer"
+            role="dialog"
+            aria-modal="true"
+            aria-label={`${opened.name} details`}
+          >
           <header className="ext-drawer__head">
             <div className="ext-drawer__title">
               <strong>{opened.name}</strong>
@@ -655,7 +662,8 @@ export const RepositoryCatalog: React.FC<RepositoryCatalogProps> = ({
             </footer>
           ) : null}
         </aside>
-      );
+      </>
+    );
     })() : null}
     </div>
   );

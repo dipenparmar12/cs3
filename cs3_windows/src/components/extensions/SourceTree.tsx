@@ -15,7 +15,7 @@
  * responsible.
  */
 import React, { useState } from 'react';
-import { Package, Layers, Radio, Trash2, AlertTriangle, Info, ChevronsDownUp, ChevronsUpDown, Plus } from 'lucide-react';
+import { Package, Layers, Radio, Trash2, AlertTriangle, Info, ChevronsDownUp, ChevronsUpDown, Plus, ChevronRight } from 'lucide-react';
 import { Button } from '../ui';
 import {
   Badge,
@@ -165,16 +165,20 @@ const ExtensionRow: React.FC<{
   onUninstall,
 }) => {
   const [localOpen, setLocalOpen] = useState(false);
-  // One provider is not a choice worth a click: it is always shown, with no
-  // disclosure to open first. The toggle appears only when there is a list.
   const single = providers.length === 1;
-  const open = single || (openProp !== undefined ? openProp : localOpen);
+  const open = !single && (openProp !== undefined ? openProp : localOpen);
   const toggleOpen = () => {
     if (onToggleOpen) onToggleOpen();
     else setLocalOpen((value) => !value);
   };
   const [showDetails, setShowDetails] = useState(false);
-  const suppressed = suppression(extension, 'its repository');
+
+  const active = job && (job.state === 'queued' || job.state === 'running');
+  const jobWord: Record<string, string> = {
+    install: 'Installing',
+    update: 'Updating',
+    uninstall: 'Uninstalling',
+  };
 
   /**
    * Checked when the extension itself is selected (what Uninstall acts on);
@@ -182,14 +186,137 @@ const ExtensionRow: React.FC<{
    * a partial selection, so the next click does what was asked.
    */
   const extSelected = selected.has(extKey(extension.internalName));
+
+  if (single) {
+    const singleProvider = providers[0];
+    const namesDiffer = extension.name.trim().toLowerCase() !== singleProvider.name.trim().toLowerCase();
+    const suppressed = suppression(extension, 'its repository') || suppression(singleProvider, 'its extension or repository');
+    const isSelected = extSelected || selected.has(provKey(singleProvider.name));
+    const isEnabled = extension.enabled !== false && singleProvider.enabled !== false;
+
+    const handleToggle = (next: boolean) => {
+      if (next) {
+        onExtensionToggle(extension.internalName, true);
+        if (singleProvider.enabled === false) {
+          onProviderToggle(singleProvider.name, true);
+        }
+      } else {
+        onExtensionToggle(extension.internalName, false);
+      }
+    };
+
+    const provenance: Provenance = {
+      kind: 'extension',
+      title: namesDiffer ? `${extension.name} › ${singleProvider.name}` : extension.name,
+      chain: [extension.repositoryName, extension.name, ...(namesDiffer ? [singleProvider.name] : [])].filter(Boolean) as string[],
+      internalName: extension.internalName,
+      version: extension.version,
+      authors: extension.authors,
+      description: extension.description,
+      language: singleProvider.lang || extension.language,
+      tags: singleProvider.supportedTypes.length ? singleProvider.supportedTypes : extension.tvTypes,
+      fileSize: extension.fileSize,
+      problem: extension.unavailableReason,
+      suppressedReason: suppressed,
+      counts: [{ label: 'Providers', value: '1' }],
+    };
+
+    const lang = singleProvider.lang || extension.language;
+    const types = singleProvider.supportedTypes;
+
+    return (
+      <li className="ext-node ext-node--extension ext-node--single">
+        <div className="ext-row__head">
+          <Disclosure open={false} hidden label="" onToggle={() => {}} />
+          <TriStateCheckbox
+            state={isSelected ? 'checked' : 'unchecked'}
+            onChange={() => onToggleExtension(extension)}
+            title="Select this extension and provider"
+          />
+          <Layers size={14} className="ext-node__icon" />
+          <div className="ext-row__grow">
+            <div className="ext-row__title ext-row__title--breadcrumb">
+              {namesDiffer ? (
+                <>
+                  <span className="ext-breadcrumb__parent" title={`Extension: ${extension.name}`}>
+                    {extension.name}
+                  </span>
+                  <ChevronRight size={12} className="ext-breadcrumb__sep" aria-hidden />
+                  <span className="ext-breadcrumb__leaf" title={`Provider: ${singleProvider.name}`}>
+                    {singleProvider.name}
+                  </span>
+                </>
+              ) : (
+                <span className="ext-breadcrumb__leaf" title={extension.name}>
+                  {extension.name}
+                </span>
+              )}
+              {extension.version ? <Badge>v{extension.version}</Badge> : null}
+              {singleProvider.adult ? <Badge tone="danger">18+</Badge> : null}
+              {extension.enabled === false ? (
+                <Badge tone="neutral">Off</Badge>
+              ) : singleProvider.enabled === false ? (
+                <Badge tone="neutral">Provider off</Badge>
+              ) : null}
+              {active ? (
+                <Badge tone="accent" title={job?.step}>
+                  {job?.state === 'queued' ? 'Queued' : `${jobWord[job!.kind] ?? 'Working'}…`}
+                </Badge>
+              ) : job?.state === 'failed' ? (
+                <Badge tone="danger" title={job.message}>
+                  {job.kind === 'uninstall' ? 'Uninstall failed' : 'Failed'}
+                </Badge>
+              ) : null}
+            </div>
+            <div className="ext-row__subtitle">
+              {lang ? <span>{lang}</span> : null}
+              {types.length > 0 ? <span>{types.map(tagLabel).join(', ')}</span> : null}
+              {extension.providers.length > 1 ? (
+                <span>1 of {extension.providers.length} providers</span>
+              ) : null}
+              {extension.unavailableReason ? (
+                <span className="ext-warn">
+                  <AlertTriangle size={11} /> {extension.unavailableReason}
+                </span>
+              ) : null}
+              {suppressed ? <span className="ext-warn">{suppressed}</span> : null}
+            </div>
+          </div>
+          <button
+            type="button"
+            className="icon-button"
+            title="Provenance and compatibility"
+            aria-expanded={showDetails}
+            onClick={() => setShowDetails((value) => !value)}
+          >
+            <Info size={14} />
+          </button>
+          <button
+            type="button"
+            className="icon-button btn--danger-text"
+            title="Uninstall this add-on and delete the files it downloaded"
+            disabled={Boolean(active)}
+            onClick={() => onUninstall(extension.internalName)}
+          >
+            <Trash2 size={14} />
+          </button>
+          <Toggle
+            on={isEnabled}
+            label={isEnabled ? `Enabled — searching ${singleProvider.name}` : `Disabled`}
+            suppressedReason={suppressed}
+            disabled={Boolean(active) || busy === `ext:${extension.internalName}` || busy === `provider:${singleProvider.name}`}
+            onChange={handleToggle}
+          />
+        </div>
+
+        {showDetails ? <ProvenancePanel details={provenance} /> : null}
+      </li>
+    );
+  }
+
+  const suppressed = suppression(extension, 'its repository');
   const chosen = extension.providers.filter((provider) => selected.has(provKey(provider.name))).length;
   const state: CheckState = extSelected ? 'checked' : chosen > 0 ? 'indeterminate' : 'unchecked';
-  const active = job && (job.state === 'queued' || job.state === 'running');
-  const jobWord: Record<string, string> = {
-    install: 'Installing',
-    update: 'Updating',
-    uninstall: 'Uninstalling',
-  };
 
   const provenance: Provenance = {
     kind: 'extension',
@@ -212,7 +339,7 @@ const ExtensionRow: React.FC<{
       <div className="ext-row__head">
         <Disclosure
           open={open}
-          hidden={providers.length <= 1}
+          hidden={providers.length === 0}
           label={open ? 'Collapse providers' : 'Expand providers'}
           onToggle={toggleOpen}
         />
@@ -243,12 +370,6 @@ const ExtensionRow: React.FC<{
               {extension.providers.length === 1 ? 'provider' : 'providers'}
             </span>
             {extension.language ? <span>{extension.language}</span> : null}
-            {/*
-              An extension that registered nothing says so, and is never given a
-              placeholder provider to stand in for it — a synthesised name no
-              provider answers to is what made the search scope picker offer
-              sources the main process then dropped.
-            */}
             {extension.unavailableReason ? (
               <span className="ext-warn">
                 <AlertTriangle size={11} /> {extension.unavailableReason}
@@ -421,15 +542,16 @@ export const SourceTree: React.FC<SourceTreeProps> = ({
             0
           );
 
+          const multiProviderExts = extensions.filter(({ extension: ext }) => ext.providers.length > 1);
           const areAllRepoExtsOpen =
-            extensions.length > 0 &&
-            extensions.every(({ extension: ext }) => openExtensions[ext.id ?? ext.internalName]);
+            multiProviderExts.length > 0 &&
+            multiProviderExts.every(({ extension: ext }) => openExtensions[ext.id ?? ext.internalName]);
 
           const toggleAllRepoExts = () => {
             const target = !areAllRepoExtsOpen;
             setOpenExtensions((current) => {
               const next = { ...current };
-              for (const { extension: ext } of extensions) {
+              for (const { extension: ext } of multiProviderExts) {
                 next[ext.id ?? ext.internalName] = target;
               }
               return next;
@@ -489,7 +611,7 @@ export const SourceTree: React.FC<SourceTreeProps> = ({
                     <ExternalLink url={repository.homepageUrl ?? repository.url} />
                   </div>
                 </div>
-                {expanded && extensions.some(({ extension: ext }) => ext.providers.length > 1) ? (
+                {expanded && multiProviderExts.length > 0 ? (
                   <Button size="compact" variant="ambient" onClick={toggleAllRepoExts}>
                     {areAllRepoExtsOpen ? 'Hide providers' : 'Show providers'}
                   </Button>
