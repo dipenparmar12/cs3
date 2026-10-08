@@ -195,42 +195,6 @@
     ]
   },
   {
-    "id": "cuxplug",
-    "name": "CuxPlug Repo",
-    "internalName": "CuxPlug",
-    "description": "Cux custom extension pack providing multi-server link extraction.",
-    "url": "https://github.com/ycngmn/CuxPlug",
-    "rawRepoUrl": "https://raw.githubusercontent.com/ycngmn/CuxPlug/master/repo.json",
-    "category": "Community",
-    "language": "English",
-    "verified": true,
-    "documentKind": "repository",
-    "regions": [
-      "*"
-    ],
-    "languages": [
-      "en"
-    ]
-  },
-  {
-    "id": "fstream",
-    "name": "FStream French Repo",
-    "internalName": "FStream",
-    "description": "French language streaming providers including FrenchStream, Wawacity, and VoirAnime. Its host now sits behind an Anubis bot wall: the index URL answers HTTP 200 with an HTML interstitial (\"Making sure you're not a bot!\") rather than JSON, measured 2026-09-07, so the app cannot parse it. Unverified until the host serves the document again.",
-    "url": "https://git.disroot.org/ayza/FStream",
-    "rawRepoUrl": "https://git.disroot.org/ayza/FStream/raw/branch/main/repo.json",
-    "category": "Regional",
-    "language": "French (FR)",
-    "verified": false,
-    "documentKind": "repository",
-    "regions": [
-      "EU"
-    ],
-    "languages": [
-      "fr"
-    ]
-  },
-  {
     "id": "indostream",
     "name": "IndoStream Repo",
     "internalName": "IndoStream",
@@ -373,24 +337,6 @@
     ],
     "languages": [
       "en"
-    ]
-  },
-  {
-    "id": "pitipitii",
-    "name": "Pitipitii Repo",
-    "internalName": "Pitipitii",
-    "description": "Pitipitii custom extension pack. The repository is gone: GitHub answers HTTP 451 (unavailable for legal reasons) for it on 2026-09-07, and every branch and filename 404s. Kept listed only so the id stays reserved; it can never resolve and is never offered.",
-    "url": "https://github.com/sarapcanagii/Pitipitii",
-    "rawRepoUrl": "https://raw.githubusercontent.com/sarapcanagii/Pitipitii/master/repo.json",
-    "category": "Community",
-    "language": "Multilingual",
-    "verified": false,
-    "documentKind": "repository",
-    "regions": [
-      "*"
-    ],
-    "languages": [
-      "mul"
     ]
   },
   {
