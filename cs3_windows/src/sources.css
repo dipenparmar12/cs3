@@ -11603,3 +11603,18 @@ button.credit-card { border: 0; background: none; padding: 0; font: inherit; col
 .screen-head__meta { margin: 0.15rem 0 0; font-size: 0.78rem; color: var(--text-subtle); }
 .screen-head__meta-warn { color: #fbbf24; }
 .screen-head__actions { display: inline-flex; align-items: center; gap: 0.35rem; flex-wrap: wrap; }
+
+
+/* Who wrote the description, when more than one catalogue did. Quiet on
+   purpose: the text is the content, its source is a footnote. */
+.detail-hero__plot-foot { display: flex; align-items: center; gap: 0.75rem; flex-wrap: wrap; margin-top: 0.15rem; }
+.detail-hero__plot-foot .detail-hero__plot-toggle { margin: 0; }
+.detail-hero__plot-sources { display: inline-flex; align-items: center; gap: 0.15rem; flex-wrap: wrap; font-size: 0.72rem; }
+.detail-hero__plot-sources-label { color: var(--text-subtle); margin-right: 0.2rem; }
+.detail-hero__plot-source {
+  background: none; border: 0; padding: 0.1rem 0.4rem; border-radius: 999px;
+  color: var(--text-muted); font: inherit; cursor: pointer;
+}
+.detail-hero__plot-source:hover { color: var(--text-primary); background: rgba(255, 255, 255, 0.06); }
+.detail-hero__plot-source--on { color: var(--text-primary); background: rgba(255, 255, 255, 0.1); }
+.detail-hero__plot-source:focus-visible { outline: 2px solid var(--accent-primary); outline-offset: 1px; }

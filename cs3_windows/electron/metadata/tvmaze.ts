@@ -222,6 +222,8 @@ export interface TvMazeShowFacts {
   ratings: TitleRating[];
   seasonCount?: number;
   episodeCount?: number;
+  /** The show's summary, still HTML — `plots.ts` cleans every source alike. */
+  plot?: string;
 }
 
 interface TvMazeNetwork {
@@ -248,6 +250,7 @@ export interface TvMazeShow {
   webChannel?: TvMazeNetwork | null;
   image?: TvMazeImage | null;
   rating?: { average?: number | null } | null;
+  summary?: string | null;
   _embedded?: { seasons?: TvMazeSeason[] };
 }
 
@@ -283,6 +286,7 @@ export function parseShowFacts(show: TvMazeShow | null | undefined): TvMazeShowF
     // is the fallback, because a show with one episode has no average.
     runtimeMinutes: show.averageRuntime ?? show.runtime ?? undefined,
     genres: show.genres ?? [],
+    plot: show.summary || undefined,
     language: show.language || undefined,
     premiered: show.premiered || undefined,
     ended: show.ended || undefined,

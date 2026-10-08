@@ -196,6 +196,12 @@ export const TitleStatus = {
 } as const;
 export type TitleStatus = (typeof TitleStatus)[keyof typeof TitleStatus];
 
+/** One catalogue's description of the title, as plain text. */
+export interface TitlePlot {
+  source: MetadataSource;
+  text: string;
+}
+
 /**
  * One published score, on its own scale.
  *
@@ -434,8 +440,14 @@ export interface ExtendedMetadata {
    * synthesising one out of the first sentence of the plot.
    */
   tagline?: string;
-  /** Long-form plot, where a source has one longer than the provider's. */
+  /** The first catalogue plot — the floor under a page whose provider sent none. */
   plot?: string;
+  /**
+   * Every distinct catalogue description, in precedence order
+   * (`electron/metadata/plots.ts`). Offered beside the provider's own text,
+   * never in place of it.
+   */
+  plots?: TitlePlot[];
 
   /**
    * Cover art, when the *provider* had none.

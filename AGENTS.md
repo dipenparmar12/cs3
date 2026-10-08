@@ -272,6 +272,7 @@ rather than omitting the ones nothing serves.
 | `metadata/tvmaze.ts` | Cast and crew with real photographs, for television. Two endpoints on a host the app already talks to and had never asked. |
 | `metadata/anilist.ts` | Characters, their voice actors in every language, and staff, for anime. Both name pairs in both scripts. |
 | `metadata/wikipedia.ts` | "Behind the scenes" prose. The article is a Wikidata sitelink, **never a search** — see `fn:metadata`. |
+| `metadata/plots.ts` | Every catalogue's description (AniList, Cinemeta `description`, TVmaze `summary`) as `ExtendedMetadata.plots`, HTML cleaned, copies and truncations dropped. Offered **beside** the provider's synopsis (hero: "Description: Provider · IMDb · TVmaze", `plotChoices` in `metadataDisplay.ts`), never in place of it — the provider's text describes the release being played. Pure, tested. |
 | `metadata/cinemetaExtras.ts` | The half of Cinemeta's reply the app already pays for and drops: director, writer, `released`, country, awards, trailers. |
 | `src/utils/metadataDisplay.ts` | Rendering rules for the above. Pure; owns the partial-date trap. |
 | `pluginManager.ts` | `.cs3` repository discovery, plugin-list parsing (mirrors upstream `RepositoryManager.kt`), download + SHA-256 verification, Android-style install paths, then hands archives to the sidecar. Also owns the enable/disable cascade — see the extensions-screen section. |

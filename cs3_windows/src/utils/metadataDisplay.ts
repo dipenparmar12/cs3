@@ -33,6 +33,7 @@ import {
   type CreditPerson,
   type ExtendedMetadata,
   type MetadataSourceOutcome,
+  type TitlePlot,
   type TitleRating,
   type TitleStatus,
 } from '../types/metadata.ts';
@@ -369,4 +370,48 @@ export function answeringSources(outcomes: MetadataSourceOutcome[] | undefined):
   return (outcomes ?? [])
     .filter((entry) => entry.status === 'ok')
     .map((entry) => sourceLabel(entry.source));
+}
+
+
+/** One description the viewer can switch to, labelled by who wrote it. */
+export interface PlotChoice {
+  id: string;
+  label: string;
+  text: string;
+}
+
+const plotPrint = (text: string) =>
+  text
+    .normalize('NFKD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '');
+
+/**
+ * The descriptions a detail page can offer, provider's first.
+ *
+ * The provider's own text leads because it describes the release about to be
+ * played (a dub, a regional cut). A catalogue plot that only repeats it — the
+ * same words, or a truncation either way — is not a second choice; offering
+ * "IMDb" that turns out to be the same paragraph is noise. With one choice or
+ * none, the page shows no switch at all.
+ */
+export function plotChoices(
+  providerPlot: string | undefined,
+  providerLabel: string | undefined,
+  plots: TitlePlot[] | undefined
+): PlotChoice[] {
+  const choices: PlotChoice[] = [];
+  const prints: string[] = [];
+  const add = (id: string, label: string, text: string | undefined) => {
+    const trimmed = text?.trim();
+    if (!trimmed) return;
+    const print = plotPrint(trimmed.replace(/(\.\.\.|…)$/, ''));
+    if (!print || prints.some((seen) => seen.startsWith(print) || print.startsWith(seen))) return;
+    prints.push(print);
+    choices.push({ id, label, text: trimmed });
+  };
+  add('provider', providerLabel?.trim() || sourceLabel('provider'), providerPlot);
+  for (const plot of plots ?? []) add(plot.source, sourceLabel(plot.source), plot.text);
+  return choices;
 }

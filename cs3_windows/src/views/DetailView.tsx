@@ -41,7 +41,7 @@ import { useTitleInteractions } from '../components/useTitleInteractions';
 import { shouldRetryOnOpen } from '../utils/cardState';
 import type { ExtendedMetadata, TitleVideo } from '../types/metadata';
 import { MetadataSource, TitleVideoKind } from '../types/metadata';
-import { formatRuntimeMinutes, formatSeasonCount, parseRuntimeMinutes } from '../utils/metadataDisplay';
+import { formatRuntimeMinutes, formatSeasonCount, parseRuntimeMinutes, plotChoices } from '../utils/metadataDisplay';
 import { DetailSection, setSectionsCollapsed } from '../components/detail/DetailSection';
 import { CollectionDialog } from '../components/detail/CollectionDialog';
 import { FilmographyDialog } from '../components/detail/FilmographyDialog';
@@ -995,6 +995,12 @@ export const DetailView: React.FC<DetailViewProps> = ({
       { isSeries }
     );
   }, [detail, watchState, isSeries]);
+
+  /** The provider's description first, then each catalogue's that says something else. */
+  const heroPlotChoices = useMemo(
+    () => plotChoices(detail?.plot || undefined, provenance.provider, extended?.plots),
+    [detail?.plot, provenance.provider, extended?.plots]
+  );
 
   /** The person behind a credit, looked up by id where the catalogue gave one. */
   const openPerson = useCallback(
@@ -2072,6 +2078,7 @@ export const DetailView: React.FC<DetailViewProps> = ({
         posterUrl={detail.posterUrl || extended?.posterUrl}
         backdropUrl={extended?.backdropUrl}
         plot={detail.plot || extended?.plot}
+        plotChoices={heroPlotChoices}
         rating={detail.rating}
         /*
           One spelling for every provider's duration ("136 min", "2h 16m",

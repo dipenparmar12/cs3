@@ -19,6 +19,7 @@ import {
 } from 'lucide-react';
 import { useDismissable } from '../../utils/useDismissable';
 import { MediaRatings } from './MediaRatings';
+import type { PlotChoice } from '../../utils/metadataDisplay';
 
 /**
  * The detail page's masthead.
@@ -73,6 +74,11 @@ interface DetailHeroProps {
   /** Wide artwork behind the masthead; decorative, so a background. */
   backdropUrl?: string;
   plot?: string;
+  /**
+   * Other descriptions of the title, provider's first (`plotChoices`). With
+   * two or more, a quiet switch under the plot says who wrote each.
+   */
+  plotChoices?: PlotChoice[];
   rating?: number;
   /** Already formatted ("2 h 16 min"). */
   duration?: string;
@@ -124,7 +130,8 @@ export const DetailHero: React.FC<DetailHeroProps> = ({
   type,
   posterUrl,
   backdropUrl,
-  plot,
+  plot: providedPlot,
+  plotChoices,
   rating,
   duration,
   tmdbId,
@@ -151,6 +158,10 @@ export const DetailHero: React.FC<DetailHeroProps> = ({
   const isDeveloper = useIsDeveloper();
   const [menuOpen, setMenuOpen] = useState(false);
   const [plotOpen, setPlotOpen] = useState(false);
+  const [plotChoiceId, setPlotChoiceId] = useState<string | null>(null);
+  const choices = plotChoices ?? [];
+  const chosenPlot = choices.find((choice) => choice.id === plotChoiceId) ?? choices[0];
+  const plot = chosenPlot?.text ?? providedPlot;
   const menuWrapper = useRef<HTMLDivElement | null>(null);
   const closeMenu = useCallback(() => setMenuOpen(false), []);
   useDismissable(menuOpen, menuWrapper, closeMenu);
@@ -303,15 +314,38 @@ export const DetailHero: React.FC<DetailHeroProps> = ({
               {plot}
             </p>
           )}
-          {longPlot && (
-            <button
-              type="button"
-              className="detail-hero__plot-toggle"
-              onClick={() => setPlotOpen((open) => !open)}
-              aria-expanded={plotOpen}
-            >
-              {plotOpen ? 'Less' : 'More'}
-            </button>
+          {(longPlot || choices.length > 1) && (
+            <div className="detail-hero__plot-foot">
+              {longPlot && (
+                <button
+                  type="button"
+                  className="detail-hero__plot-toggle"
+                  onClick={() => setPlotOpen((open) => !open)}
+                  aria-expanded={plotOpen}
+                >
+                  {plotOpen ? 'Less' : 'More'}
+                </button>
+              )}
+              {choices.length > 1 && (
+                <div className="detail-hero__plot-sources" role="group" aria-label="Description from">
+                  <span className="detail-hero__plot-sources-label">Description:</span>
+                  {choices.map((choice) => (
+                    <button
+                      key={choice.id}
+                      type="button"
+                      className={`detail-hero__plot-source${choice === chosenPlot ? ' detail-hero__plot-source--on' : ''}`}
+                      aria-pressed={choice === chosenPlot}
+                      onClick={() => {
+                        setPlotChoiceId(choice.id);
+                        setPlotOpen(false);
+                      }}
+                    >
+                      {choice.label}
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
           )}
 
           <div className="detail-hero__cta">

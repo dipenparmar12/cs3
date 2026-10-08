@@ -71,6 +71,7 @@ import {
   orderCredits,
   preferPreciseDate,
 } from './merge.ts';
+import { collectPlots } from './plots.ts';
 import { commonsThumbnail, fetchWikidata, type WikidataResult } from './wikidata.ts';
 import {
   fetchCredits as fetchTvMazeCredits,
@@ -786,6 +787,14 @@ export class MetadataEnrichmentService {
 
     const facts = wikidata?.facts ?? null;
 
+    // Precedence: AniList's is written for the anime the id names; Cinemeta's
+    // is IMDb's own; TVmaze's is a network blurb as often as a synopsis.
+    const plots = collectPlots([
+      { source: MetadataSource.AniList, text: anilist?.plot },
+      { source: MetadataSource.Cinemeta, text: cinemeta?.plot },
+      { source: MetadataSource.TvMaze, text: tvmazeFacts?.plot },
+    ]);
+
     return {
       url: request.url,
       ids,
@@ -794,7 +803,8 @@ export class MetadataEnrichmentService {
       alternateTitles: mergeStrings([anilist?.alternateTitles]),
       // The provider's own synopsis stays on the page; this is the floor under
       // a scraped page whose only description was a one-line site blurb.
-      plot: anilist?.plot,
+      plot: plots[0]?.text,
+      plots: plots.length > 0 ? plots : undefined,
       posterUrl: cinemeta?.posterUrl ?? tvmazeFacts?.posterUrl ?? anilist?.posterUrl,
       releaseDate: preferPreciseDate(
         preferPreciseDate(
