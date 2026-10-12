@@ -34,6 +34,7 @@ const base: MpvSnapshot = {
   positionSeconds: 12,
   durationSeconds: 7200,
   bufferedSeconds: 30,
+  bufferedRanges: [{ start: 0, end: 30 }],
   paused: false,
   volume: 100,
   muted: false,
@@ -72,6 +73,8 @@ test('frame rate, dropped frames, buffer and duration may wait', () => {
   assert.equal(isSignificantChange(base, from({ frameRate: 23.974 })), false);
   assert.equal(isSignificantChange(base, from({ droppedFrames: 1 })), false);
   assert.equal(isSignificantChange(base, from({ bufferedSeconds: 31 })), false);
+  // A new array of the same ranges every tick must not count as a change.
+  assert.equal(isSignificantChange(base, from({ bufferedRanges: [{ start: 0, end: 31 }] })), false);
   assert.equal(isSignificantChange(base, from({ durationSeconds: 7201 })), false);
 });
 
@@ -179,6 +182,7 @@ test('every field of the snapshot is accounted for', () => {
     'positionSeconds',
     'durationSeconds',
     'bufferedSeconds',
+    'bufferedRanges',
     'frameRate',
     'droppedFrames',
     'startupLatencyMs',

@@ -6127,6 +6127,42 @@
   .player__toast { animation: none; }
 }
 
+/* --- player OSD ------------------------------------------------------------
+   Keyboard feedback (volume, seek, speed): one small pill near the top centre,
+   updated in place and gone ~1s after the last press. Placed clear of the
+   subtitles at the bottom and of the control bar, and never stacked. */
+.player__osd {
+  position: absolute;
+  top: 14%;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 6;
+  display: inline-flex;
+  align-items: center;
+  gap: .5rem;
+  padding: .35rem .8rem;
+  border-radius: 999px;
+  background: rgba(18, 20, 24, .78);
+  color: #fff;
+  font-size: .85rem;
+  font-variant-numeric: tabular-nums;
+  line-height: 1.2;
+  pointer-events: none;
+  white-space: nowrap;
+}
+.player__osd-primary { font-weight: 600; }
+.player__osd-secondary { color: rgba(255, 255, 255, .7); font-size: .78rem; }
+.player__osd-level {
+  display: inline-block;
+  width: 72px;
+  height: 3px;
+  border-radius: 2px;
+  background: rgba(255, 255, 255, .2);
+  overflow: hidden;
+}
+.player__osd-level > span { display: block; height: 100%; background: #fff; }
+.player--mini .player__osd { display: none; }
+
 /* --- player copy menu -----------------------------------------------------
    One quiet affordance for everything technical. Seven copy buttons along the
    control bar would have made the player read as a diagnostic console; the

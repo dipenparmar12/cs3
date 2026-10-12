@@ -48,6 +48,13 @@ export interface MpvSnapshot {
   durationSeconds: number;
   /** Absolute position the demuxer cache reaches, not a delta from the playhead. */
   bufferedSeconds: number;
+  /**
+   * Every cached span of the timeline, absolute seconds — mpv's
+   * `demuxer-cache-state/seekable-ranges`. After a seek the cache can hold the
+   * old span and the new one at once; one end figure cannot say that, which is
+   * how the buffer bar came to show the old span after a seek back.
+   */
+  bufferedRanges: Array<{ start: number; end: number }>;
 
   paused: boolean;
   volume: number;
