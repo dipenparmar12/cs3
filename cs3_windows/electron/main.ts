@@ -3705,8 +3705,10 @@ ipcMain.handle('media:getProbeConfig', async () => {
  * will happily launch a `file:` or custom-protocol handler if allowed to.
  */
 ipcMain.handle('shell:openExternal', async (_, url: string) => {
-  if (!/^https?:\/\//i.test(url)) {
-    return { ok: false, error: 'Only http and https links can be opened.' };
+  // `mailto:` for the developer's published contact address (Settings → About
+  // & support); it opens a mail client and nothing else.
+  if (!/^https?:\/\//i.test(url) && !/^mailto:[^\s/\\]+@[^\s/\\]+$/i.test(url)) {
+    return { ok: false, error: 'Only http, https and mailto links can be opened.' };
   }
   await shell.openExternal(url);
   return { ok: true };

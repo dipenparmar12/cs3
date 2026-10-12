@@ -182,14 +182,19 @@ export const Sidebar: React.FC<SidebarProps> = ({
   useEffect(() => {
     if (!rowMenu) return;
     const close = () => setRowMenu(null);
-    const onKey = (event: KeyboardEvent) => { if (event.key === 'Escape') close(); };
+    // Consumed in capture, so the same Escape does not also go Back.
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key !== 'Escape') return;
+      event.stopPropagation();
+      close();
+    };
     window.addEventListener('click', close);
     window.addEventListener('blur', close);
-    window.addEventListener('keydown', onKey);
+    window.addEventListener('keydown', onKey, true);
     return () => {
       window.removeEventListener('click', close);
       window.removeEventListener('blur', close);
-      window.removeEventListener('keydown', onKey);
+      window.removeEventListener('keydown', onKey, true);
     };
   }, [rowMenu]);
   const [dragging, setDragging] = useState<string | null>(null);
