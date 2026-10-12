@@ -82,6 +82,7 @@ const OBSERVED = [
   'idle-active',
   'paused-for-cache',
   'demuxer-cache-time',
+  'demuxer-cache-state',
   'track-list',
   'aid',
   'sid',
@@ -141,6 +142,8 @@ export const NATIVE_KEY_BINDINGS: ReadonlyArray<readonly [key: string, command: 
   ['MBTN_LEFT_DBL', 'cycle fullscreen'],
   ['RIGHT', 'seek 10'],
   ['LEFT', 'seek -10'],
+  ['Shift+RIGHT', 'seek 3'],
+  ['Shift+LEFT', 'seek -3'],
   ['l', 'seek 30'],
   ['j', 'seek -30'],
   ['UP', 'add volume 5'],
@@ -1040,6 +1043,18 @@ export class MpvEngine {
     this.state = this.properties.get('pause') === true ? 'paused' : 'playing';
   }
 
+  /** `seekable-ranges` of the demuxer cache, or nothing when mpv has not said. */
+  private cachedRanges(): Array<{ start: number; end: number }> {
+    const state = this.properties.get('demuxer-cache-state') as
+      | { 'seekable-ranges'?: Array<{ start?: unknown; end?: unknown }> }
+      | undefined;
+    const ranges = state?.['seekable-ranges'];
+    if (!Array.isArray(ranges)) return [];
+    return ranges
+      .map((range) => ({ start: Number(range?.start), end: Number(range?.end) }))
+      .filter((range) => Number.isFinite(range.start) && Number.isFinite(range.end) && range.end > range.start);
+  }
+
   private numberProperty(name: string): number {
     const value = this.properties.get(name);
     return typeof value === 'number' && Number.isFinite(value) ? value : 0;
@@ -1096,6 +1111,7 @@ export class MpvEngine {
       durationSeconds: this.numberProperty('duration'),
       /** Absolute, like `<video>`'s buffered ranges — not a delta from `time-pos`. */
       bufferedSeconds: cacheTime > 0 ? cacheTime : position,
+      bufferedRanges: this.cachedRanges(),
       paused: this.properties.get('pause') === true,
       volume: this.numberProperty('volume'),
       muted: this.properties.get('mute') === true,

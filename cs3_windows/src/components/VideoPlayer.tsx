@@ -68,6 +68,16 @@ import {
 import { durationCloseness, subtitleFitsMedia } from '../utils/subtitleDuration';
 import { durableAddress } from '../utils/durableAddress';
 import { formatBufferAhead, formatDeltaSeconds, loadTimeDisplayMode, rightHandSeconds, saveTimeDisplayMode, type TimeDisplayMode } from './player/timeDisplay';
+import {
+  bufferedEndAt,
+  mpvBufferedRanges,
+  normaliseRanges,
+  rangeSegments,
+  readTimeRanges,
+  sameRanges,
+  type TimeRange,
+} from './player/bufferedRanges';
+import { OSD_VISIBLE_MS, describeOsd, nextOsd, type OsdAction, type OsdState } from './player/playerOsd';
 import { describeError } from '../utils/errors';
 import { useIsDeveloper } from '../utils/ExperienceModeContext';
 
@@ -266,6 +276,8 @@ const CONTROLS_IDLE_MS = 3_000;
 
 const SPEEDS = [0.5, 0.75, 1, 1.25, 1.5, 2];
 const SKIP_SECONDS = 10;
+/** Shift+← / Shift+→: for landing on a line of dialogue, not skipping a scene. */
+const FINE_SKIP_SECONDS = 3;
 
 /**
  * Volume, as the one number three engines have to agree on.
@@ -372,7 +384,11 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
   const [isPlaying, setIsPlaying] = useState(false);
   const [currentTime, setCurrentTime] = useState(0);
   const [duration, setDuration] = useState(0);
-  const [buffered, setBuffered] = useState(0);
+  /** Every buffered span, absolute seconds — see `player/bufferedRanges.ts`. */
+  const [bufferedRanges, setBufferedRangesState] = useState<TimeRange[]>([]);
+  const setBufferedRanges = useCallback((next: TimeRange[]) => {
+    setBufferedRangesState((current) => (sameRanges(current, next) ? current : next));
+  }, []);
   const [timeMode, setTimeMode] = useState<TimeDisplayMode>(loadTimeDisplayMode);
   const toggleTimeMode = useCallback(() => {
     setTimeMode((prev) => {
@@ -383,7 +399,8 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
   }, []);
   const rightHand = rightHandSeconds(timeMode, currentTime, duration);
   const rightHandLabel = `${rightHand.negative ? '-' : ''}${formatTimecode(rightHand.seconds)}`;
-  const bufferAhead = formatBufferAhead(buffered, currentTime);
+  const shownRanges = normaliseRanges(bufferedRanges, duration);
+  const bufferAhead = formatBufferAhead(bufferedEndAt(shownRanges, currentTime) ?? currentTime, currentTime);
   const [volume, setVolume] = useState(1);
   /** Current volume/mute, readable from effects that must not depend on them. */
   const audioSettings = useRef({ volume: 1, muted: false });
@@ -708,6 +725,27 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
   }, []);
 
   /**
+   * Feedback for what the viewer just did with a key — one indicator, updated
+   * in place, never a queue. See `player/playerOsd.ts`.
+   */
+  const [osd, setOsd] = useState<OsdState | null>(null);
+  const osdTimer = useRef<number | null>(null);
+  const showOsd = useCallback((action: OsdAction) => {
+    setOsd((current) => nextOsd(current, action));
+    if (osdTimer.current !== null) window.clearTimeout(osdTimer.current);
+    osdTimer.current = window.setTimeout(() => {
+      osdTimer.current = null;
+      setOsd(null);
+    }, OSD_VISIBLE_MS);
+  }, []);
+  useEffect(
+    () => () => {
+      if (osdTimer.current !== null) window.clearTimeout(osdTimer.current);
+    },
+    []
+  );
+
+  /**
    * Download state changes, announced once each.
    *
    * Driven off the queue rather than off the click, so a transfer that fails
@@ -984,7 +1022,9 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
     setIsMpvBuffering(false);
     setStats(null);
     setSwarm(null);
-  }, [streamUrl]);
+    // The last source's buffer says nothing about this one.
+    setBufferedRanges([]);
+  }, [streamUrl, setBufferedRanges]);
 
   // Ensure native mpv engine and any lingering external windows are stopped when player unmounts
   useEffect(() => {
@@ -1174,6 +1214,11 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
    * that the element is empty rather than broken.
    */
   const isNativeEngine = prepared?.ok === true && capability?.requiredStrategy === 'NATIVE_MPV';
+  // A recovery that hands the stream to the other engine (the forced retry to
+  // mpv) keeps `streamUrl`, so the buffer is dropped on the engine too.
+  useEffect(() => {
+    setBufferedRanges([]);
+  }, [isNativeEngine, setBufferedRanges]);
 
   /**
    * Synchronizes the native MPV engine's playback state with the player UI.
@@ -1212,9 +1257,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
       if (snapshot.durationSeconds > 0) {
         setDuration(snapshot.durationSeconds);
       }
-      if (snapshot.bufferedSeconds >= 0) {
-        setBuffered(snapshot.bufferedSeconds);
-      }
+      setBufferedRanges(mpvBufferedRanges(snapshot));
       /**
        * mpv's own window is a second controller, so its levels are adopted —
        * but not while a change made *here* is still on its way there.
@@ -1285,7 +1328,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
         }
         if (s.positionSeconds >= 0) setCurrentTime(s.positionSeconds);
         if (s.durationSeconds > 0) setDuration(s.durationSeconds);
-        if (s.bufferedSeconds >= 0) setBuffered(s.bufferedSeconds);
+        setBufferedRanges(mpvBufferedRanges(s));
         if (s.videoTracks && s.videoTracks.length > 0) {
           setQualities(
             s.videoTracks.map((t, idx) => ({
@@ -1317,7 +1360,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
     return () => {
       dispose?.();
     };
-  }, [isNativeEngine, audioEchoActive, adoptEngineAudio]);
+  }, [isNativeEngine, audioEchoActive, adoptEngineAudio, setBufferedRanges]);
   const probeFailure = capability?.failure ?? null;
   const probeFailureRef = useRef<typeof probeFailure>(null);
   /**
@@ -2018,6 +2061,13 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
     const video = videoRef.current;
     if (!video) return;
 
+    /*
+     * Re-read from the element on every event that can change it — a seek
+     * starts and ends, a new source empties it — rather than only on
+     * `timeupdate`, which does not fire while paused.
+     */
+    const syncBuffered = () => setBufferedRanges(readTimeRanges(video.buffered, offsetRef.current));
+
     const onTime = () => {
       const realPos = offsetRef.current + video.currentTime;
       currentPositionRef.current = realPos;
@@ -2026,9 +2076,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
       if (pendingSeekTargetRef.current === null) {
         setCurrentTime(realPos);
       }
-      if (video.buffered.length > 0) {
-        setBuffered(offsetRef.current + video.buffered.end(video.buffered.length - 1));
-      }
+      syncBuffered();
       if (video.currentTime > 0) {
         setHasStartedPlayback(true);
       }
@@ -2111,6 +2159,10 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
     video.addEventListener('canplay', onCanPlay);
     video.addEventListener('seeked', onSeeked);
     video.addEventListener('error', onError);
+    video.addEventListener('seeking', syncBuffered);
+    video.addEventListener('seeked', syncBuffered);
+    video.addEventListener('emptied', syncBuffered);
+    video.addEventListener('loadstart', syncBuffered);
 
     return () => {
       video.removeEventListener('timeupdate', onTime);
@@ -2123,8 +2175,12 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
       video.removeEventListener('canplay', onCanPlay);
       video.removeEventListener('seeked', onSeeked);
       video.removeEventListener('error', onError);
+      video.removeEventListener('seeking', syncBuffered);
+      video.removeEventListener('seeked', syncBuffered);
+      video.removeEventListener('emptied', syncBuffered);
+      video.removeEventListener('loadstart', syncBuffered);
     };
-  }, []);
+  }, [setBufferedRanges]);
 
   // Rolling on to the next episode is the expected behaviour for a series, and
   // it is the one thing a viewer should never have to reach for. Dismissing the
@@ -2310,8 +2366,9 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
     seekTo(0);
   }, [seekTo]);
 
+  /** Seeks relative to where the last seek landed; returns where this one lands. */
   const seekBy = useCallback(
-    (delta: number) => {
+    (delta: number): number => {
       const base = pendingSeekTargetRef.current ?? currentPositionRef.current;
       const maxDur = durationRef.current > 0 ? durationRef.current : Infinity;
       const target = Math.max(0, Math.min(base + delta, maxDur));
@@ -2325,6 +2382,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
       seekDebounceTimerRef.current = setTimeout(() => {
         commitSeek(target);
       }, 120);
+      return target;
     },
     [commitSeek]
   );
@@ -3614,14 +3672,14 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
 
   const toggleSubtitles = useCallback(() => {
     if (allSubtitles.length === 0) {
-      notify('No subtitles available');
+      showOsd({ kind: 'text', text: 'No subtitles available' });
       return;
     }
     if (activeSubtitle) {
       lastSelectedSubtitleRef.current = activeSubtitle;
       setActiveSubtitle(null);
       if (isNativeEngine) void window.cloudstream?.mpvSetSubtitleTrack(null);
-      notify('Subtitles: Off');
+      showOsd({ kind: 'text', text: 'Subtitles: Off' });
     } else {
       const target =
         (lastSelectedSubtitleRef.current &&
@@ -3629,13 +3687,13 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
         allSubtitles[0];
       setActiveSubtitle(target.url);
       if (isNativeEngine) void window.cloudstream?.mpvAddSubtitle(target.url, target.name);
-      notify(`Subtitles: ${target.name}`);
+      showOsd({ kind: 'text', text: `Subtitles: ${target.name}` });
     }
-  }, [activeSubtitle, allSubtitles, isNativeEngine, notify]);
+  }, [activeSubtitle, allSubtitles, isNativeEngine, showOsd]);
 
   const cycleSubtitles = useCallback(() => {
     if (allSubtitles.length === 0) {
-      notify('No subtitles available');
+      showOsd({ kind: 'text', text: 'No subtitles available' });
       return;
     }
     const currentIndex = allSubtitles.findIndex((s) => s.url === activeSubtitle);
@@ -3643,27 +3701,25 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
       const first = allSubtitles[0];
       setActiveSubtitle(first.url);
       if (isNativeEngine) void window.cloudstream?.mpvAddSubtitle(first.url, first.name);
-      notify(`Subtitles: ${first.name}`);
+      showOsd({ kind: 'text', text: `Subtitles: ${first.name}` });
     } else if (currentIndex === allSubtitles.length - 1) {
       lastSelectedSubtitleRef.current = activeSubtitle;
       setActiveSubtitle(null);
       if (isNativeEngine) void window.cloudstream?.mpvSetSubtitleTrack(null);
-      notify('Subtitles: Off');
+      showOsd({ kind: 'text', text: 'Subtitles: Off' });
     } else {
       const next = allSubtitles[currentIndex + 1];
       setActiveSubtitle(next.url);
       if (isNativeEngine) void window.cloudstream?.mpvAddSubtitle(next.url, next.name);
-      notify(`Subtitles: ${next.name}`);
+      showOsd({ kind: 'text', text: `Subtitles: ${next.name}` });
     }
-  }, [activeSubtitle, allSubtitles, isNativeEngine, notify]);
+  }, [activeSubtitle, allSubtitles, isNativeEngine, showOsd]);
 
   const toggleMute = useCallback(() => {
-    setIsMuted((prev) => {
-      const next = !prev;
-      notify(next ? 'Muted' : `Volume: ${Math.round(volume * 100)}%`);
-      return next;
-    });
-  }, [notify, volume]);
+    const next = !isMuted;
+    setIsMuted(next);
+    showOsd({ kind: 'volume', volume, muted: next });
+  }, [isMuted, showOsd, volume]);
 
   const keyboardStateRef = useRef({
     togglePlay,
@@ -3698,6 +3754,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
     allSubtitles,
     isNativeEngine,
     notify,
+    showOsd,
     revealControls,
   });
 
@@ -3734,6 +3791,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
     allSubtitles,
     isNativeEngine,
     notify,
+    showOsd,
     revealControls,
   };
 
@@ -3790,25 +3848,27 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
           state.revealControls();
           break;
         case 'ArrowRight':
+        case 'ArrowLeft':
         case 'l':
         case 'L':
-          e.preventDefault();
-          state.seekBy(SKIP_SECONDS);
-          state.revealControls();
-          break;
-        case 'ArrowLeft':
         case 'j':
-        case 'J':
+        case 'J': {
           e.preventDefault();
-          state.seekBy(-SKIP_SECONDS);
+          // Shift+arrow is the fine step; letters always take the full one.
+          const forward = e.key === 'ArrowRight' || e.key === 'l' || e.key === 'L';
+          const step = e.shiftKey && e.key.startsWith('Arrow') ? FINE_SKIP_SECONDS : SKIP_SECONDS;
+          const delta = forward ? step : -step;
+          const position = state.seekBy(delta);
+          state.showOsd({ kind: 'seek', delta, position, duration: state.duration });
           state.revealControls();
           break;
+        }
         case 'ArrowUp': {
           e.preventDefault();
           const next = Math.min(1, Math.round((state.volume + 0.05) * 100) / 100);
           state.setVolume(next);
           if (state.isMuted) state.setIsMuted(false);
-          state.notify(`Volume: ${Math.round(next * 100)}%`);
+          state.showOsd({ kind: 'volume', volume: next, muted: false });
           state.revealControls();
           break;
         }
@@ -3817,7 +3877,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
           const next = Math.max(0, Math.round((state.volume - 0.05) * 100) / 100);
           state.setVolume(next);
           if (next === 0) state.setIsMuted(true);
-          state.notify(next === 0 ? 'Muted' : `Volume: ${Math.round(next * 100)}%`);
+          state.showOsd({ kind: 'volume', volume: next, muted: next === 0 || state.isMuted });
           state.revealControls();
           break;
         }
@@ -3859,20 +3919,21 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
           const pct = Number(e.key) / 10;
           const targetTime = state.duration * pct;
           state.seekTo(targetTime);
-          state.notify(`${Math.round(pct * 100)}%`);
+          state.showOsd({ kind: 'jump', position: targetTime, duration: state.duration });
           state.revealControls();
           break;
         }
         case 'Home':
           e.preventDefault();
           state.seekTo(0);
-          state.notify('0:00');
+          state.showOsd({ kind: 'jump', position: 0, duration: state.duration });
           state.revealControls();
           break;
         case 'End':
           e.preventDefault();
           if (state.duration > 0) {
             state.seekTo(Math.max(0, state.duration - 1));
+            state.showOsd({ kind: 'jump', position: Math.max(0, state.duration - 1), duration: state.duration });
           }
           state.revealControls();
           break;
@@ -3884,7 +3945,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
           const nextIndex = currentIndex >= 0 && currentIndex < SPEEDS.length - 1 ? currentIndex + 1 : currentIndex;
           const nextSpeed = SPEEDS[nextIndex] ?? state.speed;
           state.setSpeed(nextSpeed);
-          state.notify(`Speed: ${nextSpeed}×`);
+          state.showOsd({ kind: 'speed', speed: nextSpeed });
           state.revealControls();
           break;
         }
@@ -3896,7 +3957,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
           const prevIndex = currentIndex > 0 ? currentIndex - 1 : 0;
           const prevSpeed = SPEEDS[prevIndex] ?? state.speed;
           state.setSpeed(prevSpeed);
-          state.notify(`Speed: ${prevSpeed}×`);
+          state.showOsd({ kind: 'speed', speed: prevSpeed });
           state.revealControls();
           break;
         }
@@ -4578,6 +4639,25 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
         </div>
       )}
 
+      {/* Volume, seek and speed from the keyboard: one indicator, updated in
+          place (playerOsd.ts). Toasts below are for things that happened. */}
+      {osd && (() => {
+        const shown = describeOsd(osd);
+        return (
+          <div className="player__osd" role="status" aria-live="polite" aria-atomic="true">
+            {osd.kind === 'volume' &&
+              (shown.level === 0 ? <VolumeX size={16} aria-hidden /> : <Volume2 size={16} aria-hidden />)}
+            <span className="player__osd-primary">{shown.primary}</span>
+            {shown.secondary && <span className="player__osd-secondary">{shown.secondary}</span>}
+            {shown.level !== undefined && (
+              <span className="player__osd-level" aria-hidden>
+                <span style={{ width: `${shown.level * 100}%` }} />
+              </span>
+            )}
+          </div>
+        );
+      })()}
+
       <div className="player__messages player__messages--bottom">
         {showStrategyNote && capability && (
           <div className="player__strategy-note">{capability.explanation}</div>
@@ -4977,10 +5057,13 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
           {stats && (
             <div className="player__seek-torrent" style={{ width: `${stats.progress * 100}%` }} />
           )}
-          <div
-            className="player__seek-buffer"
-            style={{ width: duration ? `${(buffered / duration) * 100}%` : '0%' }}
-          />
+          {rangeSegments(shownRanges, duration).map((segment) => (
+            <div
+              key={segment.left.toFixed(3)}
+              className="player__seek-buffer"
+              style={{ left: `${segment.left}%`, width: `${segment.width}%` }}
+            />
+          ))}
           <div className="player__seek-played" style={{ width: `${progressPercent}%` }} />
           <div className="player__seek-handle" style={{ left: `${progressPercent}%` }} />
 

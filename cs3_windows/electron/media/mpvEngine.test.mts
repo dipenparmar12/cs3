@@ -292,6 +292,9 @@ try {
     // than a key that does nothing.
     assert.equal(bound.get('RIGHT'), 'seek 10');
     assert.equal(bound.get('LEFT'), 'seek -10');
+    // `FINE_SKIP_SECONDS` is 3 in `VideoPlayer`.
+    assert.equal(bound.get('Shift+RIGHT'), 'seek 3');
+    assert.equal(bound.get('Shift+LEFT'), 'seek -3');
     assert.equal(bound.get('l'), 'seek 30');
     assert.equal(bound.get('j'), 'seek -30');
     assert.equal(bound.get('SPACE'), 'cycle pause');

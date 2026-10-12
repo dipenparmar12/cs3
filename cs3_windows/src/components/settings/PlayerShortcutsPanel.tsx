@@ -36,11 +36,13 @@ const SHORTCUT_CATEGORIES: ShortcutCategory[] = [
   },
   {
     title: 'Seeking & Navigation',
-    note: '10s jump, timeline scrubber and direct percentage',
-    keywords: 'seek forward backward 10s jump arrow left right j l home end percentage',
+    note: '10s jump, 3s fine step, timeline scrubber and direct percentage',
+    keywords: 'seek forward backward 10s 3s fine shift jump arrow left right j l home end percentage',
     items: [
       { action: 'Seek Forward 10s', keys: ['→', 'L'] },
       { action: 'Seek Backward 10s', keys: ['←', 'J'] },
+      { action: 'Seek Forward 3s', keys: ['Shift + →'] },
+      { action: 'Seek Backward 3s', keys: ['Shift + ←'] },
       { action: 'Seek to 0% – 90%', keys: ['0', '–', '9'] },
       { action: 'Jump to Beginning (0:00)', keys: ['Home'] },
       { action: 'Jump to End', keys: ['End'] },

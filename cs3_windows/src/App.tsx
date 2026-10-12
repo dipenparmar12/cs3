@@ -45,6 +45,7 @@ import { ScrollToTop } from './components/ScrollToTop';
 import { durableAddress } from './utils/durableAddress';
 import { canonicalKey } from '../electron/cs3/libraryStore';
 import { SCREEN_SEARCH_FOCUS_EVENT, screenSearchAvailable } from './utils/screenSearch';
+import { classifyDroppedPaths, droppedLinkKind, isSupportedDrag } from './utils/dropSupport';
 import {
   depthOf,
   emptyNavigation,
@@ -210,6 +211,8 @@ export const App: React.FC = () => {
   activeTabRef.current = activeTab;
   const scrollMemory = useRef(new Map<string, number>());
   const selectedMedia = topOf(navigation, activeTab);
+  const selectedMediaRef = useRef(selectedMedia);
+  selectedMediaRef.current = selectedMedia;
 
   /*
    * Restored after paint rather than immediately: the screen being returned
@@ -317,6 +320,8 @@ export const App: React.FC = () => {
   /** Whether something is being dragged over the window, for the overlay. */
   const [dragging, setDragging] = useState(false);
   const dragDepth = useRef(0);
+  /** `handleSearch` is declared below the drop handler that needs it. */
+  const handleSearchRef = useRef<((query: string) => void) | null>(null);
 
   /**
    * The instant-play path: the player opens on this state before any stream
@@ -431,7 +436,7 @@ export const App: React.FC = () => {
 
   const [isInspectorOpen, setIsInspectorOpen] = useState(false);
   /** Which Settings pane to open on, when something deep-links into it. */
-  const [settingsTab, setSettingsTab] = useState<'general' | 'advanced'>('general');
+  const [settingsTab, setSettingsTab] = useState<'general' | 'about'>('general');
 
   /**
    * Whether the machine has a network at all.
@@ -696,7 +701,7 @@ export const App: React.FC = () => {
 
     // Help → Licences. A menu item that does nothing is worse than no menu item.
     const disposeLicences = window.cloudstream?.onShowLicences?.(() => {
-      setSettingsTab('advanced');
+      setSettingsTab('about');
       switchTab('settings');
     });
 
@@ -903,41 +908,55 @@ export const App: React.FC = () => {
    * navigation now; this turns the gesture into the thing the user meant.
    */
   useEffect(() => {
-    const isFileDrag = (event: DragEvent) => {
-      const types = event.dataTransfer?.types;
-      if (!types) return false;
-      if (types.includes('application/x-ott-platform')) return false;
-      return types.includes('Files') || types.includes('text/plain');
+    /*
+     * Decided per drag, from what the drag announces (`utils/dropSupport.ts`):
+     * the overlay only appears for something CS3 can open, and anything else
+     * — an image, a document, text selected in the app — gets no overlay, no
+     * drop cursor and no message. Drags that begin inside this window are the
+     * app's own (reordering the sidebar) and never count.
+     */
+    let startedInApp = false;
+    const supported = (event: DragEvent) => {
+      const transfer = event.dataTransfer;
+      if (!transfer) return false;
+      const items = [...(transfer.items ?? [])].map((item) => ({ kind: item.kind, type: item.type }));
+      return isSupportedDrag([...transfer.types], items, startedInApp);
     };
 
+    const onDragStart = () => {
+      startedInApp = true;
+    };
     const allow = (event: DragEvent) => {
-      if (isFileDrag(event)) {
-        event.preventDefault();
-      }
+      // Only a supported drag gets a drop target; the rest keep the default
+      // "no drop" cursor and never reach `onDrop`.
+      if (supported(event)) event.preventDefault();
     };
     const onDrop = (event: DragEvent) => {
-      if (!isFileDrag(event)) {
-        setDragging(false);
-        dragDepth.current = 0;
-        return;
-      }
-
-      event.preventDefault();
       setDragging(false);
       dragDepth.current = 0;
+      if (!supported(event)) return;
+      event.preventDefault();
 
       /*
        * Dragged *text* is checked first, because a magnet dragged out of a
        * browser arrives as text and carries no file at all. Checking files
        * first would silently drop it.
        */
-      const dragged = event.dataTransfer?.getData('text/plain')?.trim();
-      if (dragged && /^magnet:\?/i.test(dragged)) {
-        void handleOpenMagnet(dragged);
+      const transfer = event.dataTransfer;
+      const files = [...(transfer?.files ?? [])];
+      if (files.length === 0) {
+        const uri = transfer
+          ?.getData('text/uri-list')
+          ?.split(/\r?\n/)
+          .find((line) => line.trim() && !line.startsWith('#'));
+        const link = uri?.trim() || transfer?.getData('text/plain')?.trim();
+        const kind = droppedLinkKind(link);
+        if (kind === 'magnet') void handleOpenMagnet(link!);
+        // A page address becomes its own search row, the same as pasting it.
+        else if (kind === 'page') handleSearchRef.current?.(link!);
         return;
       }
 
-      const files = [...(event.dataTransfer?.files ?? [])];
       /*
        * `File.path` was removed in Electron 32 and this app is on 43.
        *
@@ -954,18 +973,23 @@ export const App: React.FC = () => {
         .filter((filePath): filePath is string => Boolean(filePath));
 
       if (paths.length === 0) {
-        if (files.length > 0) {
-          setActionNotice('That could not be read from disk. Try the paperclip beside the search box.');
-        }
+        setActionNotice('That could not be read from disk. Try the paperclip beside the search box.');
         return;
       }
 
-      const torrents = paths.filter((filePath) => filePath.toLowerCase().endsWith('.torrent'));
+      const { torrents, media, other } = classifyDroppedPaths(paths);
       if (torrents.length > 0) {
         void handleOpenTorrentFiles(torrents);
         return;
       }
-      void handleOpenLocalFile(paths[0]);
+      if (media.length > 0) {
+        void handleOpenLocalFile(media[0]);
+        return;
+      }
+      // Only reachable for a file whose type the system did not know: the
+      // drag could not tell, the name can.
+      const name = other[0]?.split(/[\\/]/).pop() ?? 'That file';
+      setActionNotice(`${name} is not a torrent or a video or audio file, so CS3 cannot open it.`);
     };
 
     /*
@@ -974,27 +998,30 @@ export const App: React.FC = () => {
      * enters and leaves is what makes it stable.
      */
     const onDragEnter = (event: DragEvent) => {
-      if (!isFileDrag(event)) return;
+      if (!supported(event)) return;
       event.preventDefault();
       dragDepth.current += 1;
       setDragging(true);
     };
     const onDragLeave = (event: DragEvent) => {
-      if (!isFileDrag(event)) return;
+      if (!supported(event)) return;
       dragDepth.current = Math.max(0, dragDepth.current - 1);
       if (dragDepth.current === 0) setDragging(false);
     };
     const onDragEnd = () => {
+      startedInApp = false;
       dragDepth.current = 0;
       setDragging(false);
     };
 
+    window.addEventListener('dragstart', onDragStart);
     window.addEventListener('dragover', allow);
     window.addEventListener('dragenter', onDragEnter);
     window.addEventListener('dragleave', onDragLeave);
     window.addEventListener('dragend', onDragEnd);
     window.addEventListener('drop', onDrop);
     return () => {
+      window.removeEventListener('dragstart', onDragStart);
       window.removeEventListener('dragover', allow);
       window.removeEventListener('dragenter', onDragEnter);
       window.removeEventListener('dragleave', onDragLeave);
@@ -1040,6 +1067,7 @@ export const App: React.FC = () => {
       setSearchError(describeError(err));
     }
   }, [handleShareLink, resetScreen, switchTab, scrollAfterPaint]);
+  handleSearchRef.current = (query) => void handleSearch(query);
 
   /**
    * Abandons the running search, keeping whatever it has already found.
@@ -1921,8 +1949,8 @@ export const App: React.FC = () => {
 
   /*
    * Back like a browser: the mouse's back button and Alt+←, one page on the
-   * current screen. Not while the player is in front — there, Back belongs to
-   * the player.
+   * current screen — and Escape on a details page. Not while the player is in
+   * front — there, Back belongs to the player.
    */
   const playerInFront = Boolean((session || playback || preparing) && !playerHidden && !playerMini);
   useEffect(() => {
@@ -1933,7 +1961,30 @@ export const App: React.FC = () => {
       goBack();
     };
     const onKey = (event: KeyboardEvent) => {
-      if (!event.altKey || event.key !== 'ArrowLeft' || !canGoBack()) return;
+      if (event.altKey && event.key === 'ArrowLeft' && canGoBack()) {
+        event.preventDefault();
+        goBack();
+        return;
+      }
+      /*
+       * Escape on a details page is Back. Last in line: anything that consumed
+       * the key (a dialog, a menu, the trailer, a search box clearing itself)
+       * stopped it or marked it handled before it got here, and a key aimed at
+       * a field or a modal still open is theirs.
+       */
+      if (
+        event.key !== 'Escape' ||
+        event.defaultPrevented ||
+        event.altKey || event.ctrlKey || event.metaKey || event.shiftKey ||
+        !selectedMediaRef.current ||
+        !canGoBack() ||
+        document.fullscreenElement
+      ) {
+        return;
+      }
+      const target = event.target as HTMLElement | null;
+      if (target?.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(target?.tagName ?? '')) return;
+      if (document.querySelector('[aria-modal="true"], .modal-overlay')) return;
       event.preventDefault();
       goBack();
     };

@@ -6,6 +6,7 @@ import {
   Download,
   Globe,
   HardDrive,
+  Heart,
   Home,
   Layers,
   List,
@@ -19,6 +20,7 @@ import {
   Sliders,
   Sparkles,
   Trash2,
+  UserRound,
   Wrench,
   Crosshair,
   Zap,
@@ -50,6 +52,8 @@ import { ExtensionIssuesPanel } from '../components/settings/ExtensionIssuesPane
 import { AboutPanel } from '../components/settings/AboutPanel';
 import { StoragePanel } from '../components/settings/StoragePanel';
 import { BackupPanel } from '../components/settings/BackupPanel';
+import { DeveloperPanel, SupportCard, SupportSettings } from '../components/settings/SupportPanels';
+import { useSupportCardDismissed } from '../components/settings/useSupportCard';
 import { Button, SearchInput, Switch } from '../components/ui';
 
 /**
@@ -70,7 +74,8 @@ type TabId =
   | 'sources'
   | 'downloads'
   | 'network'
-  | 'advanced';
+  | 'advanced'
+  | 'about';
 
 interface SettingsViewProps {
   hasBinaries?: boolean;
@@ -105,6 +110,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ initialTab }) => {
    * day they disagreed this screen and the player would be telling one person
    * two different things about the same preference.
    */
+  const supportCard = useSupportCardDismissed();
   const mode = useExperienceMode();
   const setMode = useSetExperienceMode();
   const level: SettingsLevel = settingsLevelFor(mode);
@@ -362,6 +368,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ initialTab }) => {
         ) : undefined,
     },
     { id: 'advanced', label: 'Advanced', icon: <Wrench size={15} /> },
+    { id: 'about', label: 'About & support', icon: <Heart size={15} /> },
     { id: 'all', label: 'Everything on one page', icon: <List size={15} /> },
   ];
 
@@ -468,6 +475,18 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ initialTab }) => {
       ) : null}
 
       {statusMessage && <div className="settings__flash">{statusMessage}</div>}
+
+      {/* Support first (requirement 105), on the screen Settings opens to.
+          Hidden once dismissed; the same methods stay under About & support. */}
+      {!searching && supportCard.dismissed === false && (tab === 'general' || tab === 'all') && (
+        <SupportCard
+          onDismiss={supportCard.dismiss}
+          onShowMore={() => {
+            setQuery('');
+            setTab('about');
+          }}
+        />
+      )}
 
       {shows('general') && (
         <>
@@ -902,6 +921,30 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ initialTab }) => {
             keywords="backup restore export import move machine file"
           >
             <BackupPanel />
+          </SettingGroup>
+        </>
+      )}
+
+      {shows('about') && (
+        <>
+          {sectionTitle('about', 'About & support')}
+          <SettingGroup
+            title="Support CS3"
+            icon={<Heart size={15} />}
+            keywords="support donate donation donations contribute tip sponsor upi buy me a coffee money pay"
+          >
+            <SupportSettings
+              cardDismissed={supportCard.dismissed === true}
+              onRestoreCard={supportCard.restore}
+            />
+          </SettingGroup>
+
+          <SettingGroup
+            title="About the developer"
+            icon={<UserRound size={15} />}
+            keywords="developer author contact email github profile repository collaboration business feedback questions"
+          >
+            <DeveloperPanel />
           </SettingGroup>
 
           {/*

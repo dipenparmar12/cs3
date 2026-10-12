@@ -75,6 +75,8 @@ const COALESCEABLE = new Set<keyof MpvSnapshot>([
   'positionSeconds',
   'durationSeconds',
   'bufferedSeconds',
+  // A fresh array on every snapshot, so `!==` would call each one significant.
+  'bufferedRanges',
   'frameRate',
   'droppedFrames',
   'startupLatencyMs',
