@@ -183,17 +183,13 @@ export class SidecarSupervisor {
   }
 
   private async start(): Promise<boolean> {
+    // The provisioner's reason says what is missing and the fix that works
+    // for it — Install Required Components only for Java (runtimeAdvice.ts).
     const sidecarInfo = this.provisioner.findSidecarJar();
-    if (!sidecarInfo) {
-      this.startFailure =
-        'The extension runtime is not provisioned. Click "Install Required Components" in Settings to set up automatically.';
-      return false;
-    }
-
     const javaInfo = this.provisioner.findJavaBinary();
-    if (!javaInfo) {
+    if (!sidecarInfo || !javaInfo) {
       this.startFailure =
-        'No compatible Java 21+ runtime was found. Click "Install Required Components" in Settings to set up automatically.';
+        this.provisioner.getStatus(true).reason ?? 'The extension runtime is incomplete.';
       return false;
     }
 

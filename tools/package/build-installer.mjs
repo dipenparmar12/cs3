@@ -28,6 +28,7 @@ import { spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { runDoctor } from './doctor.mjs';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const root = path.resolve(here, '..', '..');
@@ -56,6 +57,7 @@ if (has('--help') || has('-h')) {
   --skip-media          do not bundle ffmpeg/mpv (they are then fetched on first use)
   --allow-missing-media stage whatever media binaries are present instead of failing
   --skip-typecheck      skip \`tsc -b\`
+  --yes                 download a missing JDK or Maven into tools/toolchain without asking
 `);
   process.exit(0);
 }
@@ -132,12 +134,14 @@ function resolveTool(name, prefix) {
   return null;
 }
 
-const MVN = resolveTool('mvn', 'apache-maven') ?? (isWindows ? 'mvn.cmd' : 'mvn');
-const JAVA_HOME_DIR = (() => {
-  if (!fs.existsSync(toolchain)) return process.env.JAVA_HOME;
+// Re-resolved after the preflight, which may have just installed either one.
+let MVN = resolveTool('mvn', 'apache-maven') ?? (isWindows ? 'mvn.cmd' : 'mvn');
+function resolveToolchainJdk() {
+  if (!fs.existsSync(toolchain)) return null;
   const jdk = fs.readdirSync(toolchain).filter((e) => e.startsWith('jdk-')).sort().reverse()[0];
-  return jdk ? path.join(toolchain, jdk) : process.env.JAVA_HOME;
-})();
+  return jdk ? path.join(toolchain, jdk) : null;
+}
+let JAVA_HOME_DIR = resolveToolchainJdk() ?? process.env.JAVA_HOME;
 
 /**
  * `shell: true` is needed for a .cmd/.bat shim and is actively harmful for
@@ -264,42 +268,32 @@ function upToDate(label, outputs, inputs = [], stamp = null) {
 }
 
 // ── 1. Preflight ─────────────────────────────────────────────────────────────
-heading('Preflight');
-
-const nodeMajor = Number(process.versions.node.split('.')[0]);
-if (nodeMajor < 20) die(`Node ${process.versions.node} is too old; 20 or newer is required.`);
-info(`node ${process.versions.node} on ${process.platform}/${process.arch}`);
-
-if (!SKIP_JVM) {
-  const javaExe = JAVA_HOME_DIR
-    ? path.join(JAVA_HOME_DIR, 'bin', isWindows ? 'java.exe' : 'java')
-    : 'java';
-  const probe = exec(javaExe, ['-version'], { stdio: 'pipe', encoding: 'utf8' });
-  const banner = `${probe.stdout ?? ''}${probe.stderr ?? ''}`;
-  const version = Number(/version "(\d+)/.exec(banner)?.[1] ?? 0);
-  if (!version) {
-    die(
-      'no JDK was found.',
-      'The sidecar is compiled to class file 65, so this needs Java 21 or newer.\n' +
-        'Point JAVA_HOME at one, or drop a JDK into tools/toolchain/jdk-*.\n' +
-        'To package without extension support, pass --skip-jvm.',
-    );
-  }
-  if (version < 21) {
-    die(
-      `Java ${version} cannot build the sidecar (class file 65 needs 21 or newer).`,
-      'tools/toolchain/jdk-* is preferred when present; otherwise point JAVA_HOME at a JDK 21.',
-    );
-  }
-  info(`java ${version} (${JAVA_HOME_DIR ?? 'PATH'})`);
-}
-
-if (!fs.existsSync(path.join(app, 'node_modules'))) {
+/*
+ * The same checks `bun run setup` runs (doctor.mjs), so a build stops here
+ * naming what is missing and the command that fixes it, instead of failing ten
+ * minutes in with a Maven or electron-builder error that names neither. It
+ * installs missing node_modules on its own and asks before downloading a JDK or
+ * Maven into tools/toolchain (`--yes` answers for it).
+ */
+heading('Preflight — build environment');
+const environment = await runDoctor({
+  mode: 'dist',
+  assumeYes: has('--yes') || process.env.CS3_AUTO_INSTALL === '1',
+  skipJvm: SKIP_JVM,
+  skipMedia: SKIP_MEDIA,
+  log: info,
+});
+if (!environment.ok) {
   die(
-    'cs3_windows/node_modules is missing.',
-    'Install the app dependencies first:\n    cd cs3_windows && bun install',
+    `the build environment is not ready — ${environment.problems.join('; ')}.`,
+    'Each item above names its fix. `cd cs3_windows && bun run setup` fixes what can be\n' +
+      'fixed automatically; rerun with --yes to let this build download a JDK or Maven itself.\n' +
+      'To package without extension support (no Java or Maven needed), pass --skip-jvm.',
   );
 }
+MVN = resolveTool('mvn', 'apache-maven') ?? environment.mvn ?? MVN;
+JAVA_HOME_DIR = resolveToolchainJdk() ?? environment.javaHome ?? JAVA_HOME_DIR;
+if (!SKIP_JVM) info(`maven ${path.relative(root, MVN) || MVN}; JAVA_HOME ${JAVA_HOME_DIR ?? '(PATH)'}`);
 for (const tool of ['electron-builder', 'vite', 'tsc']) requireBin(tool);
 
 // ── The JVM side ─────────────────────────────────────────────────────────────

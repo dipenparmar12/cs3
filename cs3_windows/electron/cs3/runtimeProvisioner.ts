@@ -6,6 +6,7 @@ import { spawnSync } from 'child_process';
 
 import { FastChunkDownloader, type DownloadProgress as FastProgress } from '../fastDownloader';
 import { describeError } from '../../src/utils/errors.ts';
+import { REQUIRED_JAVA_VERSION, describeRuntimeGaps } from './runtimeAdvice.ts';
 
 export interface SystemRuntimeStatus {
   ready: boolean;
@@ -211,7 +212,6 @@ export interface RuntimeProgress {
   error?: string;
 }
 
-const REQUIRED_JAVA_VERSION = 21;
 
 /**
  * Fallback openJDK 21 binary mirrors for auto-provisioning
@@ -323,14 +323,9 @@ export class RuntimeProvisioner {
 
     const ready = javaReady && sidecarReady && bridgeReady;
 
-    let reason: string | undefined;
-    if (!ready) {
-      const missing: string[] = [];
-      if (!javaReady) missing.push(`Java ${REQUIRED_JAVA_VERSION}+ runtime`);
-      if (!sidecarReady) missing.push('Extension sidecar (cs3-sidecar.jar)');
-      if (!bridgeReady) missing.push('Provider bridge (library-jvm.jar)');
-      reason = `Required components missing: ${missing.join(', ')}. Click "Install Required Components" in Settings to set up automatically.`;
-    }
+    const reason = ready
+      ? undefined
+      : describeRuntimeGaps({ javaReady, sidecarReady, bridgeReady, packaged: Boolean(app?.isPackaged) });
 
     const stamp = this.readStamp();
     const staleReason = this.describeStaleness(stamp);
@@ -997,18 +992,18 @@ export class RuntimeProvisioner {
     error?: string;
   }> {
     const javaInfo = this.findJavaBinary();
-    if (!javaInfo) {
-      return { ok: false, error: 'Java 21+ execution engine is not found or not provisioned.' };
-    }
-
     const sidecarInfo = this.findSidecarJar();
-    if (!sidecarInfo) {
-      return { ok: false, error: 'Extension sidecar (cs3-sidecar.jar) is missing.' };
-    }
-
     const runtimeInfo = this.findRuntimeDir();
-    if (!runtimeInfo) {
-      return { ok: false, error: 'Provider bridge dependencies (library-jvm) are missing.' };
+    if (!javaInfo || !sidecarInfo || !runtimeInfo) {
+      return {
+        ok: false,
+        error: describeRuntimeGaps({
+          javaReady: Boolean(javaInfo),
+          sidecarReady: Boolean(sidecarInfo),
+          bridgeReady: Boolean(runtimeInfo?.hasBridge),
+          packaged: Boolean(app?.isPackaged),
+        }),
+      };
     }
 
     return {
