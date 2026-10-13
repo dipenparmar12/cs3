@@ -1595,7 +1595,7 @@ discover → resolve artifact → verify hash → verify signature → pin/compa
 ## 10. CSX-SDK: the provider contract
 
 `[proposed]`. Shipped as `@cs3desktop/sdk` — types plus a thin runtime. Lives in
-`cs3_windows/src/types/csx/` and is imported by `electron/` **and** `src/`, exactly as
+`desktop/src/types/csx/` and is imported by `electron/` **and** `src/`, exactly as
 `src/types/` is today `[measured]`.
 
 ### 10.1 The interface
@@ -3723,7 +3723,7 @@ worse than no catch.**
 
 ### 23.2 Types
 
-`cs3_windows/src/types/csx/` — `provider.ts`, `metadata.ts`, `source.ts`, `manifest.ts`,
+`desktop/src/types/csx/` — `provider.ts`, `metadata.ts`, `source.ts`, `manifest.ts`,
 `repository.ts`, `host.ts` — imported by `electron/` **and** `src/`, and published as
 `@cs3desktop/sdk`. That dual import is intentional and already the pattern `[measured]`.
 

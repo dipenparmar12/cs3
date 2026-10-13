@@ -489,8 +489,8 @@ For M0, and the same shape for each provider after it:
 ## 12. One thing to settle before implementation
 
 The working tree is **mid-merge** (`MERGE_HEAD` = `9e529d3`, "Merge branch
-`claude/cloudstream-android-providers-f5nzq6`"). `AGENTS.md`, `cs3_windows/electron/contentService.ts`
-and `cs3_windows/package.json` are staged `UU` but contain **zero conflict markers** — the
+`claude/cloudstream-android-providers-f5nzq6`"). `AGENTS.md`, `desktop/electron/contentService.ts`
+and `desktop/package.json` are staged `UU` but contain **zero conflict markers** — the
 resolutions are already in the working tree and simply have not been `git add`ed. That merge
 should be completed and committed before any of this lands on top of it.
 

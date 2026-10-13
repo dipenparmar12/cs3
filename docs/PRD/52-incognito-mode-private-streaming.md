@@ -211,7 +211,7 @@ The application must clearly distinguish explicit actions from automatic activit
 Create a main-process service:
 
 ```text
-cs3_windows/electron/cs3/privacyMode.ts
+desktop/electron/cs3/privacyMode.ts
 ```
 
 The service is the single source of truth for Incognito state.

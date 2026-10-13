@@ -27,7 +27,7 @@
  *   node tools/package/build-media-runtime.mjs --verify   # ...and run each binary
  *   node tools/package/build-media-runtime.mjs --allow-missing
  *
- * Output is `cs3_windows/media-runtime/`, which `electron-builder` copies to
+ * Output is `desktop/media-runtime/`, which `electron-builder` copies to
  * `resources/media/` and `BinaryDownloader.resolveBinary` looks in first.
  *
  * **One platform per run, into one directory.** The script stages whichever
@@ -47,7 +47,7 @@ import { fileURLToPath } from 'node:url';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = path.resolve(HERE, '..', '..');
-const OUT_DIR = path.join(REPO_ROOT, 'cs3_windows', 'media-runtime');
+const OUT_DIR = path.join(REPO_ROOT, 'desktop', 'media-runtime');
 const WORK_DIR = path.join(os.tmpdir(), 'cs3-media-runtime');
 /**
  * Downloaded archives, kept between builds.
@@ -556,7 +556,7 @@ function verify(entries) {
 
 // --- main ------------------------------------------------------------------
 
-console.log(`\nStaging the media runtime for ${key} into cs3_windows/media-runtime/\n`);
+console.log(`\nStaging the media runtime for ${key} into desktop/media-runtime/\n`);
 fs.mkdirSync(OUT_DIR, { recursive: true });
 fs.mkdirSync(WORK_DIR, { recursive: true });
 

@@ -134,7 +134,7 @@ transcode path, which is the 0.47x-realtime stall the engine exists to avoid.
 the good one was opt-in behind a download the user had to discover.**
 
 `tools/package/build-media-runtime.mjs` stages the binaries per platform into
-`cs3_windows/media-runtime/`, `extraResources` copies that to `resources/media/`,
+`desktop/media-runtime/`, `extraResources` copies that to `resources/media/`,
 and `electron:build` runs it. It **fails the build** when a required component is
 missing rather than producing a package quietly without its player;
 `--allow-missing` is the deliberate override.

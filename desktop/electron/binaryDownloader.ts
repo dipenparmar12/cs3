@@ -56,7 +56,7 @@ export class BinaryDownloader {
    * Where the bundled media runtime lives.
    *
    * `tools/package/build-media-runtime.mjs` stages ffmpeg, ffprobe and mpv into
-   * `cs3_windows/media-runtime/`, and `extraResources` copies that to
+   * `desktop/media-runtime/`, and `extraResources` copies that to
    * `resources/media/`. Both are listed so a dev checkout resolves the same
    * binaries the packaged app will.
    */

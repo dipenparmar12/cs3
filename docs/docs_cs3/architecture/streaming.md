@@ -1,7 +1,7 @@
 # Streaming Architecture (end to end)
 
 Authoritative description of how a title becomes pixels. The stages below are the ones that exist in code;
-file names are in `cs3_windows/electron/` unless noted.
+file names are in `desktop/electron/` unless noted.
 
 ```
 Search / Catalogue ─► Detail (load) ─► Discovery (getSources) ─► Cache ─► Selection

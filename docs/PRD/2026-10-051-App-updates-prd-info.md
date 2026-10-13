@@ -1987,14 +1987,14 @@ The following directory maps the buffer ahead indicator and timeline toggle requ
 
 | Component / Requirement | File Path | Line Range of Interest | Responsibility / Architectural Role |
 |---|---|---|---|
-| **Player Timeline & Time Readouts** | `cs3_windows/src/components/VideoPlayer.tsx` | `L4645–L4660`, `L4520–L4560` | Primary timecode display (`player__time`), seekbar buffer track, click toggle interaction, and buffer-ahead calculations. |
-| **Mini-Player Time Display** | `cs3_windows/src/components/VideoPlayer.tsx` | `L3730–L3745` | Floating and mini-player timecode container (`player-mini__time`) and synchronized time toggle handling. |
-| **Time & Duration Formatting Utilities** | `cs3_windows/src/utils/format.ts` | `L1–L80` | Formatting functions for timecodes (`formatTimecode`), remaining time format (`-hh:mm:ss`), and adaptive buffer strings. |
-| **Player Toolbar & Seekbar Styles** | `cs3_windows/src/sources.css` | `L2810–L2840`, `L4500–L4550` | Styling for `.player__time`, interactive cursor states, tooltip feedback, and buffer ahead badge typography. |
-| **Native mpv Cache & Buffer Observation** | `cs3_windows/electron/media/mpvEngine.ts` | `L70–L92`, `L1005–L1030` | mpv property observation (`demuxer-cache-time`, `time-pos`), snapshot assembly, and buffer duration reporting over IPC. |
-| **Native Playback Snapshot Types** | `cs3_windows/src/types/mpv.ts` | `L1–L60` | Type definitions for `MpvSnapshot` including `positionSeconds`, `durationSeconds`, and `bufferedSeconds`. |
-| **Player Preferences Store** | `cs3_windows/src/types/player.ts` | `L1–L80` | Configuration schema for persisting user time display mode (`elapsed_total` vs `elapsed_remaining`). |
-| **Native Engine React Stage** | `cs3_windows/src/components/player/NativeEngineStage.tsx` | `L35–L65`, `L90–L120` | Native playback state consumption, progress synchronization, and bridge to player control bar. |
+| **Player Timeline & Time Readouts** | `desktop/src/components/VideoPlayer.tsx` | `L4645–L4660`, `L4520–L4560` | Primary timecode display (`player__time`), seekbar buffer track, click toggle interaction, and buffer-ahead calculations. |
+| **Mini-Player Time Display** | `desktop/src/components/VideoPlayer.tsx` | `L3730–L3745` | Floating and mini-player timecode container (`player-mini__time`) and synchronized time toggle handling. |
+| **Time & Duration Formatting Utilities** | `desktop/src/utils/format.ts` | `L1–L80` | Formatting functions for timecodes (`formatTimecode`), remaining time format (`-hh:mm:ss`), and adaptive buffer strings. |
+| **Player Toolbar & Seekbar Styles** | `desktop/src/sources.css` | `L2810–L2840`, `L4500–L4550` | Styling for `.player__time`, interactive cursor states, tooltip feedback, and buffer ahead badge typography. |
+| **Native mpv Cache & Buffer Observation** | `desktop/electron/media/mpvEngine.ts` | `L70–L92`, `L1005–L1030` | mpv property observation (`demuxer-cache-time`, `time-pos`), snapshot assembly, and buffer duration reporting over IPC. |
+| **Native Playback Snapshot Types** | `desktop/src/types/mpv.ts` | `L1–L60` | Type definitions for `MpvSnapshot` including `positionSeconds`, `durationSeconds`, and `bufferedSeconds`. |
+| **Player Preferences Store** | `desktop/src/types/player.ts` | `L1–L80` | Configuration schema for persisting user time display mode (`elapsed_total` vs `elapsed_remaining`). |
+| **Native Engine React Stage** | `desktop/src/components/player/NativeEngineStage.tsx` | `L35–L65`, `L90–L120` | Native playback state consumption, progress synchronization, and bridge to player control bar. |
 
 ---
 
@@ -2098,11 +2098,11 @@ The following directory maps the chronological movie series and franchise requir
 
 | Component / Requirement | File Path | Line Range of Interest | Responsibility / Architectural Role |
 |---|---|---|---|
-| **Media Details Page View** | `cs3_windows/src/views/DetailView.tsx` | `L1930–L1960`, `L165–L175` | Renders the chronological franchise rail, cards, active movie badge, and installment navigation. |
-| **Poster Card Component** | `cs3_windows/src/components/PosterCard.tsx` | `L1–L120` | Renders individual movie poster cards with custom franchise badges and chronological labels. |
-| **Extended Metadata Types** | `cs3_windows/src/types/metadata.ts` | `L410–L460` | Type definitions for `ExtendedMetadata`, including `MovieCollection` and `CollectionPart` schemas. |
-| **Wikidata Franchise Enrichment** | `cs3_windows/electron/metadata/wikidata.ts` | `L60–L120`, `L200–L250` | SPARQL query definitions for series entities (`P179`), ordinals (`P1545`), prequels (`P155`), and sequels (`P156`). |
-| **Metadata Enrichment Service** | `cs3_windows/electron/metadata/enrichmentService.ts` | `L55–L110`, `L250–L310` | Coordinates franchise fetching, caching, and merging into the title's extended metadata record. |
-| **Cinemeta Metadata & Artwork** | `cs3_windows/electron/cinemeta.ts` | `L55–L85`, `L160–L200` | Resolves posters, titles, and release years for franchise IMDb IDs without requiring API keys. |
-| **Detail View Styles** | `cs3_windows/src/sources.css` | `L2800–L2850`, `L7150–L7190` | Layout, badges, and typography for `.detail-collection`, franchise headings, and active borders. |
+| **Media Details Page View** | `desktop/src/views/DetailView.tsx` | `L1930–L1960`, `L165–L175` | Renders the chronological franchise rail, cards, active movie badge, and installment navigation. |
+| **Poster Card Component** | `desktop/src/components/PosterCard.tsx` | `L1–L120` | Renders individual movie poster cards with custom franchise badges and chronological labels. |
+| **Extended Metadata Types** | `desktop/src/types/metadata.ts` | `L410–L460` | Type definitions for `ExtendedMetadata`, including `MovieCollection` and `CollectionPart` schemas. |
+| **Wikidata Franchise Enrichment** | `desktop/electron/metadata/wikidata.ts` | `L60–L120`, `L200–L250` | SPARQL query definitions for series entities (`P179`), ordinals (`P1545`), prequels (`P155`), and sequels (`P156`). |
+| **Metadata Enrichment Service** | `desktop/electron/metadata/enrichmentService.ts` | `L55–L110`, `L250–L310` | Coordinates franchise fetching, caching, and merging into the title's extended metadata record. |
+| **Cinemeta Metadata & Artwork** | `desktop/electron/cinemeta.ts` | `L55–L85`, `L160–L200` | Resolves posters, titles, and release years for franchise IMDb IDs without requiring API keys. |
+| **Detail View Styles** | `desktop/src/sources.css` | `L2800–L2850`, `L7150–L7190` | Layout, badges, and typography for `.detail-collection`, franchise headings, and active borders. |
 

@@ -32,11 +32,11 @@ jobs:
           node-version: '22'
       - uses: oven-sh/setup-bun@v2
       - name: Install dependencies
-        working-directory: cs3_windows
+        working-directory: desktop
         run: bun install --frozen-lockfile
       - name: Typecheck (tsc -b)
-        working-directory: cs3_windows
+        working-directory: desktop
         run: ./node_modules/.bin/tsc -b
       - name: Unit tests
-        working-directory: cs3_windows
+        working-directory: desktop
         run: bun run test --fast

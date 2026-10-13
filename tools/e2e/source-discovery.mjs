@@ -27,7 +27,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
-const APP = path.join(path.resolve(HERE, '..', '..'), 'cs3_windows');
+const APP = path.join(path.resolve(HERE, '..', '..'), 'desktop');
 
 function compile() {
   const out = fs.mkdtempSync(path.join(os.tmpdir(), 'cs3-disc-'));

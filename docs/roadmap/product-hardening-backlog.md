@@ -58,7 +58,7 @@ check**. An agent should be able to take one ID and finish it without re-derivin
 **Rules for working this backlog:**
 
 1. **One ID per commit.** Commit message: `fix(<scope>): <summary>  [<ID>]`. Scopes follow §7 of
-   `CLAUDE.md` (`cs3`, `player`, `torrent`, `library`, `chore(cs3_windows)`, `docs`).
+   `CLAUDE.md` (`cs3`, `player`, `torrent`, `library`, `chore(desktop)`, `docs`).
 2. **Count before fixing.** Where an item says "measure first", do that first. This repo's own
    history (the six-missing-classes finding) is the argument: grouping by cause turned 113
    symptoms into 6 fixes.
@@ -543,7 +543,7 @@ with a foreign `Host` gets 403; the existing 11 cases still pass.
 ### P2-02 — No Content-Security-Policy anywhere
 **Severity:** P2 · **Area:** Electron hardening · **Effort:** 2 hours
 
-**Evidence.** `cs3_windows/index.html` has no CSP `<meta>`; `main.ts` registers no
+**Evidence.** `desktop/index.html` has no CSP `<meta>`; `main.ts` registers no
 `session.defaultSession.webRequest.onHeadersReceived` CSP; `webPreferences.sandbox` is `false`
 (`main.ts:539`).
 
@@ -1465,7 +1465,7 @@ conversion, not before.*
 
 ## 12. Verification commands
 
-Baseline, run from `cs3_windows/`:
+Baseline, run from `desktop/`:
 
 ```bash
 ./node_modules/.bin/tsc -b --force      # must exit 0

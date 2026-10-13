@@ -2,7 +2,7 @@
 
 > **Document ID**: `PRD-49-SECURITY-ANTIBOT-INTERCEPTION`  
 > **Status**: Active / Implemented  
-> **Scope**: CloudStream 3 Desktop Application (`cs3_windows`)  
+> **Scope**: CloudStream 3 Desktop Application (`desktop`)  
 > **Source Files**: `electron/cs3/webViewHost.ts`, `webViewMatch.ts`, `torrent/botChallenge.ts`, `logging/redact.ts`, `main.ts`  
 > **Test Suites**: `electron/cs3/webViewMatch.test.mts` (21 cases), `electron/torrent/botChallenge.test.mts` (14 cases), `electron/logging/logger.test.mts`  
 > **Date**: 2026-09-17  

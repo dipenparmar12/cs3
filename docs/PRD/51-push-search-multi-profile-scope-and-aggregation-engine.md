@@ -2,7 +2,7 @@
 
 > **Document ID**: `PRD-51-PUSH-SEARCH-SCOPES-AGGREGATION`  
 > **Status**: Active / Implemented  
-> **Scope**: CloudStream 3 Desktop Application (`cs3_windows`)  
+> **Scope**: CloudStream 3 Desktop Application (`desktop`)  
 > **Source Files**: `electron/searchSession.ts`, `searchMerge.ts`, `searchHistory.ts`, `searchSuggestions.ts`, `cs3/sourceProfiles.ts`, `cs3/sourceProfileStore.ts`, `cs3/sourceScope.ts`, `cs3/hostDeadline.ts`  
 > **Test Suites**: `electron/cs3/sourceProfiles.test.mts` (17 cases), `electron/cs3/sourceScope.test.mts` (17 cases), `electron/cs3/hostDeadline.test.mts` (15 cases), `electron/cs3/searchOrder.test.mts`  
 > **Date**: 2026-09-17  

@@ -1,7 +1,7 @@
 # PRD-55: Media Sources, Discovery, Navigation, Search UX, Trailer Playback, and Provider Verification Improvements
 
 **Status:** Proposed  
-**Scope:** Windows desktop application (`cs3_windows`), Sidecar JVM Runtime, IPC Subsystems, UI/UX Components  
+**Scope:** Windows desktop application (`desktop`), Sidecar JVM Runtime, IPC Subsystems, UI/UX Components  
 **Priority:** High  
 **Document Generation Date:** October 2026  
 **Related Documents:** 

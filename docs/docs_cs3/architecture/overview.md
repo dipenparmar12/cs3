@@ -1,10 +1,10 @@
 # Architecture Overview
 
-CloudStream 3 Desktop (`cs3_windows/`) is an Electron 43 + React 19 + TypeScript application that ports the
+CloudStream 3 Desktop (`desktop/`) is an Electron 43 + React 19 + TypeScript application that ports the
 Android CloudStream 3 app and keeps the community `.cs3` extension ecosystem working. This is the
 authoritative map; deeper topics are linked, not repeated.
 
-> Source of truth: `cs3_windows/electron/`, `cs3_windows/src/`, `sidecar/`. Verified against the tree on
+> Source of truth: `desktop/electron/`, `desktop/src/`, `sidecar/`. Verified against the tree on
 > 2026-10-07 (see [../VERIFICATION.md](../VERIFICATION.md) for what was checked and what is inherited).
 
 ## 1. Process model
@@ -29,10 +29,10 @@ authoritative map; deeper topics are linked, not repeated.
 
 | Layer | Location | Notes |
 |---|---|---|
-| Renderer | `cs3_windows/src/` | `contextIsolation: true`, `nodeIntegration: false`. Routes are `React.lazy` chunks. |
-| Preload | `cs3_windows/electron/preload.ts` | The **only** bridge. Typed as `CloudStreamElectronAPI`. |
-| Main | `cs3_windows/electron/` | Services; `electron/cs3/` holds the CloudStream-specific domain, `electron/media/`, `electron/torrent/`, `electron/metadata/`, `electron/download/`, `electron/logging/`. |
-| Shared types | `cs3_windows/src/types/*.ts` | Imported by both sides on purpose. |
+| Renderer | `desktop/src/` | `contextIsolation: true`, `nodeIntegration: false`. Routes are `React.lazy` chunks. |
+| Preload | `desktop/electron/preload.ts` | The **only** bridge. Typed as `CloudStreamElectronAPI`. |
+| Main | `desktop/electron/` | Services; `electron/cs3/` holds the CloudStream-specific domain, `electron/media/`, `electron/torrent/`, `electron/metadata/`, `electron/download/`, `electron/logging/`. |
+| Shared types | `desktop/src/types/*.ts` | Imported by both sides on purpose. |
 | Sidecar | `sidecar/` (Java 21, Maven) + `sidecar/bridge/` (Kotlin) | Runs Android `.cs3` extensions. See [extensions.md](extensions.md). |
 | Tooling | `tools/package`, `tools/e2e`, `tools/research` | Packaging and live-network harnesses. |
 

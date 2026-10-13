@@ -32,7 +32,7 @@ import { runDoctor } from './doctor.mjs';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const root = path.resolve(here, '..', '..');
-const app = path.join(root, 'cs3_windows');
+const app = path.join(root, 'desktop');
 const toolchain = path.join(root, 'tools', 'toolchain');
 const isWindows = process.platform === 'win32';
 
@@ -194,7 +194,7 @@ function bin(name) {
 function requireBin(name) {
   const resolved = bin(name);
   if (!resolved) {
-    die(`${name} is not installed in cs3_windows/node_modules.`, 'Run: cd cs3_windows && bun install');
+    die(`${name} is not installed in desktop/node_modules.`, 'Run: cd desktop && bun install');
   }
   return resolved;
 }
@@ -286,7 +286,7 @@ const environment = await runDoctor({
 if (!environment.ok) {
   die(
     `the build environment is not ready — ${environment.problems.join('; ')}.`,
-    'Each item above names its fix. `cd cs3_windows && bun run setup` fixes what can be\n' +
+    'Each item above names its fix. `cd desktop && bun run setup` fixes what can be\n' +
       'fixed automatically; rerun with --yes to let this build download a JDK or Maven itself.\n' +
       'To package without extension support (no Java or Maven needed), pass --skip-jvm.',
   );
@@ -438,7 +438,7 @@ if (SKIP_MEDIA) {
   const stampFile = path.join(mediaDir, '.staged');
   if (
     upToDate(
-      'cs3_windows/media-runtime',
+      'desktop/media-runtime',
       (isWindows ? ['ffmpeg', 'ffprobe', 'mpv'] : ['ffmpeg', 'ffprobe']).map((name) =>
         path.join(mediaDir, isWindows ? `${name}.exe` : name),
       ),
@@ -453,7 +453,7 @@ if (SKIP_MEDIA) {
       ALLOW_MISSING_MEDIA ? ['--allow-missing'] : ['--verify'],
       {
         hint:
-          'The ffmpeg and mpv mirrors are frequently unreachable. If cs3_windows/media-runtime\n' +
+          'The ffmpeg and mpv mirrors are frequently unreachable. If desktop/media-runtime\n' +
           'already holds ffmpeg, ffprobe and mpv, rerun with --fast to use them.',
       },
     );

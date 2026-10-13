@@ -2,7 +2,7 @@
 
 > **Document ID**: `PRD-50-RUNTIME-PROVISIONING-RECOVERY`  
 > **Status**: Active / Implemented  
-> **Scope**: CloudStream 3 Desktop Application (`cs3_windows`)  
+> **Scope**: CloudStream 3 Desktop Application (`desktop`)  
 > **Source Files**: `electron/cs3/runtimeProvisioner.ts`, `sidecarSupervisor.ts`, `extensionUpdater.ts`, `extensionIssues.ts`, `failureTaxonomy.ts`, `sidecarStderr.ts`  
 > **Test Suites**: `electron/cs3/extensionUpdater.test.mts` (12 cases), `electron/cs3/extensionIssues.test.mts` (21 cases), `electron/cs3/failureTaxonomy.test.mts`, `electron/cs3/sidecarStderr.test.mts` (20 cases), `sidecar/` JUnit suite (47 tests)  
 > **Date**: 2026-09-17  

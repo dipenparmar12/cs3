@@ -1,5 +1,5 @@
 import { execFileSync } from 'node:child_process';
-import { pickPromoStream, MAX_PROMO_HEIGHT } from 'file:///D:/projects/cs3/cs3_windows/electron/ytdlpSources.ts';
+import { pickPromoStream, MAX_PROMO_HEIGHT } from './electron/ytdlpSources.ts';
 
 const bin = 'C:/Users/dipen/AppData/Roaming/CloudStream 3 Desktop/bin/yt-dlp.exe';
 const ids = process.argv.slice(2);

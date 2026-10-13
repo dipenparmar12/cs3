@@ -2,7 +2,7 @@
 
 > **Document ID**: `PRD-33-CS3-DESKTOP-CURRENT-IMPLEMENTATION`  
 > **Status**: Active / Verified  
-> **Scope**: CloudStream 3 Desktop Application (`cs3_windows`)  
+> **Scope**: CloudStream 3 Desktop Application (`desktop`)  
 > **Last Updated**: 2026-09-17  
 > **Document Version**: 2.0.0 (Updated to reflect React 19, sidecar runtime Gen 14, 4-tier media engine, push search, native providers, OTT aggregator, and complete IPC surface)
 
@@ -10,7 +10,7 @@
 
 ## 1. Executive Summary
 
-This document provides a comprehensive, 1-to-1 technical specification of the **CloudStream 3 Desktop Application** (`cs3_windows`) as currently implemented in the codebase. It details all active services, IPC channels, plugin and sidecar architectures, streaming and playback engines, BitTorrent pipelines, download subsystems, datastore migration mechanisms, and UI components.
+This document provides a comprehensive, 1-to-1 technical specification of the **CloudStream 3 Desktop Application** (`desktop`) as currently implemented in the codebase. It details all active services, IPC channels, plugin and sidecar architectures, streaming and playback engines, BitTorrent pipelines, download subsystems, datastore migration mechanisms, and UI components.
 
 The application is built on **Electron**, **React 19**, **TypeScript (strict)**, **Vite 8**, and **Bun**, running primarily on **Windows 10/11 (x64)** with native background worker processes (Java 21 JVM sidecar, portable aria2c, portable yt-dlp, FFmpeg/ffprobe, and mpv native engine).
 
@@ -54,7 +54,7 @@ Processes   Android Shim)   HTTP Server
 ### 3.1 Plugin & Extension Management Engine (`electron/cs3/` & `electron/pluginManager.ts`)
 
 * **Repository Inventory & Persistence**:
-  * Loads provider metadata from [`electron/official_repositories.json`](file:///cs3_windows/electron/official_repositories.json) cataloging community repositories (MegaRepo, Official Extensions, GermanProviders, ItaliaInStreaming, re-3arabi, Vietnamese, CSX, etc.).
+  * Loads provider metadata from [`electron/official_repositories.json`](file:///desktop/electron/official_repositories.json) cataloging community repositories (MegaRepo, Official Extensions, GermanProviders, ItaliaInStreaming, re-3arabi, Vietnamese, CSX, etc.).
   * User-added repository URLs and plugin installation lists persist in `cs3_datastore.json`.
 * **Multi-Lane Provider Strategy**:
   * **Lane 1 (`.cs3` Android Drop-In)**: Executes Android DEX `.cs3` plugins via bundled Java 21 JVM sidecar with runtime Android API shims (`android.util.Log`, `Base64`, `Context`, `SharedPreferences`, `CookieManager`).

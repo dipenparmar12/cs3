@@ -2,7 +2,7 @@
 
 > **Document ID**: `PRD-48-MULTI-ENGINE-DOWNLOAD-RESUME`  
 > **Status**: Active / Implemented  
-> **Scope**: CloudStream 3 Desktop Application (`cs3_windows`)  
+> **Scope**: CloudStream 3 Desktop Application (`desktop`)  
 > **Source Files**: `electron/downloadService.ts`, `fastDownloader.ts`, `aria2Engine.ts`, `ytdlpEngine.ts`, `httpDownloader.ts`, `mediaDownloadResolver.ts`, `download/resumePlan.ts`, `download/resumeWindow.ts`, `src/utils/downloadIdentity.ts`  
 > **Test Suites**: `electron/download/resumePlan.test.mts` (17 cases), `electron/download/resumeWindow.test.mts` (10 cases), `src/utils/downloadIdentity.test.mts` (18 cases)  
 > **Date**: 2026-09-17  

@@ -16,7 +16,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
-const release = path.resolve(here, '..', '..', 'cs3_windows', 'release');
+const release = path.resolve(here, '..', '..', 'desktop', 'release');
 const platform = process.platform;
 const exe = (name) => (platform === 'win32' ? `${name}.exe` : name);
 

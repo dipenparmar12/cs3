@@ -3,7 +3,7 @@
   "configVersion": 1,
   "workspaces": {
     "": {
-      "name": "cs3_windows",
+      "name": "cloudstream-desktop",
       "dependencies": {
         "chardet": "^2.2.0",
         "cheerio": "^1.2.0",

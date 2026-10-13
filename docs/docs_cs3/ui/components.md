@@ -1,6 +1,6 @@
 # UI Component Inventory
 
-Locations are under `cs3_windows/src/`. **Reusable** = used by several screens; **screen-specific** = owned by one.
+Locations are under `desktop/src/`. **Reusable** = used by several screens; **screen-specific** = owned by one.
 Props below were read from the component files (2026-10-07); anything not listed was not re-read.
 
 ## 1. Reusable primitives

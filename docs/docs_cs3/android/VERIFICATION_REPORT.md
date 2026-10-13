@@ -399,7 +399,7 @@ The documentation in `docs/docs_cs3/` provides a **comprehensive and generally a
    - **Actual:** Relative path should be used or removed
 
 2. **Documentation Root:**
-   - States: `D:\dipen\cs3\cs3_windows\docs`
+   - States: `D:\dipen\cs3\desktop\docs`
    - **Issue:** This is for the desktop port, not the Android reference
    - **Actual:** Should reference the current document location
 

@@ -199,7 +199,7 @@ When setting up the project for the first time, build the three JVM runtime comp
 
 ```bash
 # 1. Install Node/Electron dependencies
-cd cs3_windows
+cd desktop
 bun install
 cd ..
 
@@ -221,7 +221,7 @@ mvn -f sidecar/bridge/pom.xml package
 ### Running the App in Development
 
 ```bash
-cd cs3_windows
+cd desktop
 bun run dev
 ```
 
@@ -229,7 +229,7 @@ This starts the Vite dev server on port `5173` with HMR (Hot Module Replacement)
 
 To check TypeScript types across the entire project:
 ```bash
-cd cs3_windows
+cd desktop
 bun run typecheck   # Runs 'tsc -b' across app and electron configs
 ```
 
@@ -244,7 +244,7 @@ mvn -f sidecar/pom.xml test
 # 2. Main Process, Media Decision, Source Cache & Native Engine Tests (99 tests)
 # The native-engine suite spawns a real mpv; the pipeline suite runs real ffmpeg.
 # Both skip themselves when the binary is absent.
-cd cs3_windows
+cd desktop
 bun run test:electron
 
 # 3. Real-world Provider End-to-End Test Harness
@@ -268,11 +268,11 @@ To create a standalone Windows installer and portable binary:
 node tools/package/build-runtime.mjs --verify
 
 # 2. Build and package the Electron app
-cd cs3_windows
+cd desktop
 bun run electron:build
 ```
 
-The output installer and portable `.exe` will be generated in `cs3_windows/release/`.
+The output installer and portable `.exe` will be generated in `desktop/release/`.
 
 ---
 
@@ -280,7 +280,7 @@ The output installer and portable `.exe` will be generated in `cs3_windows/relea
 
 ```
 cs3/
-├── cs3_windows/               # The Electron + React 19 Desktop Application
+├── desktop/                   # The Electron + React 19 Desktop Application
 │   ├── electron/              # Electron Main Process services & IPC handlers
 │   │   ├── main.ts            # App lifecycle, window management, IPC registration
 │   │   ├── preload.ts         # Secure typed IPC bridge (CloudStreamElectronAPI)
@@ -439,7 +439,7 @@ Contributions are warmly welcomed! Please follow these guidelines:
 2. **Preserve Drop-in Compatibility:** Never introduce changes that require community `.cs3` plugins to be modified.
 3. **Typecheck & Test:** Ensure all checks pass before submitting a pull request:
    ```bash
-   # From cs3_windows/
+   # From desktop/
    bun run typecheck
    bun run test:electron
    mvn -f ../sidecar/pom.xml test

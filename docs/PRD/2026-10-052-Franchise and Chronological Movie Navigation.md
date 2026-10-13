@@ -54,7 +54,7 @@ To uphold CS3's strict architectural principles (no user API keys, no proprietar
    * **`wdt:P156` (Followed By / Sequel):** Explicitly identifies the immediate successor film.
    * **`wdt:P577` (Publication Date):** Official release timestamp to guarantee strictly chronological release ordering.
    * **`wdt:P345` (IMDb ID):** Universally maps the items to Cinemeta and CS3's media resolution layer.
-   * *Architecture Advantage:* CS3 already utilizes Wikidata via [`wikidata.ts`](/cs3/cs3_windows/electron/metadata/wikidata.ts), so franchise queries require zero new external infrastructure.
+   * *Architecture Advantage:* CS3 already utilizes Wikidata via [`wikidata.ts`](/cs3/desktop/electron/metadata/wikidata.ts), so franchise queries require zero new external infrastructure.
 
 2. **Artwork & Item Resolution via Cinemeta:**
    * Resolved franchise IMDb IDs are cross-referenced with Cinemeta (`https://v3-cinemeta.strem.io/`) to obtain high-resolution posters, synopses, and release years.
@@ -99,13 +99,13 @@ The module responsibilities are mapped as follows:
 
 | Component / Requirement | File Path | Line Range | Architectural Role |
 |---|---|---|---|
-| **Media Details Page View** | [`DetailView.tsx`](/cs3/cs3_windows/src/views/DetailView.tsx) | `L1930–L1960`, `L165–L175` | Renders the chronological franchise rail, cards, active movie badge, and installment navigation. |
-| **Poster Card Component** | [`PosterCard.tsx`](/cs3/cs3_windows/src/components/PosterCard.tsx) | `L1–L120` | Renders individual movie poster cards with custom franchise badges and chronological labels. |
-| **Extended Metadata Types** | [`metadata.ts`](/cs3/cs3_windows/src/types/metadata.ts) | `L410–L460` | Type definitions for `ExtendedMetadata`, including `MovieCollection` and `CollectionPart` schemas. |
-| **Wikidata Franchise Enrichment** | [`wikidata.ts`](/cs3/cs3_windows/electron/metadata/wikidata.ts) | `L60–L120`, `L200–L250` | SPARQL query definitions for series entities (`P179`), ordinals (`P1545`), prequels (`P155`), and sequels (`P156`). |
-| **Metadata Enrichment Service** | [`enrichmentService.ts`](/cs3/cs3_windows/electron/metadata/enrichmentService.ts) | `L55–L110`, `L250–L310` | Coordinates franchise fetching, caching, and merging into the title's extended metadata record. |
-| **Cinemeta Metadata & Artwork** | [`cinemeta.ts`](/cs3/cs3_windows/electron/cinemeta.ts) | `L55–L85`, `L160–L200` | Resolves posters, titles, and release years for franchise IMDb IDs without requiring API keys. |
-| **Detail View Styles** | [`sources.css`](/cs3/cs3_windows/src/sources.css) | `L2800–L2850`, `L7150–L7190` | Layout, badges, and typography for `.detail-collection`, franchise headings, and active borders. |
+| **Media Details Page View** | [`DetailView.tsx`](/cs3/desktop/src/views/DetailView.tsx) | `L1930–L1960`, `L165–L175` | Renders the chronological franchise rail, cards, active movie badge, and installment navigation. |
+| **Poster Card Component** | [`PosterCard.tsx`](/cs3/desktop/src/components/PosterCard.tsx) | `L1–L120` | Renders individual movie poster cards with custom franchise badges and chronological labels. |
+| **Extended Metadata Types** | [`metadata.ts`](/cs3/desktop/src/types/metadata.ts) | `L410–L460` | Type definitions for `ExtendedMetadata`, including `MovieCollection` and `CollectionPart` schemas. |
+| **Wikidata Franchise Enrichment** | [`wikidata.ts`](/cs3/desktop/electron/metadata/wikidata.ts) | `L60–L120`, `L200–L250` | SPARQL query definitions for series entities (`P179`), ordinals (`P1545`), prequels (`P155`), and sequels (`P156`). |
+| **Metadata Enrichment Service** | [`enrichmentService.ts`](/cs3/desktop/electron/metadata/enrichmentService.ts) | `L55–L110`, `L250–L310` | Coordinates franchise fetching, caching, and merging into the title's extended metadata record. |
+| **Cinemeta Metadata & Artwork** | [`cinemeta.ts`](/cs3/desktop/electron/cinemeta.ts) | `L55–L85`, `L160–L200` | Resolves posters, titles, and release years for franchise IMDb IDs without requiring API keys. |
+| **Detail View Styles** | [`sources.css`](/cs3/desktop/src/sources.css) | `L2800–L2850`, `L7150–L7190` | Layout, badges, and typography for `.detail-collection`, franchise headings, and active borders. |
 
 ---
 

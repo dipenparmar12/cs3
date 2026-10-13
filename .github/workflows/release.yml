@@ -77,13 +77,13 @@ jobs:
           java-version: ${{ env.JAVA_VERSION }}
           cache: maven
       - name: Install dependencies
-        working-directory: cs3_windows
+        working-directory: desktop
         run: bun install --frozen-lockfile
       - name: Typecheck (tsc -b)
-        working-directory: cs3_windows
+        working-directory: desktop
         run: ./node_modules/.bin/tsc -b
       - name: Unit tests
-        working-directory: cs3_windows
+        working-directory: desktop
         run: bun run test --fast
       - name: Sidecar tests (mvn test)
         if: matrix.os == 'ubuntu-latest'
@@ -111,16 +111,16 @@ jobs:
       VERSION: ${{ needs.version.outputs.version }}
       # Signing is opt-in: provide CSC_LINK/CSC_KEY_PASSWORD (and APPLE_* for
       # notarisation) as repository secrets to sign; without them the macOS
-      # app is ad-hoc signed by cs3_windows/scripts/after-pack.cjs.
+      # app is ad-hoc signed by desktop/scripts/after-pack.cjs.
       CSC_IDENTITY_AUTO_DISCOVERY: 'false'
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
-        with:
+      - with:
           node-version: ${{ env.NODE_VERSION }}
       - uses: oven-sh/setup-bun@v2
       - uses: actions/setup-java@v4
-        with:
+      - with:
           distribution: temurin
           java-version: ${{ env.JAVA_VERSION }}
           cache: maven
@@ -133,7 +133,7 @@ jobs:
           path: .cache/media-runtime
           key: media-${{ matrix.label }}-${{ hashFiles('tools/package/build-media-runtime.mjs') }}
       - name: Install dependencies
-        working-directory: cs3_windows
+        working-directory: desktop
         run: bun install --frozen-lockfile
       - name: Build packages
         # --fast: a fresh checkout's timestamps are all "now", so the
@@ -149,12 +149,12 @@ jobs:
           name: cs3-${{ matrix.label }}
           if-no-files-found: error
           path: |
-            cs3_windows/release/CS3-*.exe
-            cs3_windows/release/CS3-*.zip
-            cs3_windows/release/CS3-*.dmg
-            cs3_windows/release/CS3-*.AppImage
-            cs3_windows/release/CS3-*.deb
-            cs3_windows/release/CS3-*.tar.gz
+            desktop/release/CS3-*.exe
+            desktop/release/CS3-*.zip
+            desktop/release/CS3-*.dmg
+            desktop/release/CS3-*.AppImage
+            desktop/release/CS3-*.deb
+            desktop/release/CS3-*.tar.gz
 
   release:
     name: Publish release

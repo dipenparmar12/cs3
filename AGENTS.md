@@ -27,7 +27,7 @@ Upstream is **GPL-3.0**; `LICENSE` + `THIRD-PARTY-NOTICES.md` at root, reachable
 
 ```
 cs3/
-├── cs3_windows/      ← THE APP. Electron + React 19 + TypeScript + Vite 8. Most work here.
+├── desktop/          ← THE APP. Electron + React 19 + TypeScript + Vite 8. Most work here.
 ├── sidecar/          ← JVM (Java 21 / Maven) process that runs Android .cs3 extensions.
 ├── tools/dex-spike/  ← Maven harness; measured DEX→JVM translation across 392 real plugins.
 ├── docs/PRD/         ← 37+ numbered specs — the reasoning behind everything.
@@ -47,57 +47,57 @@ cs3/
 
 | What | Where | Command |
 |---|---|---|
-| Install deps | `cs3_windows/` | `bun install` (lockfile is `bun.lock`; npm works but will churn it) |
-| **Fresh clone / "sidecar missing"** | `cs3_windows/` | **`bun run setup`** (`tools/package/doctor.mjs --fix`): installs deps, the Electron binary, builds `cs3-sidecar.jar` (+ bridge if stale), offers to download a JDK 21 (Corretto, SHA-256 checked) / Maven 3.9.9 (SHA-512 checked) into `tools/toolchain/`. `bun run doctor` reports only. Runs as `predev` (silent when ready; builds a missing/stale sidecar itself; JVM gaps warn, never block), `prebuild` and `preelectron:build`; `build-installer.mjs` uses it as its preflight (`--yes` downloads without asking). Never installs system-wide or edits PATH/JAVA_HOME — prints the command instead |
-| Dev app | `cs3_windows/` | `bun run dev` — Vite on :5173, `vite-plugin-electron` launches Electron and rebuilds main/preload on change |
-| Typecheck + build | `cs3_windows/` | `bun run build` (`tsc && vite build`) |
+| Install deps | `desktop/` | `bun install` (lockfile is `bun.lock`; npm works but will churn it) |
+| **Fresh clone / "sidecar missing"** | `desktop/` | **`bun run setup`** (`tools/package/doctor.mjs --fix`): installs deps, the Electron binary, builds `cs3-sidecar.jar` (+ bridge if stale), offers to download a JDK 21 (Corretto, SHA-256 checked) / Maven 3.9.9 (SHA-512 checked) into `tools/toolchain/`. `bun run doctor` reports only. Runs as `predev` (silent when ready; builds a missing/stale sidecar itself; JVM gaps warn, never block), `prebuild` and `preelectron:build`; `build-installer.mjs` uses it as its preflight (`--yes` downloads without asking). Never installs system-wide or edits PATH/JAVA_HOME — prints the command instead |
+| Dev app | `desktop/` | `bun run dev` — Vite on :5173, `vite-plugin-electron` launches Electron and rebuilds main/preload on change |
+| Typecheck + build | `desktop/` | `bun run build` (`tsc && vite build`) |
 | Bundle the JVM | repo root | `node tools/package/build-runtime.mjs --verify` → `sidecar/dist/` |
-| Bundle ffmpeg + mpv | repo root | `node tools/package/build-media-runtime.mjs --verify` → `cs3_windows/media-runtime/` |
-| **Ship it (Windows)** | `cs3_windows/` | **`bun run dist:win`** → `release/` — the whole chain, Maven included; `dist:win:fast` reuses existing jars |
-| Package (Windows), lower level | `cs3_windows/` | `bun run electron:build` → `release/` (assumes the Maven builds have already been run by hand) |
-| Lint | `cs3_windows/` | `bunx oxlint` (oxlint is a devDependency; there is deliberately **no** `lint` script yet) |
-| Typecheck only | `cs3_windows/` | `bun run typecheck` (`tsc -b` — see the warning below) |
+| Bundle ffmpeg + mpv | repo root | `node tools/package/build-media-runtime.mjs --verify` → `desktop/media-runtime/` |
+| **Ship it (Windows)** | `desktop/` | **`bun run dist:win`** → `release/` — the whole chain, Maven included; `dist:win:fast` reuses existing jars |
+| Package (Windows), lower level | `desktop/` | `bun run electron:build` → `release/` (assumes the Maven builds have already been run by hand) |
+| Lint | `desktop/` | `bunx oxlint` (oxlint is a devDependency; there is deliberately **no** `lint` script yet) |
+| Typecheck only | `desktop/` | `bun run typecheck` (`tsc -b` — see the warning below) |
 | Sidecar build | `sidecar/` | `mvn package` → `target/cs3-sidecar.jar` + `target/lib/*` + the android shim into `runtime/` |
 | Sidecar tests | `sidecar/` | `mvn test` (50 tests) |
-| Main-process tests (all) | `cs3_windows/` | `bun run test` (~580 cases across 42 suites, Node type-stripping; or `bun run test:electron`) |
-| Fast unit tests (skips slow) | `cs3_windows/` | `bun run test --fast` (120 suites in ~66s, measured 2026-10-08; was 40 in ~5s) |
-| Extension issues only | `cs3_windows/` | `bun run test issues` (21 cases, pure) |
-| Provider registry only | `cs3_windows/` | `bun run test registry` (9 cases, temp dirs) |
-| Provider recovery only | `cs3_windows/` | `bun run test recovery` (12 cases, pure) |
-| Torrent contents only | `cs3_windows/` | `bun run test torrent-contents` (24 cases, pure) |
-| Sidecar log only | `cs3_windows/` | `bun run test sidecar-log` (20 cases, pure) |
-| Source cache only | `cs3_windows/` | `bun run test cache` (10 cases, no ffmpeg needed) |
-| Provider links only | `cs3_windows/` | `bun run test links` (15 cases, no ffmpeg needed) |
-| WebView matching only | `cs3_windows/` | `bun run test webview` (21 cases, pure) |
-| Torrent metadata + DHT cache only | `cs3_windows/` | `bun run test torrent-metadata` (28 cases, temp dirs) |
-| Source scope only | `cs3_windows/` | `bun run test source-scope` (17 cases) |
-| OTT platform matching only | `cs3_windows/` | `bun run test ott` (19 cases, pure) |
-| Built-in provider lane only | `cs3_windows/` | `bun run test native-providers` (50 cases, pure — stubs `setHttpFetch`) |
-| Download resume decision only | `cs3_windows/` | `bun run test resume` (17 cases, pure) |
-| Download resume probe only | `cs3_windows/` | `bun run test resume-window` (10 cases, real sockets) |
-| Component reachability only | `cs3_windows/` | `bun run test reachability` (2 cases, lexical) |
-| Startup profiler only | `cs3_windows/` | `bun run test startup-profile` (7 cases, blocks the loop for real) |
-| Startup queue only | `cs3_windows/` | `bun run test startup-queue` (9 cases, real timers) |
-| Settings level only | `cs3_windows/` | `bun run test settings-level` (6 cases, pure + lexical) |
-| Dead result rows only | `cs3_windows/` | `bun run test dead-rows` (8 cases, pure) |
-| Media proxy only | `cs3_windows/` | `bun run test proxy` (11 cases, stubbed origin) |
-| Subtitles only | `cs3_windows/` | `bun run test subtitles` (16 cases) |
-| Media decisions only | `cs3_windows/` | `bun run test media` (71 cases, no ffmpeg needed) |
-| Media pipeline only | `cs3_windows/` | `bun run test pipeline` (17 cases, real ffmpeg; skips itself without it) |
-| Source export only | `cs3_windows/` | `bun run test export` (13 cases, pure) |
-| Direct (non-torrent) indexer sources only | `cs3_windows/` | `bun run test direct-sources` (13 cases, pure) |
-| yt-dlp source mapping only | `cs3_windows/` | `bun run test ytdlp` (16 cases, pure) |
-| Repository catalogue only | `cs3_windows/` | `bun run test repositories` (9 cases, pure — fetches nothing) |
-| Extension job queue only | `cs3_windows/` | `bun run test jobs` (13 cases, pure — gated runners, no JVM) |
-| Saved searches only | `cs3_windows/` | `bun run test saved-searches` (9 cases, temp dirs) |
-| Settings search only | `cs3_windows/` | `bun run test settings-search` (6 cases, pure) |
-| Extended metadata (all) | `cs3_windows/` | `bun run test metadata` (92 cases, pure — fetches nothing) |
-| Metadata merge only | `cs3_windows/` | `bun run test metadata-merge` (34 cases, pure) |
-| Metadata sources only | `cs3_windows/` | `bun run test metadata-sources` (39 cases, stubbed transport) |
-| Metadata display only | `cs3_windows/` | `bun run test metadata-display` (19 cases, pure) |
+| Main-process tests (all) | `desktop/` | `bun run test` (~580 cases across 42 suites, Node type-stripping; or `bun run test:electron`) |
+| Fast unit tests (skips slow) | `desktop/` | `bun run test --fast` (120 suites in ~66s, measured 2026-10-08; was 40 in ~5s) |
+| Extension issues only | `desktop/` | `bun run test issues` (21 cases, pure) |
+| Provider registry only | `desktop/` | `bun run test registry` (9 cases, temp dirs) |
+| Provider recovery only | `desktop/` | `bun run test recovery` (12 cases, pure) |
+| Torrent contents only | `desktop/` | `bun run test torrent-contents` (24 cases, pure) |
+| Sidecar log only | `desktop/` | `bun run test sidecar-log` (20 cases, pure) |
+| Source cache only | `desktop/` | `bun run test cache` (10 cases, no ffmpeg needed) |
+| Provider links only | `desktop/` | `bun run test links` (15 cases, no ffmpeg needed) |
+| WebView matching only | `desktop/` | `bun run test webview` (21 cases, pure) |
+| Torrent metadata + DHT cache only | `desktop/` | `bun run test torrent-metadata` (28 cases, temp dirs) |
+| Source scope only | `desktop/` | `bun run test source-scope` (17 cases) |
+| OTT platform matching only | `desktop/` | `bun run test ott` (19 cases, pure) |
+| Built-in provider lane only | `desktop/` | `bun run test native-providers` (50 cases, pure — stubs `setHttpFetch`) |
+| Download resume decision only | `desktop/` | `bun run test resume` (17 cases, pure) |
+| Download resume probe only | `desktop/` | `bun run test resume-window` (10 cases, real sockets) |
+| Component reachability only | `desktop/` | `bun run test reachability` (2 cases, lexical) |
+| Startup profiler only | `desktop/` | `bun run test startup-profile` (7 cases, blocks the loop for real) |
+| Startup queue only | `desktop/` | `bun run test startup-queue` (9 cases, real timers) |
+| Settings level only | `desktop/` | `bun run test settings-level` (6 cases, pure + lexical) |
+| Dead result rows only | `desktop/` | `bun run test dead-rows` (8 cases, pure) |
+| Media proxy only | `desktop/` | `bun run test proxy` (11 cases, stubbed origin) |
+| Subtitles only | `desktop/` | `bun run test subtitles` (16 cases) |
+| Media decisions only | `desktop/` | `bun run test media` (71 cases, no ffmpeg needed) |
+| Media pipeline only | `desktop/` | `bun run test pipeline` (17 cases, real ffmpeg; skips itself without it) |
+| Source export only | `desktop/` | `bun run test export` (13 cases, pure) |
+| Direct (non-torrent) indexer sources only | `desktop/` | `bun run test direct-sources` (13 cases, pure) |
+| yt-dlp source mapping only | `desktop/` | `bun run test ytdlp` (16 cases, pure) |
+| Repository catalogue only | `desktop/` | `bun run test repositories` (9 cases, pure — fetches nothing) |
+| Extension job queue only | `desktop/` | `bun run test jobs` (13 cases, pure — gated runners, no JVM) |
+| Saved searches only | `desktop/` | `bun run test saved-searches` (9 cases, temp dirs) |
+| Settings search only | `desktop/` | `bun run test settings-search` (6 cases, pure) |
+| Extended metadata (all) | `desktop/` | `bun run test metadata` (92 cases, pure — fetches nothing) |
+| Metadata merge only | `desktop/` | `bun run test metadata-merge` (34 cases, pure) |
+| Metadata sources only | `desktop/` | `bun run test metadata-sources` (39 cases, stubbed transport) |
+| Metadata display only | `desktop/` | `bun run test metadata-display` (19 cases, pure) |
 | Repository/corpus liveness | repo root | `node tools/research/survey-repositories.mjs` — counts the live indexes; see PRD-43 |
-| Download identity only | `cs3_windows/` | `bun run test download-identity` (18 cases, pure) |
-| Native engine only | `cs3_windows/` | `bun run test native` (12 cases, spawns a real mpv; skips itself without it) |
+| Download identity only | `desktop/` | `bun run test download-identity` (18 cases, pure) |
+| Native engine only | `desktop/` | `bun run test native` (12 cases, spawns a real mpv; skips itself without it) |
 | Provider end-to-end | repo root | `node tools/e2e/provider-e2e.mjs` — see §5.1 |
 | Vendor stream matrix | repo root | `node --experimental-strip-types tools/e2e/native-engine-matrix.mjs` — see §5.2 |
 | **Metadata coverage** | repo root | `node --experimental-strip-types tools/e2e/metadata-e2e.mjs` — see §5.3. **Nothing in `electron/metadata/` has been run against a live host; this is what settles it.** |
@@ -105,7 +105,7 @@ cs3/
 | Provider bridge (Kotlin) | repo root | `mvn -f sidecar/bridge/pom.xml package` → `sidecar/runtime/cs3-provider-bridge.jar` |
 | Provider bridge, no JitPack | repo root | `node tools/package/build-bridge.mjs` — same jar, compiled against `sidecar/runtime/` |
 | Provider catalogues (`getMainPage`) | root | `node tools/e2e/catalogue-e2e.mjs --installed netflix,prime` — every row of the installed providers via the sidecar, classified OK/MULTI/EMPTY/DROPPED/ERROR; tells provider-side from app-side |
-| Fresh links for a reported title | root | `node tools/e2e/links-e2e.mjs --case "Hindmoviez=Dune Part Two" --out l.json`, then `cs3_windows/node_modules/electron/dist/electron tools/e2e/links-play.cjs l.json` — re-resolves through the installed providers and fetches each link via Electron `net.fetch` (HLS down to a segment), also under the default referrer policy. Issue-file links expire within hours; re-resolve before judging |
+| Fresh links for a reported title | root | `node tools/e2e/links-e2e.mjs --case "Hindmoviez=Dune Part Two" --out l.json`, then `desktop/node_modules/electron/dist/electron tools/e2e/links-play.cjs l.json` — re-resolves through the installed providers and fetches each link via Electron `net.fetch` (HLS down to a segment), also under the default referrer policy. Issue-file links expire within hours; re-resolve before judging |
 
 Test suites are **auto-discovered** (`*.test.mts`); `PRESET_ALIASES` in `scripts/test-runner.mjs` are just shortcuts. Run `bun run test --list` for the current set rather than trusting a count written here.
 
@@ -128,7 +128,7 @@ Test suites are **auto-discovered** (`*.test.mts`); `PRESET_ALIASES` in `scripts
 
 Variants: `dist:installer`, `dist:portable`, `dist:win:fast`, `dist:mac`, `dist:linux` (`--os` defaults to the host; `--arch`, `--version`). `--skip-jvm`/`--skip-media` for UI iteration; both warn in the report.
 
-**Cross-platform release (2026-10-08).** Pushing a `v*` tag runs `.github/workflows/release.yml`: version from the tag (must be semver; stamped into the build with `--version`, so `package.json` needs no bump; `workflow_dispatch` takes it as an input) → checks on 3 OSes → build matrix (windows-x64, macos-x64 on `macos-13`, macos-arm64 on `macos-14`, linux-x64 on `ubuntu-22.04`, linux-arm64 on `ubuntu-24.04-arm`) → one GitHub Release with every artifact plus `SHA256SUMS.txt`. **The release job needs every build job green — no partial releases.** Artifact names come from `electron-builder.yml`: `CS3-<version>-windows-x64-installer.exe` / `-portable.exe`, `CS3-<version>-macos-<arch>.dmg`/`.zip`, `CS3-<version>-linux-<arch>.AppImage`/`.deb`/`.tar.gz`. Each build runs `tools/package/verify-package.mjs` on its unpacked app (sidecar jar + JRE + 58 jars + media tools) — the guard for the silent-skip trap below. macOS is unsigned: `cs3_windows/scripts/after-pack.cjs` ad-hoc signs so Apple Silicon will launch it at all; users still clear Gatekeeper by hand. darwin-arm64 bundles no ffmpeg (no static build exists) and resolves Homebrew's; `electron/platform/binarySources.ts` owns per-OS aria2/yt-dlp assets and install hints. **None of the macOS/Linux packages has been built or launched yet.**
+**Cross-platform release (2026-10-08).** Pushing a `v*` tag runs `.github/workflows/release.yml`: version from the tag (must be semver; stamped into the build with `--version`, so `package.json` needs no bump; `workflow_dispatch` takes it as an input) → checks on 3 OSes → build matrix (windows-x64, macos-x64 on `macos-13`, macos-arm64 on `macos-14`, linux-x64 on `ubuntu-22.04`, linux-arm64 on `ubuntu-24.04-arm`) → one GitHub Release with every artifact plus `SHA256SUMS.txt`. **The release job needs every build job green — no partial releases.** Artifact names come from `electron-builder.yml`: `CS3-<version>-windows-x64-installer.exe` / `-portable.exe`, `CS3-<version>-macos-<arch>.dmg`/`.zip`, `CS3-<version>-linux-<arch>.AppImage`/`.deb`/`.tar.gz`. Each build runs `tools/package/verify-package.mjs` on its unpacked app (sidecar jar + JRE + 58 jars + media tools) — the guard for the silent-skip trap below. macOS is unsigned: `desktop/scripts/after-pack.cjs` ad-hoc signs so Apple Silicon will launch it at all; users still clear Gatekeeper by hand. darwin-arm64 bundles no ffmpeg (no static build exists) and resolves Homebrew's; `electron/platform/binarySources.ts` owns per-OS aria2/yt-dlp assets and install hints. **None of the macOS/Linux packages has been built or launched yet.**
 
 **Every stage is incremental by default, decided from the files rather than a flag (2026-09-19).** Reuse used to be `--fast` and nothing else, so an ordinary `dist:portable` rebuilt the sidecar, re-resolved the 56-jar classpath from jitpack, recompiled the bridge, relinked a JRE and **re-downloaded ~140 MB of ffmpeg and mpv**, however little had changed. `upToDate(label, outputs, inputs)` skips a stage when every output exists and is newer than every input; `--clean` forces the work, `--fast` skips the comparison and trusts what is on disk (right for a fresh clone, whose checkout timestamps are all "now"). The end of the run prints where the time went, per stage.
 
@@ -171,7 +171,7 @@ It once asked `findRuntimeDir()` where to copy *from* — which answers with the
 
 ---
 
-## 4. Architecture of `cs3_windows`
+## 4. Architecture of `desktop`
 
 ```
 ┌──────────────── RENDERER (React 19, src/) ────────────────┐
@@ -247,7 +247,7 @@ question: `extension:*` is an inventory keyed on repositories and archives, this
 "can I watch Netflix?" keyed on the platform — and it has to answer even when the
 answer is no, so the list always contains every platform with how it is reachable
 rather than omitting the ones nothing serves.
-### Services (`cs3_windows/electron/`)
+### Services (`desktop/electron/`)
 
 | File | Responsibility |
 |---|---|
@@ -666,7 +666,7 @@ Requirement ids in code comments (`ARCH-2`, `SEC-7`, `DROP-12`, `DSK-57`, `AC-D4
 
 - **Branching**: cloud/agent sessions develop on their assigned `claude/*` branch and push there. **Never push to `master`.** No PR unless asked.
 - **Scope**: implement what was asked. Don't start on a PRD step because you read about it here.
-- **Commits**: Conventional Commits, scope from the area (`feat(library):`, `fix(cs3):`, `feat(torrent):`, `feat(player):`, `docs:`, `chore(cs3_windows):`).
+- **Commits**: Conventional Commits, scope from the area (`feat(library):`, `fix(cs3):`, `feat(torrent):`, `feat(player):`, `docs:`, `chore(desktop):`).
 - **Comments explain *why*, not *what*.** Match the surrounding density. No narration of the obvious.
 - **TypeScript `strict`.** Avoid `any` — the existing ones are IPC plumbing, not precedent.
 - **Report honestly.** "Typechecks with `tsc -b`" is true; "tested" is not unless you ran `mvn test` or actually exercised the path. GPL-3.0 + third-party-indexer + community-plugin context makes overclaiming expensive.
@@ -677,7 +677,7 @@ Requirement ids in code comments (`ARCH-2`, `SEC-7`, `DROP-12`, `DSK-57`, `AC-D4
   core grows back into something every session pays for. **Keep it dense**: facts, rules and
   measurements, not narrative — a post-mortem is worth one rule plus its number, not its story.
 - **Do not vendor or commit**: `.cs3` archives, `library-jvm.jar`, `node_modules/`, `target/`, `dist/`, `dist-electron/`, downloaded `aria2c`/`yt-dlp` binaries. A `jar xf`'d sidecar jar is build output too — one branch merge carried 28 stray `.class` files beside their `.java` sources, and a stale compiled copy in the tree reads as a second, authoritative build.
-- **Anchor every ignore rule naming a runtime directory.** A bare `extensions/` in `cs3_windows/.gitignore` matched **any depth**, silently swallowing `src/components/extensions/` — the whole extensions screen vanished from every fresh clone and broke `tsc -b` unconditionally. Rules are anchored now (`/extensions/`, `/data/`, `/bin/`).
+- **Anchor every ignore rule naming a runtime directory.** A bare `extensions/` in `desktop/.gitignore` matched **any depth**, silently swallowing `src/components/extensions/` — the whole extensions screen vanished from every fresh clone and broke `tsc -b` unconditionally. Rules are anchored now (`/extensions/`, `/data/`, `/bin/`).
 
 ### Merging from `claude/refine` / `claude/android-media-desktop-dybtml`
 

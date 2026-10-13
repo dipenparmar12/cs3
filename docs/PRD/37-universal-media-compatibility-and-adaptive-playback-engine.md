@@ -2,7 +2,7 @@
 
 > **Document ID**: `PRD-37-UNIVERSAL-MEDIA-COMPATIBILITY-ENGINE`  
 > **Status**: Approved Specification / Architecture Contract  
-> **Scope**: CloudStream 3 Desktop Application (`cs3_windows`)  
+> **Scope**: CloudStream 3 Desktop Application (`desktop`)  
 > **Baseline**: Android v4.8.0 (`a72f9e6c`), Electron 43+, Windows 10 (1809+) / 11 x64  
 > **Generated**: 2026-08-15  
 
@@ -10,7 +10,7 @@
 
 ## 1. Executive Summary
 
-This document specifies the **Universal Media Compatibility and Adaptive Playback Engine** for CloudStream 3 Desktop (`cs3_windows`). 
+This document specifies the **Universal Media Compatibility and Adaptive Playback Engine** for CloudStream 3 Desktop (`desktop`). 
 
 The core challenge in porting CloudStream from Android to desktop is that **Android delegates media decoding to ExoPlayer backed by device-level hardware/software decoders (including MediaCodec and `nextlib-media3ext` FFmpeg modules)**, whereas **Electron desktop relies on an embedded Chromium `<video>` renderer whose native container and codec support is strictly restricted**. 
 

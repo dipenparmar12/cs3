@@ -4,7 +4,7 @@ Honest account of what the desktop documentation set was checked against. No acc
 would imply a full line-by-line audit of ~100k lines, which this was not.
 
 ## Method
-1. Inventoried `cs3_windows/electron`, `cs3_windows/src`, `sidecar/` (file lists, line counts, IPC registrations by script).
+1. Inventoried `desktop/electron`, `desktop/src`, `sidecar/` (file lists, line counts, IPC registrations by script).
 2. Read the code for the claims below (greps and targeted reads), then wrote the documents from that plus `CLAUDE.md`/`AGENTS.md`.
 3. Validation pass: a script confirmed that **every backticked file name in the new documents exists in the repository**
    (exceptions: `manifest.json` is inside plugin archives) and that every relative link resolves.

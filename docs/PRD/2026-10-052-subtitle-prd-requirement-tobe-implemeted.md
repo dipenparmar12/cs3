@@ -1465,17 +1465,17 @@ The following directory maps each architectural requirement to its exact locatio
 
 | Component / Requirement | File Path | Line Range of Interest | Responsibility / Architectural Role |
 |---|---|---|---|
-| **Subtitle Panel UI** | `cs3_windows/src/components/player/SubtitlePanel.tsx` | `L57–L555` | In-player subtitle search panel, query inputs, language filtering, saved subtitles list, and result presentation. |
-| **Subtitle Panel Styles** | `cs3_windows/src/sources.css` | `L2828–L2965`, `L9605–L9645` | Visual layout for search forms, inputs, badges, language tags, and action buttons. |
-| **Player Toolbar & Menu** | `cs3_windows/src/components/VideoPlayer.tsx` | `L4878–L4915`, `L4727–L4742` | Player toolbar Subtitle `HoverMenu`, search trigger, active track switching, and panel visibility toggling. |
-| **Subtitle Styling Application** | `cs3_windows/src/components/VideoPlayer.tsx` | `L2200–L2275`, `L3580–L3590` | Subtitle preference subscription and CSS variable injection for the media player. |
-| **Subtitle Style Tokens & mpv Translation** | `cs3_windows/src/utils/subtitleStyle.ts` | `L1–L118` | Shared definitions for size, color, background, outline, lift, CSS variable generation, and mpv property translation. |
-| **Native mpv Subtitle Execution** | `cs3_windows/src/components/player/NativeEngineStage.tsx` | `L104–L148` | Native mpv playback stage, external subtitle attachment, and initial engine style synchronization. |
-| **Native mpv IPC Engine** | `cs3_windows/electron/media/mpvEngine.ts` | `L1245–L1275`, `L605–L665` | mpv subprocess management, IPC command dispatch, subtitle track addition, and subtitle property mutation. |
-| **Online Subtitle Service** | `cs3_windows/electron/subtitleService.ts` | `L1–L286` | OpenSubtitles / Cinemeta API integration, title resolution, language code mapping, and byte-level fetching. |
-| **Subtitle Conversion & Charset Detection** | `cs3_windows/electron/subtitles/convert.ts` | `L1–L239` | Character encoding detection (BOM, UTF-8, Windows-1252), SRT-to-WebVTT conversion, and ASS parsing. |
-| **Local Subtitle Persistence** | `cs3_windows/electron/subtitles/subtitleLibrary.ts` | `L1–L198` | On-disk storage, retrieval, indexing, and deduplication of saved subtitle files. |
-| **Download Companion Subtitles** | `cs3_windows/electron/downloadService.ts` | `L815–L870` | Post-download companion file generation (`.srt` / `.vtt`) beside completed media files. |
-| **Subtitle Appearance Settings** | `cs3_windows/src/components/settings/SubtitleSettings.tsx` | `L1–L179` | User preferences UI for subtitle size, color, background, weight, and positioning. |
-| **Transcoding & Remuxing Pipeline** | `cs3_windows/electron/mediaTranscoder.ts` | `L500–L600` | FFmpeg arguments, timestamp normalization, dual-stream seeking, and live streaming output. |
-| **Media Decision Engine** | `cs3_windows/electron/media/playbackEngine.ts` | `L185–L215`, `L535–L560` | Stream format inspection, codec capability validation, and playback routing (Direct vs mpv vs Transcode). |
+| **Subtitle Panel UI** | `desktop/src/components/player/SubtitlePanel.tsx` | `L57–L555` | In-player subtitle search panel, query inputs, language filtering, saved subtitles list, and result presentation. |
+| **Subtitle Panel Styles** | `desktop/src/sources.css` | `L2828–L2965`, `L9605–L9645` | Visual layout for search forms, inputs, badges, language tags, and action buttons. |
+| **Player Toolbar & Menu** | `desktop/src/components/VideoPlayer.tsx` | `L4878–L4915`, `L4727–L4742` | Player toolbar Subtitle `HoverMenu`, search trigger, active track switching, and panel visibility toggling. |
+| **Subtitle Styling Application** | `desktop/src/components/VideoPlayer.tsx` | `L2200–L2275`, `L3580–L3590` | Subtitle preference subscription and CSS variable injection for the media player. |
+| **Subtitle Style Tokens & mpv Translation** | `desktop/src/utils/subtitleStyle.ts` | `L1–L118` | Shared definitions for size, color, background, outline, lift, CSS variable generation, and mpv property translation. |
+| **Native mpv Subtitle Execution** | `desktop/src/components/player/NativeEngineStage.tsx` | `L104–L148` | Native mpv playback stage, external subtitle attachment, and initial engine style synchronization. |
+| **Native mpv IPC Engine** | `desktop/electron/media/mpvEngine.ts` | `L1245–L1275`, `L605–L665` | mpv subprocess management, IPC command dispatch, subtitle track addition, and subtitle property mutation. |
+| **Online Subtitle Service** | `desktop/electron/subtitleService.ts` | `L1–L286` | OpenSubtitles / Cinemeta API integration, title resolution, language code mapping, and byte-level fetching. |
+| **Subtitle Conversion & Charset Detection** | `desktop/electron/subtitles/convert.ts` | `L1–L239` | Character encoding detection (BOM, UTF-8, Windows-1252), SRT-to-WebVTT conversion, and ASS parsing. |
+| **Local Subtitle Persistence** | `desktop/electron/subtitles/subtitleLibrary.ts` | `L1–L198` | On-disk storage, retrieval, indexing, and deduplication of saved subtitle files. |
+| **Download Companion Subtitles** | `desktop/electron/downloadService.ts` | `L815–L870` | Post-download companion file generation (`.srt` / `.vtt`) beside completed media files. |
+| **Subtitle Appearance Settings** | `desktop/src/components/settings/SubtitleSettings.tsx` | `L1–L179` | User preferences UI for subtitle size, color, background, weight, and positioning. |
+| **Transcoding & Remuxing Pipeline** | `desktop/electron/mediaTranscoder.ts` | `L500–L600` | FFmpeg arguments, timestamp normalization, dual-stream seeking, and live streaming output. |
+| **Media Decision Engine** | `desktop/electron/media/playbackEngine.ts` | `L185–L215`, `L535–L560` | Stream format inspection, codec capability validation, and playback routing (Direct vs mpv vs Transcode). |

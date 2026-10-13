@@ -1100,7 +1100,7 @@ providers scraped but no link played.
 
 It talks to the sidecar over the same stdio JSON-RPC the main process uses, with **no
 Electron in the way**. That split is most of its value: if the harness passes and the app
-does not, the bug is in `cs3_windows/`; if the harness fails, it is in the runtime or the
+does not, the bug is in `desktop/`; if the harness fails, it is in the runtime or the
 extension.
 
 Measured 2026-08-13, all five repositories, 2 plugins each: 6 providers loaded, 4 answering

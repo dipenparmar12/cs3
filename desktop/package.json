@@ -3,7 +3,7 @@
   "productName": "CloudStream 3 Desktop",
   "private": true,
   "version": "1.0.0",
-  "description": "CloudStream 3 Cross-Platform Desktop Application (Windows)",
+  "description": "CloudStream 3 Cross-Platform Desktop Application",
   "main": "dist-electron/main.js",
   "type": "module",
   "scripts": {

@@ -40,7 +40,7 @@ export function describeRuntimeGaps(gaps: RuntimeGaps): string | undefined {
     const java = gaps.javaReady ? '' : ` Java ${REQUIRED_JAVA_VERSION}+ is missing as well.`;
     return gaps.packaged
       ? `This copy of CloudStream was packaged without ${what}, so extensions cannot run. Install Required Components cannot download ${built.length > 1 ? 'them' : 'it'} — reinstall from a complete release.${java}`
-      : `${capitalise(what)} ${built.length > 1 ? 'have' : 'has'} not been built in this checkout. Run "bun run setup" in cs3_windows (it builds ${built.length > 1 ? 'them' : 'it'} with Maven), then restart the app.${java}`;
+      : `${capitalise(what)} ${built.length > 1 ? 'have' : 'has'} not been built in this checkout. Run "bun run setup" in desktop (it builds ${built.length > 1 ? 'them' : 'it'} with Maven), then restart the app.${java}`;
   }
 
   if (!gaps.javaReady) {

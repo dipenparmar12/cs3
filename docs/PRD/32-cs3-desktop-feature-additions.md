@@ -2,14 +2,14 @@
 
 > **Document ID**: `PRD-32-CS3-DESKTOP-FEATURE-ADDITIONS`  
 > **Status**: Active / Implemented  
-> **Scope**: CloudStream 3 Desktop Application (`cs3_windows`)  
+> **Scope**: CloudStream 3 Desktop Application (`desktop`)  
 > **Last Updated**: 2026-08-12  
 
 ---
 
 ## 1. Executive Summary
 
-This document specifies the additional features, architectural subsystems, and user experience enhancements implemented in the **CloudStream 3 Desktop** application (`cs3_windows`) that extend beyond the baseline requirements outlined in earlier PRD sections.
+This document specifies the additional features, architectural subsystems, and user experience enhancements implemented in the **CloudStream 3 Desktop** application (`desktop`) that extend beyond the baseline requirements outlined in earlier PRD sections.
 
 These additions establish:
 1. A **3-Tier Plugin Strategy** bridging Android `.cs3` packages to desktop JVM runtimes without `RISK-D1` translation risks.
@@ -53,7 +53,7 @@ To execute CloudStream 3's 299 provider extensions across 26 community repositor
 ## 3. Official 26 Repositories Catalog & Data Model
 
 ### 3.1 Overview
-The desktop app incorporates a dedicated, structured dataset ([`electron/official_repositories.json`](file:///cs3_windows/electron/official_repositories.json)) listing all 26 official community extension repositories.
+The desktop app incorporates a dedicated, structured dataset ([`electron/official_repositories.json`](file:///desktop/electron/official_repositories.json)) listing all 26 official community extension repositories.
 
 ### 3.2 Repository Classification
 Repositories are categorized into 6 distinct categories:
@@ -92,12 +92,12 @@ Repositories are categorized into 6 distinct categories:
 ```
 
 ### 4.1 Layer 1: Pre-Search Provider Scope
-* Located in [`src/components/Navbar.tsx`](file:///cs3_windows/src/components/Navbar.tsx).
+* Located in [`src/components/Navbar.tsx`](file:///desktop/src/components/Navbar.tsx).
 * Allows selecting 1, multiple, or all active providers prior to initiating a search query.
 * Passes `targetProviders?: string[]` to `PluginManager.searchAll()`.
 
 ### 4.2 Layer 2: Post-Search Result Filtering
-* Located in [`src/views/SearchView.tsx`](file:///cs3_windows/src/views/SearchView.tsx).
+* Located in [`src/views/SearchView.tsx`](file:///desktop/src/views/SearchView.tsx).
 * Renders dynamic filter chips above the search results grid showing badge counts for each provider that returned results.
 * Allows instant, zero-latency filtering of the displayed media grid without triggering new network requests.
 
@@ -106,12 +106,12 @@ Repositories are categorized into 6 distinct categories:
 ## 5. 1-Click Downloader Engine & Fallback Pipeline
 
 ### 5.1 Portable Binary Downloader (`BinaryDownloader`)
-* Located in [`electron/binaryDownloader.ts`](file:///cs3_windows/electron/binaryDownloader.ts).
+* Located in [`electron/binaryDownloader.ts`](file:///desktop/electron/binaryDownloader.ts).
 * Automatically downloads and configures portable `aria2c.exe` (16-thread multi-connection engine) and `yt-dlp.exe` into `%APPDATA%\cloudstream-desktop\bin\` upon prompt confirmation.
 * Resolves file handle locking via `fileStream.on('finish')` event synchronization before zip extraction.
 
 ### 5.2 Native HTTP Stream Fallback Downloader
-* Located in [`electron/downloadService.ts`](file:///cs3_windows/electron/downloadService.ts).
+* Located in [`electron/downloadService.ts`](file:///desktop/electron/downloadService.ts).
 * Automatically streams downloads via Node.js `http`/`https` pipelines if `aria2c` binary is missing or uninitialized.
 * Eliminates `"aria2c engine binary not initialized"` errors.
 
@@ -124,7 +124,7 @@ Repositories are categorized into 6 distinct categories:
 ## 6. Developer Options & Live Streaming Mode
 
 ### 6.1 Developer Mode Toggle
-* Located in [`src/views/SettingsView.tsx`](file:///cs3_windows/src/views/SettingsView.tsx).
+* Located in [`src/views/SettingsView.tsx`](file:///desktop/src/views/SettingsView.tsx).
 * Toggle switch: **Live Content Streaming Mode (ON)** vs. **Demo Content Streaming Mode (OFF)**.
 * Persisted in `cs3_datastore.json` under `use_live_streaming_sources`.
 
@@ -141,7 +141,7 @@ When Live Mode is active, `PluginManager` queries real public media search APIs 
 ## 7. Robust Datastore & CS3 Android Backup Migration
 
 ### 7.1 6-Bucket Key-Grammar Parsing
-Located in [`electron/datastore.ts`](file:///cs3_windows/electron/datastore.ts). Parses Android CS3's 6 data buckets:
+Located in [`electron/datastore.ts`](file:///desktop/electron/datastore.ts). Parses Android CS3's 6 data buckets:
 * `_Bool`: Boolean settings and preference toggles.
 * `_Int`: Integer counts, watch positions, and timestamps.
 * `_String`: String preferences, URLs, and datastore entries.

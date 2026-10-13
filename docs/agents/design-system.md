@@ -1,6 +1,6 @@
 # Design system — controls and forms
 
-One design language for every interactive control in `cs3_windows/src`. This file is the
+One design language for every interactive control in `desktop/src`. This file is the
 audit that started it (2026-10-07), the decisions, the component catalogue, and what is
 still to migrate. **New controls use these components; a one-off control needs a reason
 written next to it.**

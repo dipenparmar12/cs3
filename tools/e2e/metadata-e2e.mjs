@@ -42,12 +42,12 @@ import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
 
-import { parseCredits, parseFacts, fetchWikidata } from '../../cs3_windows/electron/metadata/wikidata.ts';
-import { fetchCredits as fetchTvMaze, lookupByImdb } from '../../cs3_windows/electron/metadata/tvmaze.ts';
-import { fetchAniListCredits } from '../../cs3_windows/electron/metadata/anilist.ts';
-import { fetchWikipediaNotes } from '../../cs3_windows/electron/metadata/wikipedia.ts';
-import { parseCinemetaExtras } from '../../cs3_windows/electron/metadata/cinemetaExtras.ts';
-import { mergeCredits, orderCredits } from '../../cs3_windows/electron/metadata/merge.ts';
+import { parseCredits, parseFacts, fetchWikidata } from '../../desktop/electron/metadata/wikidata.ts';
+import { fetchCredits as fetchTvMaze, lookupByImdb } from '../../desktop/electron/metadata/tvmaze.ts';
+import { fetchAniListCredits } from '../../desktop/electron/metadata/anilist.ts';
+import { fetchWikipediaNotes } from '../../desktop/electron/metadata/wikipedia.ts';
+import { parseCinemetaExtras } from '../../desktop/electron/metadata/cinemetaExtras.ts';
+import { mergeCredits, orderCredits } from '../../desktop/electron/metadata/merge.ts';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(here, '../..');

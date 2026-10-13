@@ -6,14 +6,14 @@ For an AI (or human) about to modify CS3 Desktop. Root context also lives in `CL
 ## 1. Orientation
 ```
 cs3/
-├── cs3_windows/        THE APP (Electron main in electron/, React in src/, scripts/, electron-builder.yml)
+├── desktop/        THE APP (Electron main in electron/, React in src/, scripts/, electron-builder.yml)
 ├── sidecar/            JVM runtime for .cs3 (Maven) + bridge/ (Kotlin)
 ├── tools/              package/ (build), e2e/ (live harnesses), research/, dex-spike/, toolchain/
 ├── docs/               PRD/ (intent), agents/ (domain notes), docs_cs3/ (this set; android/ = upstream reference)
 └── repositories/       26 submodules, EMPTY unless initialised — never claim to have verified against them
 ```
-`cs3_windows/electron/`: `main.ts` (wiring + IPC), `preload.ts`, `cs3/` (domain), `media/`, `torrent/`, `metadata/`, `download/`, `logging/`, `util/`.
-`cs3_windows/src/`: `App.tsx`, `views/`, `components/`, `utils/` (pure rules), `types/` (shared with main).
+`desktop/electron/`: `main.ts` (wiring + IPC), `preload.ts`, `cs3/` (domain), `media/`, `torrent/`, `metadata/`, `download/`, `logging/`, `util/`.
+`desktop/src/`: `App.tsx`, `views/`, `components/`, `utils/` (pure rules), `types/` (shared with main).
 
 ## 2. Trace any feature, UI → backend
 1. Find the component (`src/components` or `src/views`) and the call `window.cloudstream.<ns>.<method>`.
@@ -41,7 +41,7 @@ Process: sidecar stdout carries RPC frames only; all teardown on `before-quit`; 
 UI: never remount the `<video>`; Esc consumed only when it closed something; never name a `.ts` and `.tsx` alike but for case; key effects on serialised keys, not object identity; keep state in `App` where return-navigation must restore it.
 
 ## 5. Verification (what "done" means here)
-| Check | Command (in `cs3_windows/`) | Note |
+| Check | Command (in `desktop/`) | Note |
 |---|---|---|
 | Typecheck | `bun run typecheck` (`tsc -b`) | `bun run build`'s `tsc` is a no-op on the solution root |
 | Unit tests | `bun run test --fast` (skips real ffmpeg/mpv); `bun run test <alias>`; `bun run test --list` | suites auto-discovered (`*.test.mts`) |

@@ -198,7 +198,7 @@ node tools/e2e/provider-e2e.mjs [--repo X] [--plugins N] [--queries "a,b"]
                                 [--lane cs3]   # force DEX artifact, skip jar lane
 ```
 
-Drives repo JSON → `.cs3` download + SHA-256 → DEX→JVM → `load()` → `search()` → `load()` → `loadLinks()` → a 2MB range-GET off the real host. **Talks stdio JSON-RPC directly to the sidecar, no Electron** — harness passes + app fails ⇒ bug in `cs3_windows/`; harness fails ⇒ bug in runtime/extension. Exit 0 requires **bytes**, not just search results; `PARTIAL` = scraped but nothing played.
+Drives repo JSON → `.cs3` download + SHA-256 → DEX→JVM → `load()` → `search()` → `load()` → `loadLinks()` → a 2MB range-GET off the real host. **Talks stdio JSON-RPC directly to the sidecar, no Electron** — harness passes + app fails ⇒ bug in `desktop/`; harness fails ⇒ bug in runtime/extension. Exit 0 requires **bytes**, not just search results; `PARTIAL` = scraped but nothing played.
 
 - `fileHash` is `sha256-<hex>` — strip the prefix before comparing.
 - Repository URLs are project pages resolved to raw documents by probing branch/filename combos (`master/repo.json`, `builds/repo.json`, `builds/plugins.json` all in use).

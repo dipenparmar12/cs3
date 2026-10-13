@@ -2,7 +2,7 @@
 
 > **Document ID**: `PRD-47-NATIVE-PROVIDERS-OTT-ENGINE`  
 > **Status**: Active / Implemented  
-> **Scope**: CloudStream 3 Desktop Application (`cs3_windows`)  
+> **Scope**: CloudStream 3 Desktop Application (`desktop`)  
 > **Source Files**: `electron/cs3/nativeProviderRegistry.ts`, `nativeProviders/stremio.ts`, `nativeProviders/jellyfin.ts`, `ottService.ts`, `ottCatalog.ts`, `ottPlatforms.ts`, `pageSnapshot.ts`  
 > **Test Suites**: `electron/cs3/nativeProviders.test.mts` (50 cases), `electron/cs3/ottCatalog.test.mts` (19 cases), `electron/cs3/ottPlatforms.test.mts` (19 cases), `electron/cs3/pageSnapshot.test.mts`  
 > **Date**: 2026-09-17  

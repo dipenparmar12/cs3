@@ -165,14 +165,14 @@ The following directory maps the buffer ahead indicator and timeline toggle requ
 
 | Component / Requirement | File Path | Line Range of Interest | Responsibility / Architectural Role |
 |---|---|---|---|
-| **Player Timeline & Time Readouts** | `cs3_windows/src/components/VideoPlayer.tsx` | `L4645–L4660`, `L4520–L4560` | Primary timecode container (`player__time`), seekbar buffer track, click toggle event handlers, and buffer-ahead readout rendering. |
-| **Mini-Player Time Display** | `cs3_windows/src/components/VideoPlayer.tsx` | `L3730–L3745` | Floating and mini-player timecode container (`player-mini__time`) and synchronized time toggle handling. |
-| **Time & Duration Formatting Utilities** | `cs3_windows/src/utils/format.ts` | `L1–L80` | Formatting functions for timecodes (`formatTimecode`), remaining time format (`-hh:mm:ss`), and adaptive buffer string (`+2m 30s`). |
-| **Player Toolbar & Seekbar Styles** | `cs3_windows/src/sources.css` | `L2810–L2840`, `L4500–L4550` | Styling for `.player__time`, interactive hover states, tooltip feedback, and buffer ahead badge typography. |
-| **Native mpv Cache & Buffer Observation** | `cs3_windows/electron/media/mpvEngine.ts` | `L70–L92`, `L1005–L1030` | mpv property observation (`demuxer-cache-time`, `time-pos`), snapshot assembly, and buffer duration reporting over IPC. |
-| **Native Playback Snapshot Types** | `cs3_windows/src/types/mpv.ts` | `L1–L60` | Type definitions for `MpvSnapshot` including `positionSeconds`, `durationSeconds`, and `bufferedSeconds`. |
-| **Player Preferences Store** | `cs3_windows/src/types/player.ts` | `L1–L80` | Configuration schema for persisting user time display mode (`elapsed_total` vs `elapsed_remaining`). |
-| **Native Engine React Stage** | `cs3_windows/src/components/player/NativeEngineStage.tsx` | `L35–L65`, `L90–L120` | Native playback state consumption, progress synchronization, and bridge to player control bar. |
+| **Player Timeline & Time Readouts** | `desktop/src/components/VideoPlayer.tsx` | `L4645–L4660`, `L4520–L4560` | Primary timecode container (`player__time`), seekbar buffer track, click toggle event handlers, and buffer-ahead readout rendering. |
+| **Mini-Player Time Display** | `desktop/src/components/VideoPlayer.tsx` | `L3730–L3745` | Floating and mini-player timecode container (`player-mini__time`) and synchronized time toggle handling. |
+| **Time & Duration Formatting Utilities** | `desktop/src/utils/format.ts` | `L1–L80` | Formatting functions for timecodes (`formatTimecode`), remaining time format (`-hh:mm:ss`), and adaptive buffer string (`+2m 30s`). |
+| **Player Toolbar & Seekbar Styles** | `desktop/src/sources.css` | `L2810–L2840`, `L4500–L4550` | Styling for `.player__time`, interactive hover states, tooltip feedback, and buffer ahead badge typography. |
+| **Native mpv Cache & Buffer Observation** | `desktop/electron/media/mpvEngine.ts` | `L70–L92`, `L1005–L1030` | mpv property observation (`demuxer-cache-time`, `time-pos`), snapshot assembly, and buffer duration reporting over IPC. |
+| **Native Playback Snapshot Types** | `desktop/src/types/mpv.ts` | `L1–L60` | Type definitions for `MpvSnapshot` including `positionSeconds`, `durationSeconds`, and `bufferedSeconds`. |
+| **Player Preferences Store** | `desktop/src/types/player.ts` | `L1–L80` | Configuration schema for persisting user time display mode (`elapsed_total` vs `elapsed_remaining`). |
+| **Native Engine React Stage** | `desktop/src/components/player/NativeEngineStage.tsx` | `L35–L65`, `L90–L120` | Native playback state consumption, progress synchronization, and bridge to player control bar. |
 
 ---
 

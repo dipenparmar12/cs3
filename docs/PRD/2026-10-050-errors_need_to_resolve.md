@@ -180,7 +180,7 @@ The user reported:
 
 ### Why Is Cross-Sourcing Happening?
 
-A comprehensive audit of [`src/views/DetailView.tsx`](file:///D:/projects/cs3/cs3_windows/src/views/DetailView.tsx), [`electron/searchMerge.ts`](file:///D:/projects/cs3/cs3_windows/electron/searchMerge.ts), [`electron/contentService.ts`](file:///D:/projects/cs3/cs3_windows/electron/contentService.ts), [`electron/playbackSession.ts`](file:///D:/projects/cs3/cs3_windows/electron/playbackSession.ts), and [`src/App.tsx`](file:///D:/projects/cs3/cs3_windows/src/App.tsx) identified **5 distinct compounding causes**:
+A comprehensive audit of [`src/views/DetailView.tsx`](file:///D:/projects/cs3/desktop/src/views/DetailView.tsx), [`electron/searchMerge.ts`](file:///D:/projects/cs3/desktop/electron/searchMerge.ts), [`electron/contentService.ts`](file:///D:/projects/cs3/desktop/electron/contentService.ts), [`electron/playbackSession.ts`](file:///D:/projects/cs3/desktop/electron/playbackSession.ts), and [`src/App.tsx`](file:///D:/projects/cs3/desktop/src/App.tsx) identified **5 distinct compounding causes**:
 
 ```mermaid
 flowchart TD
@@ -199,7 +199,7 @@ flowchart TD
 ### The 5 Specific Fault Points in the Codebase
 
 #### 1. `DetailView.tsx`: Unsolicited Background Search Substitution
-- **Location:** [`src/views/DetailView.tsx#L538-L567`](file:///D:/projects/cs3/cs3_windows/src/views/DetailView.tsx#L538-L567)
+- **Location:** [`src/views/DetailView.tsx#L538-L567`](file:///D:/projects/cs3/desktop/src/views/DetailView.tsx#L538-L567)
 - **The Code:**
   ```typescript
   if (index === routes.length - 1 && !searchedElsewhere) {
@@ -218,7 +218,7 @@ flowchart TD
 - **What happens:** If the original provider page fails to load (e.g., site redesign, 404), `DetailView` automatically calls `searchAll` across **every provider installed in the app**. `sameWorkMatches` performs a loose title-only match. If another show or film shares the name (or anime with similar titles), the app automatically pushes the foreign provider's URL into `routes` and loads it without explicit user consent.
 
 #### 2. `searchMerge.ts`: Catalogue Bias Stripping Original Provider Identity
-- **Location:** [`electron/searchMerge.ts#L46-L65`](file:///D:/projects/cs3/cs3_windows/electron/searchMerge.ts#L46-L65)
+- **Location:** [`electron/searchMerge.ts#L46-L65`](file:///D:/projects/cs3/desktop/electron/searchMerge.ts#L46-L65)
 - **The Code:**
   ```typescript
   function primacy(result: SearchResponse): number {
@@ -231,7 +231,7 @@ flowchart TD
 - **What happens:** When search results are returned, if a Cinemeta or IMDb catalogue entry matches, its `primacy` score gets `+100`. The catalogue entry overwrites the provider entry. As a result, the card the user clicks points to `cs3meta://` rather than the provider's `cs3ext://`. When played, the app searches torrent indexers rather than staying within the selected provider.
 
 #### 3. `contentService.ts`: Automatic Scope Escalation (`origin` $\to$ `all`)
-- **Location:** [`electron/contentService.ts#L1280-L1307`](file:///D:/projects/cs3/cs3_windows/electron/contentService.ts#L1280-L1307) & [`electron/cs3/sourceScope.ts#L156-L164`](file:///D:/projects/cs3/cs3_windows/electron/cs3/sourceScope.ts#L156-L164)
+- **Location:** [`electron/contentService.ts#L1280-L1307`](file:///D:/projects/cs3/desktop/electron/contentService.ts#L1280-L1307) & [`electron/cs3/sourceScope.ts#L156-L164`](file:///D:/projects/cs3/desktop/electron/cs3/sourceScope.ts#L156-L164)
 - **The Code:**
   ```typescript
   if (shouldEscalateScope({ scopeUsed: 'origin', sourceCount: sources.length, ... })) {
@@ -241,7 +241,7 @@ flowchart TD
 - **What happens:** If Provider A returns 0 sources (or its links expired), `shouldEscalateScope` escalates the request from `'origin'` to `'all'` by default. It launches an unconstrained torrent indexer search for the text title. Any torrent matching that string is presented as a valid source.
 
 #### 4. `playbackSession.ts`: Unprompted Auto-Play of First Escalated Candidate
-- **Location:** [`electron/playbackSession.ts#L421`](file:///D:/projects/cs3/cs3_windows/electron/playbackSession.ts#L421)
+- **Location:** [`electron/playbackSession.ts#L421`](file:///D:/projects/cs3/desktop/electron/playbackSession.ts#L421)
 - **The Code:**
   ```typescript
   await this.beginStream(session, session.sources);
@@ -249,7 +249,7 @@ flowchart TD
 - **What happens:** Because `autoStartWhenDone` is `true`, as soon as the widened search returns any source from any indexer, the player immediately starts streaming `session.sources[0]`. The user is never prompted with: *"Provider A had no links; do you want to try torrent X?"* It simply starts playing foreign media.
 
 #### 5. `App.tsx` & `VideoPlayer.tsx`: History Storing Ephemeral URLs Instead of Truth
-- **Location:** [`src/components/VideoPlayer.tsx#L1471`](file:///D:/projects/cs3/cs3_windows/src/components/VideoPlayer.tsx#L1471) & [`src/App.tsx#L1333-L1363`](file:///D:/projects/cs3/cs3_windows/src/App.tsx#L1333-L1363)
+- **Location:** [`src/components/VideoPlayer.tsx#L1471`](file:///D:/projects/cs3/desktop/src/components/VideoPlayer.tsx#L1471) & [`src/App.tsx#L1333-L1363`](file:///D:/projects/cs3/desktop/src/App.tsx#L1333-L1363)
 - **The Code:**
   In `VideoPlayer.tsx`:
   ```typescript

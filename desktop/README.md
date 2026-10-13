@@ -1,4 +1,4 @@
-# CloudStream 3 Desktop — Windows Client (`cs3_windows`)
+# CloudStream 3 Desktop (`desktop`)
 
 This directory contains the desktop frontend and Electron main process for **CloudStream 3 Desktop**.
 
@@ -17,7 +17,7 @@ For the complete project overview, end-to-end architecture, JVM sidecar explanat
 
 ## 🚀 Quick Development Scripts
 
-Run all commands from within `cs3_windows/`:
+Run all commands from within `desktop/`:
 
 | Command | Action |
 |---|---|

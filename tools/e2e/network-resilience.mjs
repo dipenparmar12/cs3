@@ -38,7 +38,7 @@ import os from 'node:os';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = path.resolve(HERE, '..', '..');
-const APP = path.join(REPO_ROOT, 'cs3_windows');
+const APP = path.join(REPO_ROOT, 'desktop');
 
 /**
  * Compiled on the fly rather than checked in.

@@ -24,7 +24,7 @@ dist-ssr
 *.sw?
 
 target/
-cs3_windows/dist-electron/
+desktop/dist-electron/
 
 # Portable JDK 21 + Maven fetched to build the sidecar. Downloaded, never
 # vendored: ~250 MB of third-party binaries do not belong in git history.
@@ -39,7 +39,7 @@ sidecar/plugin-data/
 
 .github/hooks/context-mode.json
 .temp/
-cs3_windows/release
+desktop/release
 # `cs3-sidecar.jar` unzipped in place. A `jar xf` at the repo root leaves
 # `META-INF/` and `com/` beside the sources they were compiled from, and one
 # merge carried all 28 of them into the tree — build output that goes stale

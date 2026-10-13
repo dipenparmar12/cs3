@@ -1,7 +1,7 @@
 /**
  * electron-builder afterPack hook.
  *
- * Hook implementation lives in cs3_windows/scripts/after-pack.cjs because
+ * Hook implementation lives in desktop/scripts/after-pack.cjs because
  * electron-builder requires hook module paths to resolve within the workspace root.
  * ---
  * macOS on Apple silicon refuses to launch a bundle whose code signature is
@@ -14,4 +14,4 @@
  *
  * Every other platform: nothing to do.
  */
-module.exports = require('../../cs3_windows/scripts/after-pack.cjs')
+module.exports = require('../../desktop/scripts/after-pack.cjs')

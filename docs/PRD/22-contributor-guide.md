@@ -12,7 +12,7 @@ For engineers and AI agents working on the desktop application.
 ```
 cs3/
 ├── cloudstream_ref_android/   Git submodule: the Android source of truth (read-only)
-├── cs3_windows/               The Electron desktop application
+├── desktop/               The Electron desktop application
 │   ├── docs/                  Project docs
 │   └── docs_cs3/              Prior architecture notes on the Android app
 └── docs/PRD/                  This document set

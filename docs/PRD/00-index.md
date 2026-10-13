@@ -39,7 +39,7 @@ The governing principle throughout:
 | Total commits in history | 3,753 (first commit 2021-04-30) |
 | Gradle modules | `:app`, `:library`, `:docs` (`settings.gradle.kts:23`) |
 | Kotlin source files in `:app` | 232 |
-| Target desktop project | `cs3_windows/` (this repository) |
+| Target desktop project | `desktop/` (this repository) |
 | Primary target platform | **Windows 10 (1809+) / 11, x64** — macOS and Linux specified but phased later |
 | Community extension corpus | 26 repositories vendored at `repositories/` — 1,009 Kotlin files, 325 Gradle modules, 303 `@CloudstreamPlugin` classes, 299 `MainAPI` providers, 110 `ExtractorApi` classes (surveyed 2026-08-12) |
 

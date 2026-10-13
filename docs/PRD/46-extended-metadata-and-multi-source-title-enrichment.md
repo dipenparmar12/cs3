@@ -2,7 +2,7 @@
 
 > **Document ID**: `PRD-46-EXTENDED-METADATA-ENRICHMENT`  
 > **Status**: Active / Implemented  
-> **Scope**: CloudStream 3 Desktop Application (`cs3_windows`)  
+> **Scope**: CloudStream 3 Desktop Application (`desktop`)  
 > **Source Files**: `electron/metadata/enrichmentService.ts`, `merge.ts`, `anilist.ts`, `tvmaze.ts`, `wikidata.ts`, `wikipedia.ts`, `cinemetaExtras.ts`, `src/utils/metadataDisplay.ts`  
 > **Test Suites**: `electron/metadata/merge.test.mts` (34 cases), `electron/metadata/sources.test.mts` (39 cases), `src/utils/metadataDisplay.test.mts` (19 cases), `tools/e2e/metadata-e2e.mjs`  
 > **Date**: 2026-09-17  

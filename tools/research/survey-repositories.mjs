@@ -38,7 +38,7 @@ import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
-const CATALOGUE = path.join(HERE, '..', '..', 'cs3_windows', 'electron', 'official_repositories.json');
+const CATALOGUE = path.join(HERE, '..', '..', 'desktop', 'electron', 'official_repositories.json');
 
 /** Branch × filename combinations observed across the live corpus. */
 const BRANCHES = ['builds', 'master', 'main', 'refs/heads/main', 'refs/heads/master'];

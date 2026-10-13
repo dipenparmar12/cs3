@@ -2,7 +2,7 @@
 
 > **Document ID**: `PRD-34-CS3-DESKTOP-TORRENT-ENGINE`  
 > **Status**: Active / Implemented  
-> **Scope**: CloudStream 3 Desktop Application (`cs3_windows`)  
+> **Scope**: CloudStream 3 Desktop Application (`desktop`)  
 > **Last Updated**: 2026-09-17  
 > **Document Version**: 2.0.0 (Updated to reflect DHT node routing cache, indexer budget management, bot challenge mitigations, multi-file content parsing, and swarm health probes)
 
@@ -10,7 +10,7 @@
 
 ## 1. Executive Summary
 
-This document specifies the **BitTorrent Search, Sequential Streaming & P2P Download Subsystem** implemented in the CloudStream 3 Desktop application (`cs3_windows`).
+This document specifies the **BitTorrent Search, Sequential Streaming & P2P Download Subsystem** implemented in the CloudStream 3 Desktop application (`desktop`).
 
 The engine integrates P2P torrent discovery, metadata matching, release ranking, sequential HTTP streaming, and background downloading into a seamless desktop media experience without requiring external torrent clients (like qBittorrent or Transmission).
 

@@ -34,16 +34,16 @@ Read this section before writing any code. It is the "extra research" already do
 
 | Behaviour                             | Where                                                                                                                                              | Notes                                                                                                                                                                                                                 |
 | ------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Add by URL, verified before kept      | [pluginManager.ts](../../cs3_windows/electron/pluginManager.ts) `addRepository` (~L1277)                                                           | Fetches the document first; an unreachable or non-repository URL is refused with the reason. Project pages are resolved to raw documents via `rawDocumentCandidates` (~L503) and `resolveRepositoryDocument` (~L562). |
+| Add by URL, verified before kept      | [pluginManager.ts](../../desktop/electron/pluginManager.ts) `addRepository` (~L1277)                                                           | Fetches the document first; an unreachable or non-repository URL is refused with the reason. Project pages are resolved to raw documents via `rawDocumentCandidates` (~L503) and `resolveRepositoryDocument` (~L562). |
 | Persistence                           | `persist()` (~L953) writes `installed_repositories_urls` through `DatastoreManager.setObject`                                                      | The datastore lives in `app.getPath('userData')/cs3_datastore.json`, is debounced (250 ms) and written temp-file-plus-rename. userData survives app updates and NSIS reinstalls by default.                           |
 | Startup restore                       | `restore()` (~L938) reads `installed_repositories_urls` into `installedRepoUrls`                                                                   | Runs in the constructor; no IPC or window needed.                                                                                                                                                                     |
 | Remove with cascade                   | `removeRepository` (~L1446)                                                                                                                        | Deletes the URL **and** uninstalls every extension that came from it, and cleans the disabled set so a re-added repository does not arrive silently off.                                                              |
 | Enable/disable                        | `cs3_disabled_repositories` datastore key (~L376) via `DisabledSet`                                                                                | Keyed by repository URL. Reversible; archives are kept.                                                                                                                                                               |
-| Updates                               | [extensionUpdater.ts](../../cs3_windows/electron/cs3/extensionUpdater.ts) L360, L568 iterate `getInstalledRepositories()`                          | Custom repositories are already in that set, so their extensions already update OTA.                                                                                                                                  |
-| Background install                    | [extensionJobs.ts](../../cs3_windows/electron/cs3/extensionJobs.ts) L36–39: `addRepository` / `installRepository` job kinds                        | The screen queues jobs; one job per target; whole-state snapshots.                                                                                                                                                    |
-| UI entry point                        | [RepositoryCatalog.tsx](../../cs3_windows/src/components/extensions/RepositoryCatalog.tsx) ~L175–241                                               | Custom URL input + Add button, wired through `ExtensionsScreen.tsx` L338 to the job queue.                                                                                                                            |
+| Updates                               | [extensionUpdater.ts](../../desktop/electron/cs3/extensionUpdater.ts) L360, L568 iterate `getInstalledRepositories()`                          | Custom repositories are already in that set, so their extensions already update OTA.                                                                                                                                  |
+| Background install                    | [extensionJobs.ts](../../desktop/electron/cs3/extensionJobs.ts) L36–39: `addRepository` / `installRepository` job kinds                        | The screen queues jobs; one job per target; whole-state snapshots.                                                                                                                                                    |
+| UI entry point                        | [RepositoryCatalog.tsx](../../desktop/src/components/extensions/RepositoryCatalog.tsx) ~L175–241                                               | Custom URL input + Add button, wired through `ExtensionsScreen.tsx` L338 to the job queue.                                                                                                                            |
 | Search/scope/playback/download parity | `enabledProviderNames` funnel                                                                                                                      | Once an extension from any repository is installed, its providers are indistinguishable downstream. **This already holds and needs no change.**                                                                       |
-| Backup                                | `BackupService` `settings` section ([main.ts](../../cs3_windows/electron/main.ts) L5704) collects `datastore.snapshot()` — the **whole** datastore | `installed_repositories_urls` is already inside it. Any new datastore key added by this PRD is backed up automatically.                                                                                               |
+| Backup                                | `BackupService` `settings` section ([main.ts](../../desktop/electron/main.ts) L5704) collects `datastore.snapshot()` — the **whole** datastore | `installed_repositories_urls` is already inside it. Any new datastore key added by this PRD is backed up automatically.                                                                                               |
 
 ### 2.2 The gaps this PRD closes
 
@@ -234,7 +234,7 @@ Resolution order per node, and the order is load-bearing:
 `bundled` stays on the interface unchanged — other consumers read it, and `origin` does not
 replace it 1:1 (`catalogue` ≠ "not bundled" is a distinction the update flow cares about).
 
-**Renderer change** ([SourceTree](../../cs3_windows/src/components/extensions/SourceTree.tsx)
+**Renderer change** ([SourceTree](../../desktop/src/components/extensions/SourceTree.tsx)
 and the row rendering): a "Custom" badge on rows where `origin === 'custom'`, plus the
 `unreachableReason` line when set (CR-10). Standard mode shows "Added by you"; developer mode
 may add the raw URL (which provenance already shows). No jargon gate on the badge itself —
@@ -245,7 +245,7 @@ surface is never held back).
 
 A new private `refreshCustomRepositories()` on `PluginManager`:
 
-- Registered as a **startup queue task** ([util/startupQueue.ts](../../cs3_windows/electron/util/startupQueue.ts)),
+- Registered as a **startup queue task** ([util/startupQueue.ts](../../desktop/electron/util/startupQueue.ts)),
   priority below provider warm-up, lane `extension-updates` if that lane exists for the updater
   — repository fetches are network-bound and safe to overlap, but the queue's serial default is
   fine and simpler. Nothing about this may run at module scope (AGENTS.md §12).
@@ -300,7 +300,7 @@ bug is in the funnel, not here — the test is the tripwire.
 - `extension:getProviderTree` (existing channel) — nodes gain `origin` and `custom`.
 - The job queue (`enqueueJobs` with `kind: 'addRepository'`) is unchanged.
 
-Type additions go in [src/types/plugin.ts](../../cs3_windows/src/types/plugin.ts) wherever
+Type additions go in [src/types/plugin.ts](../../desktop/src/types/plugin.ts) wherever
 `ProviderTreeRepository` is mirrored for the renderer — the shared-types-both-sides rule
 applies; the renderer must import the type, not redeclare it.
 
@@ -310,8 +310,8 @@ applies; the renderer must import the type, not redeclare it.
 
 | Surface                                                                                      | Change                                                                                                                                                                                                                                                                    |
 | -------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| [RepositoryCatalog.tsx](../../cs3_windows/src/components/extensions/RepositoryCatalog.tsx)   | Custom URL form: unchanged entry point. On `alreadyAdded`, show "Already in your repositories" as neutral feedback, not an error.                                                                                                                                         |
-| Installed tab ([SourceTree.tsx](../../cs3_windows/src/components/extensions/SourceTree.tsx)) | Zero-extension custom repositories render (CR-4) with name, "Added by you" badge, added date, and an Install-all action. Rows with `unreachableReason` show one muted line: "Could not be reached since \<date\> — \<reason\>. Your installed extensions are unaffected." |
+| [RepositoryCatalog.tsx](../../desktop/src/components/extensions/RepositoryCatalog.tsx)   | Custom URL form: unchanged entry point. On `alreadyAdded`, show "Already in your repositories" as neutral feedback, not an error.                                                                                                                                         |
+| Installed tab ([SourceTree.tsx](../../desktop/src/components/extensions/SourceTree.tsx)) | Zero-extension custom repositories render (CR-4) with name, "Added by you" badge, added date, and an Install-all action. Rows with `unreachableReason` show one muted line: "Could not be reached since \<date\> — \<reason\>. Your installed extensions are unaffected." |
 | Repository row badge                                                                         | `origin === 'custom'` → a "Custom" chip beside the existing bundled/catalogue labelling (CR-5).                                                                                                                                                                           |
 | Remove confirmation                                                                          | Existing cascade dialog; copy gains the extension count for custom repositories exactly as for catalogue ones.                                                                                                                                                            |
 
@@ -357,7 +357,7 @@ Nothing here is developer-mode gated (the §settings-level rule about choices an
 ### 9.1 New pure unit suite — `electron/customRepositories.test.mts`
 
 Run via `bun run test custom-repositories` (add the alias to
-[scripts/test-runner.mjs](../../cs3_windows/scripts/test-runner.mjs) `PRESET_ALIASES`; suites
+[scripts/test-runner.mjs](../../desktop/scripts/test-runner.mjs) `PRESET_ALIASES`; suites
 are auto-discovered so the alias is the only edit). Extract the record logic into a small pure
 module — `electron/cs3/customRepositories.ts` — injected with the datastore and a fetch
 function, for the same reason `resumePlan.ts` and `ottPlatforms.ts` are pure: every wrong
@@ -430,9 +430,9 @@ by something — the orphan-component failure mode).
 4. **`refreshCustomRepositories`** — startup-queue registration in `main.ts`, failure
    marking. CR-10 tests.
 5. **Renderer** — badge, zero-extension rows, unreachable line, `alreadyAdded` toast
-   ([SourceTree.tsx](../../cs3_windows/src/components/extensions/SourceTree.tsx),
-   [RepositoryCatalog.tsx](../../cs3_windows/src/components/extensions/RepositoryCatalog.tsx),
-   [ExtensionsScreen.tsx](../../cs3_windows/src/components/extensions/ExtensionsScreen.tsx)).
+   ([SourceTree.tsx](../../desktop/src/components/extensions/SourceTree.tsx),
+   [RepositoryCatalog.tsx](../../desktop/src/components/extensions/RepositoryCatalog.tsx),
+   [ExtensionsScreen.tsx](../../desktop/src/components/extensions/ExtensionsScreen.tsx)).
 6. **Docs** — this PRD's status → implemented; `AGENTS.md` services table gains
    `cs3/customRepositories.ts` with one dense entry; `docs/PRD/00-index.md` gains the row.
 

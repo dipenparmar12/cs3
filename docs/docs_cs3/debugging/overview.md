@@ -23,7 +23,7 @@ Developer mode is a renderer reveal; the data channels themselves are unconditio
 1. **Classify the failure** with the shared taxonomy (`failureTaxonomy.classifyFailure`) — one closed cause set. Count the
    log first (grouping by cause turned 113 load failures into 6 missing classes).
 2. **Decide which side owns it:** if the harness (`tools/e2e/provider-e2e.mjs`, no Electron) passes and the app doesn't, the bug is in
-   `cs3_windows/`; if the harness fails, it is in the runtime or the extension.
+   `desktop/`; if the harness fails, it is in the runtime or the extension.
 3. **Trace the layer** with the table in [troubleshooting.md](troubleshooting.md).
 4. **Check the runtime copy** before assuming a shim/bridge bug: compare `%APPDATA%/<app>/cs3-runtime/runtime/` against
    `sidecar/runtime/` and `runtime:getStatus` (`stale`).

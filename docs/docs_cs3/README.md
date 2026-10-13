@@ -2,7 +2,7 @@
 
 Two subjects, kept apart on purpose:
 
-1. **CS3 Desktop** (`cs3_windows/` + `sidecar/`) — the Electron app in this repository. **Source code is the authority**;
+1. **CS3 Desktop** (`desktop/` + `sidecar/`) — the Electron app in this repository. **Source code is the authority**;
    these documents describe what the code does today. Start here.
 2. **Android reference** (`android/`) — the upstream CloudStream 3 Android app (v4.8.0) that the desktop app ports.
    Useful for expected behaviour; it does **not** describe this codebase.
@@ -44,7 +44,7 @@ intent/requirements: `docs/PRD/`; deep domain notes: `docs/agents/`.
 [verification report](android/VERIFICATION_REPORT.md) (Android-only; compares those documents to the upstream Android tree).
 
 Android docs paths such as `app/src/main/…` refer to the upstream Android repository
-(`repositories/_cloudstream_ref_android`, an **uninitialised submodule** by default), not to anything in `cs3_windows/`.
+(`repositories/_cloudstream_ref_android`, an **uninitialised submodule** by default), not to anything in `desktop/`.
 
 ## Maintenance rules
 * Code wins. When a document disagrees with the code, fix the document in the same change.

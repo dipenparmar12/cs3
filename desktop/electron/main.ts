@@ -1376,6 +1376,7 @@ function createWindow() {
     const cleanTitle = title?.trim();
     if (
       cleanTitle &&
+      cleanTitle !== 'desktop' &&
       cleanTitle !== 'cs3_windows' &&
       cleanTitle !== 'CloudStream 3 Desktop' &&
       cleanTitle !== 'CloudStream 3' &&

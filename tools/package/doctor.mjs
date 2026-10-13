@@ -20,7 +20,7 @@
  *   node tools/package/doctor.mjs --build  # before `bun run build` (prebuild)
  *   node tools/package/doctor.mjs --dist   # before packaging (preelectron:build)
  *
- * What it will change on its own: `cs3_windows/node_modules` (an install), the
+ * What it will change on its own: `desktop/node_modules` (an install), the
  * Electron binary inside it, and the jars under `sidecar/` (a Maven build) —
  * all inside this checkout, all re-creatable. What it asks first: downloading a
  * JDK (~190 MB) or Maven (~10 MB) into `tools/toolchain/`, which is gitignored
@@ -42,7 +42,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 export const ROOT = path.resolve(here, '..', '..');
-const APP = path.join(ROOT, 'cs3_windows');
+const APP = path.join(ROOT, 'desktop');
 const SIDECAR = path.join(ROOT, 'sidecar');
 const TOOLCHAIN = path.join(ROOT, 'tools', 'toolchain');
 const isWindows = process.platform === 'win32';
@@ -365,7 +365,7 @@ function buildChecks(ctx) {
     },
     {
       id: 'deps',
-      label: 'App dependencies (cs3_windows/node_modules)',
+      label: 'App dependencies (desktop/node_modules)',
       modes: ['check', 'setup', 'dev', 'build', 'dist'],
       inspect() {
         if (!fs.existsSync(path.join(APP, 'node_modules'))) return { ok: false, detail: 'not installed' };
@@ -387,7 +387,7 @@ function buildChecks(ctx) {
           if (result.status !== 0) throw new Error(`${command} ${args.join(' ')} failed`);
         },
       },
-      hint: 'cd cs3_windows && bun install   (Bun: https://bun.sh — npm install also works)',
+      hint: 'cd desktop && bun install   (Bun: https://bun.sh — npm install also works)',
     },
     {
       id: 'electron',
@@ -410,7 +410,7 @@ function buildChecks(ctx) {
           if (result.status !== 0) throw new Error('the Electron download failed');
         },
       },
-      hint: 'cd cs3_windows && node node_modules/electron/install.js',
+      hint: 'cd desktop && node node_modules/electron/install.js',
     },
     {
       id: 'java',
@@ -476,7 +476,7 @@ function buildChecks(ctx) {
           if (result.status !== 0) throw new Error('the sidecar build failed (see the Maven output above)');
         },
       },
-      hint: 'cd cs3_windows && bun run setup   (builds it with Maven)',
+      hint: 'cd desktop && bun run setup   (builds it with Maven)',
     },
     {
       id: 'runtime',
@@ -619,7 +619,7 @@ export async function runDoctor({ mode = 'check', assumeYes = false, skipJvm = f
     log(`${isBlocking ? red('✗') : yellow('!')} ${check.label} — ${result.detail}`);
     const fixLine =
       check.fix && check.fix.kind === 'confirm'
-        ? `Fix: cd cs3_windows && bun run setup   (${check.fix.describe()})`
+        ? `Fix: cd desktop && bun run setup   (${check.fix.describe()})`
         : null;
     if (fixLine) log(`    ${fixLine}`);
     log(`    ${fixLine ? 'Or: ' : 'Fix: '}${check.hint}`);
@@ -628,7 +628,7 @@ export async function runDoctor({ mode = 'check', assumeYes = false, skipJvm = f
 
   if (mode === 'dev' && warnings.length > 0) {
     log(yellow('The app will start, but extensions will not run until the items marked ! are fixed:'));
-    log(`    ${bold('cd cs3_windows && bun run setup')}`);
+    log(`    ${bold('cd desktop && bun run setup')}`);
   }
 
   return {
@@ -686,7 +686,7 @@ if (invokedDirectly) {
   });
   if (!report.ok) {
     console.error(red(`\nNot ready: ${report.problems.length} problem${report.problems.length === 1 ? '' : 's'} above.`));
-    if (mode !== 'setup') console.error(`Run ${bold('cd cs3_windows && bun run setup')} to fix what can be fixed automatically.`);
+    if (mode !== 'setup') console.error(`Run ${bold('cd desktop && bun run setup')} to fix what can be fixed automatically.`);
     process.exit(1);
   }
   if (!quiet) console.log(green('\nReady.'));

@@ -45,9 +45,9 @@ import {
   MediaInspector,
   detectExtensionPicky,
   drmRequiresEme,
-} from '../../cs3_windows/electron/media/mediaInspector.ts';
-import { runTool } from '../../cs3_windows/electron/media/runTool.ts';
-import { decideStrategy } from '../../cs3_windows/electron/media/decisionEngine.ts';
+} from '../../desktop/electron/media/mediaInspector.ts';
+import { runTool } from '../../desktop/electron/media/runTool.ts';
+import { decideStrategy } from '../../desktop/electron/media/decisionEngine.ts';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = path.resolve(HERE, '..', '..');
