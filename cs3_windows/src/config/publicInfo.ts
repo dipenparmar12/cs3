@@ -98,16 +98,32 @@ export const PUBLIC_INFO: PublicInfo = {
     ],
   },
   donations: {
-    /*
-     * Empty until real destinations are chosen. Examples of the two shapes:
-     *
-     *   { kind: 'link', id: 'bmc', label: 'Buy Me a Coffee',
-     *     url: 'https://buymeacoffee.com/<handle>', description: 'Cards, Apple Pay, Google Pay' },
-     *   { kind: 'link', id: 'razorpay', label: 'UPI and Indian cards',
-     *     url: 'https://razorpay.me/@<handle>', description: 'UPI, RuPay, netbanking' },
-     *   { kind: 'upi', id: 'upi', label: 'UPI', upiId: '<name>@<bank>' },
-     */
-    methods: [],
+    methods: [
+      {
+        kind: 'link',
+        id: 'bmc',
+        label: 'Buy Me a Coffee',
+        url: 'https://buymeacoffee.com/dipenparmar12',
+        description: 'Cards, Apple Pay, Google Pay',
+      },
+      {
+        kind: 'link',
+        id: 'github-sponsors',
+        label: 'GitHub Sponsors',
+        url: 'https://github.com/sponsors/dipenparmar12',
+        description: 'Sponsor via GitHub',
+      },
+      /*
+       * Patreon is not activated yet — will be turned on in future:
+       * {
+       *   kind: 'link',
+       *   id: 'patreon',
+       *   label: 'Patreon',
+       *   url: 'https://www.patreon.com/dipenparmar12',
+       *   description: 'Monthly support and membership',
+       * },
+       */
+    ],
   },
 };
 
