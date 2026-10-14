@@ -1,28 +1,38 @@
 import path from 'node:path';
+import { isInside } from '../security/localFiles.ts';
 
 /**
- * Validates and confines target paths requested for folder/file reveal.
+ * What "Show in folder" may open (audit SEC-06 in the second report).
  *
- * Prevents arbitrary directory browsing via IPC by strictly confining targets
- * to the active downloads directory or the application data directory.
- * Any unconfined or empty target safely defaults to the downloads folder.
+ * The handler only ever *opens a directory* or *highlights a file*
+ * (`shell.openPath` on directories, `showItemInFolder` on files), so this is
+ * about navigation, not execution: an arbitrary renderer-supplied path should
+ * not walk the file manager around the disk.
+ *
+ * Allowed: anything inside a download root (the folder chosen in Settings and
+ * the OS Downloads folder), the app's data folder, or exactly a file this app
+ * downloaded — and that file's folder. The last one matters: a download saved
+ * before the viewer changed the download folder lives outside every current
+ * root, and confining to roots alone made "Show in folder" silently open the
+ * wrong place. Compared segment-wise and case-folded on Windows (`isInside`).
+ * Anything else falls back to the first root.
  */
 export function resolveSafeRevealTarget(
   targetPath: string | undefined | null,
-  downloadsDir: string,
-  dataDir: string
+  roots: readonly string[],
+  knownFiles: readonly string[] = [],
+  platform: NodeJS.Platform = process.platform
 ): string {
-  if (!targetPath) return downloadsDir;
+  const usableRoots = roots.filter(Boolean).map((root) => path.resolve(root));
+  const fallback = usableRoots[0] ?? '';
+  if (!targetPath) return fallback;
+
   const resolved = path.resolve(String(targetPath));
-  const normalizedDownloads = path.resolve(downloadsDir);
-  const normalizedData = path.resolve(dataDir);
+  if (usableRoots.some((root) => isInside(resolved, root, platform))) return resolved;
 
-  const inDownloads =
-    resolved === normalizedDownloads ||
-    resolved.startsWith(normalizedDownloads + path.sep);
-  const inData =
-    resolved === normalizedData ||
-    resolved.startsWith(normalizedData + path.sep);
+  const same = (a: string, b: string) => (platform === 'win32' ? a.toLowerCase() === b.toLowerCase() : a === b);
+  const known = knownFiles.filter(Boolean).map((file) => path.resolve(file));
+  if (known.some((file) => same(file, resolved) || same(path.dirname(file), resolved))) return resolved;
 
-  return inDownloads || inData ? resolved : normalizedDownloads;
+  return fallback;
 }

@@ -5172,7 +5172,11 @@ ipcMain.handle('download:getActiveBatches', async () => batchDownloader.getActiv
 
 ipcMain.handle('download:revealInFolder', async (_, targetPath?: string) => {
   const defaultDir = storage.downloadsDir();
-  const target = resolveSafeRevealTarget(targetPath, defaultDir, storage.dataDir);
+  const target = resolveSafeRevealTarget(
+    targetPath,
+    [defaultDir, app.getPath('downloads'), storage.dataDir],
+    downloadService.getTasks().map((task) => task.targetFilePath)
+  );
   try {
     const normalized = path.normalize(target);
     if (fs.existsSync(normalized)) {
