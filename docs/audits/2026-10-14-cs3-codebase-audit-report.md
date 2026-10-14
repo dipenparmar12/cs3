@@ -6,6 +6,8 @@
 **Date:** 2026-10-14  
 **Audit Status:** Completed, Confirmed Remediations Implemented & Regression-Tested  
 
+> **Review note (2026-10-14).** Checked against the code in `2026-10-14-codebase-audit.md` §6. Corrections: SEC-01's `'unsafe-eval'` is not required and has been removed; SEC-06 is Low (navigation, not execution) and its confinement was widened so downloads in a previous download folder can still be revealed; the `ip` advisory affects all versions (2.0.1 is installed) and is unrelated to the media proxy; `VideoPlayer.tsx` is 5,788 lines. The findings themselves stand.
+
 ---
 
 ## 1. Executive Summary & Verification Matrix

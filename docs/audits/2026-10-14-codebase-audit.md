@@ -53,7 +53,7 @@ Severity is by realistic likelihood × impact for a desktop media app whose rend
 | SEC-06 | Medium | **`download:enqueue`/`request` accepted a renderer-supplied `targetFilePath`**, letting the IPC caller choose where provider bytes are written (a Startup folder included). | `main.ts` | Stripped at the IPC boundary; paths are always built in main from sanitised titles. The renderer never set one (`downloadIdentity.ts` sends `''`). |
 | SEC-07 | Medium | **"System default player" launched `cmd /c start "" <url>`** — `&` in a provider URL ran as a command. CWE-78. | `externalPlayer.ts` | `rundll32 url.dll,FileProtocolHandler <url>`, no shell. Custom players are refused unless `.exe` on Windows (a `.bat` would be parsed by cmd). |
 | SEC-08 | Low | **CI tokens over-privileged**: `release.yml` gave `contents: write` to every job, including build jobs running dependency install scripts; `ci.yml` used defaults. | `.github/workflows` | Read-only by default; `contents: write` on the publish job only. |
-| SEC-09 | Low | **CSP allowed `'unsafe-eval'`**, which nothing needs (no `eval`/`new Function` in any production bundle); no `base-uri`/`form-action`. | `desktop/index.html` | Removed; `base-uri 'none'; form-action 'none'` added. Built app: 0 violations. |
+| SEC-09 | Low | **The CSP added in the parallel audit pass allowed `'unsafe-eval'`**, which nothing needs (no `eval`/`new Function` in any production bundle); no `base-uri`/`form-action`. (The last commit before that pass had no CSP at all — see §6.) | `desktop/index.html` | Removed; `base-uri 'none'; form-action 'none'` added. Built app: 0 violations. |
 | REL-01 | High | **App crash**: a non-Latin-1 response header (`【…】` in `Content-Disposition`) made Electron's `net.fetch` throw inside its own callback — uncaught, process dead (last line of a 2026-10-14 log). | `main.ts`, `util/headerBytes.ts` | Header values re-encoded as their UTF-8 bytes in `onHeadersReceived`; the exact Electron error is contained if one slips through. Tests reproduce the throw. |
 | REL-02 | Medium | Detached `spawn` without an `error` listener → a missing/moved player executable was an uncaught exception in main. | `externalPlayer.ts`, `externalPlayerControl.ts` | Listeners added. |
 | REL-03 | High | **`release.yml` could not run**: in the build job `with:` was written as its own list item under `setup-node` and `setup-java`, giving steps with neither `uses` nor `run`, which GitHub rejects. | `.github/workflows/release.yml` | Fixed; both workflows parsed and every step validated. |
@@ -89,3 +89,21 @@ Severity is by realistic likelihood × impact for a desktop media app whose rend
 2. Run the release workflow once on GitHub (it has never run) with a `v*-rc` tag.
 3. SEC-10 and SEC-11 (both small, contained).
 4. Dependency refresh within ranges (DEP-02) behind a full `dist:win` run.
+
+## 6. Reconciliation with the second report
+
+`2026-10-14-cs3-codebase-audit-report.md` was written in parallel against the same tree, and part of it describes the fixes above. Each of its findings was checked against the code:
+
+| Its ID | Verdict | Notes |
+|---|---|---|
+| SEC-01 CSP missing | **Valid; remediation partly wrong** | There was no CSP in the last commit before that pass, and it added one. Its claim that `'unsafe-eval'` is "required for Shaka Player / WebAssembly" is not borne out: no production bundle contains `eval`/`new Function`, the built app runs with 0 violations without it, and WebAssembly would need `'wasm-unsafe-eval'`, not `'unsafe-eval'`. Removed (SEC-09 here). |
+| SEC-02 – SEC-05 | Valid | The same findings as SEC-02 – SEC-05 here, and the same fixes. |
+| SEC-06 reveal-in-folder | **Valid, Low rather than Medium** | The handler opens directories and highlights files (`showItemInFolder`), never launches one, so the risk is navigation, not execution. Its confinement also broke "Show in folder" for downloads saved before the download folder was changed, or into the OS Downloads folder; now any download root, the data folder, or a file this app downloaded (and its folder) is allowed, compared segment-wise and case-folded (`download/revealTarget.ts`, 5 tests). |
+| ARCH-01 god modules | Valid (informational) | Same as ARC-01 here. Measured sizes differ from the report: `VideoPlayer.tsx` 5,788 lines, `main.ts` 7,070 lines / 353 handlers, `pluginManager.ts` 4,410, `preload.ts` 2,579. Extract per IPC namespace as each changes; a big-bang split was tried and rejected (AGENTS.md §14). |
+| ARCH-02 preload interface segregation | Not adopted | Namespacing the 380-method API would touch every caller for no change in privilege — the whole API is one trust level either way. Revisit if any method needs a narrower audience. |
+| ARCH-03 `sourceLease` / `playbackTelemetry` unwired | Valid, already known | AGENTS.md §6.11 records it. Wiring leases is PRD-40.1 feature work with its own design, not an audit fix; expired links are currently recovered by the playback session's re-resolve. |
+| DRY-01, DRY-02 | Valid, fixed | Committed as `refactor: report caught errors with describeError`. |
+| §3 `ip` advisory | **Facts wrong** | The installed `ip` is 2.0.1 and GHSA-2p57 affects every version, not "≤ 1.1.8". The media proxy's loopback filtering is unrelated: the weakness is in `bittorrent-tracker`'s peer address filtering (DEP-01 here). |
+| Residual: Job Objects for the sidecar | Valid idea | Restricting what the extension JVM may spawn (Windows Job Objects / macOS sandbox profiles) would narrow SEC-13. Needs a design: extensions legitimately make network requests. |
+
+Findings in this report that the second one does not cover: the unsandboxed renderer (SEC-01), renderer-chosen download paths (SEC-06), the `cmd /c start` injection (SEC-07), CI token scope (SEC-08), the header crash (REL-01), the release workflow that could not run (REL-03) and the macOS signing switch (REL-04).
