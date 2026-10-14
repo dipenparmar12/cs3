@@ -26,6 +26,7 @@ import {
   variantFromSource,
 } from '../utils/downloadIdentity';
 import { HoverMenu } from './player/HoverMenu';
+import { controlLanguageLabel, numberedLanguageLabel } from './player/controlLabels';
 import { EpisodePanel } from './player/EpisodePanel';
 import { SourcePanel } from './player/SourcePanel';
 import { SourceResolveOverlay } from './player/SourceResolveOverlay';
@@ -3343,7 +3344,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
           // Worth saying: it is why this track sounds different from the file.
           track.playable && track.channels <= 2 ? undefined : 'converted',
         ].filter(Boolean);
-        return { index: track.index, label: name, detail: facts.join(' · ') };
+        return { index: track.index, label: name, language: track.language, detail: facts.join(' · ') };
       }),
     [capability]
   );
@@ -3403,6 +3404,26 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
     });
     return englishFirst;
   }, [subtitles, fetchedSubtitles, prepared?.subtitles]);
+
+  const subtitleControlLabel = useMemo(() => {
+    const active = activeSubtitle ? allSubtitles.find((sub) => sub.url === activeSubtitle) : undefined;
+    return active
+      ? numberedLanguageLabel(undefined, active.name, allSubtitles.map((sub) => ({ label: sub.name })))
+      : 'Subtitles';
+  }, [activeSubtitle, allSubtitles]);
+
+  const audioControlLabel = useMemo(() => {
+    const liveAudio = audioTracks.find((track) => String(track.id) === String(activeAudioTrack));
+    const probedAudio = probedAudioTracks.find((track) => track.index === selectedAudioIndex);
+    const selected = isNativeEngine ? liveAudio : probedAudio ?? liveAudio;
+    return controlLanguageLabel(selected?.language, selected?.label) || 'Audio';
+  }, [activeAudioTrack, audioTracks, isNativeEngine, probedAudioTracks, selectedAudioIndex]);
+
+  const qualityControlLabel = useMemo(
+    () => qualities.find((item) => item.level === quality)?.label ??
+      (activeSource?.parsed?.resolution ? `${activeSource.parsed.resolution}p` : ''),
+    [activeSource?.parsed?.resolution, qualities, quality]
+  );
 
   /**
    * Keeps the played-source record's track choices current.
@@ -4786,20 +4807,6 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
                 <Info size={15} />
               </button>
             )}
-            {onSearchTitle && (
-              <button
-                type="button"
-                className="player__title-search"
-                /* The clean title, not the release name: "Avengers Age of Ultron"
-                   finds the film, while "Avengers.Age.of.Ultron.2015.1080p.WEB-DL"
-                   finds nothing on any catalogue. */
-                onClick={() => onSearchTitle(title)}
-                title={`Search for "${title}"`}
-                aria-label={`Search for ${title}`}
-              >
-                <Search size={15} />
-              </button>
-            )}
             {progress?.mediaUrl && (
               <button
                 type="button"
@@ -4813,6 +4820,20 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
                 aria-label="Save this playback"
               >
                 {playbackSaved ? <BookmarkCheck size={15} /> : <BookmarkPlus size={15} />}
+              </button>
+            )}
+            {onSearchTitle && (
+              <button
+                type="button"
+                className="player__title-search"
+                /* The clean title, not the release name: "Avengers Age of Ultron"
+                   finds the film, while "Avengers.Age.of.Ultron.2015.1080p.WEB-DL"
+                   finds nothing on any catalogue. */
+                onClick={() => onSearchTitle(title)}
+                title={`Search for "${title}"`}
+                aria-label={`Search for ${title}`}
+              >
+                <Search size={15} />
               </button>
             )}
           </div>
@@ -5323,103 +5344,86 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
             ) : null}
           </button>
 
-          {/* Subtitle search sits immediately to the right side of the download panel.
-              Optional control: enabled by default, can be toggled via Player Settings. */}
-          {/*
-            One Subtitles button: choose a track, turn them off, or find more
-            online, all in one panel. There were two — a menu that chose and a
-            panel that searched — under the same icon.
-          */}
-          {(showSubtitlesControl || allSubtitles.length > 0) && (
-            <button
-              className={`icon-button ${subtitlePanelOpen ? 'active' : ''}${activeSubtitle ? ' icon-button--on' : ''}`}
-              data-panel-toggle
-              onClick={(e) => {
-                e.stopPropagation();
-                setSubtitlePanelOpen((v) => !v);
-                revealControls();
-              }}
-              aria-label="Subtitles"
-              title={(() => {
-                const current = activeSubtitle ? allSubtitles.find((sub) => sub.url === activeSubtitle) : null;
-                return current ? `Subtitles: ${current.name} (C to toggle)` : 'Subtitles (C to toggle)';
-              })()}
-            >
-              <Subtitles size={18} />
-            </button>
-          )}
+          <div className="player__media-controls" aria-label="Tracks and quality">
+            {(showSubtitlesControl || allSubtitles.length > 0) && (
+              <button
+                className={`player__media-control ${subtitlePanelOpen ? 'active' : ''}${activeSubtitle ? ' player__media-control--on' : ''}`}
+                data-panel-toggle
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setSubtitlePanelOpen((v) => !v);
+                  revealControls();
+                }}
+                aria-label={activeSubtitle ? `Subtitles: ${subtitleControlLabel}` : 'Subtitles'}
+                title={activeSubtitle ? `Subtitles: ${subtitleControlLabel} (C to toggle)` : 'Subtitles (C to toggle)'}
+              >
+                <Subtitles size={16} />
+                <span>{subtitleControlLabel}</span>
+              </button>
+            )}
 
-          {qualities.length > 1 && (
-            <HoverMenu
-              icon={<Settings2 size={16} />}
-              label="Quality"
-              value={quality}
-              onChange={setQuality}
-              onOpenChange={onMenuOpenChange}
-              options={[
-                { value: AUTO_QUALITY, label: 'Auto' },
-                ...qualities.map((q) => ({ value: q.level, label: q.label, detail: q.detail })),
-              ]}
-            />
-          )}
+            {qualities.length > 1 && (
+              <HoverMenu
+                icon={<Settings2 size={16} />}
+                label="Quality"
+                value={quality}
+                onChange={setQuality}
+                onOpenChange={onMenuOpenChange}
+                options={[
+                  { value: AUTO_QUALITY, label: 'Auto' },
+                  ...qualities.map((q) => ({ value: q.level, label: q.label, detail: q.detail })),
+                ]}
+              />
+            )}
+            {qualities.length <= 1 && qualityControlLabel && (
+              <span className="player__media-status" title={`Quality: ${qualityControlLabel}`}>
+                <Settings2 size={16} />
+                <span>{qualityControlLabel}</span>
+              </span>
+            )}
 
-          {/* Probed tracks take precedence over the element's own list: a
-              `<video>` does not expose tracks it cannot decode at all, so the
-              AC-3 Japanese dub simply would not appear without the probe.
-              Under the native engine, mpv's own live track list is used directly. */}
-          {isNativeEngine ? (
-            audioTracks.length > 1 && (
+            {isNativeEngine ? (
+              audioTracks.length > 1 && (
+                <HoverMenu
+                  icon={<Volume2 size={16} />}
+                  label="Audio"
+                  value={activeAudioTrack}
+                  onChange={(val) => selectAudioTrack(val)}
+                  onOpenChange={onMenuOpenChange}
+                  triggerText={audioControlLabel}
+                  options={audioTracks.map((track) => ({ value: track.id, label: track.label, detail: track.language ? track.language.toUpperCase() : undefined }))}
+                />
+              )
+            ) : probedAudioTracks.length > 1 ? (
               <HoverMenu
                 icon={<Volume2 size={16} />}
                 label="Audio"
-                value={activeAudioTrack}
-                onChange={(val) => selectAudioTrack(val)}
+                value={selectedAudioIndex}
+                onChange={(val) => void selectProbedAudio(Number(val))}
                 onOpenChange={onMenuOpenChange}
-                triggerText={
-                  audioTracks.find((a) => String(a.id) === String(activeAudioTrack))?.label ?? 'Audio'
-                }
-                options={audioTracks.map((track) => ({
-                  value: track.id,
-                  label: track.label,
-                  detail: track.language ? track.language.toUpperCase() : undefined,
-                }))}
+                triggerText={audioControlLabel}
+                options={probedAudioTracks.map((track) => ({ value: track.index, label: track.label, detail: track.detail }))}
               />
-            )
-          ) : probedAudioTracks.length > 1 ? (
-            <HoverMenu
-              icon={<Volume2 size={16} />}
-              label="Audio"
-              value={selectedAudioIndex}
-              onChange={(val) => void selectProbedAudio(Number(val))}
-              onOpenChange={onMenuOpenChange}
-              triggerText={
-                probedAudioTracks.find((t) => t.index === selectedAudioIndex)?.label ?? 'Audio'
-              }
-              options={probedAudioTracks.map((track) => ({
-                value: track.index,
-                label: track.label,
-                detail: track.detail,
-              }))}
-            />
-          ) : (
-            audioTracks.length > 1 && (
-              <HoverMenu
-                icon={<Volume2 size={16} />}
-                label="Audio"
-                value={activeAudioTrack}
-                onChange={(val) => selectAudioTrack(val)}
-                onOpenChange={onMenuOpenChange}
-                triggerText={
-                  audioTracks.find((a) => String(a.id) === String(activeAudioTrack))?.label ?? 'Audio'
-                }
-                options={audioTracks.map((track) => ({
-                  value: track.id,
-                  label: track.label,
-                  detail: track.language ? track.language.toUpperCase() : undefined,
-                }))}
-              />
-            )
-          )}
+            ) : (
+              audioTracks.length > 1 && (
+                <HoverMenu
+                  icon={<Volume2 size={16} />}
+                  label="Audio"
+                  value={activeAudioTrack}
+                  onChange={(val) => selectAudioTrack(val)}
+                  onOpenChange={onMenuOpenChange}
+                  triggerText={audioControlLabel}
+                  options={audioTracks.map((track) => ({ value: track.id, label: track.label, detail: track.language ? track.language.toUpperCase() : undefined }))}
+                />
+              )
+            )}
+            {audioTracks.length <= 1 && probedAudioTracks.length <= 1 && audioControlLabel !== 'Audio' && (
+              <span className="player__media-status" title={`Audio: ${audioControlLabel}`}>
+                <Volume2 size={16} />
+                <span>{audioControlLabel}</span>
+              </span>
+            )}
+          </div>
 
           {showSpeedControl && (
             <HoverMenu

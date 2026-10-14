@@ -2092,10 +2092,53 @@
 .player-panel__now { font-size: 0.66rem; color: var(--accent-primary); flex-shrink: 0; }
 .player-panel__episode-play { color: var(--text-muted); flex-shrink: 0; }
 
-.player__buttons { display: flex; align-items: center; gap: 0.6rem; margin-top: 0.4rem; }
+.player__buttons { position: relative; display: flex; align-items: center; gap: 0.6rem; margin-top: 0.4rem; }
 .player__time { font-size: 0.8rem; color: var(--text-muted); font-variant-numeric: tabular-nums; }
 .player__volume { width: 90px; accent-color: var(--accent-primary); user-select: none; }
 .player__spacer { flex: 1; }
+.player__media-controls {
+  position: absolute;
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
+  min-width: 0;
+}
+.player__media-control,
+.player__media-controls .hover-menu__trigger,
+.player__media-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.32rem;
+  max-width: 9.5rem;
+  min-width: 0;
+  padding: 0.32rem 0.45rem;
+  color: rgba(255, 255, 255, 0.86);
+  font-size: 0.76rem;
+  line-height: 1;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  cursor: pointer;
+}
+.player__media-control > span,
+.player__media-controls .hover-menu__value,
+.player__media-status > span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.player__media-control:hover,
+.player__media-control:focus-visible,
+.player__media-controls .hover-menu__trigger:hover,
+.player__media-controls .hover-menu__trigger:focus-visible { background: rgba(255, 255, 255, 0.13); color: #fff; }
+.player__media-control--on { color: var(--accent-primary); }
+@media (max-width: 820px) {
+  .player__media-controls { gap: 0; }
+  .player__media-control, .player__media-controls .hover-menu__trigger { max-width: 6.5rem; }
+  .player__media-status { max-width: 6.5rem; }
+}
 .player__select {
   background: rgba(255, 255, 255, 0.08);
   border: none;
