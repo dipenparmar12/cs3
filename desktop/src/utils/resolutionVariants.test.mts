@@ -4,6 +4,7 @@ import {
   formatResolutionLabel,
   areResolutionSiblings,
   findResolutionVariants,
+  findLanguageVariants,
 } from './resolutionVariants.ts';
 import type { TorrentResult, ParsedRelease } from '../types/torrent.ts';
 import { Resolution } from '../types/torrent.ts';
@@ -198,6 +199,53 @@ test('findResolutionVariants returns sorted, deduplicated resolution variants', 
   assert.equal(variants[2].label, '480p');
   assert.equal(variants[2].isCurrent, false);
 });
+
+// PRD §123.7's own example: English 1080p/720p, Hindi 1080p/480p.
+const matrix = () => {
+  const make = (id: string, langs: string[], res: Resolution) =>
+    createSource({ infoHash: id, providerName: 'P', indexerName: 'X', parsed: { cleanTitle: 'Film', languages: langs, resolution: res } });
+  return {
+    en1080: make('en1080', ['en'], 1080),
+    en720: make('en720', ['en'], 720),
+    hi1080: make('hi1080', ['hi'], 1080),
+    hi480: make('hi480', ['hi'], 480),
+  };
+};
+
+test('quality rungs stay inside the playing language (no Hindi 720p, no silent swap)', () => {
+  const m = matrix();
+  const all = Object.values(m);
+  assert.deepEqual(findResolutionVariants(m.en720, all).map((v) => v.source.infoHash), ['en1080', 'en720']);
+  assert.deepEqual(findResolutionVariants(m.hi1080, all).map((v) => v.source.infoHash), ['hi1080', 'hi480']);
+});
+
+test('a language that only overlaps is not offered as a quality rung', () => {
+  const both = createSource({ infoHash: 'both', providerName: 'P', indexerName: 'X', parsed: { cleanTitle: 'Film', languages: ['hi', 'en'], resolution: 1080 } });
+  const enOnly = createSource({ infoHash: 'en', providerName: 'P', indexerName: 'X', parsed: { cleanTitle: 'Film', languages: ['en'], resolution: 720 } });
+  assert.equal(areResolutionSiblings(both, enOnly), false);
+});
+
+test('language rungs keep the resolution when that version has it, else the nearest', () => {
+  const m = matrix();
+  const all = Object.values(m);
+  const from1080 = findLanguageVariants(m.en1080, all);
+  assert.deepEqual(from1080.map((v) => [v.key, v.source.infoHash, v.isCurrent]), [
+    ['en', 'en1080', true],
+    ['hi', 'hi1080', false],
+  ]);
+  const from720 = findLanguageVariants(m.en720, all);
+  assert.equal(from720.find((v) => v.key === 'hi')?.source.infoHash, 'hi480');
+});
+
+test('no language rungs without a declared language or a second version', () => {
+  const m = matrix();
+  const unknown = createSource({ infoHash: 'u', providerName: 'P', indexerName: 'X', parsed: { cleanTitle: 'Film', languages: [], resolution: 1080 } });
+  assert.deepEqual(findLanguageVariants(unknown, [unknown, ...Object.values(m)]), []);
+  assert.deepEqual(findLanguageVariants(m.en1080, [m.en1080, m.en720]), []);
+  // An unlabelled link is never given the language of its neighbours.
+  assert.equal(findLanguageVariants(m.en1080, [m.en1080, m.hi1080, unknown]).length, 2);
+});
+
 
 let failed = 0;
 for (const [name, fn] of tests) {

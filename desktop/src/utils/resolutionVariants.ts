@@ -69,15 +69,16 @@ export function formatResolutionLabel(resolution: number): string {
 const lower = (value: string | undefined) => (value ?? '').toLowerCase().trim();
 
 /**
- * Whether two links are the same release at (possibly) different resolutions.
+ * Whether two links are one release from one place, whatever their resolution
+ * or language.
  *
  * Conservative on every axis PRD §99.2 lists, because a wrong "yes" swaps the
  * film for another one while the menu says only the quality changed: same
  * provider (never across providers, however similar the title), same extractor
- * when both name one, same episode, same title once resolution and file
- * decorations are stripped, and languages that overlap where both declare any.
+ * when both name one, same episode, and the same title once resolution,
+ * language and file decorations are stripped.
  */
-export function areResolutionSiblings(a: TorrentResult, b: TorrentResult): boolean {
+export function areSameRelease(a: TorrentResult, b: TorrentResult): boolean {
   if (a === b) return true;
 
   const providerA = lower(a.providerName || a.indexerName);
@@ -91,13 +92,27 @@ export function areResolutionSiblings(a: TorrentResult, b: TorrentResult): boole
 
   const coreA = lower(a.parsed?.cleanTitle) || coreTitle(a.title);
   const coreB = lower(b.parsed?.cleanTitle) || coreTitle(b.title);
-  if (!coreA || coreA !== coreB) return false;
+  return Boolean(coreA) && coreA === coreB;
+}
 
-  const langsA = (a.parsed?.languages ?? []).map(lower);
-  const langsB = new Set((b.parsed?.languages ?? []).map(lower));
-  if (langsA.length > 0 && langsB.size > 0 && !langsA.some((l) => langsB.has(l))) return false;
+/**
+ * The audio version a link carries, as a stable key: `en+hi`, or `''` when it
+ * declares none. Never borrowed from a sibling (PRD §123.4 Case C).
+ */
+export function languageKey(source: TorrentResult): string {
+  return [...new Set((source.parsed?.languages ?? []).map(lower).filter(Boolean))].sort().join('+');
+}
 
-  return true;
+/**
+ * Same release at (possibly) another resolution, *in the same audio version*.
+ *
+ * The languages must be the same set, not merely overlap: "Hindi + English
+ * 1080p" and "English 720p" overlap, and offering the second as "720p" would
+ * drop Hindi without a word (PRD §123.7: never silently substitute a
+ * language). A link that declares none matches only another that declares none.
+ */
+export function areResolutionSiblings(a: TorrentResult, b: TorrentResult): boolean {
+  return areSameRelease(a, b) && languageKey(a) === languageKey(b);
 }
 
 /**
@@ -144,4 +159,75 @@ export function findResolutionVariants(
       isCurrent: resolution === activeRes,
       failed: resolution !== activeRes && isFailed(source),
     }));
+}
+
+/**
+ * One rung of the audio-language menu that is a *different link* (PRD §123.4
+ * Case B): the provider sent "Hindi 1080p" and "English 1080p" as two sources
+ * rather than one stream with two audio tracks.
+ */
+export interface LanguageVariant {
+  /** `languageKey` of the link: `hi`, `en+hi`. */
+  key: string;
+  languages: string[];
+  resolution: number;
+  source: TorrentResult;
+  isCurrent: boolean;
+  failed: boolean;
+}
+
+/**
+ * The audio versions of the playing release, one link each.
+ *
+ * For every language set the release comes in, the link chosen keeps the
+ * current resolution when that version has it, else the nearest one (higher on
+ * a tie) — so a change of language never also becomes an unasked change of
+ * quality when it need not (§123.7), and the caller can say when it must. A
+ * link that failed this session yields to one that has not.
+ *
+ * Empty unless there is a real choice, and empty when the playing link
+ * declares no language: there would be no way to mark which rung is current.
+ */
+export function findLanguageVariants(
+  activeSource: TorrentResult | null | undefined,
+  allSources: TorrentResult[] | undefined,
+  failedHashes: ReadonlySet<string> = new Set(),
+): LanguageVariant[] {
+  if (!activeSource || !allSources || allSources.length === 0) return [];
+  const activeKey = languageKey(activeSource);
+  if (!activeKey) return [];
+  const activeRes = extractResolution(activeSource);
+
+  const isFailed = (s: TorrentResult) => Boolean(s.infoHash) && failedHashes.has(s.infoHash);
+  const distance = (s: TorrentResult) => {
+    const res = extractResolution(s);
+    if (!activeRes || !res) return Number.MAX_SAFE_INTEGER;
+    return Math.abs(res - activeRes) * 2 + (res < activeRes ? 1 : 0);
+  };
+  const better = (candidate: TorrentResult, held: TorrentResult) => {
+    if (isFailed(held) !== isFailed(candidate)) return isFailed(held);
+    if (distance(candidate) !== distance(held)) return distance(candidate) < distance(held);
+    return (candidate.score ?? 0) > (held.score ?? 0);
+  };
+
+  const byKey = new Map<string, TorrentResult>([[activeKey, activeSource]]);
+  for (const sibling of allSources) {
+    if (sibling === activeSource || sibling.infoHash === activeSource.infoHash) continue;
+    const key = languageKey(sibling);
+    if (!key || key === activeKey || !areSameRelease(activeSource, sibling)) continue;
+    const held = byKey.get(key);
+    if (!held || better(sibling, held)) byKey.set(key, sibling);
+  }
+  if (byKey.size < 2) return [];
+
+  return [...byKey.entries()]
+    .map(([key, source]) => ({
+      key,
+      languages: key.split('+'),
+      resolution: extractResolution(source),
+      source,
+      isCurrent: key === activeKey,
+      failed: key !== activeKey && isFailed(source),
+    }))
+    .sort((a, b) => Number(b.isCurrent) - Number(a.isCurrent) || a.key.localeCompare(b.key));
 }
