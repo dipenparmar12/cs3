@@ -412,7 +412,12 @@ export class ExternalPlayerService {
         if (process.platform === 'darwin') {
           child = spawn('open', [url], { detached: true, stdio: 'ignore' });
         } else if (process.platform === 'win32') {
-          child = spawn('cmd.exe', ['/c', 'start', '', url], {
+          /*
+           * Never `cmd /c start "" <url>`: cmd parses the URL, and a provider's
+           * query string is full of `&` — `…?a=1&calc` would run `calc`. The
+           * protocol handler takes the URL as one argument, with no shell.
+           */
+          child = spawn('rundll32.exe', ['url.dll,FileProtocolHandler', url], {
             detached: true,
             stdio: 'ignore',
             windowsHide: true,
@@ -420,6 +425,9 @@ export class ExternalPlayerService {
         } else {
           child = spawn('xdg-open', [url], { detached: true, stdio: 'ignore' });
         }
+        // A detached child that fails to start emits `error` later; unheard, it
+        // is an uncaught exception in main.
+        child.on('error', (error) => console.warn('[external-player] system default failed:', describeError(error)));
         child.unref();
         return { ok: true };
       } catch (error) {
@@ -447,6 +455,7 @@ export class ExternalPlayerService {
         });
       }
 
+      child.on('error', (error) => console.warn(`[external-player] ${player.name} failed:`, describeError(error)));
       child.unref();
       return { ok: true };
     } catch (error) {
