@@ -20,7 +20,7 @@ const MODES: Array<{ value: AdultMode; label: string; detail: string }> = [
     value: 'ask',
     label: 'Ask before showing',
     detail:
-      'They stay installed and configured but hidden. Revealing them lasts until you close the app, and every launch starts hidden again.',
+      'They stay installed and configured but hidden. Each launch starts hidden and asks once; revealing them lasts until you close the app.',
   },
   {
     value: 'on',
