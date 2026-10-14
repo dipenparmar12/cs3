@@ -5600,6 +5600,8 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
             allSources={sourceSession?.sources}
             download={currentDownload ?? null}
             onOpenChange={onMenuOpenChange}
+            externalPlayers={externalPlayers}
+            onOpenExternal={(playerId) => void handleOpenExternalPlayer(playerId)}
             playerState={() => ({
               position: `${Math.floor(currentTime)}s`,
               duration: duration ? `${Math.floor(duration)}s` : undefined,

@@ -50,6 +50,14 @@ interface PlayerCopyMenuProps {
   /** Delegates to the main process, which owns the environment and the log. */
   onCopyDiagnostics: (mode: 'current' | 'full') => Promise<string | null>;
   onOpenChange?: (open: boolean) => void;
+  /** Players found on this machine; the list the control bar's picker uses. */
+  externalPlayers?: Array<{ id: string; name: string }>;
+  /**
+   * The player's own handoff: it pauses the element and keeps a remote to the
+   * player where one exists. Launching from here directly did neither, so the
+   * film carried on underneath VLC with both soundtracks playing.
+   */
+  onOpenExternal?: (playerId: string) => void;
 }
 
 /** Nothing empty, nothing undefined — a report full of blanks reads as broken. */
@@ -74,20 +82,13 @@ export const PlayerCopyMenu: React.FC<PlayerCopyMenuProps> = ({
   playerState,
   onCopyDiagnostics,
   onOpenChange,
+  externalPlayers = [],
+  onOpenExternal,
 }) => {
   const isDeveloper = useIsDeveloper();
   const [open, setOpen] = useState(false);
   const { message: copied, flash: setCopied } = useFlash<string>(2200);
   const wrapper = useRef<HTMLDivElement | null>(null);
-  const [externalPlayers, setExternalPlayers] = useState<Array<{ id: string; name: string }>>([]);
-
-  React.useEffect(() => {
-    if (!open) return;
-    void window.cloudstream?.listExternalPlayers?.().then((res) => {
-      if (res?.players) setExternalPlayers(res.players);
-    });
-  }, [open]);
-
   React.useEffect(() => {
     onOpenChange?.(open);
   }, [open, onOpenChange]);
@@ -207,16 +208,16 @@ export const PlayerCopyMenu: React.FC<PlayerCopyMenuProps> = ({
    */
   const activeLink = activeSource ? sourceAddress(activeSource) : streamUrl;
   const everyday: Array<{ label: string; hint?: string; run: () => void }> = [
-    ...externalPlayers.map((p) => ({
-      label: `Play in ${p.name}`,
-      hint: 'Launch in external player',
-      run: () => {
-        setOpen(false);
-        void window.cloudstream?.openInExternalPlayer?.(p.id, streamUrl).then((res) => {
-          setCopied(res?.ok ? `Opening in ${p.name}…` : (res?.error ?? `Could not start ${p.name}`));
-        });
-      },
-    })),
+    ...(onOpenExternal && streamUrl
+      ? externalPlayers.map((p) => ({
+          label: `Play in ${p.name}`,
+          hint: 'Continue in that player',
+          run: () => {
+            setOpen(false);
+            onOpenExternal(p.id);
+          },
+        }))
+      : []),
     ...(activeLink
       ? [{ label: 'Copy video link', hint: 'Open it in another player', run: () => void write('link', activeLink) }]
       : []),
