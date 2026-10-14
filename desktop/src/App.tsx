@@ -1061,7 +1061,11 @@ export const App: React.FC = () => {
     if (!window.cloudstream) return;
     try {
       const response = await window.cloudstream.startSearch(query, options);
-      if (response.snapshot) setSearch(response.snapshot);
+      if (response.snapshot) {
+        setSearch(response.snapshot);
+        // An IMDb link comes back searched as the title it names; say so.
+        if (response.snapshot.query !== query) setSearchQuery(response.snapshot.query);
+      }
       if (!response.ok && response.error) setSearchError(response.error);
     } catch (err) {
       setSearchError(describeError(err));
@@ -2431,6 +2435,7 @@ export const App: React.FC = () => {
                     savedView={savedView}
                     onSaveResults={handleSaveSearch}
                     onClearResults={handleClearSearchResults}
+                    onSearch={(query) => void handleSearch(query)}
                   />
                 </ErrorBoundary>
               )}

@@ -2129,6 +2129,13 @@ ipcMain.handle('api:searchAll', async (_, query: string, options?: SearchOptions
  */
 ipcMain.handle('search:start', async (_, query: string, options?: SearchOptions) => {
   try {
+    // An IMDb id or link is searched as the work it names, by title. A caller
+    // that already pinned a work (a picked suggestion) keeps its own.
+    const exact = options?.exact ? null : await contentService.exactFromImdbQuery(query);
+    if (exact) {
+      query = exact.title;
+      options = { ...options, exact };
+    }
     const snapshot = contentService.startSearch(query, options ?? {});
     /**
      * Recorded now, not when the search finishes.

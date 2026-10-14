@@ -4464,6 +4464,59 @@
   max-width: 46ch;
 }
 
+.search-idle {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 1.5rem;
+  padding-top: 2rem;
+}
+.search-idle__recent {
+  width: min(100%, 640px);
+  text-align: center;
+}
+.search-idle__recent h3 {
+  margin: 0 0 0.6rem;
+  font-size: 0.75rem;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+.search-idle__recent ul {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 0.4rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.search-idle__chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  max-width: 28ch;
+  padding: 0.3rem 0.7rem;
+  overflow: hidden;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: var(--radius-full);
+  background: rgba(255, 255, 255, 0.04);
+  color: var(--text-secondary, inherit);
+  font-size: 0.8rem;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  cursor: pointer;
+}
+.search-idle__chip:hover,
+.search-idle__chip:focus-visible {
+  background: rgba(255, 255, 255, 0.09);
+  color: var(--text-primary, inherit);
+}
+.search-idle__chip--empty {
+  opacity: 0.6;
+}
+
 .search-section {
   display: flex;
   align-items: center;

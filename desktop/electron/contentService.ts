@@ -1,4 +1,4 @@
-import { TvType, type ExtractorLink, type SearchOptions, type SearchResponse } from '../src/types/api';
+import { TvType, type ExactMedia, type ExtractorLink, type SearchOptions, type SearchResponse } from '../src/types/api';
 import type {
   IndexerQuery,
   ParsedRelease,
@@ -8,6 +8,8 @@ import type {
 import { MetadataProvider, parseMetadataUrl, type MetadataDetail } from './metadataProvider';
 import {
   CinemetaProvider,
+  buildCinemetaUrl,
+  imdbIdFromQuery,
   parseBareImdbUrl,
   parseCinemetaUrl,
   type CinemetaDetail,
@@ -650,6 +652,31 @@ export class ContentService {
    */
   public startSearch(query: string, options: SearchOptions = {}): SearchSnapshot {
     return this.searches.start(query, options);
+  }
+
+  /**
+   * A query that is an IMDb id or title page, as the work it names.
+   *
+   * Providers only accept text, so "tt1160419" or a pasted imdb.com link found
+   * nothing anywhere. Resolved to its title and searched in `exact` mode —
+   * the same path a picked autocomplete suggestion takes — so the named work
+   * leads the results and its catalogue row survives even if no provider has
+   * it. `null` for any other query, or when Cinemeta cannot place the id.
+   */
+  public async exactFromImdbQuery(query: string): Promise<ExactMedia | null> {
+    const imdbId = imdbIdFromQuery(query);
+    if (!imdbId) return null;
+    const work = await this.cinemeta.resolveImdb(imdbId).catch(() => null);
+    if (!work) return null;
+    const isSeries = work.type === TvType.TvSeries || work.type === TvType.Anime;
+    return {
+      title: work.title,
+      year: work.year,
+      type: work.type,
+      imdbId,
+      url: buildCinemetaUrl(isSeries ? 'series' : 'movie', imdbId),
+      posterUrl: work.posterUrl,
+    };
   }
 
   public cancelSearch(id: string): SearchSnapshot | null {
