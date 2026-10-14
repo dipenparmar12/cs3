@@ -450,14 +450,15 @@ export class PlaybackEngine {
       });
 
       /*
-       * A stream ffprobe could not read, but that is not dead, goes to mpv when
-       * it is there: mpv demuxes and probes for itself with the platform's
-       * decoders, and the alternative is a blind software re-encode — the
-       * slowest, least reliable rung. This was the "mpv used to open for
-       * unsupported media" path that never asked whether mpv existed.
+       * A stream ffprobe could not read stays with the app: a failed probe is
+       * usually the link (a timeout, a refusal), not a format the app cannot
+       * play, so the in-app path gets its turn and mpv follows only if it fails
+       * on the media. Straight to mpv only when Settings make it the first
+       * choice (`aggressive`).
        */
       const native = this.deps.nativeEngine();
-      const toMpv = !failure.dead && native.available && native.policy !== 'off' && !request.avoidNativeEngine;
+      const toMpv =
+        !failure.dead && native.available && native.policy === 'aggressive' && !request.avoidNativeEngine;
       return {
         resolvedUrl,
         transport: inspection.transport,
@@ -595,12 +596,12 @@ export class PlaybackEngine {
      * whatever bitstream defeated the element is very likely ordinary to it. If
      * it is not available, or the policy is `off`, the re-encode is still there.
      *
-     * A source that *declared* it needs a full player (`preferNativeEngine`)
-     * takes the same route up front instead of failing in the element first;
-     * without mpv it falls through to the ordinary decision, not a re-encode.
+     * Only after the in-app player has had its turn: a provider's name asking
+     * for VLC ("Castle TV (Use VLC)") is not a reason to skip it. The app plays
+     * first; mpv is for what it cannot play, or when Settings make it default.
      */
     const forcedToNative =
-      (request.force || request.preferNativeEngine) &&
+      request.force &&
       // "Play in this window" on the native engine: the one request that must
       // never be answered with mpv again.
       !request.avoidNativeEngine &&

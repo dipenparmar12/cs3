@@ -82,7 +82,6 @@ import { OSD_VISIBLE_MS, describeOsd, nextOsd, type OsdAction, type OsdState } f
 import { describeError } from '../utils/errors';
 import { useIsDeveloper } from '../utils/ExperienceModeContext';
 import { findResolutionVariants, findLanguageVariants, extractResolution, formatResolutionLabel } from '../utils/resolutionVariants';
-import { asksForExternalPlayer } from '../utils/enginePreference';
 import { isWindowFullScreen, setWindowFullScreen, useWindowFullScreen } from '../utils/useWindowFullScreen';
 
 interface VideoPlayerProps {
@@ -587,7 +586,6 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
       headers: activeSource?.directHeaders,
       isDash: activeSource?.isDash,
       drm: activeSource?.drm,
-      preferNativeEngine: asksForExternalPlayer(activeSource),
     }),
     // Deliberately keyed on the serialised identity rather than the object.
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -3149,7 +3147,6 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
         // ffprobe to be misdiagnosed as a corrupt file.
         drm: sourceConfig.drm,
         provider: providerProvenance?.provider,
-        preferNativeEngine: sourceConfig.preferNativeEngine,
         // The language the viewer keeps choosing, so the engine plans *that* track
         // (remuxing it in where the browser cannot pick it) rather than the default.
         preferredAudioLanguage: titlePreferences.current?.audioLanguage ?? preferredAudioLanguage.current ?? undefined,

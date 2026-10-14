@@ -389,12 +389,6 @@ export interface PlaybackStreamRequest {
   provider?: string;
   preferredAudioLanguage?: string;
   /**
-   * The source declared it needs a full player (`Castle TV (Use VLC)`); see
-   * `src/utils/enginePreference.ts`. Routes to mpv when it is available and
-   * allowed, exactly like a forced retry — never for DRM.
-   */
-  preferNativeEngine?: boolean;
-  /**
    * Never route to mpv: the viewer pressed "Play in this window" on the native
    * engine. The stream is converted for the built-in player instead.
    */
