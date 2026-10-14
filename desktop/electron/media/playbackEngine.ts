@@ -319,7 +319,7 @@ export class PlaybackEngine {
   private async measure(
     resolvedUrl: string,
     originUrl: string,
-    request: Pick<PlaybackStreamRequest, 'isM3u8' | 'isDash' | 'drm' | 'headers' | 'preferredAudioLanguage'>
+    request: Pick<PlaybackStreamRequest, 'isM3u8' | 'isDash' | 'drm' | 'headers' | 'preferredAudioLanguage' | 'avoidNativeEngine'>
   ): Promise<SourceCapabilityModel> {
     const host = await this.hostCapability();
     const { isM3u8 } = request;
@@ -449,6 +449,15 @@ export class PlaybackEngine {
           .join(' · ') || undefined,
       });
 
+      /*
+       * A stream ffprobe could not read, but that is not dead, goes to mpv when
+       * it is there: mpv demuxes and probes for itself with the platform's
+       * decoders, and the alternative is a blind software re-encode — the
+       * slowest, least reliable rung. This was the "mpv used to open for
+       * unsupported media" path that never asked whether mpv existed.
+       */
+      const native = this.deps.nativeEngine();
+      const toMpv = !failure.dead && native.available && native.policy !== 'off' && !request.avoidNativeEngine;
       return {
         resolvedUrl,
         transport: inspection.transport,
@@ -458,8 +467,10 @@ export class PlaybackEngine {
         failure,
         directPlayable: false,
         // INV-RACE-3: unknown video is never copied.
-        requiredStrategy: 'FULL_TRANSCODE',
-        transformationPlan: blindFallbackPlan(host),
+        requiredStrategy: toMpv ? 'NATIVE_MPV' : 'FULL_TRANSCODE',
+        transformationPlan: toMpv
+          ? { videoAction: 'none', audioAction: 'none', selectedAudioIndex: -1, containerAction: 'passthrough', subtitleAction: 'ignore' }
+          : blindFallbackPlan(host),
         drm: inspection.drm,
         requiresEmeDecryption: false,
         explanation: failure.reason,
@@ -590,6 +601,9 @@ export class PlaybackEngine {
      */
     const forcedToNative =
       (request.force || request.preferNativeEngine) &&
+      // "Play in this window" on the native engine: the one request that must
+      // never be answered with mpv again.
+      !request.avoidNativeEngine &&
       capability.requiredStrategy !== 'EME_NATIVE' &&
       !capability.requiresEmeDecryption &&
       (() => {
@@ -618,6 +632,14 @@ export class PlaybackEngine {
      */
     if (forcedToNative) {
       capability = { ...capability, requiredStrategy: 'NATIVE_MPV', directPlayable: false };
+    } else if (request.force) {
+      /*
+       * The re-encode was chosen, so the model must say so. Left as the
+       * decision's own strategy — `NATIVE_MPV` for a stream it had routed to
+       * mpv — the renderer would hand the URL back to mpv while a conversion
+       * session sat unused: "Play in this window" did nothing.
+       */
+      capability = { ...capability, requiredStrategy: 'FULL_TRANSCODE', directPlayable: false, transformationPlan: plan };
     }
 
     /**

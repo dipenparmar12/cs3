@@ -394,6 +394,11 @@ export interface PlaybackStreamRequest {
    * allowed, exactly like a forced retry — never for DRM.
    */
   preferNativeEngine?: boolean;
+  /**
+   * Never route to mpv: the viewer pressed "Play in this window" on the native
+   * engine. The stream is converted for the built-in player instead.
+   */
+  avoidNativeEngine?: boolean;
 }
 
 export interface PlaybackStreamResponse {

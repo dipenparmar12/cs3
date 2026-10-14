@@ -1436,8 +1436,10 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
    * forced pass does not consult the probe — this runs precisely when the probe
    * has already been wrong about something.
    */
-  const forceTranscodeRef = useRef<(() => void) | null>(null);
+  const forceTranscodeRef = useRef<((options?: { inApp?: boolean }) => void) | null>(null);
   const forcedFor = useRef<string | null>(null);
+  /** The URL "Play in this window" already converted, so a second press is a no-op. */
+  const inAppFor = useRef<string | null>(null);
   /**
    * The one rung every transport steps onto when it gives up.
    *
@@ -3234,13 +3236,26 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
    * nothing in them to match on.
    */
   useEffect(() => {
-    forceTranscodeRef.current = () => {
-      if (forcedFor.current === streamUrl) return;
-      forcedFor.current = streamUrl;
+    forceTranscodeRef.current = (options?: { inApp?: boolean }) => {
+      /*
+       * `inApp` is the native engine's "Play in this window": convert for the
+       * built-in player and never route back to mpv. It used to call this same
+       * forced retry, which (a) returned at once because the forced retry had
+       * already run for this URL — usually it is how mpv was reached — and
+       * (b) would have sent the stream straight back to mpv anyway. Allowed
+       * once per URL, like the automatic retry.
+       */
+      const inApp = Boolean(options?.inApp);
+      const guard = inApp ? inAppFor : forcedFor;
+      if (guard.current === streamUrl) return;
+      guard.current = streamUrl;
 
       void (async () => {
         const previous = prepared?.sessionId;
-        const at = (isConverted ? playbackOffset : 0) + (videoRef.current?.currentTime ?? 0);
+        // Under mpv the element is idle; the engine's own position is the truth.
+        const at = isNativeEngine
+          ? currentPositionRef.current
+          : (isConverted ? playbackOffset : 0) + (videoRef.current?.currentTime ?? 0);
 
         // Still trying, not failed — standard mode says so rather than showing
         // an error panel for the length of a second attempt.
@@ -3258,6 +3273,8 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
             // override it anyway.
             refresh: true,
             force: true,
+            // "Play in this window": convert for the element, never back to mpv.
+            avoidNativeEngine: inApp,
           });
           if (!response?.ok || !response.playbackUrl) {
             // Conversion is unavailable; the source has had its chance.
@@ -4623,7 +4640,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
           onEnded={() => {
             if (nextEpisode && onSelectEpisode && !upNextDismissed) onSelectEpisode(nextEpisode);
           }}
-          onFallbackToBuiltIn={() => forceTranscodeRef.current?.()}
+          onFallbackToBuiltIn={() => forceTranscodeRef.current?.({ inApp: true })}
           onFindSubtitles={() => {
             setSubtitlePanelOpen(true);
             revealControls();
