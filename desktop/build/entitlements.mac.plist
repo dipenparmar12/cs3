@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  Hardened-runtime entitlements for a Developer ID build (PRD §126.4).
+
+  The minimum this app is known to need, each for a named reason:
+  - allow-jit, allow-unsigned-executable-memory: V8 (Electron) and the bundled
+    JRE that runs the extension sidecar both generate code at run time.
+  - disable-library-validation: the bundled JRE loads its own dylibs, and the
+    media runtime ships third-party binaries signed by their own authors.
+  Nothing here grants camera, microphone, location or network-server rights.
+-->
+<plist version="1.0">
+  <dict>
+    <key>com.apple.security.cs.allow-jit</key>
+    <true/>
+    <key>com.apple.security.cs.allow-unsigned-executable-memory</key>
+    <true/>
+    <key>com.apple.security.cs.disable-library-validation</key>
+    <true/>
+  </dict>
+</plist>

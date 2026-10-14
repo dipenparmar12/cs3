@@ -14,6 +14,10 @@ concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: true
 
+# Checks only read the repository (audit SEC-08).
+permissions:
+  contents: read
+
 jobs:
   checks:
     name: Checks (${{ matrix.os }})

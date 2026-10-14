@@ -45,7 +45,18 @@ asarUnpack:
   - node_modules/node-datachannel/**
   - node_modules/utp-native/**
 
+# Shown in the Windows file properties and the macOS "About" panel. The publisher
+# a user sees in a SmartScreen or UAC prompt is the *signing certificate's*
+# subject, set up as described in docs/release/distribution.md.
+copyright: Copyright © 2026 CloudStream Desktop contributors. GPL-3.0.
+
 win:
+  # Signed when a certificate is provided: CSC_LINK/CSC_KEY_PASSWORD (or
+  # WIN_CSC_LINK) for a .pfx, or Microsoft Artifact Signing (Azure Trusted
+  # Signing) through the AZURE_* variables that tools/package/build-installer.mjs
+  # turns into `win.azureSignOptions`. electron-builder signs the app executable,
+  # the installer and the portable exe alike.
+  #
   # x64 explicitly: an ia32 build cannot load the x64 native .node binaries
   # webtorrent pulls in, and electron-builder will happily attempt one if the
   # default ever changes.
@@ -60,19 +71,26 @@ win:
   # self-extracting portable exe. Same contents as the portable build.
   artifactName: CS3-${version}-windows-${arch}-portable.${ext}
 
-# macOS: a dmg to drag into Applications and a zip of the same .app. Built
-# unsigned by default (`identity: null`); `tools/package/after-pack.cjs` gives
-# the bundle an ad-hoc signature so it launches on Apple silicon, and a real
-# Developer ID is used when CSC_LINK is provided. An app downloaded without
-# notarisation is quarantined by Gatekeeper — the release notes say how to
-# open it (right-click → Open, or `xattr -dr com.apple.quarantine`).
+# macOS: a dmg to drag into Applications and a zip of the same .app.
+#
+# Signed with a Developer ID when one is provided (CSC_LINK/CSC_KEY_PASSWORD in
+# CI, or the keychain locally), with the hardened runtime notarisation requires,
+# and notarised when APPLE_ID/APPLE_APP_SPECIFIC_PASSWORD/APPLE_TEAM_ID (or an
+# APPLE_API_KEY) are set — see docs/release/distribution.md. This used to say
+# `identity: null`, which does not mean "unsigned by default": it switches
+# signing off even when a certificate is provided.
+#
+# With no identity, electron-builder leaves the bundle unsigned and
+# `scripts/after-pack.cjs` signs it ad hoc so it launches on Apple silicon. Such
+# a build is a preview: the release workflow publishes it only as a prerelease.
 mac:
   category: public.app-category.entertainment
   target:
     - dmg
     - zip
-  identity: null
-  hardenedRuntime: false
+  hardenedRuntime: true
+  entitlements: build/entitlements.mac.plist
+  entitlementsInherit: build/entitlements.mac.plist
   gatekeeperAssess: false
   artifactName: CS3-${version}-macos-${arch}.${ext}
 dmg:
