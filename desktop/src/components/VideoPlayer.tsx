@@ -83,6 +83,7 @@ import { describeError } from '../utils/errors';
 import { useIsDeveloper } from '../utils/ExperienceModeContext';
 import { findResolutionVariants, findLanguageVariants, extractResolution, formatResolutionLabel } from '../utils/resolutionVariants';
 import { asksForExternalPlayer } from '../utils/enginePreference';
+import { isWindowFullScreen, setWindowFullScreen, useWindowFullScreen } from '../utils/useWindowFullScreen';
 
 interface VideoPlayerProps {
   streamUrl: string;
@@ -456,7 +457,18 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
   const [backgroundPlayback, setBackgroundPlayback] = useState<BackgroundPlayback>('continue');
   const [alwaysOnTop, setAlwaysOnTop] = useState(false);
 
-  const [isFullscreen, setIsFullscreen] = useState(false);
+  /**
+   * Fullscreen is the window's (see `useWindowFullScreen`), never the HTML API
+   * on this container — the two stacked, and a player minimised while
+   * HTML-fullscreen shrank to a mini window on a black screen.
+   *
+   * `fullscreenOwnedRef` records whether *this player* turned it on. Going mini,
+   * hiding or closing gives back only what the player took: a viewer who was
+   * already in F11 mode stays there, one who pressed the player's button gets
+   * their windowed app back.
+   */
+  const [isFullscreen] = useWindowFullScreen();
+  const fullscreenOwnedRef = useRef(false);
   const [aspect, setAspect] = useState<AspectRatioMode>(AspectRatioMode.Fit);
   const [showSpeedControl, setShowSpeedControl] = useState(showPlaybackSpeedControl ?? false);
   const [showAspectControl, setShowAspectControl] = useState(showAspectRatioControl ?? false);
@@ -2509,33 +2521,34 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
     },
   });
 
-  const toggleFullscreen = useCallback(async () => {
-    const container = containerRef.current;
-    if (!container) return;
-    try {
-      if (document.fullscreenElement) {
-        await document.exitFullscreen();
-        setIsFullscreen(false);
-      } else {
-        await container.requestFullscreen();
-        setIsFullscreen(true);
-      }
-    } catch (err) {
-      console.warn('Failed to toggle fullscreen:', err);
-    }
+  const toggleFullscreen = useCallback(() => {
+    // One fullscreen: the button exits it however it was entered (F11 included).
+    const next = !isWindowFullScreen();
+    fullscreenOwnedRef.current = next;
+    setWindowFullScreen(next);
   }, []);
 
   useEffect(() => {
-    const onFullscreenChange = () => {
-      const fs = Boolean(document.fullscreenElement);
-      setIsFullscreen(fs);
-      if (!fs) {
-        setControlsVisible(true);
-      }
-    };
-    document.addEventListener('fullscreenchange', onFullscreenChange);
-    return () => document.removeEventListener('fullscreenchange', onFullscreenChange);
-  }, []);
+    if (!isFullscreen) {
+      // Left by any route — Esc, F11, the menu — so nothing is ours to give back.
+      fullscreenOwnedRef.current = false;
+      setControlsVisible(true);
+    }
+  }, [isFullscreen]);
+
+  // Mini, hidden or gone: give back the fullscreen this player took, and only that.
+  useEffect(() => {
+    if ((mini || hidden) && fullscreenOwnedRef.current) {
+      fullscreenOwnedRef.current = false;
+      setWindowFullScreen(false);
+    }
+  }, [mini, hidden]);
+  useEffect(
+    () => () => {
+      if (fullscreenOwnedRef.current) setWindowFullScreen(false);
+    },
+    []
+  );
 
   /**
    * Volume, mute and speed, remembered across media and across restarts.
@@ -4127,8 +4140,9 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
             state.setSourcePanelOpen(false);
             state.setSubtitlePanelOpen(false);
             state.setDownloadPanelOpen(false);
-          } else if (document.fullscreenElement) {
-            void document.exitFullscreen().catch(() => {});
+          } else if (isWindowFullScreen()) {
+            fullscreenOwnedRef.current = false;
+            setWindowFullScreen(false);
           } else {
             state.onBack();
           }
