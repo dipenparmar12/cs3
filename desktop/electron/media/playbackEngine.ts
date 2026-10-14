@@ -22,6 +22,7 @@ import {
 } from './decisionEngine.ts';
 import { MediaInspector, drmRequiresEme, transportFromUrl } from './mediaInspector.ts';
 import { drmFromProvider } from '../cs3/providerLinks.ts';
+import { describeError } from '../../src/utils/errors.ts';
 import type { InspectionStore } from './inspectionStore.ts';
 import { scopedLogger } from '../logging/logger.ts';
 
@@ -269,7 +270,7 @@ export class PlaybackEngine {
           results[i] = this.unmeasured(
             requests[i].url,
             transportFromUrl(requests[i].url, requests[i].isM3u8),
-            error instanceof Error ? error.message : 'Inspection failed'
+            describeError(error)
           );
         }
       }

@@ -12,6 +12,7 @@ import { MetacriticRatingProvider } from './providers/metacriticProvider.ts';
 import { TMDBRatingProvider } from './providers/tmdbProvider.ts';
 import { fetchWikidataReviewStatements } from './providers/wikidataHelper.ts';
 import { fetchJson } from '../../torrent/http.ts';
+import { describeError } from '../../../src/utils/errors.ts';
 import type { DatastoreManager } from '../../datastore.ts';
 
 const CINEMETA_BASE = 'https://v3-cinemeta.strem.io';
@@ -81,7 +82,7 @@ export class MediaRatingService {
         ok: fallback.length > 0,
         ratings: fallback,
         cached: true,
-        error: error instanceof Error ? error.message : String(error),
+        error: describeError(error),
       };
     }
   }

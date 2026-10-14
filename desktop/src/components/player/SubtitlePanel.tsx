@@ -28,6 +28,7 @@ import {
   type SubtitleStyle,
 } from '../../utils/subtitleStyle';
 import { getLanguageFlag, getLanguageName } from '../../utils/languageFlag';
+import { describeError } from '../../utils/errors';
 import { FlagIcon } from '../FlagIcon';
 import { orderLanguageChips, preferredLanguageKeys } from '../../utils/subtitleLanguageOrder';
 import { Globe } from 'lucide-react';
@@ -351,7 +352,7 @@ export const SubtitlePanel: React.FC<SubtitlePanelProps> = ({
         }
       } catch (err) {
         setLoading(false);
-        setError(err instanceof Error ? err.message : 'Subtitle search failed.');
+        setError(describeError(err));
       }
     },
     [searchQuery, searchSeason, searchEpisode, searchYear, season, episode, imdbId, title, providerCanAnswer, mediaUrl, languages, releaseName]

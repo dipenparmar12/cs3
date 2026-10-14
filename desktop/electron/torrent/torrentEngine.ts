@@ -554,7 +554,7 @@ export class TorrentEngine {
         if (!client.destroyed) {
           console.warn(
             '[torrent] non-fatal startup error:',
-            err instanceof Error ? err.message : err
+            describeError(err)
           );
           return;
         }
@@ -590,7 +590,7 @@ export class TorrentEngine {
     client.on('error', (err) => {
       // Client-level errors are usually per-torrent and non-fatal; a throw here
       // would take down the main process.
-      console.error('[torrent] client error:', err instanceof Error ? err.message : err);
+      console.error('[torrent] client error:', describeError(err));
     });
 
     /**

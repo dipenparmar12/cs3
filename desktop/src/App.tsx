@@ -1398,9 +1398,7 @@ export const App: React.FC = () => {
     try {
       await request.onRequestEpisode(episode);
     } catch (error) {
-      setSwitchError(
-        error instanceof Error ? error.message : 'Could not start that episode.'
-      );
+      setSwitchError(describeError(error));
     } finally {
       setSwitchingTo(null);
     }
