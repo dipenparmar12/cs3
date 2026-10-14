@@ -167,7 +167,7 @@ It once asked `findRuntimeDir()` where to copy *from* — which answers with the
 2. Provisioning reads from **build locations only** (`findSourceComponents`) and picks **newest, not first** — `sidecar/dist/` is generated *from* `sidecar/runtime/` and goes stale the moment Maven runs again.
 3. Translations drop when the sidecar changes; an absent stamp counts as changed.
 
-**Bump `RUNTIME_GENERATION`** whenever the shim/bridge/translator changes in a way an already-provisioned copy would get wrong (currently **16**; one paragraph per generation in `runtimeProvisioner.ts`). Debugging "a class that should exist doesn't"? Compare `%APPDATA%/<app>/cs3-runtime/runtime/` against `sidecar/runtime/` first.
+**Bump `RUNTIME_GENERATION`** whenever the shim/bridge/translator changes in a way an already-provisioned copy would get wrong (currently **17**; one paragraph per generation in `runtimeProvisioner.ts`). Debugging "a class that should exist doesn't"? Compare `%APPDATA%/<app>/cs3-runtime/runtime/` against `sidecar/runtime/` first.
 
 ---
 
@@ -460,7 +460,7 @@ registered) · `cs3/webViewHost.ts` (Cloudflare challenges) · `cs3/extensionIss
 **Rules:**
 - **Call `ensureProviderActive(name)` before using a provider.** Loading is lazy and per-archive, deduped by an in-flight map.
 - **Provider loading cannot be parallelised** — providers self-register into a global, and overlapping loads steal each other's providers (measured: 176 mis-attributed).
-- **Bump `RUNTIME_GENERATION`** whenever the shim, bridge or translator changes (currently **16**). The app runs a *copy* in `%APPDATA%`, not what you just built.
+- **Bump `RUNTIME_GENERATION`** whenever the shim, bridge or translator changes (currently **17**). The app runs a *copy* in `%APPDATA%`, not what you just built.
 - **`cs3-provider-bridge.jar` must live in `sidecar/runtime/`** — same loader as `library-jvm.jar`, or `BasePlugin` resolves as two different classes.
 - **The sidecar's stdout carries RPC frames and nothing else.** A stray `println` desyncs the channel; logs go to stderr.
 - **Shim rule: concede the type, refuse the operation.** Never widen a parameter or return type to `Object` (it renames the method — `ShimSignatureTest` enforces this); never forge the package name; never fake a platform number.
