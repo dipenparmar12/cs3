@@ -181,6 +181,13 @@ export interface TransformationPlan {
 
   audioAction: 'copy' | 'transcode' | 'none';
   targetAudioCodec?: 'aac';
+  /**
+   * The codec being copied, when `audioAction` is `copy` and the planner knew
+   * it. AAC copied out of MPEG-TS is ADTS, which the MP4 muxer refuses
+   * ("Malformed AAC bitstream") without `aac_adtstoasc` — and that filter
+   * errors on any other codec, so it is applied only when this says `aac`.
+   */
+  copiedAudioCodec?: string;
   /** Ordinal among audio streams; `-1` when the file has no audio. */
   selectedAudioIndex: number;
 

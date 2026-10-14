@@ -483,7 +483,17 @@ export class MediaTranscoder {
              * exists to fix.
              */
             ['-c:a', 'aac', '-b:a', '192k', '-ac', '2']
-          : ['-c:a', 'copy'])
+          : [
+              '-c:a', 'copy',
+              /*
+               * ADTS AAC (MPEG-TS, HLS) into MP4: measured on Castle TV's Hindi
+               * track, the muxer stopped after 0.24s with "Malformed AAC
+               * bitstream"; with the filter, 20s remuxed in 1.5s. A no-op on AAC
+               * that is already in MP4 form; refused by other codecs, hence the
+               * check.
+               */
+              ...(plan.copiedAudioCodec === 'aac' ? ['-bsf:a', 'aac_adtstoasc'] : []),
+            ])
       );
     }
 

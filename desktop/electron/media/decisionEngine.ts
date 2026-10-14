@@ -430,6 +430,7 @@ export function planForAudioTrack(
     selectedAudioIndex: track.index,
     audioAction: playable ? 'copy' : 'transcode',
     targetAudioCodec: playable ? undefined : 'aac',
+    copiedAudioCodec: playable ? track.codec : undefined,
   };
 }
 
@@ -796,6 +797,7 @@ function decideBrowserStrategy(
         videoAction: 'copy',
         audioAction: audioPlayable ? 'copy' : 'transcode',
         targetAudioCodec: audioPlayable ? undefined : 'aac',
+        copiedAudioCodec: audioPlayable ? track?.codec : undefined,
         selectedAudioIndex: audioIndex,
         containerAction: 'mp4_fragmented',
         subtitleAction: 'ignore',
