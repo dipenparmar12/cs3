@@ -1127,3 +1127,126 @@ tags: [Todo]
     ```
 
 
+## 
+
+### 119. Subtitle Selection and Search Experience Redesign
+
+**Objective**
+
+Redesign the subtitle selection workflow to make it simpler, more intuitive, and less visually cluttered, especially for users who are new to CS3. Preserve existing subtitle search, language filtering, metadata, recommendations, and playback functionality while presenting only the information users need to make a selection.
+
+The interface should prioritize subtitle titles, language identification, and quick selection. Additional metadata must remain accessible without being permanently displayed on every result.
+
+#### 119.1 Simplified Subtitle Result Items
+
+- Redesign the subtitle result component to display a concise, readable title as its primary content.
+- Show only essential secondary information inline, such as the language and a small language flag where appropriate.
+- Remove verbose metadata, provider descriptions, technical details, and other nonessential information from the default result layout.
+- Add a subtle information icon to each result when additional metadata is available.
+- Clicking or hovering over the information icon should reveal a compact popover containing relevant details, such as the subtitle provider, source, release or episode matching information, format, and other available metadata.
+- Display only information supported by the actual result. Do not invent missing metadata or show empty fields.
+- Ensure the information popover does not obstruct subtitle selection, overwhelm the interface, or require users to open a separate page.
+- Keep subtitle items compact and consistent across original-source subtitles and globally searched results.
+
+#### 119.2 Quick Subtitle Selection from the Player
+
+- Make the subtitle control in the central player interface the primary entry point for subtitle selection.
+- When the user clicks or hovers over the subtitle control, expose a compact quick-selection menu with the currently available original-source subtitle tracks.
+- Place **Off** as the first item, followed by available subtitle tracks in a sensible order, such as English, Hindi, and other languages.
+- Display concise labels and language indicators rather than lengthy technical descriptions.
+- Allow users to select a subtitle directly from this menu without opening the full subtitle sidebar.
+- Keep the quick-selection menu lightweight and visually consistent with the existing player controls.
+
+#### 119.3 One-Step Subtitle Off Control
+
+- Make disabling subtitles possible directly from the quick-selection menu.
+- The **Off** option must be immediately accessible and must not require opening the subtitle panel and locating a separate control at the top of the sidebar.
+- Clearly indicate the currently active subtitle track or the Off state.
+- When the user selects Off, disable subtitles immediately and update the player control to reflect the new state.
+- Keep the Off action available even when only one subtitle track exists.
+
+#### 119.4 Automatic Global Subtitle Search
+
+- If original-source subtitle tracks are available, show them in the quick-selection menu first.
+- If no original-source subtitles are available, selecting the subtitle control should open the subtitle panel and automatically start a global subtitle search for the current media.
+- Use the current title and, where available, season, episode, release, and other reliable matching metadata to identify relevant subtitle results.
+- Do not require users to manually enter the title or initiate the first search when the current media context is already known.
+- Show the available results progressively as providers return them, where supported by the existing search architecture.
+- Avoid launching duplicate searches when the panel is reopened or when a search for the same media is already running.
+- Provide appropriate loading, empty, and error states without filling the panel with unnecessary explanatory text.
+
+#### 119.5 Subtitle Search and Language Filtering
+
+- Provide a simple search field that allows users to search for subtitles by title, episode, release, or other supported search terms.
+- Support language-specific subtitle filtering so users can narrow results to languages such as English, Hindi, or other available languages.
+- Make language filtering discoverable without introducing a large collection of permanently visible controls.
+- Allow users to combine text search and language filtering where supported.
+- Clearly distinguish between searching for subtitle results and filtering results that have already been retrieved.
+- Preserve the current media context when searching so the user does not need to repeatedly enter the title and episode.
+- Ensure language labels and language identifiers are normalized consistently across providers.
+- Do not exclude potentially valid subtitles solely because optional language or release metadata is missing. Handle uncertain matches conservatively.
+
+#### 119.6 Subtitle Panel Information Hierarchy
+
+- Redesign the subtitle panel around three primary elements:
+  1. A compact search field.
+  2. Simple language filtering.
+  3. A comprehensive list of available subtitle results.
+- Keep advanced controls and detailed metadata out of the primary visual hierarchy unless the user explicitly requests them.
+- Avoid repeating the media title, provider information, format details, and matching diagnostics in every result when this information can be accessed through the information popover.
+- Ensure the result list uses available space efficiently and remains readable when many subtitles are returned.
+- Maintain consistent spacing, typography, icon sizing, and interaction behavior with the rest of the CS3 interface.
+- Preserve the panel's existing capabilities unless they are explicitly replaced by this redesign or verified to be redundant.
+
+#### 119.7 Original-Source and Global-Search Results
+
+- Distinguish original-source subtitle tracks from globally discovered subtitles without creating unnecessary visual complexity.
+- Prefer original-source tracks in the initial quick-selection menu because they are already associated with the selected playback source.
+- When the user opens the full subtitle panel, allow access to the broader set of globally discovered results.
+- Ensure globally discovered results are matched to the current title and episode as accurately as available metadata permits.
+- Avoid presenting unrelated subtitles as valid matches merely because their titles share a few words.
+- Keep provider identity available through a subtle indicator or the information popover rather than rendering verbose provider details on every row.
+- Preserve the relationship between each subtitle result and its actual downloadable or selectable resource.
+
+#### 119.8 Subtle Recommended Subtitle Indicator
+
+- Retain the existing recommendation or favorite-style indicator for the subtitle considered the best match for the current media.
+- Redesign its appearance so it communicates a recommendation without dominating the list or distracting users from other results.
+- Prefer a small, restrained icon or subtle visual treatment rather than a prominent badge, bright background, or strongly highlighted result card.
+- Make the recommendation understandable through familiar iconography, a tooltip, or accessible labeling.
+- Base recommendations on reliable matching information and existing recommendation logic rather than arbitrary ordering.
+- Do not imply that a subtitle is verified or guaranteed to synchronize correctly when the available evidence does not support that claim.
+- Ensure recommended and non-recommended results remain equally readable and selectable.
+
+#### 119.9 Accessibility and Interaction Behavior
+
+- Support keyboard navigation and selection throughout the quick menu, search field, language filters, result list, and information popovers.
+- Provide accessible labels for subtitle controls, language indicators, recommendation icons, and the Off action.
+- Do not rely on hover alone to expose essential information or actions. Equivalent interactions must be available through clicking and keyboard navigation.
+- Keep the currently selected subtitle state visually clear without excessive highlighting.
+- Ensure popovers and quick menus dismiss appropriately when clicking outside them, while avoiding accidental closure during interaction.
+- Preserve responsive behavior and prevent popovers or menus from being clipped by the player, sidebar, or application window.
+
+#### 119.10 Implementation and Compatibility
+
+- Review the existing subtitle panel, result components, player subtitle control, language normalization, search pipeline, and subtitle-selection logic before making changes.
+- Reuse existing search and playback services wherever possible rather than implementing duplicate subtitle discovery or selection logic.
+- Preserve compatibility with supported playback engines and subtitle formats.
+- Ensure selecting a globally discovered subtitle correctly applies or downloads the selected resource through the existing subtitle workflow.
+- Keep original-source tracks and globally discovered subtitles distinguishable internally so the correct selection and application logic is used.
+- Handle unavailable, expired, invalid, or incompatible subtitle resources gracefully.
+- Do not alter unrelated playback, audio-track, or resolution-selection behavior.
+
+#### 119.11 Acceptance Criteria
+
+- Users can select an available subtitle or disable subtitles directly from the player control without opening the full subtitle panel.
+- The Off option is always easy to find in the quick-selection menu.
+- Original-source subtitle tracks appear first when available.
+- When no original-source tracks are available, opening the subtitle control initiates a global search using the current media context.
+- Users can search for subtitles and filter results by language.
+- Subtitle results display concise titles and essential language information by default.
+- Additional provider and technical metadata is available through a compact information popover.
+- Recommended subtitles are identifiable without visually overpowering other results.
+- Large result lists remain compact, readable, and easy to navigate.
+- Existing subtitle search, matching, downloading, selection, and playback functionality remains reliable.
+- The redesigned experience reduces visual clutter and the number of interactions required for common subtitle tasks without removing useful capabilities.
