@@ -1,10 +1,10 @@
 import React, { useEffect, useState } from 'react';
 import { useFlash } from '../utils/useFlash';
-import { Tv, Play, Cpu, Download, Loader2, PictureInPicture2, Keyboard } from 'lucide-react';
+import { Tv, Play, Cpu, Download, Loader2, PictureInPicture2, Keyboard, Plus, X } from 'lucide-react';
 import { SettingGroup, SettingRow } from './settings/SettingRow';
 import { PlayerShortcutsPanel } from './settings/PlayerShortcutsPanel';
 import { AspectRatioMode } from '../types/player';
-import { Switch } from './ui';
+import { Button, Switch } from './ui';
 
 /**
  * Settings ▸ Player.
@@ -555,6 +555,20 @@ const NativePlayerSettingsGroup: React.FC<{ flash: (msg: string) => void }> = ({
     void loadPlayers(false);
   }, []);
 
+  const addCustomPlayer = async () => {
+    const res = await window.cloudstream?.addCustomExternalPlayer?.();
+    if (!res) return;
+    if (res.players) setPlayers(res.players);
+    if (!res.ok) flash(res.error ?? 'That program could not be added.');
+    else if (!res.cancelled) flash('Player added. It appears wherever you choose another player.');
+  };
+
+  const removeCustomPlayer = async (id: string, name: string) => {
+    const res = await window.cloudstream?.removeCustomExternalPlayer?.(id);
+    if (res?.players) setPlayers(res.players);
+    flash(`${name} removed from the list. The program itself is untouched.`);
+  };
+
   const handleToggleNativeButton = async (enabled: boolean) => {
     setShowNativeButton(enabled);
     await window.cloudstream?.setSetting('player_show_native_player_btn', enabled);
@@ -595,7 +609,11 @@ const NativePlayerSettingsGroup: React.FC<{ flash: (msg: string) => void }> = ({
             {players.map((p) => (
               <span
                 key={p.id}
+                title={p.id.startsWith('custom:') ? `Added by you: ${p.path}` : undefined}
                 style={{
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  gap: '0.25rem',
                   fontSize: '0.75rem',
                   padding: '0.2rem 0.5rem',
                   borderRadius: '4px',
@@ -606,19 +624,35 @@ const NativePlayerSettingsGroup: React.FC<{ flash: (msg: string) => void }> = ({
                 }}
               >
                 {p.name}
+                {p.id.startsWith('custom:') && (
+                  <Button
+                    size="compact"
+                    variant="ambient"
+                    iconOnly
+                    icon={X}
+                    aria-label={`Remove ${p.name}`}
+                    onClick={() => void removeCustomPlayer(p.id, p.name)}
+                  />
+                )}
               </span>
             ))}
           </div>
-          <button
-            className="btn btn-secondary btn-sm"
-            onClick={() => {
-              void loadPlayers(true);
-              flash('Rescanned installed native players.');
-            }}
-            disabled={loading}
-          >
-            {loading ? 'Scanning…' : 'Rescan Players'}
-          </button>
+          <div style={{ display: 'flex', gap: '0.35rem' }}>
+            {/* For an install detection cannot find: a portable build, an unusual folder. */}
+            <Button size="compact" icon={Plus} onClick={() => void addCustomPlayer()} disabled={loading}>
+              Add a player…
+            </Button>
+            <Button
+              size="compact"
+              onClick={() => {
+                void loadPlayers(true);
+                flash('Rescanned installed native players.');
+              }}
+              loading={loading}
+            >
+              {loading ? 'Scanning…' : 'Rescan Players'}
+            </Button>
+          </div>
         </div>
       </SettingRow>
 
