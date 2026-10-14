@@ -4,6 +4,25 @@ title: "Todo CloudStream #3"
 tags: [Todo]
 ---
 
+- [ ] App Signature and bypass OS security checks for legitimate app usage
+  §126 — distribution and signing
+
+  I built a real package to check the cause first. The portable exe and the app executable are both NotSigned, which is exactly what triggers SmartScreen's "Unknown publisher".
+  - macOS could never be signed: identity: null in electron-builder.yml turns signing off even when a certificate is provided, despite the comment saying otherwise. Removed, and hardened runtime plus minimal entitlements added for the bundled Java runtime.
+  - Signing from secrets only: Microsoft Artifact Signing or a .pfx certificate on Windows, Developer ID plus notarization on macOS. No credentials go in the repo.
+  - verify-signatures.mjs checks the finished artifacts. With REQUIRE_SIGNING=true, an unsigned build fails.
+  - Unsigned releases can't go out as normal releases: they're published only as a prerelease labelled "(unsigned preview)".
+  - Each release now also carries an SBOM (component list), next to the existing checksums.
+  - docs/release/distribution.md covers setup, what users see, how to verify a download, and how to handle antivirus false positives.
+
+  Decisions for you
+
+  - Signing account: Microsoft Artifact Signing (recommended; needs Azure and identity verification) or a certificate, plus an Apple Developer membership. Then set REQUIRE_SIGNING=true.
+  - appId: it's com.lagradost.cloudstream3.desktop, the upstream author's namespace. Changing it changes the Windows install identity, so decide before the first signed release.
+  - First run: the release workflow has never run on GitHub. Its first run should be a v…-rc tag.
+
+  The working tree also has changes I didn't make (torrentEngine.ts, the ratings and related-media files, revealTarget.ts, playbackEngine.ts); typecheck and tests pass with them in place. My work is uncommitted for your tooling to pick up. A 817 MB test build is sitting in desktop/release/ (gitignored) and can be deleted.
+
 - [x] Get the movie/media from imdb id/url fetch find the correct item and do the auto smart search of the content
 
 - [ ] When user selected item did not work or find any sources, we should move to the next item of results, in results there are many providers responded with sources so we shoul have some workaroun, cureently we have only one way whcih is seach all sources/providers. Make sure that we should some good techniques and methods to get the right and genuine content most of the time, increase the success ratio
