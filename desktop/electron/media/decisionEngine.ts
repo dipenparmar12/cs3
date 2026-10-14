@@ -747,6 +747,7 @@ function decideBrowserStrategy(
         hardwareAccelerator: videoPlayable ? undefined : host.accelerator,
         audioAction: audioPlayable ? 'copy' : 'transcode',
         targetAudioCodec: audioPlayable ? undefined : 'aac',
+        copiedAudioCodec: audioPlayable ? track?.codec : undefined,
         selectedAudioIndex: audioIndex,
         containerAction: 'mp4_fragmented',
         subtitleAction,
@@ -866,6 +867,7 @@ function decideBrowserStrategy(
       plan: {
         videoAction: 'copy',
         audioAction: 'copy',
+        copiedAudioCodec: track?.codec,
         selectedAudioIndex: audioIndex,
         containerAction: 'mp4_fragmented',
         subtitleAction,
@@ -910,6 +912,7 @@ function decideBrowserStrategy(
       hardwareAccelerator: host.accelerator,
       audioAction: audioPlayable ? 'copy' : 'transcode',
       targetAudioCodec: audioPlayable ? undefined : 'aac',
+      copiedAudioCodec: audioPlayable ? track?.codec : undefined,
       selectedAudioIndex: audioIndex,
       containerAction: 'mp4_fragmented',
       subtitleAction,
