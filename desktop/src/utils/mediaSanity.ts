@@ -39,6 +39,30 @@ export function looksLikeWrongMedia(input: MediaSanityInput): boolean {
   return actualSeconds < PLACEHOLDER_CEILING_SECONDS && actualSeconds < expectedSeconds * MAX_RATIO;
 }
 
+/**
+ * The length a stream may be judged by — `undefined` when nothing measured it.
+ *
+ * The element's `duration` is the source's length only when the element plays
+ * the source itself. On a conversion it is what ffmpeg has muxed so far (8 s,
+ * one second in), and on a live playlist it is the current window. Judging
+ * either called every converted Castle TV episode "an 8 s clip" and skipped it
+ * — taking the audio track the viewer had just chosen with it, and dropping
+ * them onto whichever source came next, in its default language.
+ */
+export function judgeableDuration(input: {
+  /** What the player reports: the element's duration, or mpv's. */
+  reportedSeconds: number;
+  /** The element is playing ffmpeg's live output, not the source. */
+  converted: boolean;
+  /** The source's own length, from the inspection. */
+  sourceSeconds?: number;
+  isLive?: boolean;
+}): number | undefined {
+  if (input.isLive) return undefined;
+  const seconds = input.converted ? input.sourceSeconds : input.reportedSeconds;
+  return seconds !== undefined && Number.isFinite(seconds) && seconds > 0 ? seconds : undefined;
+}
+
 /** The sentence shown on the source that was skipped. */
 export function wrongMediaReason(actualSeconds: number, expectedSeconds: number): string {
   const minutes = (seconds: number) =>

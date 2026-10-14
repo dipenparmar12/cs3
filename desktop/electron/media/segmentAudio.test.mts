@@ -5,7 +5,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import fs from 'node:fs';
-import { firstPlaylistEntry, parseHlsManifest, withSegmentStreams } from './mediaInspector.ts';
+import { firstPlaylistEntry, hlsPlaylistDuration, parseHlsManifest, withSegmentStreams } from './mediaInspector.ts';
 import { readTsStreams } from './tsProgram.ts';
 import { decideStrategy } from './decisionEngine.ts';
 import type { HostEncodeCapability, RendererCapabilities } from '../../src/types/media.ts';
@@ -96,4 +96,16 @@ test('a multi-audio file plays the remembered language, not the file default (re
   assert.equal(hindi.plan.selectedAudioIndex, 1);
   if (hindi.strategy === 'REMUX_CONTAINER') assert.equal(hindi.plan.videoAction, 'copy');
   assert.equal(english.plan.selectedAudioIndex, 0);
+});
+
+test('a finished playlist states its own length; a live or cut-short one does not', () => {
+  // PLAYLIST above is the served shape: two segments and #EXT-X-ENDLIST.
+  assert.equal(hlsPlaylistDuration(PLAYLIST), 4.68 + 4.28);
+  assert.equal(parseHlsManifest(PLAYLIST)!.durationSeconds, 4.68 + 4.28);
+  // A live window, or a 64 KB read that stopped before the end, is not a length.
+  const live = PLAYLIST.replace('#EXT-X-ENDLIST', '');
+  assert.equal(hlsPlaylistDuration(live), undefined);
+  assert.equal(parseHlsManifest(live)!.durationSeconds, undefined);
+  // A master playlist has no segments of its own.
+  assert.equal(hlsPlaylistDuration('#EXTM3U\n#EXT-X-STREAM-INF:BANDWIDTH=1\nv.m3u8\n'), undefined);
 });

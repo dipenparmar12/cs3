@@ -42,9 +42,11 @@ const TTL_MS = 30 * 24 * 60 * 60 * 1000;
  * A file's codecs never change, but what we can *see* of them does: before 2
  * an HLS media playlist without `#EXT-X-MEDIA` was recorded as one audio
  * track, and a cached record would go on hiding the other three languages for
- * a month. Entries from an older measurement are misses, and re-probed.
+ * a month; before 3 an HLS playlist had no duration, so a converted HLS title
+ * had no length at all. Entries from an older measurement are misses, and
+ * re-probed.
  */
-const MEASUREMENT = 2;
+const MEASUREMENT = 3;
 
 /** Bounded like every other cache here; this one holds a few KB per entry. */
 const MAX_ENTRIES = 400;

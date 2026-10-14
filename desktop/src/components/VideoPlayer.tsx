@@ -38,7 +38,7 @@ import { attachShaka, type ShakaAttachment } from '../utils/shakaSession';
 import type { SeriesContext } from './player/seriesContext';
 import type { PlaybackPreferences, StoredSource } from '../types/library';
 import { matchesRelease } from '../../electron/cs3/playedSource';
-import { looksLikeWrongMedia, wrongMediaReason } from '../utils/mediaSanity';
+import { judgeableDuration, looksLikeWrongMedia, wrongMediaReason } from '../utils/mediaSanity';
 import { torrentResultToStoredSource } from '../../electron/cs3/libraryStore';
 import { isPlaceholderOrigin } from '../utils/originName';
 import { canonicalKey } from '../../electron/cs3/libraryStore';
@@ -336,6 +336,17 @@ const AUDIO_ECHO_MS = 700;
 function atTime(url: string, seconds: number): string {
   const [base] = url.split('?');
   return seconds > 0 ? `${base}?t=${Math.floor(seconds)}` : base;
+}
+
+/**
+ * Where a conversion begins: the position carried across a switch, else the
+ * resume point — and, as on every other path, never inside the last ten
+ * seconds, where resuming would only end the film.
+ */
+function conversionStart(carried: number | undefined, resumeAt: number | undefined, length: number | undefined): number {
+  const at = carried ?? resumeAt ?? 0;
+  if (!(at > 0)) return 0;
+  return length && at >= length - 10 ? 0 : at;
 }
 
 /** Sentinel for HLS automatic level selection, which hls.js represents as -1. */
@@ -1036,14 +1047,26 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
    * duration, so it never delays a working source (`mediaSanity.ts`).
    */
   const sanityCheckedFor = useRef<string | null>(null);
+  /** hls.js says the playlist is live: its duration is a window, not a length. */
+  const hlsLiveRef = useRef(false);
+  /** The stream the element was last given, and the stream whose metadata it has loaded. */
+  const attachedForRef = useRef<string | null>(null);
+  const [metadataFor, setMetadataFor] = useState<string | null>(null);
   useEffect(() => {
     // After this stream has really started: until then `duration` can still be
     // the previous stream's.
     if (!streamUrl || !hasStartedPlayback || sanityCheckedFor.current === streamUrl || duration <= 0) return;
+    const actual = judgeableDuration({
+      reportedSeconds: duration,
+      converted: Boolean(preparedRef.current?.sessionId),
+      sourceSeconds: preparedRef.current?.capability?.metadata?.durationSeconds,
+      isLive: hlsLiveRef.current,
+    });
+    if (actual === undefined) return;
     sanityCheckedFor.current = streamUrl;
     const expected = progress?.expectedDurationSeconds;
-    if (!looksLikeWrongMedia({ actualSeconds: duration, expectedSeconds: expected })) return;
-    const reason = wrongMediaReason(duration, expected!);
+    if (!looksLikeWrongMedia({ actualSeconds: actual, expectedSeconds: expected })) return;
+    const reason = wrongMediaReason(actual, expected!);
     if (sourceSession?.onSourceUnplayable) {
       notify('That source was not the title — trying the next one', 'info');
       sourceSession.onSourceUnplayable(reason);
@@ -1583,6 +1606,8 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
 
     setQualities([]);
     setQuality(AUTO_QUALITY);
+    hlsLiveRef.current = false;
+    attachedForRef.current = streamUrl;
     let hls: Hls | null = null;
     let cancelled = false;
     let clearKey: ClearKeyAttachment | null = null;
@@ -1684,6 +1709,10 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
             }))
           );
           detectAudioTracksRef.current?.();
+        });
+
+        hls.on(Hls.Events.LEVEL_LOADED, (_evt, data) => {
+          hlsLiveRef.current = data.details.live;
         });
 
         const onHlsAudioChanged = () => detectAudioTracksRef.current?.();
@@ -2146,6 +2175,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
       const dur = probed && probed > 0 ? probed : video.duration;
       setDuration(dur);
       durationRef.current = dur;
+      setMetadataFor(attachedForRef.current);
 
       const carried = carriedPositionRef.current;
       if (carried && video.currentSrc !== carried.fromSrc) {
@@ -2314,6 +2344,12 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
   const carriedPositionRef = useRef<CarriedPosition | null>(null);
   carriedPositionRef.current = carriedPosition;
   const carriedAt = carriedPosition && carriedPosition.fromUrl !== streamUrl ? carriedPosition.at : undefined;
+  /** Where mpv opens when this stream moved to it mid-play (the forced retry). */
+  const [nativeStartAt, setNativeStartAt] = useState<number | null>(null);
+  useEffect(() => {
+    setNativeStartAt(null);
+  }, [streamUrl]);
+  const nativeStartSeconds = nativeStartAt ?? carriedAt ?? progress?.resumeAt;
   const switchSourceKeepingPosition = useCallback(
     (source: TorrentResult) => {
       const at = currentPositionRef.current;
@@ -2328,7 +2364,13 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
   useEffect(() => {
     const video = videoRef.current;
     const resumeAt = progress?.resumeAt;
-    if (!video || !resumeAt || duration <= 0) return;
+    /*
+     * Only on this stream's own metadata. `duration` alone still held the
+     * previous source's length when the session moved on, so this ran once
+     * against the outgoing element, marked the new stream resumed, and the
+     * source that actually played started from 0:00.
+     */
+    if (!video || !resumeAt || duration <= 0 || metadataFor !== streamUrl) return;
     if (resumedRef.current === streamUrl) return;
     // A switch inside the player carries its own position; see above.
     if (carriedPositionRef.current) return;
@@ -2338,7 +2380,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
       video.currentTime = resumeAt;
       setResumeNotice(resumeAt);
     }
-  }, [progress?.resumeAt, duration, streamUrl]);
+  }, [progress?.resumeAt, duration, metadataFor, streamUrl]);
 
   /**
    * "Resumed at 47:12 · Start over", for a few seconds.
@@ -2449,12 +2491,12 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
   );
 
   useEffect(() => {
-    const at = progress?.resumeAt;
+    const at = nativeStartSeconds;
     if (!isNativeEngine || !hasStartedPlayback || !at || at <= 0) return;
     if (nativeResumeShown.current === streamUrl) return;
     nativeResumeShown.current = streamUrl;
     setResumeNotice(at);
-  }, [isNativeEngine, hasStartedPlayback, progress?.resumeAt, streamUrl]);
+  }, [isNativeEngine, hasStartedPlayback, nativeStartSeconds, streamUrl]);
 
   const startOver = useCallback(() => {
     setResumeNotice(null);
@@ -3140,6 +3182,10 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
   const effectiveTime = scrubbingTime !== null ? scrubbingTime : currentTime;
   const progressPercent = duration ? (effectiveTime / duration) * 100 : 0;
 
+  /** Read when a stream is prepared, not a reason to prepare it again. */
+  const resumeAtRef = useRef(progress?.resumeAt);
+  resumeAtRef.current = progress?.resumeAt;
+
   /**
    * Inspects the stream and opens whatever it needs, before anything plays.
    *
@@ -3206,8 +3252,30 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
         : remembered?.index ?? response.capability?.transformationPlan.selectedAudioIndex ?? -1;
       if (preferred >= 0) setSelectedAudioIndex(preferred);
 
-      setPlaybackOffset(0);
-      setPrepared(response);
+      /*
+       * A conversion begins where the viewer is. Its output has no index, so
+       * nothing can seek into it once attached: the resume effect's
+       * `currentTime = resumeAt` did nothing there, and a resumed episode
+       * started again at 0:00. The position travels in the request instead,
+       * as a seek does — and it is decided here, once, for the resume effect
+       * and the carried position alike.
+       */
+      let startAt = 0;
+      if (response.ok && response.sessionId) {
+        const carried = carriedPositionRef.current;
+        const carriedFrom = carried && carried.fromUrl !== streamUrl ? carried.at : undefined;
+        const resumeFrom = resumedRef.current === streamUrl ? undefined : resumeAtRef.current;
+        startAt = conversionStart(
+          carriedFrom,
+          resumeFrom,
+          response.capability?.metadata?.durationSeconds
+        );
+        resumedRef.current = streamUrl;
+        if (carriedFrom !== undefined) setCarriedPosition(null);
+        else if (startAt > 0) setResumeNotice(startAt);
+      }
+      setPlaybackOffset(startAt);
+      setPrepared(startAt > 0 ? { ...response, playbackUrl: atTime(response.playbackUrl, startAt) } : response);
       if (!response.ok && response.error) setError(response.error);
 
       /**
@@ -3301,8 +3369,15 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
           }
           if (previous) void window.cloudstream?.closePlaybackStream(previous);
           setError(null);
-          setPlaybackOffset(at);
-          setPrepared({ ...response, playbackUrl: atTime(response.playbackUrl, at) });
+          /*
+           * mpv opens the source itself and seeks from `startSeconds`; a `?t=`
+           * means something only to a conversion. Without this mpv started at
+           * the session's opening resume point, not where the viewer was.
+           */
+          const toNative = response.capability?.requiredStrategy === 'NATIVE_MPV';
+          setNativeStartAt(toNative && at > 0 ? at : null);
+          setPlaybackOffset(toNative ? 0 : at);
+          setPrepared(toNative ? response : { ...response, playbackUrl: atTime(response.playbackUrl, at) });
         } finally {
           setConverting(false);
         }
@@ -4654,7 +4729,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
           headers={activeSource?.directHeaders}
           title={episodeTitle ? `${title} — ${episodeTitle}` : title}
           capability={capability}
-          startSeconds={carriedAt ?? progress?.resumeAt}
+          startSeconds={nativeStartSeconds}
           audioLanguage={wantedAudioLanguage()}
           initialVolume={audioSettings.current.volume}
           initialMuted={audioSettings.current.muted}

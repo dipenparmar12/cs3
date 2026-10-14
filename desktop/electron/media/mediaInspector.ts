@@ -562,7 +562,7 @@ export function parseHlsManifest(manifestText: string): MediaMetadata | null {
   return {
     formatName: 'hls,applehttp',
     formatLongName: 'Apple HLS',
-    durationSeconds: undefined,
+    durationSeconds: hlsPlaylistDuration(manifestText),
     video: hasVideo
       ? {
           index: 0,
@@ -592,6 +592,22 @@ export function parseHlsManifest(manifestText: string): MediaMetadata | null {
     audio: audioTracks,
     subtitles: subtitleTracks,
   };
+}
+
+/**
+ * How long a finished playlist plays, from its own `#EXTINF` lines.
+ *
+ * A converted stream has no length of its own — the element reports what
+ * ffmpeg has muxed so far, 8 s one second in — so this is the only length a
+ * converted HLS title has. Only a complete playlist counts (`#EXT-X-ENDLIST`):
+ * a live or event playlist is a moving window, and a read cut short would
+ * under-report. Both answer `undefined`, never a number that is wrong.
+ */
+export function hlsPlaylistDuration(text: string): number | undefined {
+  if (!/^#EXT-X-ENDLIST/im.test(text)) return undefined;
+  let total = 0;
+  for (const match of text.matchAll(/^#EXTINF:\s*([\d.]+)/gim)) total += Number(match[1]) || 0;
+  return total > 0 ? total : undefined;
 }
 
 /**
@@ -971,20 +987,26 @@ export class MediaInspector {
    * provider's `Referer` and the PNG-wrapper unwrapping apply. `null` for fMP4
    * segments, unreadable bytes or any failure — the manifest's answer stands.
    */
-  private async segmentStreams(url: string, manifest: string): Promise<TsElementaryStream[] | null> {
-    if (!this.fetchBytes) return null;
+  private async segmentStreams(
+    url: string,
+    manifest: string
+  ): Promise<{ streams: TsElementaryStream[] | null; mediaPlaylist: string | null }> {
+    const none = { streams: null, mediaPlaylist: null };
+    if (!this.fetchBytes) return none;
     let entry = firstPlaylistEntry(manifest, url);
     let playlist = manifest;
     if (entry?.kind === 'variant') {
       const variant = await this.fetchHead(entry.url);
-      if (!variant) return null;
+      if (!variant) return none;
       playlist = variant;
       entry = firstPlaylistEntry(variant, entry.url);
     }
     // fMP4 segments carry their tracks in the init segment, not a PMT.
-    if (!entry || entry.kind !== 'segment' || /#EXT-X-MAP/i.test(playlist)) return null;
+    if (!entry || entry.kind !== 'segment' || /#EXT-X-MAP/i.test(playlist)) {
+      return { streams: null, mediaPlaylist: playlist };
+    }
     const bytes = await this.fetchBytes(entry.url, 64 * 1024);
-    return bytes ? readTsStreams(bytes) : null;
+    return { streams: bytes ? readTsStreams(bytes) : null, mediaPlaylist: playlist };
   }
 
   public async inspect(url: string, hintM3u8?: boolean): Promise<InspectionResult> {
@@ -1040,8 +1062,12 @@ export class MediaInspector {
            * those itself.
            */
           if (meta && !/#EXT-X-MEDIA:[^\n]*TYPE=AUDIO/i.test(head)) {
-            const streams = await this.segmentStreams(url, head).catch(() => null);
-            if (streams) meta = withSegmentStreams(meta, streams, head);
+            const found = await this.segmentStreams(url, head).catch(() => null);
+            if (found?.streams) meta = withSegmentStreams(meta, found.streams, head);
+            // A master states no length; the variant read on the way does.
+            if (meta.durationSeconds === undefined && found?.mediaPlaylist) {
+              meta = { ...meta, durationSeconds: hlsPlaylistDuration(found.mediaPlaylist) };
+            }
           }
           const parseMs = Date.now() - parseStart;
           return {

@@ -449,7 +449,7 @@ function describeResolution(width: number, height: number): string {
  * we re-encode; that always produces something playable, at a cost that is only
  * paid on a source that has already failed once.
  */
-export function blindFallbackPlan(host: HostEncodeCapability): TransformationPlan {
+export function blindFallbackPlan(host: HostEncodeCapability, audioIndex = 0): TransformationPlan {
   return {
     videoAction: host.hardware ? 'transcode' : 'downscale',
     targetVideoCodec: 'h264',
@@ -458,7 +458,10 @@ export function blindFallbackPlan(host: HostEncodeCapability): TransformationPla
     hardwareAccelerator: host.accelerator,
     audioAction: 'transcode',
     targetAudioCodec: 'aac',
-    selectedAudioIndex: 0,
+    // The track the viewer chose, which the decision already resolved; a
+    // re-encode reads any of them. Fixed at 0, "Play in this window" and the
+    // automatic retry both went back to the default language.
+    selectedAudioIndex: audioIndex >= 0 ? audioIndex : 0,
     containerAction: 'mp4_fragmented',
     subtitleAction: 'ignore',
   };

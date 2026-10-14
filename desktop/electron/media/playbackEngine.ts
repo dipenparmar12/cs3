@@ -614,7 +614,7 @@ export class PlaybackEngine {
 
     const plan =
       request.force && !forcedToNative
-        ? blindFallbackPlan(await this.hostCapability())
+        ? blindFallbackPlan(await this.hostCapability(), capability.transformationPlan.selectedAudioIndex)
         : capability.transformationPlan;
     const strategy = forcedToNative
       ? 'NATIVE_MPV'
