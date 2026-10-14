@@ -17,3 +17,14 @@ test('player control labels distinguish duplicate language tracks concisely', ()
   assert.equal(numberedLanguageLabel(undefined, 'English commentary', tracks), 'English 2');
   assert.equal(numberedLanguageLabel(undefined, 'Hindi', tracks), 'Hindi');
 });
+
+test('player control labels handle single tracks without numbers', () => {
+  const single = [{ label: 'Japanese [Audio]' }];
+  assert.equal(numberedLanguageLabel(undefined, 'Japanese [Audio]', single), 'Japanese');
+});
+
+test('player control labels fallback cleanly for unknown tracks', () => {
+  assert.equal(controlLanguageLabel('', ''), '');
+  assert.equal(numberedLanguageLabel(undefined, undefined, []), 'Subtitles');
+});
+

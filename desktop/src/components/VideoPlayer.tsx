@@ -7,7 +7,7 @@ import Hls from 'hls.js';
 import { NativeEngineStage, trackLabel } from './player/NativeEngineStage';
 import {
   Play, Pause, Volume2, VolumeX, Maximize, Minimize, ArrowLeft,
-  Loader2, Users, Gauge, Subtitles, AlertTriangle, RotateCcw, RotateCw,
+  Loader2, Users, Gauge, Subtitles, CaptionsOff, AlertTriangle, RotateCcw, RotateCw,
   SkipBack, SkipForward, List, Settings2, MonitorPlay, Radio,
   GripHorizontal, Maximize2, Minimize2, X,
   Search, Info, PictureInPicture2, BookmarkCheck, BookmarkPlus,
@@ -3409,7 +3409,9 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
     const active = activeSubtitle ? allSubtitles.find((sub) => sub.url === activeSubtitle) : undefined;
     return active
       ? numberedLanguageLabel(undefined, active.name, allSubtitles.map((sub) => ({ label: sub.name })))
-      : 'Subtitles';
+      : allSubtitles.length > 0
+        ? 'Off'
+        : 'Subtitles';
   }, [activeSubtitle, allSubtitles]);
 
   const audioControlLabel = useMemo(() => {
@@ -3691,26 +3693,53 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
 
   const lastSelectedSubtitleRef = useRef<string | null>(null);
 
+  const handleSelectSubtitle = useCallback(
+    (url: string | null, label?: string, detail?: string) => {
+      if (url && !allSubtitles.some((s) => s.url === url)) {
+        setFetchedSubtitles((prev) => [...prev, { name: label ?? 'Subtitle', url, detail }]);
+      }
+      if (activeSubtitle && !url) {
+        lastSelectedSubtitleRef.current = activeSubtitle;
+      }
+      setActiveSubtitle(url);
+
+      if (isNativeEngine) {
+        if (url) {
+          void window.cloudstream?.mpvAddSubtitle(url, label ?? '');
+        } else {
+          void window.cloudstream?.mpvSetSubtitleTrack(null);
+        }
+      }
+
+      /**
+       * The label carries the language; the URL is per-file and worthless
+       * to remember. Turning subtitles *off* is remembered too — an explicit
+       * choice, and the one most likely to be undone by a default.
+       */
+      const language = url ? label?.split(/[^A-Za-z]+/)[0] ?? '' : '';
+      void window.cloudstream?.setPlayerPreferences({ subtitleLanguage: language });
+      preferredSubtitleLanguage.current = language || null;
+      subtitlesOff.current = !url;
+      showOsd({ kind: 'text', text: url ? `Subtitles: ${label ?? 'On'}` : 'Subtitles: Off' });
+    },
+    [activeSubtitle, allSubtitles, isNativeEngine, showOsd]
+  );
+
   const toggleSubtitles = useCallback(() => {
     if (allSubtitles.length === 0) {
       showOsd({ kind: 'text', text: 'No subtitles available' });
       return;
     }
     if (activeSubtitle) {
-      lastSelectedSubtitleRef.current = activeSubtitle;
-      setActiveSubtitle(null);
-      if (isNativeEngine) void window.cloudstream?.mpvSetSubtitleTrack(null);
-      showOsd({ kind: 'text', text: 'Subtitles: Off' });
+      handleSelectSubtitle(null, 'Off');
     } else {
       const target =
         (lastSelectedSubtitleRef.current &&
           allSubtitles.find((s) => s.url === lastSelectedSubtitleRef.current)) ||
         allSubtitles[0];
-      setActiveSubtitle(target.url);
-      if (isNativeEngine) void window.cloudstream?.mpvAddSubtitle(target.url, target.name);
-      showOsd({ kind: 'text', text: `Subtitles: ${target.name}` });
+      handleSelectSubtitle(target.url, target.name, target.detail);
     }
-  }, [activeSubtitle, allSubtitles, isNativeEngine, showOsd]);
+  }, [activeSubtitle, allSubtitles, handleSelectSubtitle, showOsd]);
 
   const cycleSubtitles = useCallback(() => {
     if (allSubtitles.length === 0) {
@@ -3720,21 +3749,14 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
     const currentIndex = allSubtitles.findIndex((s) => s.url === activeSubtitle);
     if (currentIndex === -1) {
       const first = allSubtitles[0];
-      setActiveSubtitle(first.url);
-      if (isNativeEngine) void window.cloudstream?.mpvAddSubtitle(first.url, first.name);
-      showOsd({ kind: 'text', text: `Subtitles: ${first.name}` });
+      handleSelectSubtitle(first.url, first.name, first.detail);
     } else if (currentIndex === allSubtitles.length - 1) {
-      lastSelectedSubtitleRef.current = activeSubtitle;
-      setActiveSubtitle(null);
-      if (isNativeEngine) void window.cloudstream?.mpvSetSubtitleTrack(null);
-      showOsd({ kind: 'text', text: 'Subtitles: Off' });
+      handleSelectSubtitle(null, 'Off');
     } else {
       const next = allSubtitles[currentIndex + 1];
-      setActiveSubtitle(next.url);
-      if (isNativeEngine) void window.cloudstream?.mpvAddSubtitle(next.url, next.name);
-      showOsd({ kind: 'text', text: `Subtitles: ${next.name}` });
+      handleSelectSubtitle(next.url, next.name, next.detail);
     }
-  }, [activeSubtitle, allSubtitles, isNativeEngine, showOsd]);
+  }, [activeSubtitle, allSubtitles, handleSelectSubtitle, showOsd]);
 
   const toggleMute = useCallback(() => {
     const next = !isMuted;
@@ -4996,30 +5018,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
         embedded={allSubtitles}
         activeUrl={activeSubtitle}
         onClose={() => setSubtitlePanelOpen(false)}
-        onSelect={(url, label, detail) => {
-          if (url && !allSubtitles.some((s) => s.url === url)) {
-            setFetchedSubtitles((prev) => [...prev, { name: label, url, detail }]);
-          }
-          setActiveSubtitle(url);
-
-          if (isNativeEngine) {
-            if (url) {
-              void window.cloudstream?.mpvAddSubtitle(url, label);
-            } else {
-              void window.cloudstream?.mpvSetSubtitleTrack(null);
-            }
-          }
-
-          /**
-           * The label carries the language; the URL is per-file and worthless
-           * to remember. Turning subtitles *off* is remembered too — an explicit
-           * choice, and the one most likely to be undone by a default.
-           */
-          const language = url ? label?.split(/[^A-Za-z]+/)[0] ?? '' : '';
-          void window.cloudstream?.setPlayerPreferences({ subtitleLanguage: language });
-          preferredSubtitleLanguage.current = language || null;
-          subtitlesOff.current = !url;
-        }}
+        onSelect={handleSelectSubtitle}
         year={progress?.year}
         releaseName={activeSource?.title}
         delay={subtitleDelay}
@@ -5346,20 +5345,71 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
 
           <div className="player__media-controls" aria-label="Tracks and quality">
             {(showSubtitlesControl || allSubtitles.length > 0) && (
-              <button
-                className={`player__media-control ${subtitlePanelOpen ? 'active' : ''}${activeSubtitle ? ' player__media-control--on' : ''}`}
-                data-panel-toggle
-                onClick={(e) => {
-                  e.stopPropagation();
-                  setSubtitlePanelOpen((v) => !v);
-                  revealControls();
-                }}
-                aria-label={activeSubtitle ? `Subtitles: ${subtitleControlLabel}` : 'Subtitles'}
-                title={activeSubtitle ? `Subtitles: ${subtitleControlLabel} (C to toggle)` : 'Subtitles (C to toggle)'}
-              >
-                <Subtitles size={16} />
-                <span>{subtitleControlLabel}</span>
-              </button>
+              allSubtitles.length > 0 ? (
+                <HoverMenu
+                  icon={activeSubtitle ? <Subtitles size={16} /> : <CaptionsOff size={16} />}
+                  label="Subtitles"
+                  value={activeSubtitle ?? '__off__'}
+                  onChange={(val) => {
+                    if (val === '__off__') {
+                      handleSelectSubtitle(null, 'Off');
+                    } else {
+                      const track = allSubtitles.find((s) => s.url === val);
+                      handleSelectSubtitle(val, track?.name, track?.detail);
+                    }
+                  }}
+                  onOpenChange={onMenuOpenChange}
+                  triggerText={activeSubtitle ? subtitleControlLabel : 'Off'}
+                  triggerClassName={`player__media-control ${activeSubtitle ? 'player__media-control--on' : 'player__media-control--off'}`}
+                  showChevron={true}
+                  options={[
+                    {
+                      value: '__off__',
+                      label: 'Off',
+                      icon: <CaptionsOff size={14} />,
+                    },
+                    ...allSubtitles.map((track) => ({
+                      value: track.url,
+                      label: numberedLanguageLabel(
+                        undefined,
+                        track.name,
+                        allSubtitles.map((s) => ({ label: s.name }))
+                      ),
+                      detail: track.detail,
+                      icon: <Subtitles size={14} />,
+                    })),
+                  ]}
+                  footer={
+                    <button
+                      type="button"
+                      className="hover-menu__footer-action"
+                      onClick={() => {
+                        setSubtitlePanelOpen(true);
+                        revealControls();
+                      }}
+                    >
+                      <Search size={13} />
+                      <span>Search subtitles online...</span>
+                    </button>
+                  }
+                />
+              ) : (
+                <button
+                  type="button"
+                  className={`player__media-control ${subtitlePanelOpen ? 'active' : ''} player__media-control--empty`}
+                  data-panel-toggle
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    setSubtitlePanelOpen((v) => !v);
+                    revealControls();
+                  }}
+                  aria-label="Search subtitles"
+                  title="Subtitles: None loaded · Click to search online"
+                >
+                  <Subtitles size={16} />
+                  <span>Subtitles</span>
+                </button>
+              )
             )}
 
             {qualities.length > 1 && (
@@ -5369,14 +5419,20 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
                 value={quality}
                 onChange={setQuality}
                 onOpenChange={onMenuOpenChange}
+                showChevron={true}
+                triggerText={quality === AUTO_QUALITY ? 'Auto' : (qualityControlLabel || 'Quality')}
                 options={[
-                  { value: AUTO_QUALITY, label: 'Auto' },
+                  { value: AUTO_QUALITY, label: 'Auto', detail: qualityControlLabel || undefined },
                   ...qualities.map((q) => ({ value: q.level, label: q.label, detail: q.detail })),
                 ]}
               />
             )}
             {qualities.length <= 1 && qualityControlLabel && (
-              <span className="player__media-status" title={`Quality: ${qualityControlLabel}`}>
+              <span
+                className="player__media-status"
+                title={`Quality: ${qualityControlLabel}`}
+                aria-label={`Quality: ${qualityControlLabel}`}
+              >
                 <Settings2 size={16} />
                 <span>{qualityControlLabel}</span>
               </span>
@@ -5390,8 +5446,13 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
                   value={activeAudioTrack}
                   onChange={(val) => selectAudioTrack(val)}
                   onOpenChange={onMenuOpenChange}
+                  showChevron={true}
                   triggerText={audioControlLabel}
-                  options={audioTracks.map((track) => ({ value: track.id, label: track.label, detail: track.language ? track.language.toUpperCase() : undefined }))}
+                  options={audioTracks.map((track) => ({
+                    value: track.id,
+                    label: track.label,
+                    detail: track.language ? track.language.toUpperCase() : undefined,
+                  }))}
                 />
               )
             ) : probedAudioTracks.length > 1 ? (
@@ -5401,8 +5462,13 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
                 value={selectedAudioIndex}
                 onChange={(val) => void selectProbedAudio(Number(val))}
                 onOpenChange={onMenuOpenChange}
+                showChevron={true}
                 triggerText={audioControlLabel}
-                options={probedAudioTracks.map((track) => ({ value: track.index, label: track.label, detail: track.detail }))}
+                options={probedAudioTracks.map((track) => ({
+                  value: track.index,
+                  label: track.label,
+                  detail: track.detail,
+                }))}
               />
             ) : (
               audioTracks.length > 1 && (
@@ -5412,13 +5478,22 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
                   value={activeAudioTrack}
                   onChange={(val) => selectAudioTrack(val)}
                   onOpenChange={onMenuOpenChange}
+                  showChevron={true}
                   triggerText={audioControlLabel}
-                  options={audioTracks.map((track) => ({ value: track.id, label: track.label, detail: track.language ? track.language.toUpperCase() : undefined }))}
+                  options={audioTracks.map((track) => ({
+                    value: track.id,
+                    label: track.label,
+                    detail: track.language ? track.language.toUpperCase() : undefined,
+                  }))}
                 />
               )
             )}
             {audioTracks.length <= 1 && probedAudioTracks.length <= 1 && audioControlLabel !== 'Audio' && (
-              <span className="player__media-status" title={`Audio: ${audioControlLabel}`}>
+              <span
+                className="player__media-status"
+                title={`Audio: ${audioControlLabel}`}
+                aria-label={`Audio: ${audioControlLabel}`}
+              >
                 <Volume2 size={16} />
                 <span>{audioControlLabel}</span>
               </span>

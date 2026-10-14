@@ -14,6 +14,7 @@ import {
   Sliders,
   ChevronDown,
   ChevronUp,
+  Subtitles,
 } from 'lucide-react';
 import type { SavedSubtitle } from '../../../electron/subtitles/subtitleLibrary';
 import type { SubtitleFindResult, SubtitleSearchResult } from '../../../electron/subtitleService';
@@ -486,7 +487,10 @@ export const SubtitlePanel: React.FC<SubtitlePanelProps> = ({
     >
       <header className="player-panel__head">
         <div>
-          <h3>Subtitles</h3>
+          <div className="player-panel__title-row">
+            <Subtitles size={18} className="player-panel__head-icon" aria-hidden="true" />
+            <h3>Subtitles</h3>
+          </div>
           <div className="player-panel__facts">
             <span>
               {results.length > 0
