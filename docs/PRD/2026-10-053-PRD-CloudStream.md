@@ -973,7 +973,7 @@ tags: [Todo]
     
     ```
 
-- [ ] Central element for the subtitles resolution and language So we should have And good user interface and relatable designs currently if there were only one resolution is supported like say 1080p Then there is no clicking effect will going to have any effect so we need to have a better user interface that indicated that that is only 1 and there is this is not an clickable element since it is an only 1 resolution or only one language is supported which is currently rendered with correct label so make sure that we have an ui and style that smartly indicate and differentiate between what has more option and clickable item and what is not so we should indicate via the The styles and good user interface And from the subtitle we have very Popular icon for subtitle in youtube Netflix Amazon Prime everywhere uses icon with all the cc so make sure that we adopt as well so we don't invent our app language if there is a widely community and widely accepted in world of related icons and everything make sure that we use that only for easy and Good interface that I already known so user don't have to learn anything extra from our app
+- [x] Central element for the subtitles resolution and language So we should have And good user interface and relatable designs currently if there were only one resolution is supported like say 1080p Then there is no clicking effect will going to have any effect so we need to have a better user interface that indicated that that is only 1 and there is this is not an clickable element since it is an only 1 resolution or only one language is supported which is currently rendered with correct label so make sure that we have an ui and style that smartly indicate and differentiate between what has more option and clickable item and what is not so we should indicate via the The styles and good user interface And from the subtitle we have very Popular icon for subtitle in youtube Netflix Amazon Prime everywhere uses icon with all the cc so make sure that we adopt as well so we don't invent our app language if there is a widely community and widely accepted in world of related icons and everything make sure that we use that only for easy and Good interface that I already known so user don't have to learn anything extra from our app
 
     ```markdown
     ## 117. Intelligent Player Controls and Standardized Subtitle Icons
@@ -1250,3 +1250,184 @@ The interface should prioritize subtitle titles, language identification, and qu
 - Large result lists remain compact, readable, and easy to navigate.
 - Existing subtitle search, matching, downloading, selection, and playback functionality remains reliable.
 - The redesigned experience reduces visual clutter and the number of interactions required for common subtitle tasks without removing useful capabilities.
+
+
+
+### 120. Reliable Metadata Enrichment, Related Content Discovery, and Deduplicated Recommendations [ ] 
+
+**Objective**
+
+Improve the accuracy, completeness, and reliability of metadata and related-content discovery across CS3. Existing searches for directors, writers, screenwriters, producers, editors, studios, cast members, and other contributors sometimes return incomplete, irrelevant, or inconsistent results. Investigate the current implementation, strengthen metadata aggregation, integrate suitable public metadata APIs, and introduce useful related-content recommendations.
+
+The goal is to help users discover both **more content connected to what they already enjoy** and **new movies or shows that offer a similar viewing experience**, while preventing duplicate results and incorrect associations.
+
+#### 120.1 Audit Existing Metadata and Related-Content Workflows
+
+- Inspect the current metadata providers, API integrations, search services, enrichment pipeline, related-content components, data models, caching, and existing deduplication logic before implementing changes.
+- Identify why searches for directors, screenwriters, producers, writers, editors, studios, cast members, and other contributors sometimes fail or return incomplete or unrelated results.
+- Determine whether failures originate from missing source data, incorrect person or title matching, incomplete API responses, unsupported search paths, pagination, inconsistent identifiers, query construction, caching, or UI rendering.
+- Verify whether existing related-content features use authoritative relationships, text similarity, genre matching, or other heuristics.
+- Reuse and improve existing metadata aggregation and related-content functionality instead of creating duplicate services or parallel implementations.
+- Establish a test set covering popular franchises, lesser-known films, television series, shared creators, similar titles, and films with different genres but comparable audience appeal.
+
+#### 120.2 Multi-Source Metadata Enrichment
+
+- Evaluate and integrate additional suitable metadata sources where they improve coverage, accuracy, or reliability.
+- Prefer structured APIs with stable identifiers, documented endpoints, clear licensing terms, and predictable response formats.
+- Investigate the following sources and capabilities:
+
+  - **The Movie Database (TMDB):** Search, discover, title details, cast and crew credits, people, and related-content endpoints. TMDB supports text search across original, translated, and alternative titles, and can retrieve content through known external identifiers. <Link url="https://developer.themoviedb.org/docs/finding-data" title="TMDB data discovery documentation"/>. <Link url="https://developer.themoviedb.org/docs/getting-started" title="TMDB API getting started"/>.
+  - **Wikidata:** Structured relationships between films, people, organizations, and other entities. Its SPARQL query service can supplement missing credits or relationships when queries are sufficiently specific. It should not be treated as a general-purpose fuzzy-search engine. <Link url="https://www.wikidata.org/wiki/Help:Data_access" title="Wikidata data access documentation"/>.
+  - **IMDb:** Investigate its official datasets and API options if licensing, access requirements, cost, and permitted usage are appropriate. IMDb provides downloadable non-commercial datasets, while its real-time API is available through AWS Data Exchange with subscription and authentication requirements. <Link url="https://www.imdb.com/interfaces/" title="IMDb non-commercial datasets"/>. <Link url="https://data.imdb.com/documentation/api-documentation/" title="IMDb API documentation"/>.
+
+- Treat these sources as candidates for evaluation, not mandatory integrations. Verify current API capabilities, terms, rate limits, attribution requirements, and commercial-use restrictions before adoption.
+- Do not rely on unofficial scraping or undocumented endpoints as a substitute for supported APIs.
+- Preserve the ability to add or replace metadata providers without rewriting the entire enrichment pipeline.
+
+#### 120.3 Robust Search for People, Credits, Studios, and Production Companies
+
+- Support searching for media associated with a specific person or organization across all relevant supported roles.
+- Normalize role names and map provider-specific credit categories into consistent internal roles, including director, writer, screenwriter, story, producer, executive producer, editor, cinematographer, composer, studio, network, and production company.
+- Preserve the distinction between writing credits, directing credits, production credits, and other contributions. Do not treat every person associated with a title as its writer or director.
+- Prefer searches based on stable person, company, and title identifiers whenever available.
+- When an identifier is unavailable, combine normalized names, original names, known aliases, title identity, release year, media type, and other available evidence.
+- Handle alternate spellings, transliterations, localized names, punctuation differences, and common name variations without merging unrelated people or organizations.
+- Query all relevant supported sources and paginate results where necessary, subject to reasonable request and latency limits.
+- Merge results progressively when practical so users can see useful content before every provider finishes.
+- If one source is unavailable or returns incomplete data, continue with the remaining sources and preserve any valid results already obtained.
+- Distinguish an empty result set from a provider failure, timeout, rate limit, or incomplete response.
+
+#### 120.4 Canonical Identity, Deduplication, and Conflict Resolution
+
+- Introduce or strengthen a canonical metadata identity model so the same movie, television series, person, studio, or production company is not displayed repeatedly when multiple sources return it.
+- Prefer stable external identifiers and provider-specific IDs mapped to a canonical entity.
+- When identifiers are unavailable, use conservative matching based on normalized title, original title, release year, media type, season or episode identity, and other relevant metadata.
+- Do not merge distinct films or series solely because they share a title, franchise name, cast member, or creator.
+- Preserve genuinely different releases, adaptations, remakes, and works with the same or similar names.
+- Deduplicate people and organizations using reliable identifiers where available, while retaining legitimate distinctions between people with similar names.
+- Merge complementary metadata fields rather than discarding useful information from secondary sources.
+- Resolve conflicting values using field-specific source reliability, identifier confidence, completeness, freshness, and provenance. Do not assume that one provider is always authoritative for every field.
+- Preserve the source and confidence of merged values internally so incorrect associations can be diagnosed and corrected.
+- Apply deduplication consistently before rendering search results, related-content rails, creator filmographies, studio collections, and other aggregated content.
+- Make deduplication deterministic so repeated searches produce stable results and do not reorder items arbitrarily.
+
+#### 120.5 Related Content: Two Distinct Discovery Modes
+
+Implement or improve two complementary discovery modes. They serve different user intentions and must not be conflated.
+
+**A. Connected content and franchise discovery**
+
+Find content with an explicit relationship to the selected movie or series, including:
+
+- Sequels and prequels.
+- Remakes and adaptations.
+- Shared cinematic universes and franchises.
+- Related television series, spin-offs, and specials.
+- Other entries in an established series or collection.
+- Content connected through verified creators, characters, or other meaningful relationships.
+
+For example, a user watching Spider-Man should be able to discover the relevant Spider-Man films and, where reliable relationships exist, other connected Marvel films and series.
+
+Use structured franchise, collection, sequel, prequel, and external relationship data wherever available. Do not infer that two works share a universe simply because they contain a similar character name or genre.
+
+**B. Similar movies and audience-oriented discovery**
+
+Recommend content that may appeal to someone who enjoyed the selected title, even when the recommended content is not part of the same franchise, does not share its genre, and has no common creator.
+
+For example, a user who enjoyed *Green Book* might appreciate *The Intouchables* because of similarities in themes, character relationships, emotional tone, and storytelling, even though the films are not part of the same series.
+
+Evaluate available API recommendation and similarity endpoints first. TMDB provides movie and television discovery capabilities, and its documented API includes movie recommendations for user accounts. Investigate the title-based similar-content and recommendation endpoints supported by the current API version rather than assuming account-specific recommendations satisfy this requirement. <Link url="https://developer.themoviedb.org/reference/discover-movie" title="TMDB movie discovery"/>. <Link url="https://developer.themoviedb.org/v4/reference/account-movie-recommendations" title="TMDB account movie recommendations"/>.
+
+If external recommendations are insufficient, evaluate a local ranking layer using available metadata, including:
+
+- Genre and subgenre overlap.
+- Plot themes, synopsis similarity, and subject matter.
+- Tone, mood, pacing, and storytelling style where these attributes can be derived reliably.
+- Character archetypes and relationship dynamics where structured information is available.
+- Shared cast, directors, writers, or other creators.
+- Audience ratings and popularity, with appropriate safeguards against popularity dominating relevance.
+- Franchise and collection relationships, treated separately from general similarity.
+- Existing user interactions, such as watch history, completed titles, and explicit favorites, where appropriate and permitted.
+
+Do not claim that a user personally likes a movie merely because it is similar to another title. Present recommendations as suggestions based on available evidence, not guarantees of individual preference.
+
+#### 120.6 Recommendation Ranking and Explainability
+
+- Rank related content by the relevance of its relationship to the selected title and the user's discovery intent.
+- Use separate ranking logic or clearly separated groups for franchise-related content and broadly similar recommendations.
+- Prioritize strong, verified relationships when displaying chronological or franchise-related content.
+- For general recommendations, combine API-provided recommendations with local similarity signals when useful, avoiding duplicate or contradictory results.
+- Avoid recommending the same title repeatedly across multiple related-content sections.
+- Apply quality thresholds so weak matches are not presented as strong recommendations merely to fill a rail.
+- Where useful, show a short, restrained explanation such as "Same director," "Related franchise," "Similar themes," or "Similar audience interests." Only display explanations supported by actual metadata or recommendation signals.
+- Avoid excessive badges, verbose explanations, or prominent confidence scores that clutter the detail page.
+- If there are insufficient reliable matches, show fewer results rather than padding the interface with unrelated content.
+
+#### 120.7 User Experience and Detail Page Integration
+
+- Integrate improved creator, studio, franchise, and similar-content discovery into the existing detail-page architecture and related-content components.
+- Keep existing franchise rails and related-media collections consistent with the new discovery logic.
+- Provide clear distinctions between franchise chronology, creator filmography, production-company collections, and general recommendations.
+- Preserve the selected title's canonical identity when navigating to related content.
+- Ensure selecting a recommendation opens the correct media detail page and retains the correct title, year, media type, and external identifiers.
+- Load additional content progressively where possible, while avoiding repeated loading indicators and layout shifts.
+- Use cached metadata to display known content promptly while refreshing stale or incomplete information in the background when appropriate.
+- Keep the interface useful when some metadata sources are unavailable, no recommendations exist, or a title has incomplete credits.
+
+#### 120.8 API Integration, Performance, and Caching
+
+- Centralize external metadata requests through the existing metadata service architecture.
+- Define a provider contract for authentication, request construction, response normalization, pagination, timeouts, retries, rate limits, errors, and source attribution.
+- Use bounded parallel requests where appropriate rather than serially waiting for every provider.
+- Apply per-provider concurrency limits and request budgets to avoid unnecessary traffic or rate-limit failures.
+- Avoid repeating identical requests when multiple screens or components request the same metadata.
+- Cache normalized title details, credits, people, company information, franchise relationships, and recommendation results using appropriate cache keys and freshness policies.
+- Include canonical entity identifiers, query parameters, locale, and other relevant dimensions in cache keys.
+- Distinguish complete responses from partial results and failed requests so transient failures do not become permanent empty-result cache entries.
+- Use stale cached metadata when appropriate if an external provider is temporarily unavailable, while allowing refresh when connectivity returns.
+- Respect API terms governing caching, storage, attribution, and redistribution.
+- Do not expose private API credentials in the renderer, logs, exported diagnostics, or user-visible errors. Follow the existing secure configuration approach for external credentials.
+
+#### 120.9 Testing and Validation
+
+Create automated tests covering the following scenarios:
+
+- A movie with complete credits from multiple providers.
+- A movie whose director or screenwriter is missing from one source but available from another.
+- A person with multiple film and television credits.
+- Different people with identical or similar names.
+- Different movies with identical or similar titles.
+- Alternate titles, transliterations, and localized titles.
+- Duplicate results returned by several metadata providers.
+- Conflicting release dates, credit roles, and production-company information.
+- API pagination, timeouts, rate limits, malformed responses, and partial provider failures.
+- Franchise and chronological relationships.
+- Similar movies without shared franchise or creator relationships.
+- Movies with incomplete metadata or no meaningful recommendations.
+- Repeated searches and navigation between related titles.
+- Cache refreshes and recovery after temporary network failures.
+- Stable ordering and deduplication across repeated requests.
+
+#### 120.10 Acceptance Criteria
+
+- Creator, crew, and production-company searches return more complete and relevant results across supported sources.
+- Missing metadata from one source can be supplemented by another source without duplicating the same entity.
+- Different works, people, and organizations are not incorrectly merged.
+- Conflicting metadata is resolved using documented, field-specific rules, with provenance retained.
+- Users can discover both explicitly connected content and broadly similar movies or shows.
+- Franchise chronology and general recommendations remain clearly distinguishable.
+- Similar-content recommendations do not require a shared genre, creator, or franchise when other meaningful similarities exist.
+- Duplicate titles do not appear repeatedly within or across related-content sections.
+- Search and recommendation workflows remain responsive, with graceful degradation when providers fail.
+- API usage complies with applicable authentication, licensing, attribution, rate-limit, and caching requirements.
+- Existing metadata enrichment, detail-page navigation, search, library identity, and related-content behavior remain functional.
+
+#### 120.11 Research and Implementation Decision
+
+Before selecting integrations, inspect the existing source code and document which required capabilities are already implemented, which are incomplete, and which require new providers or services.
+
+Compare candidate APIs against metadata coverage, related-content quality, stable identifiers, licensing, commercial-use restrictions, request limits, availability, latency, and operational cost. Prefer a small number of complementary, well-supported sources over integrating many unreliable sources.
+
+Implement the highest-value improvements first: correct identity matching, reliable credits retrieval, canonical deduplication, and connected-content discovery. Then add or improve audience-oriented recommendations using documented API capabilities and available metadata.
+
+Do not assume every external API is free, commercially usable, or capable of providing personalized recommendations without user data. Verify these constraints before implementation and document any capability that cannot be delivered reliably with the selected sources.
