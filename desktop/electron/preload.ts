@@ -720,6 +720,23 @@ export interface CloudStreamElectronAPI {
     }
   >;
   /**
+   * Opens the OS file picker in main and keeps the chosen player if it is a
+   * real program (PRD §121.7). Answers the whole list, like `listExternalPlayers`.
+   */
+  addCustomExternalPlayer: () => Promise<
+    Envelope & {
+      cancelled?: boolean;
+      players: ExternalPlayer[];
+      downloads: Array<{ id: string; name: string; url: string; note: string }>;
+    }
+  >;
+  removeCustomExternalPlayer: (playerId: string) => Promise<
+    Envelope & {
+      players: ExternalPlayer[];
+      downloads: Array<{ id: string; name: string; url: string; note: string }>;
+    }
+  >;
+  /**
    * Opens a stream in one of them.
    *
    * Pass the URL the player is using, proxied and all: external players each
@@ -2182,6 +2199,8 @@ const api: CloudStreamElectronAPI = {
   setMediaCapabilities: (capabilities) =>
     ipcRenderer.invoke('media:setCapabilities', capabilities),
   listExternalPlayers: (refresh) => ipcRenderer.invoke('player:listExternal', refresh),
+  addCustomExternalPlayer: () => ipcRenderer.invoke('player:addCustom'),
+  removeCustomExternalPlayer: (playerId) => ipcRenderer.invoke('player:removeCustom', playerId),
   openInExternalPlayer: (playerId, url) =>
     ipcRenderer.invoke('player:openExternal', playerId, url),
   rollbackExtension: (repositoryUrl, internalName) =>

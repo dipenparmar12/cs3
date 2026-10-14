@@ -139,7 +139,7 @@ import { DiagnosticsLog } from './cs3/diagnostics';
 import { ProviderAnalytics } from './cs3/providerAnalytics';
 import { ProviderRanking } from './cs3/providerRanking';
 import { ProviderRecommender } from './cs3/providerRecommendations';
-import { ExternalPlayerService } from './externalPlayer';
+import { ExternalPlayerService, customPlayerId, validatePlayerPath } from './externalPlayer';
 import {
   continueWatchingEnabled,
   setContinueWatchingEnabled,
@@ -3761,11 +3761,68 @@ ipcMain.handle('shell:openExternal', async (_, url: string) => {
   return { ok: true };
 });
 
-ipcMain.handle('player:listExternal', async (_, refresh?: boolean) => ({
-  ok: true,
-  players: refresh ? externalPlayers.refresh() : externalPlayers.list(),
-  downloads: externalPlayers.getDownloads(),
-}));
+/**
+ * Players the viewer added by hand, read on first use rather than at module
+ * scope (the datastore is a multi-megabyte parse; see §12). A setting, so the
+ * backup's settings section carries it.
+ */
+const CUSTOM_PLAYERS_KEY = 'external_player_custom_paths';
+let customPlayersLoaded = false;
+function ensureCustomPlayers(): void {
+  if (customPlayersLoaded) return;
+  customPlayersLoaded = true;
+  externalPlayers.setCustomPlayers(datastore.getObject<string[]>(CUSTOM_PLAYERS_KEY, [], true) ?? []);
+}
+function saveCustomPlayers(paths: string[]) {
+  const kept = externalPlayers.setCustomPlayers(paths);
+  datastore.setObject(CUSTOM_PLAYERS_KEY, kept.map((player) => player.path), true);
+  return { ok: true, players: externalPlayers.list(), downloads: externalPlayers.getDownloads() };
+}
+
+ipcMain.handle('player:listExternal', async (_, refresh?: boolean) => {
+  ensureCustomPlayers();
+  return {
+    ok: true,
+    players: refresh ? externalPlayers.refresh() : externalPlayers.list(),
+    downloads: externalPlayers.getDownloads(),
+  };
+});
+
+/**
+ * "Add a player…" (PRD §121.7): for an install detection cannot find — a
+ * portable build, an unusual folder. The path comes from the OS file picker
+ * here in main, never typed into the renderer, and is validated before it is
+ * kept; it is launched with `spawn` and no shell, like every other player.
+ */
+ipcMain.handle('player:addCustom', async () => {
+  ensureCustomPlayers();
+  const options: Electron.OpenDialogOptions = {
+    title: 'Choose a media player',
+    properties: ['openFile'],
+    filters:
+      process.platform === 'win32'
+        ? [{ name: 'Programs', extensions: ['exe'] }]
+        : process.platform === 'darwin'
+          ? [{ name: 'Applications', extensions: ['app'] }]
+          : [],
+  };
+  const picked =
+    mainWindow && !mainWindow.isDestroyed()
+      ? await dialog.showOpenDialog(mainWindow, options)
+      : await dialog.showOpenDialog(options);
+  if (picked.canceled || picked.filePaths.length === 0) {
+    return { ok: true, cancelled: true, players: externalPlayers.list(), downloads: externalPlayers.getDownloads() };
+  }
+  const chosen = picked.filePaths[0];
+  const problem = validatePlayerPath(chosen);
+  if (problem) return { ok: false, error: problem, players: externalPlayers.list(), downloads: externalPlayers.getDownloads() };
+  return saveCustomPlayers([...externalPlayers.customPlayerPaths().filter((p) => p !== chosen), chosen]);
+});
+
+ipcMain.handle('player:removeCustom', async (_, playerId: string) => {
+  ensureCustomPlayers();
+  return saveCustomPlayers(externalPlayers.customPlayerPaths().filter((p) => customPlayerId(p) !== playerId));
+});
 
 /**
  * Hands a stream to an external player **and keeps a channel to it** where one
@@ -3785,6 +3842,7 @@ ipcMain.handle('external:open', async (_, playerId: string, url: string) => {
     const result = await mpvEngine.open({ url, title: 'CloudStream' });
     return { ...result, capability: result.ok ? 'full' : 'none', engine: 'mpv' };
   }
+  ensureCustomPlayers();
   const result = await externalPlayers.openControlled(playerId, url);
   if (!result.ok) {
     diagnostics.record({
@@ -3901,6 +3959,7 @@ ipcMain.handle('external:stop', async () => {
 });
 
 ipcMain.handle('player:openExternal', async (_, playerId: string, url: string) => {
+  ensureCustomPlayers();
   const result = externalPlayers.open(playerId, url);
   if (!result.ok) {
     diagnostics.record({
