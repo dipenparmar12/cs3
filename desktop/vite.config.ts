@@ -99,6 +99,13 @@ export default defineConfig({
         vite: {
           build: {
             outDir: 'dist-electron',
+            /*
+             * CommonJS, as `preload.cjs`: the window runs sandboxed (audit
+             * SEC-01), and a sandboxed preload cannot be an ES module. Set on
+             * `lib`, because the plugin derives the format from
+             * `"type": "module"` there and overrides `output.format`.
+             */
+            lib: { entry: 'electron/preload.ts', formats: ['cjs'], fileName: () => 'preload.cjs' },
             rollupOptions: {
               // The preload script is pure IPC plumbing and imports nothing
               // beyond electron itself, but keep builtins external for safety.

@@ -38,6 +38,7 @@ const endServiceGraph = startup.span('constructServices');
 
 import { app, BrowserWindow, ipcMain, dialog, Menu, net, screen, session, shell } from 'electron';
 import { byteStringHeaders, isElectronHeaderByteStringError } from './util/headerBytes.ts';
+import { appMayUse } from './security/permissions.ts';
 import { BackupService } from './cs3/backupService.ts';
 import { runReset, summarise, type ResetAreaDefinition } from './cs3/userDataReset.ts';
 import type { UserDataResetRequest } from '../src/types/userData';
@@ -57,6 +58,7 @@ import {
 } from './cs3/extensionIssues';
 import { Aria2Engine } from './aria2Engine';
 import { DownloadService } from './downloadService';
+import { resolveSafeRevealTarget } from './download/revealTarget.ts';
 import { PluginManager } from './pluginManager';
 import type { SearchScope } from './searchScope';
 import {
@@ -695,8 +697,13 @@ downloadService.setAnalytics(providerAnalytics);
 // Stream failures are otherwise invisible: the request succeeded, and the break
 // happens minutes later with nothing watching.
 contentService.getProxy().setDiagnostics(diagnostics);
+/*
+ * The folders downloads land in may serve any file; elsewhere only media and
+ * subtitles (audit SEC-05). `userData` is deliberately not one: it holds the
+ * datastore, server keys included. The viewer's own download folder joins when
+ * it is chosen (`download:setDirectory`).
+ */
 try {
-  contentService.getProxy().addAllowedDirectory(app.getPath('userData'));
   contentService.getProxy().addAllowedDirectory(app.getPath('downloads'));
 } catch {}
 // A private session discovers into memory only; leaving it drops what was found.
@@ -1395,10 +1402,16 @@ function createWindow() {
     backgroundColor: '#0c0f17',
     show: false,
     webPreferences: {
-      preload: path.join(__dirname, 'preload.js'),
+      preload: path.join(__dirname, 'preload.cjs'),
       contextIsolation: true,
       nodeIntegration: false,
-      sandbox: false,
+      /*
+       * Sandboxed (audit SEC-01). The renderer draws text and images from
+       * third-party providers; with the sandbox off, a renderer compromise is
+       * one step from the OS. The preload needs nothing a sandbox withholds —
+       * `contextBridge`, `ipcRenderer` and `webUtils` are all available.
+       */
+      sandbox: true,
       autoplayPolicy: 'no-user-gesture-required',
     },
   });
@@ -1751,6 +1764,21 @@ app.whenReady().then(async () => {
     const responseHeaders = byteStringHeaders(details.responseHeaders);
     callback(responseHeaders ? { responseHeaders } : {});
   });
+
+  /**
+   * Permissions are an allowlist (audit SEC-02, `security/permissions.ts`):
+   * Electron grants every request when no handler is set. The app's own page
+   * keeps clipboard writes, HTML fullscreen and ClearKey EME; nothing else, and
+   * no other origin, gets anything. The WebView partition refuses everything
+   * itself (`webViewHost.ts`).
+   */
+  const devServerUrl = process.env.VITE_DEV_SERVER_URL;
+  session.defaultSession.setPermissionRequestHandler((contents, permission, callback, details) =>
+    callback(appMayUse(permission, details.requestingUrl || contents.getURL(), devServerUrl))
+  );
+  session.defaultSession.setPermissionCheckHandler((contents, permission, requestingOrigin) =>
+    appMayUse(permission, requestingOrigin || contents?.getURL() || '', devServerUrl)
+  );
 
   startup.stage('createWindow', () => createWindow());
 
@@ -4704,7 +4732,7 @@ ipcMain.handle(
       });
       if (!task) return { ok: false, error: 'That file could not be queued.' };
 
-      return await downloadService.request(task);
+      return await downloadService.request(fromRenderer(task));
     } catch (error) {
       return fail(error);
     }
@@ -4781,11 +4809,23 @@ ipcMain.handle('sources:savePreferences', async (_, prefs: Partial<SourcePrefere
 
 // --- downloads -----------------------------------------------------------
 
+/**
+ * A download as the renderer describes it, minus where to write it (audit SEC-06).
+ *
+ * `enqueue` kept a caller-supplied `targetFilePath`, so whoever drives this IPC
+ * chose any path on disk to write a provider's bytes to — a Startup folder
+ * included. The renderer never sets one (`downloadIdentity.ts` sends ''); the
+ * path is always built here from the sanitised title, inside the download folder.
+ */
+function fromRenderer(task: DownloadTask): DownloadTask {
+  return { ...task, targetFilePath: '' };
+}
+
 ipcMain.handle('download:enqueue', async (_, task: DownloadTask) => {
   if (privacyMode.isActive() && !privacyMode.getState().settings.allowDownloads) {
     throw new Error('Downloads are turned off in Incognito.');
   }
-  return downloadService.enqueue(task);
+  return downloadService.enqueue(fromRenderer(task));
 });
 /**
  * The state-aware Download press.
@@ -5105,6 +5145,8 @@ ipcMain.handle('download:getQueue', async () => downloadService.getTasks());
 ipcMain.handle('download:getPlayableUrl', async (_, filePath: string) => {
   try {
     if (!filePath) return { ok: false, error: 'That download has no file path recorded.' };
+    // Read here, not at module scope: it is a datastore lookup (§12).
+    contentService.getProxy().addAllowedDirectory(storage.downloadsDir());
     return { ok: true, url: await contentService.serveLocalFile(filePath) };
   } catch (error) {
     logger.warn('download', 'local_playback_failed', { error: String(error) });
@@ -5130,7 +5172,7 @@ ipcMain.handle('download:getActiveBatches', async () => batchDownloader.getActiv
 
 ipcMain.handle('download:revealInFolder', async (_, targetPath?: string) => {
   const defaultDir = storage.downloadsDir();
-  const target = targetPath || defaultDir;
+  const target = resolveSafeRevealTarget(targetPath, defaultDir, storage.dataDir);
   try {
     const normalized = path.normalize(target);
     if (fs.existsSync(normalized)) {
@@ -6976,6 +7018,8 @@ ipcMain.handle('download:setDirectory', async (_, directory: string | null) => {
       fs.mkdirSync(resolved, { recursive: true });
       fs.accessSync(resolved, fs.constants.W_OK);
       datastore.setString(DOWNLOAD_DIRECTORY_KEY, resolved, true);
+      // Finished downloads there must play in-app, whatever their extension.
+      contentService.getProxy().addAllowedDirectory(resolved);
     } else {
       datastore.setString(DOWNLOAD_DIRECTORY_KEY, '', true);
     }
