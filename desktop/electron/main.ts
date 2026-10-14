@@ -36,7 +36,8 @@ startup.watch();
  */
 const endServiceGraph = startup.span('constructServices');
 
-import { app, BrowserWindow, ipcMain, dialog, Menu, net, screen, shell } from 'electron';
+import { app, BrowserWindow, ipcMain, dialog, Menu, net, screen, session, shell } from 'electron';
+import { byteStringHeaders, isElectronHeaderByteStringError } from './util/headerBytes.ts';
 import { BackupService } from './cs3/backupService.ts';
 import { runReset, summarise, type ResetAreaDefinition } from './cs3/userDataReset.ts';
 import type { UserDataResetRequest } from '../src/types/userData';
@@ -1038,6 +1039,23 @@ function installProcessGuards(): void {
 
   process.on('uncaughtException', (error) => {
     if (swallow(error, 'uncaughtException')) return;
+    /*
+     * Electron's own `net.fetch` choking on a header byte, which the session
+     * hook above should already prevent. If one still slips through, it is a
+     * single request that will never settle — every caller has a deadline —
+     * not a reason to take the window down.
+     */
+    if (isElectronHeaderByteStringError(error)) {
+      logger.error('app', 'net_header_bytestring', { error: error.message });
+      diagnostics.record({
+        level: 'warn',
+        stage: 'runtime',
+        source: 'network',
+        message: 'Recovered from a response header Electron could not read',
+        detail: error.stack,
+      });
+      return;
+    }
 
     // Not ours to swallow. Report it the way Electron would have, and let the
     // default behaviour stand.
@@ -1697,6 +1715,19 @@ app.whenReady().then(async () => {
    */
   setHttpFetch((input, init) => resilientFetch.fetch(input, init));
   network.apply();
+
+  /**
+   * Response headers `net.fetch` can survive. A non-Latin-1 header value — a
+   * `【…】` file name in `Content-Disposition` — makes Electron's own `Headers`
+   * construction throw where no caller can catch it, which crashed the app
+   * mid-search (see `util/headerBytes.ts`). The default session is the one
+   * `net.fetch` uses; nothing else registers `onHeadersReceived` on it, and
+   * the common case answers "unchanged" after one scan.
+   */
+  session.defaultSession.webRequest.onHeadersReceived((details, callback) => {
+    const responseHeaders = byteStringHeaders(details.responseHeaders);
+    callback(responseHeaders ? { responseHeaders } : {});
+  });
 
   startup.stage('createWindow', () => createWindow());
 
