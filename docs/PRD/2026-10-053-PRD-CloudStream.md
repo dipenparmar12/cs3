@@ -1644,3 +1644,233 @@ The cleanup mechanism must reclaim storage safely without deleting user-owned co
   - **Disposable caches:** Regenerable metadata, artwork, media inspection results, and other cached content that can be fetched or rebuilt when needed.
   - **Generated media artifacts:** Temporary transcoding outputs, proxy segments, thumbnails, and other application-generated media data.
   - **
+
+# 
+
+  [ ]
+
+### 123. Intelligent Source Aggregation, Language and Resolution Detection, and Unified Playback Selection
+
+**Objective**
+
+Design a reliable, user-friendly system that automatically identifies and organizes multiple sources for the same media, including sources with embedded audio and subtitle tracks, separate language-specific links, and multiple resolution variants.
+
+Providers can represent the same media in different ways:
+
+- One source contains multiple audio languages, subtitle tracks, and resolutions.
+- Multiple source links from the same provider offer different audio languages.
+- Multiple source links offer different resolutions of the same media.
+- Each link represents a particular language and resolution combination.
+- Source labels contain useful metadata such as `1080p`, `720p`, `Hindi`, or `English`.
+- Source labels contain incomplete, inconsistent, or no useful metadata.
+- Different providers expose different combinations of these capabilities.
+
+CS3 must normalize these differences into an intuitive playback experience. Users should be able to select their preferred language and resolution without understanding provider-specific source structures, while advanced users can still inspect and select individual sources when necessary.
+
+**Core principle:** A source is a playable resource, a track is an option within that resource, and a resolution may be either an adaptive representation or a separate source. CS3 must distinguish these cases accurately rather than treating every source link as a separate language or quality option.
+
+#### 123.1 Audit and Understand Existing Source Structures
+
+- Inspect the current source discovery, normalization, source selection, metadata matching, playback session, media inspection, and player integration implementations before introducing changes.
+- Review the existing provider response models and determine how they represent:
+  - Individual source URLs.
+  - Provider names and source labels.
+  - Audio languages and embedded audio tracks.
+  - Subtitle tracks.
+  - Resolutions and quality variants.
+  - Streaming protocols and media formats.
+  - Request headers, cookies, and authentication requirements.
+- Identify where the application currently loses language, resolution, or track information.
+- Determine whether multiple returned links are already grouped by provider, media identity, language, quality, or another attribute.
+- Reuse existing source ranking, playback recovery, metadata normalization, and track-selection logic where appropriate.
+- Avoid creating a parallel source-management architecture if the existing services can be extended safely.
+
+#### 123.2 Establish a Unified Media and Source Model
+
+Introduce or improve a normalized internal representation that distinguishes the media identity, playable source resources, available tracks, and quality options.
+
+- **Media identity:** The movie, episode, or other content the user intends to watch.
+- **Provider:** The extension or service that supplied a source.
+- **Source resource:** A specific URL or playable resource returned by a provider.
+- **Audio track:** A selectable audio stream within a source resource.
+- **Subtitle track:** An embedded or separately available subtitle resource.
+- **Quality variant:** A resolution or representation within an adaptive stream, or a distinct source that provides a different quality.
+- **Source variant:** A resource offering a particular combination of language, quality, format, or other playback characteristics.
+- **Playback capability:** The options that the active resource and selected playback engine actually support.
+
+Keep these concepts separate in the internal model even when the provider exposes only one combined source label.
+
+Each source resource must retain its own URL, provider identity, request headers, expiry information, format information, and other playback-critical metadata. Grouping sources must never cause the application to lose the information required to play the original resource.
+
+#### 123.3 Intelligent Source Label and Metadata Parsing
+
+- Extract language, resolution, audio codec, video codec, release information, and other useful attributes from provider labels, titles, filenames, URLs, structured metadata, and media inspection results.
+- Normalize common resolution labels, including `480p`, `720p`, `1080p`, `1440p`, `2160p`, `4K`, and other valid variants.
+- Recognize common language labels and aliases, including English, Hindi, Japanese, Tamil, Telugu, and other languages supported by providers.
+- Handle common abbreviations and multilingual labels where their meaning can be established reliably.
+- Distinguish language information from unrelated words, release names, subtitle indicators, and codec labels.
+- Do not assume that a label containing `Hindi` proves the resource contains a selectable Hindi audio track. It may describe the entire audio version rather than an embedded track.
+- Do not assume that `1080p` in a URL proves the resource actually delivers 1080p media.
+- Assign confidence to inferred metadata and preserve the original provider label for diagnostics.
+- When metadata is ambiguous, retain the source and represent the uncertain attribute as unknown rather than making an unsafe assumption.
+- Prefer authoritative manifest, track, or media-inspection information over inferred labels when determining actual playback capabilities.
+
+#### 123.4 Detect Embedded Tracks Versus Separate Language Sources
+
+Determine how each provider supplies language options before presenting them to the user.
+
+**Case A: One resource contains multiple audio tracks**
+
+- Inspect the manifest or media container when supported.
+- Enumerate the actual available audio tracks and their language metadata.
+- Present them in the audio-language selector.
+- Keep the resource URL unchanged when the user switches between embedded audio tracks, unless the playback engine requires a different representation or resource.
+- Ensure the selected track is actually applied by the active playback engine.
+
+**Case B: Separate source links provide different language versions**
+
+- Group compatible links under the same media identity and provider where appropriate.
+- Detect the language associated with each source using provider metadata, labels, and other reliable evidence.
+- Present language choices through the standard audio-language selector when the links represent equivalent versions of the same media.
+- When the user chooses a language, select the correct underlying source resource and initiate or update playback through the existing source-switching workflow.
+- Preserve source-specific headers, authentication, expiry, quality information, and provider identity.
+- Do not pretend that a separate language-specific URL is an embedded audio track.
+
+**Case C: Language metadata is missing or ambiguous**
+
+- Retain the source as an available option.
+- Attempt reliable metadata inspection where appropriate.
+- If the language cannot be established, display a neutral label such as "Unknown language" or retain the original source label in advanced source details.
+- Do not assign a language solely because another source from the same provider uses that language.
+
+#### 123.5 Intelligent Resolution Detection and Grouping
+
+- Detect whether resolution options are represented as adaptive-streaming variants, separate source URLs, or multiple labels pointing to the same resource.
+- For adaptive streams, expose supported quality choices through the playback engine's actual quality-selection capabilities.
+- For separate URLs, group compatible resources into quality options only when they represent the same intended media and compatible language or audio-version choices.
+- Preserve the relationship between each quality option and its underlying playable resource.
+- Avoid merging different cuts, episodes, releases, or unrelated content simply because their labels contain the same resolution.
+- When the same resource is returned repeatedly with different labels, deduplicate the redundant options if they resolve to the same playable representation.
+- Do not remove legitimate variants simply because their URLs or labels appear similar.
+- When the source provides only one valid resolution, avoid displaying a nonfunctional resolution selector.
+
+#### 123.6 Build a Unified Language and Resolution Selection Experience
+
+- Present understandable language and quality controls in the player instead of requiring ordinary users to choose between technical provider links.
+- When multiple languages and resolutions are available, allow users to select each independently where the source structure supports it.
+- Keep the currently selected language and quality visible through concise labels.
+- Update the available choices when the active source changes.
+- Show only meaningful, supported choices. Do not display a language or resolution option that cannot be selected.
+- Preserve a compact interface by hiding unnecessary controls when only one meaningful option exists.
+- Keep advanced source selection available for users who want to inspect individual providers or resources.
+- Ensure the simple selection interface does not remove useful functionality from the existing source-selection panel.
+
+#### 123.7 Generate Valid Language and Quality Combinations
+
+When providers return multiple resources, build a valid set of selectable combinations instead of assuming every language can be paired with every resolution.
+
+For example, a provider might return:
+
+- English, 1080p.
+- English, 720p.
+- Hindi, 1080p.
+- Hindi, 480p.
+
+In this case, CS3 should allow English at 1080p or 720p and Hindi at 1080p or 480p. It must not offer Hindi at 720p unless a valid source or adaptive representation supports that combination.
+
+- Represent the actual availability of each language and quality combination.
+- Filter quality choices when the selected language does not have a matching resource.
+- When the user changes language, preserve the current resolution if the equivalent quality exists for the newly selected language.
+- If the requested resolution is unavailable for that language, choose a clearly communicated fallback, such as the closest suitable available quality, or ask the user to select another available option when appropriate.
+- Never silently substitute a different language.
+- Avoid unnecessarily switching providers when the current provider offers a valid matching combination.
+- If another provider offers a better matching combination, use existing provider-ranking and source-reliability logic to evaluate it without overriding the user's explicit choices.
+
+#### 123.8 Safe Source Grouping and Deduplication
+
+- Group resources only when there is sufficient evidence that they represent the same media and compatible playback variants.
+- Use canonical media identity, season and episode identifiers, normalized source metadata, language, resolution, release information, and other relevant attributes to establish compatibility.
+- Preserve provider provenance and the identity of each underlying resource.
+- Deduplicate repeated entries without merging resources that differ in language, quality, cut, codec, accessibility, or other meaningful playback properties.
+- Avoid treating temporary URLs as permanent source identities.
+- Do not discard a valid resource simply because another resource has the same display label.
+- Keep grouping deterministic so the same provider response produces stable options.
+- If grouping confidence is low, keep the resources separate in the advanced source list rather than risking an incorrect selection.
+
+#### 123.9 Reliable Source Switching and Playback Recovery
+
+- Route language and quality selections through the existing playback-session and source-switching services.
+- Validate that the selected resource exists and remains usable before attempting playback when such validation can be performed safely.
+- Preserve playback position when switching between equivalent resources whenever practical.
+- Reuse existing source-refresh and recovery mechanisms for expired links.
+- If a source fails because of an expired URL, refresh or resolve that source through the appropriate provider workflow rather than immediately treating the media format as unsupported.
+- If a resource is inaccessible because of provider authentication or request-header requirements, preserve and apply the required request context.
+- If a selected resource fails, attempt a suitable alternative only when doing so respects the user's language and quality preferences.
+- Communicate when an exact requested combination is unavailable instead of silently changing playback to an unrelated variant.
+- Avoid duplicate playback sessions, repeated resource probes, and unnecessary player restarts.
+
+#### 123.10 Playback Engine and Track Compatibility
+
+- Integrate source grouping with the existing native, Shaka, integrated MPV, and supported external-player workflows.
+- Distinguish embedded track selection from switching to a different source resource.
+- Verify that the active playback engine supports the requested operation before exposing the corresponding control.
+- When the native engine cannot play the selected resource, use the existing compatibility-driven fallback strategy where appropriate.
+- Preserve language, quality, subtitle, authentication, and source metadata during supported engine transitions.
+- Refresh track and quality options after switching engines or resources.
+- Do not assume that an external player supports every track-selection or quality-switching operation through the available integration interface.
+- Keep source grouping and playback compatibility separate so an inaccurate metadata inference cannot cause an invalid resource to be treated as playable.
+
+#### 123.11 Source Selection for Advanced Users
+
+- Retain a source-selection interface for users who want to choose a specific provider or resource manually.
+- Display concise information such as provider, language, resolution, and availability when known.
+- Keep technical metadata, original labels, detailed format information, and diagnostics available through an expandable information view.
+- Distinguish between a provider's individual resource and the normalized language or quality option shown in the player.
+- Make it possible to inspect the underlying resource selected by the simplified controls.
+- Avoid overwhelming ordinary users with a list of technically similar URLs when those resources can be represented through clear language and quality choices.
+
+#### 123.12 Testing and Validation
+
+Test the full source-discovery-to-playback workflow against these scenarios:
+
+- One source with multiple embedded audio tracks.
+- One source with multiple embedded subtitle tracks.
+- Multiple source links for different languages.
+- Multiple source links for different resolutions.
+- Multiple links with different language and resolution combinations.
+- One provider with incomplete or misleading labels.
+- Providers with no language or resolution metadata.
+- Duplicate URLs and duplicate representations.
+- Separate links for different cuts, releases, or episodes.
+- Sources requiring request headers, cookies, authentication, or signed URLs.
+- Sources with expired links or inaccessible resources.
+- Native playback failure followed by successful MPV or external playback.
+- Language changes while maintaining the closest valid quality.
+- Quality changes while maintaining the selected language.
+- Resource changes during playback and recovery.
+- Multiple providers offering overlapping language and quality combinations.
+
+Verify that the user interface displays only valid options and that every selected option resolves to the intended media resource.
+
+#### 123.13 Acceptance Criteria
+
+- CS3 distinguishes resources, embedded tracks, language versions, and quality variants correctly.
+- Users can select available languages and resolutions without manually understanding provider-specific source labels.
+- Multiple URLs from the same provider can be grouped into meaningful options when their relationship is sufficiently reliable.
+- Embedded audio tracks remain selectable without unnecessary source changes.
+- Separate language-specific sources switch to the correct underlying resource.
+- Resolution selection reflects actual available qualities and never invents unsupported combinations.
+- Missing or ambiguous metadata does not cause valid sources to disappear.
+- Source grouping and deduplication preserve legitimate differences between resources.
+- Playback transitions preserve relevant source metadata, authentication context, and playback position where supported.
+- Failed resources use the existing recovery and player-fallback architecture appropriately.
+- The advanced source-selection workflow remains available without dominating the ordinary playback experience.
+- Existing search, provider ranking, source reliability tracking, downloads, subtitles, and player integrations continue to function correctly.
+
+#### 123.14 Implementation Principle
+
+Base the implementation on actual provider responses and the capabilities of the current playback architecture. Build a normalized, evidence-driven model that separates media identity, source resources, language tracks, and quality variants.
+
+Do not solve this problem by simply parsing labels or combining every source returned for a title. Use structured metadata and media inspection where available, conservative inference when necessary, and explicit uncertainty when the source cannot be classified reliably.
+
+The intended outcome is a seamless experience for ordinary users: CS3 identifies valid language and quality options, selects the correct resource, and plays the intended media with minimal manual intervention. Failures caused by the provider or the original hosting resource must remain distinguishable from problems in CS3's own source-selection and playback logic.
