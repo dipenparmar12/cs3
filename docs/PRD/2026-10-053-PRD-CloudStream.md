@@ -1,9 +1,8 @@
 ---
 type: 'Todo'
 title: 'Todo CloudStream #3'
+tags: [Todo]
 ---
-
-# Todo CloudStream #3
 
 - [ ] Get the movie/media from imdb id/url fetch find the correct item and do the auto smart search of the content 
 
@@ -972,6 +971,159 @@ title: 'Todo CloudStream #3'
 
     ```markdown
     
+    ```
+
+- [ ] Central element for the subtitles resolution and language So we should have And good user interface and relatable designs currently if there were only one resolution is supported like say 1080p Then there is no clicking effect will going to have any effect so we need to have a better user interface that indicated that that is only 1 and there is this is not an clickable element since it is an only 1 resolution or only one language is supported which is currently rendered with correct label so make sure that we have an ui and style that smartly indicate and differentiate between what has more option and clickable item and what is not so we should indicate via the The styles and good user interface And from the subtitle we have very Popular icon for subtitle in youtube Netflix Amazon Prime everywhere uses icon with all the cc so make sure that we adopt as well so we don't invent our app language if there is a widely community and widely accepted in world of related icons and everything make sure that we use that only for easy and Good interface that I already known so user don't have to learn anything extra from our app
+
+    ```markdown
+    ## 117. Intelligent Player Controls and Standardized Subtitle Icons
+    
+    Refine the centered subtitle, video quality, and audio language controls so users can immediately distinguish between informational indicators and interactive controls.
+    
+    Currently, these controls display the correct labels, but their appearance does not always communicate whether additional options are available. For example, when only one resolution, audio language, or subtitle track is available, clicking the control may have no meaningful effect.
+    
+    The interface should communicate availability and interactivity through familiar visual conventions rather than requiring users to discover behavior through trial and error.
+    
+    ### 117.1 Distinguish Interactive Controls from Informational Indicators
+    
+    Determine whether each control has meaningful alternative options before deciding how it should appear.
+    
+    - When multiple resolutions are available, display the quality control as an interactive selector.
+    - When only one resolution is available, display the current resolution as a subtle, non-interactive indicator.
+    - When multiple audio languages or tracks are available, provide an interactive audio selector.
+    - When only one audio option is available, display its language as a non-interactive indicator.
+    - When multiple subtitle tracks are available, provide an interactive subtitle selector.
+    - When subtitles are unavailable, do not present a misleading selector.
+    - When subtitles are available but only one track exists, retain an obvious way to enable or disable subtitles where applicable.
+    
+    A single available option should not appear clickable if clicking it cannot perform a meaningful action. However, subtitle controls must remain interactive when they support enabling or disabling subtitles, even if only one track is available.
+    
+    ### 117.2 Visual Treatment and Interaction States
+    
+    Use consistent styling to distinguish selectors from informational indicators.
+    
+    **Interactive controls:**
+    - Use a recognizable control treatment, such as a subtle background, hover state, or dropdown indicator.
+    - Provide appropriate hover, focus, pressed, and keyboard-accessible states.
+    - Open the relevant selection menu when activated.
+    - Clearly communicate that alternative options are available.
+    
+    **Informational indicators:**
+    - Use a quieter visual treatment without misleading dropdown indicators or unnecessary hover effects.
+    - Display the current resolution or language clearly.
+    - Avoid suggesting that the user can change a value when no alternative exists.
+    - Maintain visual alignment with the interactive controls.
+    
+    The controls should remain visually consistent even when their interaction states differ.
+    
+    ### 117.3 Standardized Subtitle and Closed-Caption Iconography
+    
+    Use widely recognized subtitle and closed-caption iconography rather than inventing a proprietary visual language.
+    
+    Adopt the familiar subtitle/CC symbol commonly used in streaming services and video players, such as YouTube, Netflix, and Amazon Prime Video.
+    
+    Requirements:
+    
+    - Use a recognizable subtitles or closed-caption icon for the subtitle control.
+    - Prefer established icon-library equivalents where available.
+    - Keep the icon consistent across the player control bar, subtitle selector, and subtitle sidebar.
+    - Use familiar symbols for enabled, disabled, and selected states where appropriate.
+    - Ensure icons remain understandable at compact player-control sizes.
+    - Provide accessible labels and tooltips so the controls remain clear to screen readers and users unfamiliar with an icon.
+    - Avoid introducing unnecessary custom symbols when established conventions already exist.
+    
+    Use standardized icons for audio selection, video quality, and other playback controls where suitable.
+    
+    ### 117.4 Consistent Player Control Design
+    
+    The centered subtitle, quality, and audio language controls should share a common design language.
+    
+    - Keep control heights, spacing, typography, and alignment consistent.
+    - Display concise, normalized labels.
+    - Ensure non-interactive indicators do not visually compete with interactive selectors.
+    - Preserve clear visual feedback when the active language or resolution changes.
+    - Maintain a responsive layout without overlapping adjacent controls.
+    - Keep the existing right-side player controls accessible.
+    
+    ### 117.5 Acceptance Criteria
+    
+    - Users can immediately identify which controls are interactive.
+    - Single-option resolution and audio controls appear as non-interactive indicators.
+    - Subtitle controls remain interactive when enabling or disabling subtitles is possible.
+    - Multi-option selectors visibly communicate that additional choices are available.
+    - Standard subtitle/CC iconography is used consistently.
+    - No misleading dropdown indicators or ineffective click interactions remain.
+    - Keyboard navigation and accessibility labels work correctly.
+    - The interface remains consistent across supported player layouts.
+    
+    **Implementation principle:** Use familiar visual conventions and capability-aware controls. Make interactive selectors obvious, informational indicators quiet, and subtitle functionality recognizable through established industry-standard iconography.
+    ```
+
+- [ ] When a option to select all and instal all repose trees and provider at all at once so when user had a search and that search has a results then we should select all means that current selection or current search item all and if there were no select on the extension or repository that means all across the repositories supposed to be installed and uninstalled on Extensions Screen, Repos, browse, With this extra option or any controls our existing ui supposed to be not look bloated and button and control Bloated it's supposed to be minimal and very sit on the us so it's only available when user need it otherwise it's hidden from the user interface and It's supposed to be there but only found by when user want it so we need to have it ambiently set that options on that screen
+
+    ```markdown
+    ### 118. Context-Aware Bulk Selection and Installation for Extensions and Repositories
+    
+    **Objective**
+    
+    Provide an efficient way to select and install all relevant extensions, providers, or repositories at once without cluttering the Extensions interface. Bulk actions must adapt to the user's current search, selection, and browsing context, while keeping the default interface minimal and easy to use.
+    
+    #### 118.1 Context-Aware Select All
+    
+    - When the user searches within the Extensions screen, provide a **Select All** action that selects all items matching the current search and active filters, not every item across the entire application.
+    - When no search or filter is active, **Select All** applies to the items in the current view or management scope.
+    - Selection must respect the current tab and hierarchy, including Browse, Installed, repository details, and provider or extension lists.
+    - Clearly distinguish between selecting all visible or matching results and selecting all eligible items across the current repository or management scope.
+    - Do not automatically select every repository, extension, or provider simply because the user has not manually selected an item.
+    
+    #### 118.2 Bulk Installation and Repository Management
+    
+    - Provide context-aware bulk actions such as **Install Selected**, **Install All**, **Enable Selected**, **Update Selected**, and other applicable actions.
+    - Show only actions that are valid for the current items and their states. For example, do not show Install All when no eligible uninstalled items exist.
+    - If the user has selected specific items, apply the action only to those selected items.
+    - If no explicit selection exists, allow the user to discover bulk actions through a contextual menu or selection-mode control. Do not interpret an empty selection as an unconditional request to install everything.
+    - Support bulk installation of eligible extensions and providers across repositories where the existing architecture permits it. Handle repository-level installation separately when a repository must first be added or configured before its contents become available.
+    - Exclude items that are already installed, disabled when installation is intended, incompatible, unavailable, or otherwise ineligible from installation actions, as appropriate.
+    - When an operation spans multiple repositories, report individual successes and failures without allowing one failed repository or item to interrupt all remaining operations.
+    
+    #### 118.3 Minimal, Contextual Controls
+    
+    - Keep the default Extensions interface clean, with no permanently visible row of bulk-action buttons.
+    - Reveal bulk controls only when they become relevant, such as when the user enters selection mode, selects one or more items, opens a contextual actions menu, or requests additional actions.
+    - Prefer a compact overflow menu, contextual toolbar, or similarly unobtrusive pattern that fits the existing design system.
+    - Show a concise selection count and the available actions when selection mode is active.
+    - Provide an obvious way to exit selection mode and clear the current selection.
+    - Avoid duplicate controls, excessive toolbars, large persistent buttons, and unnecessary confirmation dialogs.
+    
+    #### 118.4 Selection Scope and State Management
+    
+    - Maintain a clear distinction between:
+      - All items currently visible.
+      - All items matching the current search and filters.
+      - All eligible items within the current repository.
+      - All eligible items within the current management scope.
+    - Make the scope apparent before executing a bulk operation, especially when it extends beyond the visible results.
+    - Preserve selection while the user inspects item details or navigates within the same management workflow, where appropriate.
+    - Clear or reconcile selections when search results, filters, repository contents, or item eligibility change, so actions cannot unintentionally target stale or hidden items.
+    - Use stable item identifiers and prevent duplicate operations on the same extension, provider, or repository.
+    
+    #### 118.5 Execution Feedback and Safety
+    
+    - Provide unobtrusive progress feedback for bulk operations, including the number of completed, pending, successful, and failed items where practical.
+    - Allow cancellation of pending operations when supported, without misrepresenting already completed operations as cancelled.
+    - Keep the interface responsive when processing large selections or multiple repositories.
+    - Present actionable error details for failed items and allow retrying eligible failures without repeating successful operations unnecessarily.
+    - Use confirmation dialogs only for genuinely consequential actions, such as removing repositories or performing destructive operations, rather than routine selection or installation.
+    
+    #### 118.6 Acceptance Criteria
+    
+    - Users can select all results matching the current search and filters without affecting unrelated items.
+    - Users can discover and execute bulk actions without permanent visual clutter.
+    - An empty selection never silently triggers installation across every repository.
+    - Bulk actions are limited to eligible items and respect their current installation and enablement states.
+    - Repository-level and extension-level operations remain distinct wherever the architecture requires it.
+    - Large bulk operations provide clear progress, partial-failure handling, and appropriate cancellation behavior.
+    - Existing search, filtering, repository navigation, selection, and installation workflows continue to work correctly without duplicated functionality or unnecessary UI complexity.
     ```
 
 
