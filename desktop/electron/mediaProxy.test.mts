@@ -478,7 +478,8 @@ test('a route handed to the player survives a burst of newer ones', async () => 
 // which reads as a corrupt download rather than a missing HTTP feature.
 
 const localFixture = (() => {
-  const file = path.join(os.tmpdir(), `cs3-proxy-local-${process.pid}.bin`)
+  // A video file: media is served wherever it is kept (security/localFiles.ts).
+  const file = path.join(os.tmpdir(), `cs3-proxy-local-${process.pid}.mkv`)
   // Recognisable bytes, so a wrong offset is visible rather than merely plausible.
   const bytes = Buffer.alloc(300_000)
   for (let i = 0; i < bytes.length; i++) bytes[i] = i % 251
@@ -541,7 +542,7 @@ test('an unknown local token is a 404, not a way to read arbitrary files', async
 })
 
 test('serving a file that does not exist fails now rather than at play time', async () => {
-  await assert.rejects(() => proxy.serveFile(path.join(os.tmpdir(), 'cs3-absent-file.bin')))
+  await assert.rejects(() => proxy.serveFile(path.join(os.tmpdir(), 'cs3-absent-file.mkv')))
 })
 
 test('serving a file outside allowed directories is rejected for path traversal protection', async () => {
@@ -550,8 +551,24 @@ test('serving a file outside allowed directories is rejected for path traversal 
     process.platform === 'win32' ? 'C:\\Windows\\System32\\drivers\\etc\\hosts' : '/etc/passwd'
   await assert.rejects(
     () => proxy.serveFile(outsidePath),
-    /Access denied: path outside allowed directories/,
+    /Access denied: .* is not a media file and is not in a download folder/,
   )
+})
+
+test('a non-media file is refused even in temp; a download folder serves any file (SEC-05)', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'cs3-dl-'))
+  const secret = path.join(os.tmpdir(), `cs3-secret-${process.pid}.json`)
+  const download = path.join(dir, 'Some Film')
+  fs.writeFileSync(secret, '{"key":"jellyfin"}')
+  fs.writeFileSync(download, 'bytes')
+  try {
+    await assert.rejects(() => proxy.serveFile(secret), /Access denied/)
+    proxy.addAllowedDirectory(dir)
+    assert.match(await proxy.serveFile(download), /\/local\/[0-9a-f]{32}$/)
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true })
+    fs.rmSync(secret, { force: true })
+  }
 })
 
 test('header injection with CRLF is sanitized when forwarded', async () => {
