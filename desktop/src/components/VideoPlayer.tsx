@@ -26,7 +26,7 @@ import {
   variantFromSource,
 } from '../utils/downloadIdentity';
 import { HoverMenu } from './player/HoverMenu';
-import { controlLanguageLabel, languageLabels } from './player/controlLabels';
+import { controlLanguageLabel, languageLabels, languageSetLabel } from './player/controlLabels';
 import { EpisodePanel } from './player/EpisodePanel';
 import { SourcePanel } from './player/SourcePanel';
 import { SourceResolveOverlay } from './player/SourceResolveOverlay';
@@ -81,7 +81,7 @@ import {
 import { OSD_VISIBLE_MS, describeOsd, nextOsd, type OsdAction, type OsdState } from './player/playerOsd';
 import { describeError } from '../utils/errors';
 import { useIsDeveloper } from '../utils/ExperienceModeContext';
-import { findResolutionVariants, extractResolution, formatResolutionLabel } from '../utils/resolutionVariants';
+import { findResolutionVariants, findLanguageVariants, extractResolution, formatResolutionLabel } from '../utils/resolutionVariants';
 import { asksForExternalPlayer } from '../utils/enginePreference';
 
 interface VideoPlayerProps {
@@ -521,6 +521,10 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
   );
   const resolutionVariants = useMemo(
     () => findResolutionVariants(activeSource, sourceSession?.sources, failedSourceHashes),
+    [activeSource, sourceSession?.sources, failedSourceHashes]
+  );
+  const languageVariants = useMemo(
+    () => findLanguageVariants(activeSource, sourceSession?.sources, failedSourceHashes),
     [activeSource, sourceSession?.sources, failedSourceHashes]
   );
   const currentResolution = useMemo(
@@ -1098,7 +1102,15 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
        * the honest response is to say the stream is playing elsewhere rather
        * than to render controls that cannot reach it.
        */
-      const res = await window.cloudstream?.openControlledExternal?.(playerId, streamUrl);
+      /*
+       * The proxy's loopback address for the *original* stream, not the
+       * provider's raw URL: VLC and mpv cannot send the provider's `Referer`
+       * or cookies, and the proxy applies them (PRD §121.8). Not the converted
+       * output either — the external player gets every audio and subtitle
+       * track the file has. The raw URL only when nothing was prepared.
+       */
+      const handoffUrl = preparedRef.current?.capability?.resolvedUrl || streamUrl;
+      const res = await window.cloudstream?.openControlledExternal?.(playerId, handoffUrl);
       if (res?.ok) {
         setExternalControl({ playerId, playerName, capability: res.capability });
         setExtPlayerStatus(
@@ -2119,6 +2131,12 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
       const dur = probed && probed > 0 ? probed : video.duration;
       setDuration(dur);
       durationRef.current = dur;
+
+      const carried = carriedPositionRef.current;
+      if (carried && video.currentSrc !== carried.fromSrc) {
+        setCarriedPosition(null);
+        if (carried.at < dur - 10) video.currentTime = carried.at;
+      }
     };
     const onPlay = () => setIsPlaying(true);
     const onPause = () => {
@@ -2262,11 +2280,43 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
   // Resume from where the last session stopped, once the media knows how long
   // it is. Seeking before metadata loads is silently ignored by the element.
   const resumedRef = useRef<string | null>(null);
+
+  /**
+   * Where the viewer was when they switched quality or language in the player.
+   *
+   * `progress.resumeAt` is fixed when the session starts, so without this a
+   * switch to 720p forty minutes in restarted the film from the session's
+   * opening resume point — or from zero (PRD §123.9). It applies once, to the
+   * next stream only, and takes precedence over the session's resume point.
+   *
+   * Applied where the *new* stream announces itself — the element's
+   * `loadedmetadata` (a different `currentSrc` from the one switched away
+   * from), or mpv's start position — never from an effect, which can run in
+   * the same commit as the switch with the old stream's duration still set.
+   */
+  type CarriedPosition = { at: number; fromUrl: string; fromSrc: string };
+  const [carriedPosition, setCarriedPosition] = useState<CarriedPosition | null>(null);
+  const carriedPositionRef = useRef<CarriedPosition | null>(null);
+  carriedPositionRef.current = carriedPosition;
+  const carriedAt = carriedPosition && carriedPosition.fromUrl !== streamUrl ? carriedPosition.at : undefined;
+  const switchSourceKeepingPosition = useCallback(
+    (source: TorrentResult) => {
+      const at = currentPositionRef.current;
+      setCarriedPosition(
+        at > 5 && streamUrl ? { at, fromUrl: streamUrl, fromSrc: videoRef.current?.currentSrc ?? '' } : null
+      );
+      sourceSession?.onSelectSource(source);
+    },
+    [sourceSession, streamUrl]
+  );
+
   useEffect(() => {
     const video = videoRef.current;
     const resumeAt = progress?.resumeAt;
     if (!video || !resumeAt || duration <= 0) return;
     if (resumedRef.current === streamUrl) return;
+    // A switch inside the player carries its own position; see above.
+    if (carriedPositionRef.current) return;
 
     resumedRef.current = streamUrl;
     if (resumeAt < duration - 10) {
@@ -3454,6 +3504,11 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
     return controlLanguageLabel(selected?.language, selected?.label) || 'Audio';
   }, [activeAudioTrack, audioTracks, isNativeEngine, probedAudioTracks, selectedAudioIndex]);
 
+  /** The stream itself offers more than one audio track (Case A); then those win. */
+  const embeddedAudioChoice = isNativeEngine
+    ? audioTracks.length > 1
+    : probedAudioTracks.length > 1 || audioTracks.length > 1;
+
   const qualityControlLabel = useMemo(
     () =>
       qualities.find((item) => item.level === quality)?.label ??
@@ -4493,11 +4548,13 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
           headers={activeSource?.directHeaders}
           title={episodeTitle ? `${title} — ${episodeTitle}` : title}
           capability={capability}
-          startSeconds={progress?.resumeAt}
+          startSeconds={carriedAt ?? progress?.resumeAt}
           initialVolume={audioSettings.current.volume}
           initialMuted={audioSettings.current.muted}
           externalSubtitles={allSubtitles.map((sub) => ({ name: sub.name, url: sub.url }))}
           onProgress={(position, total) => {
+            // The new stream is playing, so the position it was opened at is spent.
+            if (carriedAt !== undefined && position > 0) setCarriedPosition(null);
             // Feeds the same state the `<video>` path writes, so the existing
             // save interval, the resume point and the up-next card all work
             // without knowing which engine produced the numbers.
@@ -5018,7 +5075,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
           onClose={() => setSourcePanelOpen(false)}
           onSelect={(source) => {
             setPendingSourceHash(source.infoHash);
-            sourceSession.onSelectSource(source);
+            switchSourceKeepingPosition(source);
             // Close on choose: the panel covers the video, and leaving it up
             // over the stream the viewer just asked for is what made picking a
             // source feel like nothing had happened.
@@ -5466,7 +5523,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
                   // Re-picking the playing rung would restart the same link.
                   if (!target || target.isCurrent) return;
                   showOsd({ kind: 'text', text: `Quality: ${target.label}` });
-                  sourceSession?.onSelectSource(target.source);
+                  switchSourceKeepingPosition(target.source);
                 }}
                 onOpenChange={onMenuOpenChange}
                 showChevron={true}
@@ -5489,7 +5546,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
               </span>
             ) : null}
 
-            {isNativeEngine ? (
+            {embeddedAudioChoice ? (isNativeEngine ? (
               audioTracks.length > 1 && (
                 <HoverMenu
                   icon={<Volume2 size={16} />}
@@ -5538,8 +5595,39 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
                   }))}
                 />
               )
-            )}
-            {audioTracks.length <= 1 && probedAudioTracks.length <= 1 && audioControlLabel !== 'Audio' && (
+            )) : languageVariants.length > 1 ? (
+              /* The provider sent each language as its own link (PRD §123.4 Case B):
+                 choosing one switches source, it is not an embedded track. */
+              <HoverMenu
+                icon={<Volume2 size={16} />}
+                label="Audio"
+                value={languageVariants.find((v) => v.isCurrent)?.key ?? ''}
+                onChange={(key) => {
+                  const target = languageVariants.find((v) => v.key === key);
+                  if (!target || target.isCurrent) return;
+                  const label = languageSetLabel(target.languages);
+                  // A change of language that also had to change quality says so.
+                  const qualityNote =
+                    currentResolution && target.resolution && target.resolution !== currentResolution
+                      ? ` · ${formatResolutionLabel(target.resolution)} (${formatResolutionLabel(currentResolution)} isn't available in ${label})`
+                      : '';
+                  showOsd({ kind: 'text', text: `Audio: ${label}${qualityNote}` });
+                  switchSourceKeepingPosition(target.source);
+                }}
+                onOpenChange={onMenuOpenChange}
+                showChevron={true}
+                triggerText={languageSetLabel(languageVariants.find((v) => v.isCurrent)?.languages ?? []) || audioControlLabel}
+                options={languageVariants.map((v) => ({
+                  value: v.key,
+                  label: languageSetLabel(v.languages),
+                  detail: v.failed
+                    ? 'Failed earlier'
+                    : !v.isCurrent && v.resolution && v.resolution !== currentResolution
+                      ? formatResolutionLabel(v.resolution)
+                      : undefined,
+                }))}
+              />
+            ) : audioControlLabel !== 'Audio' ? (
               <span
                 className="player__media-status"
                 title={`Audio: ${audioControlLabel}`}
@@ -5548,7 +5636,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
                 <Volume2 size={16} />
                 <span>{audioControlLabel}</span>
               </span>
-            )}
+            ) : null}
           </div>
 
           {showSpeedControl && (
