@@ -72,6 +72,8 @@ test('the first language goes to hls.js untouched; any other is remuxed, never r
   assert.equal(hindi.plan.videoAction, 'copy');
   assert.equal(hindi.plan.audioAction, 'copy');
   assert.equal(hindi.plan.selectedAudioIndex, 1);
+  // ADTS AAC out of TS needs aac_adtstoasc in MP4; the transcoder reads this.
+  assert.equal(hindi.plan.copiedAudioCodec, 'aac');
 
   assert.equal(decideStrategy(meta, 'hls', PLAIN, GPU, undefined, undefined, 'tel').plan.selectedAudioIndex, 3);
 });
