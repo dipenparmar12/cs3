@@ -1,5 +1,5 @@
 import { spawn } from 'child_process';
-import { VlcController, controlCapabilityFor } from './externalPlayerControl';
+import { VlcController, controlCapabilityFor } from './externalPlayerControl.ts';
 import type { ExternalPlaybackSnapshot } from '../src/types/player';
 import fs from 'fs';
 import os from 'os';
