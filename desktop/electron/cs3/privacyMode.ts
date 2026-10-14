@@ -86,6 +86,7 @@ export class PrivacyMode {
     }
     // Starts off unless the viewer asked for the choice to be remembered.
     this.active = this.settings.rememberPreference ? store.getBool(ACTIVE_KEY, false, true) : false;
+    // oxlint-disable-next-line no-this-alias
     current = this;
   }
 

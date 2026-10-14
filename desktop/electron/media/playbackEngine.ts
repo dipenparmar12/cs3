@@ -21,6 +21,7 @@ import {
   planForAudioTrack,
 } from './decisionEngine.ts';
 import { MediaInspector, drmRequiresEme, transportFromUrl } from './mediaInspector.ts';
+import { SourceLease } from './sourceLease.ts';
 import { drmFromProvider } from '../cs3/providerLinks.ts';
 import { describeError } from '../../src/utils/errors.ts';
 import type { InspectionStore } from './inspectionStore.ts';
@@ -195,7 +196,7 @@ export class PlaybackEngine {
    * the provider actually gave us.
    */
   public async inspect(
-    request: Pick<PlaybackStreamRequest, 'url' | 'headers' | 'isM3u8' | 'isDash' | 'drm' | 'refresh'>
+    request: Pick<PlaybackStreamRequest, 'url' | 'headers' | 'isM3u8' | 'isDash' | 'drm' | 'refresh' | 'provider'>
   ): Promise<SourceCapabilityModel> {
     /**
      * A stream this process is already producing is not measured again.
@@ -227,7 +228,17 @@ export class PlaybackEngine {
       ...(targetRoute?.headers ?? {}),
       ...(request.headers ?? {}),
     };
-    const resolvedUrl = await this.deps.proxy.wrap(originUrl, effectiveHeaders);
+    const isYt = /googlevideo\.com|youtube\.com|youtu\.be/i.test(originUrl);
+    const lease = new SourceLease({
+      initialSource: {
+        url: originUrl,
+        headers: effectiveHeaders,
+        provider: request.provider,
+      },
+    });
+    const resolvedUrl = await this.deps.proxy.wrapLease(lease, {
+      boundedRanges: request.isDash || isYt,
+    });
 
     const cacheKey = `${originUrl} ${JSON.stringify(effectiveHeaders)}`;
 

@@ -1769,7 +1769,11 @@
 .hover-menu__list {
   position: absolute;
   bottom: calc(100% + 6px);
-  min-width: 148px;
+  /* Wide enough for "English + Hindi +2" or "Hindi · AC-3 5.1" without guessing (PRD §127.11),
+     never wider than the window. */
+  min-width: 216px;
+  width: max-content;
+  max-width: min(360px, calc(100vw - 32px));
   max-height: 46vh;
   overflow-y: auto;
   margin: 0;

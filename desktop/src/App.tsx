@@ -735,7 +735,7 @@ export const App: React.FC = () => {
       disposeSettings?.();
       disposeLicences?.();
     };
-  }, [refreshOttPlatforms, activeTab]);
+  }, [refreshOttPlatforms, activeTab, switchTab]);
 
   /**
    * Play a file the user already has on disk.
@@ -1791,8 +1791,9 @@ export const App: React.FC = () => {
    * emit once more, and those results answer a different question — the previous
    * episode, or the search the viewer just replaced.
    */
+  const refreshSessionId = playbackRefresh?.sessionId;
   useEffect(() => {
-    if (!playbackRefresh || !playbackRefresh.sessionId) return;
+    if (!refreshSessionId) return;
 
     const dispose = window.cloudstream?.onPlaybackUpdate((snapshot) => {
       if (snapshot.sessionId !== playbackRefreshRef.current) return;
@@ -1818,7 +1819,7 @@ export const App: React.FC = () => {
     });
 
     return dispose;
-  }, [playbackRefresh?.sessionId]);
+  }, [refreshSessionId]);
 
   /**
    * Whether pressing Download asks first, and the pending question if it does.

@@ -823,13 +823,15 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
   } | null>(null);
   const [externalSnapshot, setExternalSnapshot] = useState<ExternalPlaybackSnapshot | null>(null);
 
+  const externalPlayerId = externalControl?.playerId;
+  const externalCapability = externalControl?.capability;
   useEffect(() => {
-    if (!externalControl) return;
+    if (!externalPlayerId) return;
     const dispose = window.cloudstream?.onExternalUpdate((snapshot) => {
       setExternalSnapshot(snapshot);
       // A capability that downgrades mid-session is reported, not hidden: VLC
       // without its HTTP module plays perfectly and answers nothing.
-      if (snapshot.capability !== externalControl.capability) {
+      if (snapshot.capability !== externalCapability) {
         setExternalControl((current) =>
           current ? { ...current, capability: snapshot.capability } : current
         );
@@ -840,7 +842,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
       }
     });
     return dispose;
-  }, [externalControl?.playerId, externalControl?.capability]);
+  }, [externalPlayerId, externalCapability]);
 
   /**
    * Mirrors the external player's position into the app's own timeline.
@@ -3107,12 +3109,14 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
 
   // A switch that has landed clears the row spinner; comparing against the
   // session's active hash avoids leaving it spinning when the start failed.
+  const sourceSessionPhase = sourceSession?.phase;
+  const sourceSessionActiveInfoHash = sourceSession?.activeInfoHash;
   useEffect(() => {
-    if (!sourceSession) return;
-    if (sourceSession.phase === 'playing' || sourceSession.phase === 'error') {
+    if (!sourceSessionPhase) return;
+    if (sourceSessionPhase === 'playing' || sourceSessionPhase === 'error') {
       setPendingSourceHash(null);
     }
-  }, [sourceSession?.phase, sourceSession?.activeInfoHash]);
+  }, [sourceSessionPhase, sourceSessionActiveInfoHash]);
 
   const effectiveTime = scrubbingTime !== null ? scrubbingTime : currentTime;
   const progressPercent = duration ? (effectiveTime / duration) * 100 : 0;
@@ -5585,8 +5589,9 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
                   triggerText={audioControlLabel}
                   options={audioTracks.map((track) => ({
                     value: track.id,
-                    label: track.label,
-                    detail: track.language ? track.language.toUpperCase() : undefined,
+                    // "Hindi", not "HIN"; the track's own title only when it says something more.
+                    label: controlLanguageLabel(track.language, track.label) || track.label,
+                    detail: track.label && track.label !== controlLanguageLabel(track.language, track.label) ? track.label : undefined,
                   }))}
                 />
               )
@@ -5617,8 +5622,9 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
                   triggerText={audioControlLabel}
                   options={audioTracks.map((track) => ({
                     value: track.id,
-                    label: track.label,
-                    detail: track.language ? track.language.toUpperCase() : undefined,
+                    // "Hindi", not "HIN"; the track's own title only when it says something more.
+                    label: controlLanguageLabel(track.language, track.label) || track.label,
+                    detail: track.label && track.label !== controlLanguageLabel(track.language, track.label) ? track.label : undefined,
                   }))}
                 />
               )

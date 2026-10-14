@@ -598,10 +598,15 @@ export class MediaProxy {
    * The proxy holds the lease, not just the raw URL. When token expiration occurs,
    * the proxy re-resolves the fresh URL beneath the same loopback token.
    */
-  public async wrapLease(lease: SourceLease): Promise<string> {
-    const loopbackUrl = await this.wrap(lease.url, lease.headers)
+  public async wrapLease(
+    lease: SourceLease,
+    options: {
+      boundedRanges?: boolean
+    } = {},
+  ): Promise<string> {
+    const loopbackUrl = await this.wrap(lease.url, lease.headers, options)
     const token = loopbackUrl.match(/\/stream\/([0-9a-f]{32})/)?.[1]
-    if (token) {
+    if (token && !this.leases.has(token)) {
       this.leases.set(token, lease)
     }
     return loopbackUrl

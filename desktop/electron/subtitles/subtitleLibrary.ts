@@ -64,6 +64,7 @@ export function workKey(title: string, year?: number, season?: number, episode?:
 
 /** `Dune Part Two (2024).eng.opensubtitles.vtt`, `Severance S01E02.eng.provider.vtt`. */
 export function subtitleFileName(req: Pick<SaveRequest, 'title' | 'year' | 'season' | 'episode' | 'lang' | 'origin'>): string {
+  // oxlint-disable-next-line no-control-regex
   const safe = req.title.replace(/[<>:"/\\|?*\x00-\x1f]+/g, ' ').replace(/\s+/g, ' ').trim() || 'Subtitle';
   let stem = safe;
   if (req.season !== undefined && req.episode !== undefined) {

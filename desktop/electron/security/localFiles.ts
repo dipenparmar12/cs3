@@ -20,6 +20,8 @@ const MEDIA_EXTENSIONS = new Set([
   'mkv', 'mp4', 'm4v', 'mov', 'avi', 'webm', 'ts', 'm2ts', 'mts', 'wmv', 'flv', 'mpg', 'mpeg', 'ogv', '3gp',
   'mp3', 'm4a', 'aac', 'flac', 'opus', 'ogg', 'oga', 'wav', 'mka',
   'vtt', 'srt', 'ass', 'ssa',
+  // Playlists: a local HLS/DASH folder is opened by its manifest, which then names its segments.
+  'm3u8', 'm3u', 'mpd',
 ]);
 
 export function isMediaFile(filePath: string): boolean {

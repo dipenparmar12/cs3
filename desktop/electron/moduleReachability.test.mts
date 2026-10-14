@@ -53,13 +53,6 @@ const test = (name: string, fn: () => void) => tests.push([name, fn]);
  */
 const ALLOWED = new Map<string, string>([
   [
-    'media/sourceLease.ts',
-    'PRD-40.1 §4.1 Tier 1, approved and frozen for implementation, built but not ' +
-      'yet integrated: `MediaProxy.wrapLease` exists and has no caller, so signed-URL ' +
-      'refresh never runs. Its Definition-of-Done boxes are unchecked. Remove this ' +
-      'entry when `wrapLease` is called on the prepare path.',
-  ],
-  [
     'media/playbackTelemetry.ts',
     'PRD-40.1 §4.3 Tier 1, same state: the per-session record is defined and tested, ' +
       'and nothing emits one. `PlaybackEngine` keeps its own diagnostics ring buffer, ' +
@@ -202,12 +195,12 @@ test('a type-only import is recognised as carrying no behaviour', () => {
    * erased, a plain `import` is not.
    */
   const refs = referencesByModule();
-  const lease = refs.get('media/sourceLease.ts') ?? [];
-  const production = lease.filter((r) => !isTest(r.from));
-  assert.ok(production.length > 0, 'expected mediaProxy to reference SourceLease');
+  const telem = refs.get('media/playbackTelemetry.ts') ?? [];
+  const production = telem.filter((r) => !isTest(r.from));
+  assert.ok(production.length > 0, 'expected mediaInspector to reference playbackTelemetry');
   assert.ok(
     production.every((r) => r.typeOnly),
-    'SourceLease is reached only as a type today; if that changed, the allow-list entry should go'
+    'playbackTelemetry is reached only as a type today; if that changed, the allow-list entry should go'
   );
 });
 
