@@ -196,7 +196,10 @@ export class PlaybackEngine {
    * the provider actually gave us.
    */
   public async inspect(
-    request: Pick<PlaybackStreamRequest, 'url' | 'headers' | 'isM3u8' | 'isDash' | 'drm' | 'refresh' | 'provider'>
+    request: Pick<
+      PlaybackStreamRequest,
+      'url' | 'headers' | 'isM3u8' | 'isDash' | 'drm' | 'refresh' | 'provider' | 'preferredAudioLanguage' | 'avoidNativeEngine'
+    >
   ): Promise<SourceCapabilityModel> {
     /**
      * A stream this process is already producing is not measured again.
@@ -240,7 +243,19 @@ export class PlaybackEngine {
       boundedRanges: request.isDash || isYt,
     });
 
-    const cacheKey = `${originUrl} ${JSON.stringify(effectiveHeaders)}`;
+    /*
+     * The model holds a *verdict*, and the verdict depends on what was asked as
+     * well as on the file. Keyed on the URL alone, the Hindi request for an HLS
+     * stream with four languages in its segments was answered from the cache
+     * with the English verdict — `HLS_NATIVE`, which plays only the first —
+     * so picking Hindi reattached the same English stream (measured, 2 ms).
+     */
+    const cacheKey = [
+      originUrl,
+      JSON.stringify(effectiveHeaders),
+      request.preferredAudioLanguage ?? '',
+      request.avoidNativeEngine ? 'in-app' : '',
+    ].join(' ');
 
     if (!request.refresh) {
       const hit = this.cache.get(cacheKey);

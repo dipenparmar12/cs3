@@ -2180,6 +2180,9 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
       const carried = carriedPositionRef.current;
       if (carried && video.currentSrc !== carried.fromSrc) {
         setCarriedPosition(null);
+        // The carried position *is* this stream's resume; the session's older
+        // resume point must not land on top of it a render later.
+        resumedRef.current = attachedForRef.current;
         if (carried.at < dur - 10) video.currentTime = carried.at;
       }
     };
@@ -2350,6 +2353,34 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
     setNativeStartAt(null);
   }, [streamUrl]);
   const nativeStartSeconds = nativeStartAt ?? carriedAt ?? progress?.resumeAt;
+
+  /**
+   * Attaches a re-prepared stream at the position the viewer was at.
+   *
+   * Each engine takes a position its own way: a conversion in its request
+   * (`?t=`), mpv as `startSeconds`, the element as a seek once the new source
+   * has loaded. A `?t=` on anything but a conversion is read by nothing — an
+   * audio switch answered with an hls.js playlist began again from 0:00.
+   */
+  const attachAt = useCallback(
+    (response: PlaybackStreamResponse, at: number) => {
+      if (response.sessionId) {
+        setNativeStartAt(null);
+        setPlaybackOffset(at);
+        setPrepared({ ...response, playbackUrl: atTime(response.playbackUrl, at) });
+        return;
+      }
+      setPlaybackOffset(0);
+      if (response.capability?.requiredStrategy === 'NATIVE_MPV') {
+        setNativeStartAt(at > 0 ? at : null);
+      } else if (at > 5) {
+        // Same stream, new source on the element: `loadedmetadata` seeks to it.
+        setCarriedPosition({ at, fromUrl: streamUrl, fromSrc: videoRef.current?.currentSrc ?? '' });
+      }
+      setPrepared(response);
+    },
+    [streamUrl]
+  );
   const switchSourceKeepingPosition = useCallback(
     (source: TorrentResult) => {
       const at = currentPositionRef.current;
@@ -3369,15 +3400,8 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
           }
           if (previous) void window.cloudstream?.closePlaybackStream(previous);
           setError(null);
-          /*
-           * mpv opens the source itself and seeks from `startSeconds`; a `?t=`
-           * means something only to a conversion. Without this mpv started at
-           * the session's opening resume point, not where the viewer was.
-           */
-          const toNative = response.capability?.requiredStrategy === 'NATIVE_MPV';
-          setNativeStartAt(toNative && at > 0 ? at : null);
-          setPlaybackOffset(toNative ? 0 : at);
-          setPrepared(toNative ? response : { ...response, playbackUrl: atTime(response.playbackUrl, at) });
+          // mpv used to open at the session's first resume point, not here.
+          attachAt(response, at);
         } finally {
           setConverting(false);
         }
@@ -3391,6 +3415,8 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
     playbackOffset,
     providerProvenance?.provider,
     sourceConfig,
+    isNativeEngine,
+    attachAt,
   ]);
 
   useEffect(() => {
@@ -3540,8 +3566,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
             const previous = prepared?.sessionId;
             if (previous) void window.cloudstream?.closePlaybackStream(previous);
             setError(null);
-            setPlaybackOffset(at);
-            setPrepared({ ...response, playbackUrl: atTime(response.playbackUrl, at) });
+            attachAt(response, at);
           }
         } finally {
           setConverting(false);
@@ -3559,6 +3584,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
       mimeType,
       activeSource?.directHeaders,
       providerProvenance?.provider,
+      attachAt,
     ]
   );
 
