@@ -4,13 +4,13 @@ title: "Todo CloudStream #3"
 tags: [Todo]
 ---
 
-- [ ] Get the movie/media from imdb id/url fetch find the correct item and do the auto smart search of the content
+- [x] Get the movie/media from imdb id/url fetch find the correct item and do the auto smart search of the content
 
 - [ ] When user selected item did not work or find any sources, we should move to the next item of results, in results there are many providers responded with sources so we shoul have some workaroun, cureently we have only one way whcih is seach all sources/providers. Make sure that we should some good techniques and methods to get the right and genuine content most of the time, increase the success ratio
 
-- [ ] Do not bloat our results with many TORRENT results, and we make sure we have listing for more reliable and strong sources (its can be stream amd run any Media)
+- [x] Do not bloat our results with many TORRENT results, and we make sure we have listing for more reliable and strong sources (its can be stream amd run any Media)
 
-- [ ] When bun dist or any build is executed, make sure when there is missing or required packages,java binary neccessory tools should be promoted to configure and setup thay should install and configure to make dev experience better and flowless
+- [x] When bun dist or any build is executed, make sure when there is missing or required packages,java binary neccessory tools should be promoted to configure and setup thay should install and configure to make dev experience better and flowless
 
   ````markdown
   Build Environment and Dependency Readiness
@@ -49,7 +49,7 @@ tags: [Todo]
 
 - [x] Now we should change dir name cs3_windows to relative name since now we support all os linux mac and window, so we should rename it generic and good name for our source code
 
-- [ ] NSFW content confirmation
+- [x] NSFW content confirmation
 
   ```markdown
   Adult Content Privacy, Session Confirmation, and Safe Browsing
@@ -142,7 +142,7 @@ tags: [Todo]
   Implementation principle: Detect whether the dragged content is actually supported before activating the dropzone. Unsupported drag events should remain completely silent, while supported torrent and media files should activate the dropzone only when they can be meaningfully processed.
   ```
 
-- [ ] Some time, providers produce multiple links for same media with diff resolutions can we have smart inteligent on that am seeing sometime one media is having all resolutions links in source, can we make something that way we can have this options in our resolution selector but this will not the case with alwyas so we need to have care, and need to have smart logic for that (links and titles may contains 1080, 720 etc
+- [x] Some time, providers produce multiple links for same media with diff resolutions can we have smart inteligent on that am seeing sometime one media is having all resolutions links in source, can we make something that way we can have this options in our resolution selector but this will not the case with alwyas so we need to have care, and need to have smart logic for that (links and titles may contains 1080, 720 etc
 
   ```markdown
   ## 99. Intelligent Resolution Detection and Grouping
@@ -375,7 +375,7 @@ tags: [Todo]
   **Implementation principle:** Make it easy for users to discover the people behind CS3 and voluntarily support the project, while protecting personal information, respecting user preferences, and keeping the application free and straightforward to use.
   ```
 
-- [ ] Bug Fixes ( Streaming buffer sometime shows wrong buffer when user jumps the timeline on in-app player that buffer get wrong data. it should be display accurate and correct buffer cached content on timeline. Shift + Right/Left arrow +-3 move. do not display large notifications/snakbars on volume up/down it should calm and not attention catching, if do not display multiple notifications in app player it should display one popover/snag but intelligently contains information for multiple attempt and redistricted key events for volume /jumps in time etc.
+- [x] Bug Fixes ( Streaming buffer sometime shows wrong buffer when user jumps the timeline on in-app player that buffer get wrong data. it should be display accurate and correct buffer cached content on timeline. Shift + Right/Left arrow +-3 move. do not display large notifications/snakbars on volume up/down it should calm and not attention catching, if do not display multiple notifications in app player it should display one popover/snag but intelligently contains information for multiple attempt and redistricted key events for volume /jumps in time etc.
 
   ```markdown
   ## 108. Player Buffer Accuracy and Timeline Seeking
@@ -469,9 +469,9 @@ tags: [Todo]
   On DetailView screen `ESC` should be registred as back navigation.
   ```
 
-- [ ] On src/views/SearchView.tsx:253:14 When there is not search attempt we display `Nothing found` which is not good and correct UI, we need to display more relatable and Better UX/UI
+- [x] On src/views/SearchView.tsx:253:14 When there is not search attempt we display `Nothing found` which is not good and correct UI, we need to display more relatable and Better UX/UI
 
-- [ ] We need to improve in player control The subtitle Control and Quality and language control be supposed to have a centred currently we Placed all the controllers on the two places on the very left and very right of the bottom below the timeline so subtitle and the language Control can be moved on to the centre with just like currently has Netflix Player interface so it's going to be more user intuitive and more relatable controls and the rest of our currently we are having on the right side which is good extra controls and when we have subtitle control on the centre and the selected language we should display heat So if you're watching an Contain and it has a subtitle turned on then we should display the which language it was its English Hindi Ram Neel whatever language is we should Display full The word of that language just like in Netflix display that one and make sure that when because we are fetching the subtitles from the online it has a names with ears and all that meta info of the content so we make sure that we extract only what we needed so F has a multiple English or any language subtitle then we can display 123 that item so make sure that we do not make that subtitle title very long and very large Non intuitive and not good user interface Similarly the language interface where if user is playing any of the language it is supposed to render current language and make sure that also language supposed to render what language is and also we can have We have some same interface for the language as well so current language is rendered on the centre item and it renders as run which audio is played sometime we do not have language it says multiple visualisations so that kind of thing centred That three component just like on Netflix player has one is for subtitle 1 is for regulation and one is for the language so We can have this and it all it makes sure that it is supposed to be not acquired or take whole all the bottom if the risk providers provide with very large Label or text so we said we make sure that we have smart something that only XI what we need and that rendered on that player native on the central
+- [x] We need to improve in player control The subtitle Control and Quality and language control be supposed to have a centred currently we Placed all the controllers on the two places on the very left and very right of the bottom below the timeline so subtitle and the language Control can be moved on to the centre with just like currently has Netflix Player interface so it's going to be more user intuitive and more relatable controls and the rest of our currently we are having on the right side which is good extra controls and when we have subtitle control on the centre and the selected language we should display heat So if you're watching an Contain and it has a subtitle turned on then we should display the which language it was its English Hindi Ram Neel whatever language is we should Display full The word of that language just like in Netflix display that one and make sure that when because we are fetching the subtitles from the online it has a names with ears and all that meta info of the content so we make sure that we extract only what we needed so F has a multiple English or any language subtitle then we can display 123 that item so make sure that we do not make that subtitle title very long and very large Non intuitive and not good user interface Similarly the language interface where if user is playing any of the language it is supposed to render current language and make sure that also language supposed to render what language is and also we can have We have some same interface for the language as well so current language is rendered on the centre item and it renders as run which audio is played sometime we do not have language it says multiple visualisations so that kind of thing centred That three component just like on Netflix player has one is for subtitle 1 is for regulation and one is for the language so We can have this and it all it makes sure that it is supposed to be not acquired or take whole all the bottom if the risk providers provide with very large Label or text so we said we make sure that we have smart something that only XI what we need and that rendered on that player native on the central
 
   ```markdown
   ## 113. Player Control Bar Redesign: Subtitles, Quality, and Audio Language
@@ -1058,7 +1058,7 @@ tags: [Todo]
   **Implementation principle:** Use familiar visual conventions and capability-aware controls. Make interactive selectors obvious, informational indicators quiet, and subtitle functionality recognizable through established industry-standard iconography.
   ```
 
-- [ ] When a option to select all and instal all repose trees and provider at all at once so when user had a search and that search has a results then we should select all means that current selection or current search item all and if there were no select on the extension or repository that means all across the repositories supposed to be installed and uninstalled on Extensions Screen, Repos, browse, With this extra option or any controls our existing ui supposed to be not look bloated and button and control Bloated it's supposed to be minimal and very sit on the us so it's only available when user need it otherwise it's hidden from the user interface and It's supposed to be there but only found by when user want it so we need to have it ambiently set that options on that screen
+- [x] When a option to select all and instal all repose trees and provider at all at once so when user had a search and that search has a results then we should select all means that current selection or current search item all and if there were no select on the extension or repository that means all across the repositories supposed to be installed and uninstalled on Extensions Screen, Repos, browse, With this extra option or any controls our existing ui supposed to be not look bloated and button and control Bloated it's supposed to be minimal and very sit on the us so it's only available when user need it otherwise it's hidden from the user interface and It's supposed to be there but only found by when user want it so we need to have it ambiently set that options on that screen
 
   ```markdown
   ### 118. Context-Aware Bulk Selection and Installation for Extensions and Repositories
