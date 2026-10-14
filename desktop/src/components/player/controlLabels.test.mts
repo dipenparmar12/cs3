@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { controlLanguageLabel, languageLabels } from './controlLabels.ts';
+import { controlLanguageLabel, languageLabels, languageSetLabel } from './controlLabels.ts';
 
 test('player control labels show a language, not subtitle release metadata', () => {
   assert.equal(controlLanguageLabel('', 'English SDH WEB-DL 1080p.srt'), 'English');
@@ -36,4 +36,11 @@ test('player control labels fall back to a position, never a release name', () =
     'Track 2',
   ]);
   assert.deepEqual(languageLabels([]), []);
+});
+
+test('a link audio version reads as language names', () => {
+  assert.equal(languageSetLabel(['hi']), 'Hindi');
+  assert.equal(languageSetLabel(['en', 'hi']), 'English + Hindi');
+  assert.equal(languageSetLabel(['en', 'hi', 'ta', 'te']), 'English + Hindi +2');
+  assert.equal(languageSetLabel([]), '');
 });

@@ -15,6 +15,16 @@ export function controlLanguageLabel(code?: string, label?: string): string {
 }
 
 /**
+ * A link's audio version as words: `['hi']` → "Hindi", `['en', 'hi']` →
+ * "English + Hindi", four or more → "English + Hindi +2". An unreadable code is
+ * shown as itself rather than dropped, so two versions never share one label.
+ */
+export function languageSetLabel(codes: readonly string[]): string {
+  const names = codes.map((code) => controlLanguageLabel(code) || code.toUpperCase());
+  return names.length > 3 ? `${names.slice(0, 2).join(' + ')} +${names.length - 2}` : names.join(' + ');
+}
+
+/**
  * One short label per track, in the same order, for a menu or the control bar.
  *
  * An ordinal is added only where two tracks genuinely share a language, and it
