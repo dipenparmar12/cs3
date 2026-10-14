@@ -79,6 +79,14 @@ export const PlayerCopyMenu: React.FC<PlayerCopyMenuProps> = ({
   const [open, setOpen] = useState(false);
   const { message: copied, flash: setCopied } = useFlash<string>(2200);
   const wrapper = useRef<HTMLDivElement | null>(null);
+  const [externalPlayers, setExternalPlayers] = useState<Array<{ id: string; name: string }>>([]);
+
+  React.useEffect(() => {
+    if (!open) return;
+    void window.cloudstream?.listExternalPlayers?.().then((res) => {
+      if (res?.players) setExternalPlayers(res.players);
+    });
+  }, [open]);
 
   React.useEffect(() => {
     onOpenChange?.(open);
@@ -199,6 +207,16 @@ export const PlayerCopyMenu: React.FC<PlayerCopyMenuProps> = ({
    */
   const activeLink = activeSource ? sourceAddress(activeSource) : streamUrl;
   const everyday: Array<{ label: string; hint?: string; run: () => void }> = [
+    ...externalPlayers.map((p) => ({
+      label: `Play in ${p.name}`,
+      hint: 'Launch in external player',
+      run: () => {
+        setOpen(false);
+        void window.cloudstream?.openInExternalPlayer?.(p.id, streamUrl).then((res) => {
+          setCopied(res?.ok ? `Opening in ${p.name}…` : (res?.error ?? `Could not start ${p.name}`));
+        });
+      },
+    })),
     ...(activeLink
       ? [{ label: 'Copy video link', hint: 'Open it in another player', run: () => void write('link', activeLink) }]
       : []),

@@ -499,9 +499,12 @@ export class MediaTranscoder {
 
     // Before -i: seeks by keyframe without decoding everything up to it.
     const seek = seekSeconds > 0 ? ['-ss', String(seekSeconds)] : [];
+    const isDirectHttp = session.transport === 'progressive' && /^https?:\/\//i.test(session.url);
+    const seekableOpt = (seekSeconds === 0 && isDirectHttp) ? ['-seekable', '0'] : [];
 
     return [
       '-hide_banner', '-loglevel', 'error',
+      ...seekableOpt,
       ...inputOptionsFor(session.url, session.transport),
       ...decryption,
       ...seek,

@@ -1096,6 +1096,33 @@ export class MediaInspector {
     const parseMs = Date.now() - parseStart;
 
     if (!result.ok) {
+      if (result.stderr && (result.stderr.includes('416') || result.stderr.includes('Range'))) {
+        const retryResult = await runTool(
+          ffprobe,
+          [
+            '-v', 'error',
+            '-print_format', 'json',
+            '-show_streams',
+            '-show_entries', 'format=duration,format_name,format_long_name,bit_rate,size',
+            '-probesize', String(probeSize || currentProbeConfig.probeSizeBytes),
+            '-analyzeduration', String(probeSize || currentProbeConfig.probeSizeBytes),
+            '-seekable', '0',
+            ...extraArgs,
+            ...inputOptionsFor(url, transport),
+            url,
+          ],
+          currentProbeConfig.probeTimeoutMs
+        );
+        if (retryResult.ok) {
+          return {
+            ok: true,
+            rawOutput: retryResult.stdout,
+            timedOut: false,
+            parseMs: Date.now() - parseStart,
+          };
+        }
+      }
+
       return {
         ok: false,
         rawOutput: null,

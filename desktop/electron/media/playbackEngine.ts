@@ -566,7 +566,7 @@ export class PlaybackEngine {
      * it is not available, or the policy is `off`, the re-encode is still there.
      */
     const forcedToNative =
-      request.force &&
+      (request.force || (request.provider && /use[ _-]?vlc/i.test(request.provider))) &&
       capability.requiredStrategy !== 'EME_NATIVE' &&
       !capability.requiresEmeDecryption &&
       (() => {

@@ -6,7 +6,7 @@ export function controlLanguageLabel(code?: string, label?: string): string {
   if (language) return language;
 
   const plain = (label ?? '')
-    .replace(/[\[({].*?[\])}]/g, '')
+    .replace(/[[({].*?[\])}]/g, '')
     .replace(/\b(?:web|bluray|blu-ray|webrip|web-dl|srt|vtt|ass)\b/gi, '')
     .replace(/[-_.]+/g, ' ')
     .trim();

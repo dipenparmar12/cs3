@@ -81,6 +81,7 @@ import {
 import { OSD_VISIBLE_MS, describeOsd, nextOsd, type OsdAction, type OsdState } from './player/playerOsd';
 import { describeError } from '../utils/errors';
 import { useIsDeveloper } from '../utils/ExperienceModeContext';
+import { findResolutionVariants, extractResolution } from '../utils/resolutionVariants';
 
 interface VideoPlayerProps {
   streamUrl: string;
@@ -507,6 +508,16 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
       null
     );
   }, [sourceSession]);
+
+  const resolutionVariants = useMemo(
+    () => findResolutionVariants(activeSource, sourceSession?.sources),
+    [activeSource, sourceSession?.sources]
+  );
+  const activeVariant = useMemo(() => resolutionVariants.find((v) => v.isCurrent), [resolutionVariants]);
+  const currentResolution = useMemo(
+    () => activeVariant?.resolution || (activeSource ? extractResolution(activeSource) : 0),
+    [activeVariant, activeSource]
+  );
 
   const effectiveInfoHash = useMemo(() => {
     if (sourceSession) {
@@ -1181,6 +1192,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
 
   const [audioTracks, setAudioTracks] = useState<AudioTrackInfo[]>([]);
   const [activeAudioTrack, setActiveAudioTrack] = useState<string | number>('default');
+  const detectAudioTracksRef = useRef<(() => void) | null>(null);
 
   /**
    * The prepared stream, and the gate that stops playback racing inspection.
@@ -1634,7 +1646,13 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
               detail: level.bitrate ? `${Math.round(level.bitrate / 1000)} kbps` : undefined,
             }))
           );
+          detectAudioTracksRef.current?.();
         });
+
+        const onHlsAudioChanged = () => detectAudioTracksRef.current?.();
+        hls.on(Hls.Events.AUDIO_TRACKS_UPDATED, onHlsAudioChanged);
+        hls.on(Hls.Events.AUDIO_TRACK_SWITCHED, onHlsAudioChanged);
+        hls.on(Hls.Events.AUDIO_TRACK_LOADED, onHlsAudioChanged);
 
         /**
          * hls.js's failures, finally wired to the ladder the element has had all
@@ -1885,6 +1903,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
 
     setAudioTracks([]);
   }, []);
+  detectAudioTracksRef.current = detectAudioTracks;
 
   const selectAudioTrack = useCallback(
     (trackId: string | number) => {
@@ -3287,7 +3306,10 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
 
       selectAudioTrack(index);
 
-      const hasNativeAudioSwitching = Boolean((video as any)?.audioTracks?.length > 1 || hlsRef.current);
+      const hasNativeAudioSwitching = Boolean(
+        (video as any)?.audioTracks?.length > 1 ||
+        (hlsRef.current && (hlsRef.current.audioTracks?.length ?? 0) > 1)
+      );
       if (!hasNativeAudioSwitching && streamUrl && window.cloudstream?.preparePlaybackStream) {
         setConverting(true);
         try {
@@ -3422,9 +3444,10 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
   }, [activeAudioTrack, audioTracks, isNativeEngine, probedAudioTracks, selectedAudioIndex]);
 
   const qualityControlLabel = useMemo(
-    () => qualities.find((item) => item.level === quality)?.label ??
-      (activeSource?.parsed?.resolution ? `${activeSource.parsed.resolution}p` : ''),
-    [activeSource?.parsed?.resolution, qualities, quality]
+    () =>
+      qualities.find((item) => item.level === quality)?.label ??
+      (activeVariant ? activeVariant.label : (currentResolution ? `${currentResolution}p` : '')),
+    [activeVariant, currentResolution, qualities, quality]
   );
 
   /**
@@ -5412,7 +5435,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
               )
             )}
 
-            {qualities.length > 1 && (
+            {qualities.length > 1 ? (
               <HoverMenu
                 icon={<Settings2 size={16} />}
                 label="Quality"
@@ -5426,8 +5449,27 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
                   ...qualities.map((q) => ({ value: q.level, label: q.label, detail: q.detail })),
                 ]}
               />
-            )}
-            {qualities.length <= 1 && qualityControlLabel && (
+            ) : resolutionVariants.length > 1 ? (
+              <HoverMenu
+                icon={<Settings2 size={16} />}
+                label="Quality"
+                value={currentResolution}
+                onChange={(val) => {
+                  const target = resolutionVariants.find((v) => v.resolution === Number(val));
+                  if (target && sourceSession?.onSelectSource) {
+                    sourceSession.onSelectSource(target.source);
+                  }
+                }}
+                onOpenChange={onMenuOpenChange}
+                showChevron={true}
+                triggerText={qualityControlLabel || 'Quality'}
+                options={resolutionVariants.map((v) => ({
+                  value: v.resolution,
+                  label: v.label,
+                  detail: v.source.indexerName !== activeSource?.indexerName ? v.source.indexerName : undefined,
+                }))}
+              />
+            ) : qualityControlLabel ? (
               <span
                 className="player__media-status"
                 title={`Quality: ${qualityControlLabel}`}
@@ -5436,7 +5478,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
                 <Settings2 size={16} />
                 <span>{qualityControlLabel}</span>
               </span>
-            )}
+            ) : null}
 
             {isNativeEngine ? (
               audioTracks.length > 1 && (
