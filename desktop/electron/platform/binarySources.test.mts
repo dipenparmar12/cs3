@@ -20,10 +20,21 @@ test('yt-dlp is the standalone build for each platform and architecture', () => 
 
 test('no platform is ever handed a Windows executable it cannot run', () => {
   for (const [platform, arch] of [['darwin', 'arm64'], ['linux', 'x64'], ['linux', 'arm64']]) {
-    assert.ok(ytDlpMirrors(platform, arch).every((url) => !url.endsWith('.exe')), platform);
+    assert.ok(ytDlpMirrors(platform, arch).every((m) => !(typeof m === 'string' ? m : m.url).endsWith('.exe')), platform);
     assert.deepEqual(aria2Mirrors(platform), [], platform);
   }
   assert.ok(aria2Mirrors('win32').length > 0);
+});
+
+test('a third-party mirror is only listed with the digest that verifies it (SEC-03)', () => {
+  for (const mirrors of [ytDlpMirrors('win32', 'x64'), ytDlpMirrors('linux', 'arm64'), aria2Mirrors('win32')]) {
+    for (const mirror of mirrors) {
+      const url = typeof mirror === 'string' ? mirror : mirror.url;
+      if (!/^https:\/\/(github\.com|[a-z.]*githubusercontent\.com)\//.test(url)) {
+        assert.ok(typeof mirror !== 'string' && /^[0-9a-f]{64}$/.test(mirror.sha256), url);
+      }
+    }
+  }
 });
 
 test('Homebrew and common Linux locations are searched', () => {

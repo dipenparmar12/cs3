@@ -4,6 +4,7 @@ import http from 'http';
 import https from 'https';
 import type { IncomingMessage, ClientRequest } from 'http';
 import { URL } from 'url';
+import { createHash } from 'crypto';
 import { formatEta, formatSetupSize, formatTransferRate } from '../src/utils/format.ts';
 
 export interface DownloadProgress {
@@ -16,8 +17,50 @@ export interface DownloadProgress {
   chunksActive: number;
 }
 
+/**
+ * One place an artifact can be fetched from, optionally with the SHA-256 the
+ * bytes must have.
+ *
+ * Every executable the app runs (ffmpeg, aria2c, yt-dlp, mpv) arrives through
+ * here, so this is where integrity is decided (audit SEC-03, CWE-494). A
+ * first-party origin over TLS is trusted as the publisher; a third-party mirror
+ * (`ghproxy.net`, used where GitHub is blocked) is only ever used for an
+ * artifact whose digest is pinned, because the mirror could serve anything and
+ * the app would then run it.
+ */
+export type DownloadMirror = string | { url: string; sha256: string };
+
+/** Hosts that *are* the publisher: GitHub's release storage and gyan.dev's FFmpeg builds. */
+const FIRST_PARTY_HOSTS = /^(?:github\.com|api\.github\.com|(?:[a-z0-9-]+\.)*githubusercontent\.com|www\.gyan\.dev)$/i;
+
+export function isFirstPartyMirror(url: string): boolean {
+  try {
+    const parsed = new URL(url);
+    return parsed.protocol === 'https:' && FIRST_PARTY_HOSTS.test(parsed.hostname);
+  } catch {
+    return false;
+  }
+}
+
+/** The mirrors this download may use, in order: unverifiable third-party copies dropped. */
+export function usableMirrors(mirrors: readonly DownloadMirror[]): Array<{ url: string; sha256?: string }> {
+  return mirrors
+    .map((mirror) => (typeof mirror === 'string' ? { url: mirror } : { url: mirror.url, sha256: mirror.sha256.toLowerCase() }))
+    .filter((mirror) => Boolean(mirror.sha256) || isFirstPartyMirror(mirror.url));
+}
+
+function sha256OfFile(filePath: string): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const hash = createHash('sha256');
+    fs.createReadStream(filePath)
+      .on('data', (chunk) => hash.update(chunk))
+      .on('error', reject)
+      .on('end', () => resolve(hash.digest('hex')));
+  });
+}
+
 export interface FastDownloadOptions {
-  mirrors: string[];
+  mirrors: DownloadMirror[];
   targetPath: string;
   headers?: Record<string, string>;
   maxConnections?: number;
@@ -54,16 +97,20 @@ export class FastChunkDownloader {
    * 5. Atomically finalises to targetPath upon 100% verification.
    */
   public static async download(options: FastDownloadOptions): Promise<boolean> {
-    const { mirrors, targetPath } = options;
-    if (!mirrors || mirrors.length === 0) {
+    const { targetPath } = options;
+    if (!options.mirrors || options.mirrors.length === 0) {
       throw new Error('No download mirrors provided.');
+    }
+    const mirrors = usableMirrors(options.mirrors);
+    if (mirrors.length === 0) {
+      throw new Error('No mirror for this download can be verified, so none was used.');
     }
 
     const partPath = `${targetPath}.part`;
     let lastError: Error | null = null;
 
     for (let mirrorIdx = 0; mirrorIdx < mirrors.length; mirrorIdx++) {
-      const mirrorUrl = mirrors[mirrorIdx];
+      const { url: mirrorUrl, sha256: expected } = mirrors[mirrorIdx];
       if (options.signal?.aborted) {
         throw new Error('Download was cancelled');
       }
@@ -86,6 +133,20 @@ export class FastChunkDownloader {
 
         const success = await this.downloadSingleMirror(mirrorUrl, partPath, targetPath, options);
         if (success) {
+          if (expected) {
+            // Checked before anything can run it: a mismatch is deleted, not kept.
+            const actual = await sha256OfFile(targetPath);
+            if (actual !== expected) {
+              try {
+                fs.unlinkSync(targetPath);
+              } catch {
+                /* best effort */
+              }
+              throw new Error(
+                `Integrity check failed for ${new URL(mirrorUrl).hostname}: expected SHA-256 ${expected}, got ${actual}`
+              );
+            }
+          }
           return true;
         }
       } catch (err: any) {
