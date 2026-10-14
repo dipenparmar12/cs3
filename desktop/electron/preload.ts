@@ -1035,6 +1035,15 @@ export interface CloudStreamElectronAPI {
   setWindowAlwaysOnTop: (onTop: boolean) => Promise<Envelope & { alwaysOnTop: boolean }>;
   getWindowAlwaysOnTop: () => Promise<Envelope & { alwaysOnTop: boolean }>;
   /**
+   * The window's fullscreen — the only fullscreen the app has. The player
+   * drives this rather than the HTML Fullscreen API so the two never stack;
+   * see `window:setFullScreen` in main.
+   */
+  setWindowFullScreen: (fullScreen: boolean) => Promise<Envelope & { fullScreen: boolean }>;
+  getWindowFullScreen: () => Promise<Envelope & { fullScreen: boolean }>;
+  /** Every fullscreen transition, including F11 and the View menu. */
+  onWindowFullScreenChanged: (callback: (fullScreen: boolean) => void) => () => void;
+  /**
    * Pins mpv's own window, for a stream the native engine is holding.
    *
    * Answers `applied: false` rather than failing when mpv is not running: the
@@ -2284,6 +2293,9 @@ const api: CloudStreamElectronAPI = {
   onPlayerPreferencesChanged: (callback) => subscribe('player:preferencesChanged', callback),
   setWindowAlwaysOnTop: (onTop) => ipcRenderer.invoke('window:setAlwaysOnTop', onTop),
   getWindowAlwaysOnTop: () => ipcRenderer.invoke('window:getAlwaysOnTop'),
+  setWindowFullScreen: (fullScreen) => ipcRenderer.invoke('window:setFullScreen', fullScreen),
+  getWindowFullScreen: () => ipcRenderer.invoke('window:getFullScreen'),
+  onWindowFullScreenChanged: (callback) => subscribe('window:fullScreenChanged', callback),
   setMpvOnTop: (onTop) => ipcRenderer.invoke('mpv:setOnTop', onTop),
   setMpvVideoEnabled: (enabled) => ipcRenderer.invoke('mpv:setVideoEnabled', enabled),
   listSourceProfiles: () => ipcRenderer.invoke('profiles:list'),

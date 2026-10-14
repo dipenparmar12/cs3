@@ -1417,6 +1417,14 @@ function createWindow() {
     boundsTimer = setTimeout(saveWindowBounds, 400);
     boundsTimer.unref?.();
   };
+  // Whoever changed it — the player, the menu, F11 — the renderer hears it.
+  const reportFullScreen = () => {
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.send('window:fullScreenChanged', mainWindow.isFullScreen());
+    }
+  };
+  mainWindow.on('enter-full-screen', reportFullScreen);
+  mainWindow.on('leave-full-screen', reportFullScreen);
   mainWindow.on('resize', rememberBounds);
   mainWindow.on('move', rememberBounds);
   mainWindow.on('maximize', rememberBounds);
@@ -4143,6 +4151,31 @@ ipcMain.handle('window:setAlwaysOnTop', async (_, onTop: boolean) => {
 ipcMain.handle('window:getAlwaysOnTop', async () => ({
   ok: true,
   alwaysOnTop: Boolean(mainWindow && !mainWindow.isDestroyed() && mainWindow.isAlwaysOnTop()),
+}));
+
+/**
+ * The one fullscreen: the window's.
+ *
+ * The player used the HTML Fullscreen API on its own container while the window
+ * had its own (View → Toggle Full Screen, F11), and the two stacked. Minimising
+ * a player that was fullscreen through the HTML API shrank it *inside* the
+ * still-fullscreen container — a small picture on a black screen with no app
+ * behind it and no visible way out. Driving the window instead means there is a
+ * single state, the mini player always sits over the real app, and every
+ * surface (player button, menu, F11) reads and changes the same thing.
+ * `window:fullScreenChanged` carries every transition, whoever started it.
+ */
+ipcMain.handle('window:setFullScreen', async (_, fullScreen: boolean) => {
+  if (!mainWindow || mainWindow.isDestroyed()) {
+    return { ok: false, error: 'The window is gone.', fullScreen: false };
+  }
+  mainWindow.setFullScreen(fullScreen === true);
+  return { ok: true, fullScreen: fullScreen === true };
+});
+
+ipcMain.handle('window:getFullScreen', async () => ({
+  ok: true,
+  fullScreen: Boolean(mainWindow && !mainWindow.isDestroyed() && mainWindow.isFullScreen()),
 }));
 
 ipcMain.handle('mpv:setVideoEnabled', async (_, enabled: boolean) => {
