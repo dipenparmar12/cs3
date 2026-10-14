@@ -784,13 +784,22 @@ function decideBrowserStrategy(
    * Requires the video codec to have been measured from the segment, which
    * `withSegmentStreams` did; the first track still goes to hls.js untouched.
    */
-  if (
-    transport === 'hls' &&
-    metadata.audioMuxedInSegments &&
-    audioIndex > 0 &&
-    videoPlayable &&
-    metadata.video
-  ) {
+  /*
+   * The same holds for a progressive file with several audio tracks: Chromium
+   * exposes no audio-track API, so the element plays the file's default track
+   * whatever is wanted. Handing it over while the player's menu named the
+   * remembered language was "I chose Hindi and it plays English" after every
+   * source switch and resume. Any other track is remuxed in.
+   */
+  const defaultAudioIndex = (metadata.audio.find((a) => a.isDefault) ?? metadata.audio[0])?.index ?? 0;
+  const elementCannotPick =
+    (transport === 'hls' && metadata.audioMuxedInSegments && audioIndex > 0) ||
+    (transport === 'progressive' &&
+      metadata.audio.length > 1 &&
+      audioIndex >= 0 &&
+      audioIndex !== defaultAudioIndex &&
+      containerPlayable);
+  if (elementCannotPick && videoPlayable && metadata.video) {
     return {
       directPlayable: false,
       strategy: audioPlayable ? 'REMUX_CONTAINER' : 'AUDIO_TRANSCODE',
@@ -804,8 +813,11 @@ function decideBrowserStrategy(
         subtitleAction: 'ignore',
       },
       explanation:
-        'HLS with its audio languages inside the segments: the chosen language is ' +
-        'remuxed in (copied, not re-encoded), because hls.js only ever plays the first.',
+        transport === 'hls'
+          ? 'HLS with its audio languages inside the segments: the chosen language is ' +
+            'remuxed in (copied, not re-encoded), because hls.js only ever plays the first.'
+          : 'A file with several audio tracks: the chosen one is remuxed in (copied, not ' +
+            're-encoded), because the browser always plays the file\'s default track.',
     };
   }
 

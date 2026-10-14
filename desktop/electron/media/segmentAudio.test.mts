@@ -77,3 +77,23 @@ test('the first language goes to hls.js untouched; any other is remuxed, never r
 
   assert.equal(decideStrategy(meta, 'hls', PLAIN, GPU, undefined, undefined, 'tel').plan.selectedAudioIndex, 3);
 });
+
+test('a multi-audio file plays the remembered language, not the file default (remux, copy)', () => {
+  const file = {
+    formatName: 'matroska,webm',
+    video: { index: 0, codec: 'h264', bitDepth: 8, pixelFormat: 'yuv420p', width: 1920, height: 1080, frameRate: 24, isHdr: false, isInterlaced: false },
+    audio: [
+      { index: 0, codec: 'aac', channels: 2, language: 'eng', isDefault: true, isForced: false, playable: true },
+      { index: 1, codec: 'aac', channels: 2, language: 'hin', isDefault: false, isForced: false, playable: true },
+    ],
+    subtitles: [],
+  };
+  const caps = { ...PLAIN, containers: { mkv: true } } as RendererCapabilities;
+  const english = decideStrategy(file, 'progressive', caps, GPU, undefined, undefined, 'eng');
+  const hindi = decideStrategy(file, 'progressive', caps, GPU, undefined, undefined, 'hin');
+  // Whatever the default route is for English, Hindi must not be handed to the element.
+  assert.notEqual(hindi.strategy, 'DIRECT');
+  assert.equal(hindi.plan.selectedAudioIndex, 1);
+  if (hindi.strategy === 'REMUX_CONTAINER') assert.equal(hindi.plan.videoAction, 'copy');
+  assert.equal(english.plan.selectedAudioIndex, 0);
+});

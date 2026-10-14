@@ -3148,6 +3148,9 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
         drm: sourceConfig.drm,
         provider: providerProvenance?.provider,
         preferNativeEngine: sourceConfig.preferNativeEngine,
+        // The language the viewer keeps choosing, so the engine plans *that* track
+        // (remuxing it in where the browser cannot pick it) rather than the default.
+        preferredAudioLanguage: titlePreferences.current?.audioLanguage ?? preferredAudioLanguage.current ?? undefined,
       });
       if (cancelled || !response) return;
 
@@ -3168,8 +3171,21 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
       const remembered = wantedAudio
         ? tracks.find((track) => track.language === wantedAudio)
         : undefined;
-      const preferred =
-        remembered?.index ?? response.capability?.transformationPlan.selectedAudioIndex ?? -1;
+      /*
+       * Where the engine chose the track itself — it remuxes or converts the
+       * bytes, or hands over a file whose default it confirmed — the menu shows
+       * *that* track. Showing the remembered language regardless was the menu
+       * saying "Hindi" over English audio. Only hls.js renditions and mpv pick
+       * tracks after this, and they keep the remembered one as their target.
+       */
+      const strategy = response.capability?.requiredStrategy;
+      const engineChoseTrack =
+        (strategy !== 'HLS_NATIVE' && strategy !== 'NATIVE_MPV') ||
+        // hls.js plays the first of in-segment languages and cannot be told otherwise.
+        Boolean(response.capability?.metadata?.audioMuxedInSegments);
+      const preferred = engineChoseTrack
+        ? response.capability?.transformationPlan.selectedAudioIndex ?? -1
+        : remembered?.index ?? response.capability?.transformationPlan.selectedAudioIndex ?? -1;
       if (preferred >= 0) setSelectedAudioIndex(preferred);
 
       setPlaybackOffset(0);
@@ -3237,6 +3253,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
             isDash: sourceConfig.isDash,
             drm: sourceConfig.drm,
             provider: providerProvenance?.provider,
+            preferredAudioLanguage: titlePreferences.current?.audioLanguage ?? preferredAudioLanguage.current ?? undefined,
             // The cached verdict is the one that was wrong; measure again and then
             // override it anyway.
             refresh: true,
