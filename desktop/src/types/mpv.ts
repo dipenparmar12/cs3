@@ -106,6 +106,12 @@ export interface MpvOpenRequest {
   fullscreen?: boolean;
   /** mpv track id, not an ffprobe ordinal. See {@link MpvTrack.id}. */
   audioTrackId?: number;
+  /**
+   * The language the viewer wants to hear (`hin`, `en`), applied as mpv's
+   * `alang` so the right track plays from the first frame. Ignored when
+   * `audioTrackId` names one; a file without it keeps its own default.
+   */
+  audioLanguage?: string;
   subtitleUrl?: string;
   /**
    * A native window handle to render into, passed straight to `--wid`.

@@ -32,6 +32,8 @@ interface NativeEngineStageProps {
   capability: SourceCapabilityModel;
   /** Resume point, applied at load so the first frame is already in place. */
   startSeconds?: number;
+  /** The audio language the viewer wants; read once, when the stream opens. */
+  audioLanguage?: string;
   initialVolume: number;
   initialMuted: boolean;
   /** Subtitles chosen in the app, attached to the engine as external tracks. */
@@ -82,6 +84,7 @@ export const NativeEngineStage: React.FC<NativeEngineStageProps> = ({
   title,
   capability,
   startSeconds,
+  audioLanguage,
   initialVolume,
   initialMuted,
   externalSubtitles,
@@ -116,6 +119,7 @@ export const NativeEngineStage: React.FC<NativeEngineStageProps> = ({
         headers,
         title,
         startSeconds,
+        audioLanguage,
         volume: initialMuted ? 0 : Math.round(initialVolume * 100),
       });
       if (cancelled) return;

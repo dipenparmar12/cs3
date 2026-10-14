@@ -495,6 +495,9 @@ export class MpvEngine {
     if (request.subtitleUrl) options['sub-file'] = request.subtitleUrl;
     if (typeof request.audioTrackId === 'number' && request.audioTrackId > 0) {
       options.aid = String(request.audioTrackId);
+    } else if (request.audioLanguage && /^[a-z]{2,3}(?:-[a-z0-9]{2,8})?$/i.test(request.audioLanguage)) {
+      // Without it mpv plays the file's default track whatever the viewer chose.
+      options.alang = request.audioLanguage;
     }
 
     return options;

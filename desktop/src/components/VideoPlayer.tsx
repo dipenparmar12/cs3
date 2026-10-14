@@ -83,6 +83,7 @@ import { describeError } from '../utils/errors';
 import { useIsDeveloper } from '../utils/ExperienceModeContext';
 import { findResolutionVariants, findLanguageVariants, extractResolution, formatResolutionLabel } from '../utils/resolutionVariants';
 import { isWindowFullScreen, setWindowFullScreen, useWindowFullScreen } from '../utils/useWindowFullScreen';
+import { recordedAudioChoice, wantedAudioLanguage as pickAudioLanguage } from '../utils/audioPreference';
 
 interface VideoPlayerProps {
   streamUrl: string;
@@ -2748,9 +2749,19 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
   /** The source that played this title/episode last time, for the source list's "played before". */
   const [rememberedSource, setRememberedSource] = useState<StoredSource | null>(null);
   const currentTrackChoices = useRef<PlaybackPreferences | null>(null);
+  /**
+   * The audio language picked in this player for this title, if any.
+   *
+   * Outranks everything else for the rest of the title: a source switch, a
+   * resolution change and a retry all re-prepare, and each of them used to
+   * read the stored per-title language instead, putting the viewer back on
+   * the audio they had just switched away from.
+   */
+  const audioChoice = useRef<string | null>(null);
   useEffect(() => {
     titlePreferences.current = playbackPreferences ?? null;
     currentTrackChoices.current = null;
+    audioChoice.current = null;
     setRememberedSource(null);
     if (!title || playbackPreferences) return;
     let cancelled = false;
@@ -2766,6 +2777,14 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
       cancelled = true;
     };
   }, [title, progress?.year, progress?.season, progress?.episode, playbackPreferences]);
+
+  /**
+   * The audio language to ask the engine for: this session's pick, then a
+   * pick stored for this title, then the language the viewer keeps choosing.
+   * The stream's default is what plays only when none of these exists.
+   */
+  const wantedAudioLanguage = (): string | undefined =>
+    pickAudioLanguage(audioChoice.current, titlePreferences.current, preferredAudioLanguage.current);
 
   /** Which row in the list is the release that played last time, if it is there. */
   const rememberedHash = useMemo(() => {
@@ -3149,7 +3168,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
         provider: providerProvenance?.provider,
         // The language the viewer keeps choosing, so the engine plans *that* track
         // (remuxing it in where the browser cannot pick it) rather than the default.
-        preferredAudioLanguage: titlePreferences.current?.audioLanguage ?? preferredAudioLanguage.current ?? undefined,
+        preferredAudioLanguage: wantedAudioLanguage(),
       });
       if (cancelled || !response) return;
 
@@ -3166,7 +3185,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
        * not carry it — which is the correct outcome, not a failure.
        */
       const tracks = response.capability?.metadata?.audio ?? [];
-      const wantedAudio = titlePreferences.current?.audioLanguage ?? preferredAudioLanguage.current;
+      const wantedAudio = wantedAudioLanguage();
       const remembered = wantedAudio
         ? tracks.find((track) => track.language === wantedAudio)
         : undefined;
@@ -3265,7 +3284,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
             isDash: sourceConfig.isDash,
             drm: sourceConfig.drm,
             provider: providerProvenance?.provider,
-            preferredAudioLanguage: titlePreferences.current?.audioLanguage ?? preferredAudioLanguage.current ?? undefined,
+            preferredAudioLanguage: wantedAudioLanguage(),
             // The cached verdict is the one that was wrong; measure again and then
             // override it anyway.
             refresh: true,
@@ -3382,6 +3401,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
         (track) => track.index === index
       )?.language;
       if (language && language !== 'und') {
+        audioChoice.current = language;
         preferredAudioLanguage.current = language;
         void window.cloudstream?.setPlayerPreferences({ audioLanguage: language });
       }
@@ -3465,6 +3485,25 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
       activeSource?.directHeaders,
       providerProvenance?.provider,
     ]
+  );
+
+  /**
+   * A live track (mpv's, or an hls.js rendition) picked from the menu.
+   *
+   * `selectAudioTrack` also serves the player's own automatic picks, so the
+   * viewer's choice is recorded here, where only the menu reaches.
+   */
+  const chooseLiveAudio = useCallback(
+    (trackId: string | number) => {
+      const language = audioTracks.find((track) => String(track.id) === String(trackId))?.language;
+      if (language && language !== 'und') {
+        audioChoice.current = language;
+        preferredAudioLanguage.current = language;
+        void window.cloudstream?.setPlayerPreferences({ audioLanguage: language });
+      }
+      selectAudioTrack(trackId);
+    },
+    [audioTracks, selectAudioTrack]
   );
 
   /** Audio tracks as the inspection reported them, labelled for the picker. */
@@ -3589,12 +3628,17 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
     const subtitle = activeSubtitle ? allSubtitles.find((s) => s.url === activeSubtitle) : undefined;
     const audio =
       audioTracks.find((track) => String(track.id) === String(activeAudioTrack)) ?? undefined;
-    const fileAudio = preparedRef.current?.capability?.metadata?.audio.find(
-      (track) => track.index === selectedAudioIndex
-    );
+    /*
+     * Only a language somebody chose. Recording whatever played wrote the
+     * stream's default (English) into the record ten seconds in, and the next
+     * play read it back as this title's preference — above the Hindi the
+     * viewer keeps picking. Written as `undefined` otherwise, which also
+     * clears a default an older build stored.
+     */
+    const chosen = recordedAudioChoice(audioChoice.current, titlePreferences.current);
     const choices: PlaybackPreferences = {
-      audioLanguage: audio?.language ?? (fileAudio?.language !== 'und' ? fileAudio?.language : undefined),
-      audioLabel: audio?.label,
+      ...chosen,
+      audioLabel: chosen.audioLanguage && audio?.language === chosen.audioLanguage ? audio.label : undefined,
       subtitleMode: subtitle ? 'track' : subtitlesOff.current ? 'off' : undefined,
       subtitleLanguage: subtitle ? (preferredSubtitleLanguage.current ?? subtitle.name) : undefined,
       subtitleLabel: subtitle?.name,
@@ -4611,6 +4655,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
           title={episodeTitle ? `${title} — ${episodeTitle}` : title}
           capability={capability}
           startSeconds={carriedAt ?? progress?.resumeAt}
+          audioLanguage={wantedAudioLanguage()}
           initialVolume={audioSettings.current.volume}
           initialMuted={audioSettings.current.muted}
           externalSubtitles={allSubtitles.map((sub) => ({ name: sub.name, url: sub.url }))}
@@ -5614,7 +5659,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
                   icon={<Volume2 size={16} />}
                   label="Audio"
                   value={activeAudioTrack}
-                  onChange={(val) => selectAudioTrack(val)}
+                  onChange={(val) => chooseLiveAudio(val)}
                   onOpenChange={onMenuOpenChange}
                   showChevron={true}
                   triggerText={audioControlLabel}
@@ -5647,7 +5692,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
                   icon={<Volume2 size={16} />}
                   label="Audio"
                   value={activeAudioTrack}
-                  onChange={(val) => selectAudioTrack(val)}
+                  onChange={(val) => chooseLiveAudio(val)}
                   onOpenChange={onMenuOpenChange}
                   showChevron={true}
                   triggerText={audioControlLabel}
