@@ -855,15 +855,18 @@ export class ContentService {
     /**
      * `cs3meta://tt1234567` — a saved OTT catalogue row from before those rows
      * carried a type. The type has to be discovered because the address never
-     * recorded it; movie is tried first because the catalogue is mostly films,
-     * and the miss costs one 404 against an API that is already the cheapest
-     * thing in this function.
+     * recorded it. **Series first**: a film id asked of the series catalogue
+     * answers with no `meta`, but a series id asked of the movie catalogue
+     * answers 200 with an unrelated film under the same id (measured
+     * 2026-10-14: Breaking Bad → "Mirror", The Office → "The Story of an
+     * African Farm"). Movie-first opened every saved series as someone else's
+     * film. See `CinemetaProvider.resolveImdb`.
      */
     const bareImdbId = parseBareImdbUrl(base);
     if (bareImdbId) {
-      for (const type of ['movie', 'series'] as const) {
-        // A wrong type answers 404, which `fetchJson` throws; that is this
-        // loop's "try the other one", not a failure worth reporting.
+      for (const type of ['series', 'movie'] as const) {
+        // No `meta` (or a 404 that `fetchJson` throws) is this loop's "try the
+        // other one", not a failure worth reporting.
         const detail = await this.cinemeta.load(type, bareImdbId).catch(() => null);
         if (detail) return catalogueDetail(detail, base);
       }

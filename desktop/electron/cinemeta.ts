@@ -219,9 +219,16 @@ export class CinemetaProvider {
   /**
    * Which work an IMDb id names, without knowing whether it is a film or a show.
    *
-   * Both catalogues are asked at once; an id belongs to exactly one, and the
-   * other answers with no `meta`. `null` when neither knows it — or when the
-   * host is unreachable, which the caller treats the same: search the text.
+   * Both catalogues are asked at once, and **the series answer wins** whenever
+   * there is one. The two are not symmetric — measured 2026-10-14 on nine ids:
+   * the series catalogue answered no `meta` for every film id, while the movie
+   * catalogue answered *every* series id with an unrelated film under the same
+   * id (Breaking Bad → "Mirror", Rick and Morty → "Eye Contact", The Office →
+   * "The Story of an African Farm"). Preferring the movie answer would search
+   * for the wrong work and pin the results to it.
+   *
+   * `null` when neither knows it — or when the host is unreachable, which the
+   * caller treats the same: search the text.
    */
   public async resolveImdb(
     imdbId: string,
@@ -245,8 +252,8 @@ export class CinemetaProvider {
     };
     const [movie, series] = await Promise.allSettled([ask('movie'), ask('series')]);
     return (
-      (movie.status === 'fulfilled' ? movie.value : null) ??
-      (series.status === 'fulfilled' ? series.value : null)
+      (series.status === 'fulfilled' ? series.value : null) ??
+      (movie.status === 'fulfilled' ? movie.value : null)
     );
   }
 
