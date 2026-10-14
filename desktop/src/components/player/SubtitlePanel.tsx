@@ -1058,7 +1058,7 @@ export const SubtitlePanel: React.FC<SubtitlePanelProps> = ({
                   return (
                     <li key={item.id} className="subtitle-panel__row">
                       <button
-                        className={`player-panel__sub subtitle-panel__result${item.best ? ' subtitle-panel__result--best' : ''}`}
+                        className="player-panel__sub subtitle-panel__result"
                         onClick={() => applySubtitle(item)}
                         disabled={applying !== null}
                         aria-label={`${rowLabel(item, `${language}${items.length > 1 ? ` #${index + 1}` : ''}`)}${
