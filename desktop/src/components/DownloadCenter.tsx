@@ -1,5 +1,6 @@
 import React, { useState, useMemo, useCallback, useEffect } from 'react';
-import { Button, Menu, Select } from './ui';
+import { Button, Menu, Select, SelectionToolbar, SelectMark } from './ui';
+import { groupState, useListSelection } from '../utils/listSelection';
 import { ScreenSearch } from './ScreenSearch';
 import { episodeTerms, matchesScreenQuery } from '../utils/screenSearch';
 import { useSessionState } from '../utils/useSessionState';
@@ -11,6 +12,7 @@ import type { DownloadTask } from '../types/download';
 import { DownloadState } from '../types/download';
 import { DeleteDownloadDialog, type DeletePreference } from './DeleteDownloadDialog';
 import {
+  CheckSquare,
   Play,
   Pause,
   Trash2,
@@ -56,6 +58,14 @@ interface DownloadCenterProps {
   onPlayFile?: (task: DownloadTask) => void;
 }
 
+/** Moving bytes, or about to: what Pause applies to and removal cancels. */
+const isTransferring = (t: DownloadTask) =>
+  t.state === DownloadState.Downloading ||
+  t.state === DownloadState.Queued ||
+  t.state === DownloadState.Retrying ||
+  t.state === DownloadState.RefreshingSource;
+const canResume = (t: DownloadTask) => t.state === DownloadState.Paused || t.state === DownloadState.Failed;
+
 interface TaskGroup {
   key: string;
   title: string;
@@ -74,6 +84,8 @@ interface SingleTaskRowProps {
   onReveal?: (filePath: string) => void;
   onOpenTitle?: (task: DownloadTask) => void;
   isEpisode?: boolean;
+  /** Present only in selection mode. */
+  selection?: { selected: boolean; onToggle: () => void };
 }
 
 const SingleTaskRow: React.FC<SingleTaskRowProps> = ({
@@ -85,6 +97,7 @@ const SingleTaskRow: React.FC<SingleTaskRowProps> = ({
   onReveal,
   onOpenTitle,
   isEpisode = false,
+  selection,
 }) => {
   const isDeveloper = useIsDeveloper();
   const { message: copiedMeta, flash: setCopiedMeta } = useFlash<boolean>(2500);
@@ -135,7 +148,9 @@ const SingleTaskRow: React.FC<SingleTaskRowProps> = ({
 
   return (
     <div
-      className={isEpisode ? 'download-item-card' : 'download-group-card'}
+      className={`${isEpisode ? 'download-item-card' : 'download-group-card'}${
+        selection?.selected ? ' is-selected' : ''
+      }`}
       style={
         !isEpisode
           ? {
@@ -147,6 +162,13 @@ const SingleTaskRow: React.FC<SingleTaskRowProps> = ({
           : undefined
       }
     >
+      {selection && (
+        <SelectMark
+          state={selection.selected}
+          onToggle={selection.onToggle}
+          label={`Select ${task.episodeTitle || task.title}`}
+        />
+      )}
       {/* Poster Thumbnail for standalone items */}
       {!isEpisode && (
         <div
@@ -430,12 +452,7 @@ export const DownloadCenter: React.FC<DownloadCenterProps> = ({
   // Batch action handlers
   const handlePauseAll = () => {
     for (const t of tasks) {
-      if (
-        t.state === DownloadState.Downloading ||
-        t.state === DownloadState.Queued ||
-        t.state === DownloadState.Retrying ||
-        t.state === DownloadState.RefreshingSource
-      ) {
+      if (isTransferring(t)) {
         onPause(t.id);
       }
     }
@@ -443,7 +460,7 @@ export const DownloadCenter: React.FC<DownloadCenterProps> = ({
 
   const handleResumeAll = () => {
     for (const t of tasks) {
-      if (t.state === DownloadState.Paused || t.state === DownloadState.Failed) {
+      if (canResume(t)) {
         onResume(t.id);
       }
     }
@@ -469,6 +486,7 @@ export const DownloadCenter: React.FC<DownloadCenterProps> = ({
     ids: string[];
     title: string;
     hasFile: boolean;
+    activeCount: number;
   } | null>(null);
   const [deletePreference, setDeletePreference] = useState<DeletePreference>('ask');
 
@@ -484,7 +502,14 @@ export const DownloadCenter: React.FC<DownloadCenterProps> = ({
       // Only a finished download has a file worth warning about, so the prompt
       // says which case this is rather than threatening something that is not there.
       const hasFile = tasks.some((t) => ids.includes(t.id) && t.state === DownloadState.Completed);
+      const activeCount = tasks.filter((t) => ids.includes(t.id) && isTransferring(t)).length;
 
+      // A remembered choice answers for one row. A batch that would also
+      // cancel running transfers is asked about every time.
+      if (ids.length > 1 && activeCount > 0) {
+        setPendingDelete({ ids, title, hasFile, activeCount });
+        return;
+      }
       if (deletePreference === 'list-only') {
         ids.forEach((id) => onRemove(id, false));
         return;
@@ -493,7 +518,7 @@ export const DownloadCenter: React.FC<DownloadCenterProps> = ({
         ids.forEach((id) => onRemove(id, true));
         return;
       }
-      setPendingDelete({ ids, title, hasFile });
+      setPendingDelete({ ids, title, hasFile, activeCount });
     },
     [deletePreference, onRemove, tasks]
   );
@@ -576,6 +601,37 @@ export const DownloadCenter: React.FC<DownloadCenterProps> = ({
     return list;
   }, [tasks, activeFilter, searchQuery, sortMode]);
 
+  /*
+   * Bulk selection (PRD §116), scoped to the filter tab and find query on
+   * screen. Remove goes through `requestDelete`, so a batch gets the same
+   * "list only / list and file" choice as one row, plus a warning when it
+   * would cancel transfers that are still running.
+   */
+  const taskIds = useMemo(() => filteredTasks.map((t) => t.id), [filteredTasks]);
+  const selection = useListSelection(taskIds);
+  const selectedTasks = useMemo(
+    () => filteredTasks.filter((t) => selection.selected.has(t.id)),
+    [filteredTasks, selection.selected]
+  );
+  const { message: bulkStatus, flash: flashBulkStatus } = useFlash<string>(6000);
+  const downloadsWord = (count: number) => `${count} download${count === 1 ? '' : 's'}`;
+  const pauseSelected = () => {
+    const targets = selectedTasks.filter(isTransferring);
+    targets.forEach((t) => onPause(t.id));
+    flashBulkStatus(`Paused ${downloadsWord(targets.length)}`);
+  };
+  const resumeSelected = () => {
+    const targets = selectedTasks.filter(canResume);
+    targets.forEach((t) => onResume(t.id));
+    flashBulkStatus(`Resumed ${downloadsWord(targets.length)}`);
+  };
+  const removeSelected = () => {
+    requestDelete(
+      selectedTasks.map((t) => t.id),
+      downloadsWord(selectedTasks.length)
+    );
+  };
+
   // Group filtered tasks by series / session and sort groups
   const groups: TaskGroup[] = useMemo(() => {
     const map = new Map<string, TaskGroup>();
@@ -654,6 +710,9 @@ export const DownloadCenter: React.FC<DownloadCenterProps> = ({
       ? [{ label: 'Clear completed from the list', icon: Trash2, onSelect: handleClearCompleted }]
       : []),
     ...(onReveal ? [{ label: 'Open downloads folder', icon: FolderOpen, onSelect: () => onReveal() }] : []),
+    ...(filteredTasks.length > 0 && !selection.active
+      ? [{ label: 'Select…', icon: CheckSquare, onSelect: selection.enter }]
+      : []),
   ];
 
   return (
@@ -744,6 +803,32 @@ export const DownloadCenter: React.FC<DownloadCenterProps> = ({
             ]}
           />
         </div>
+      )}
+
+      {selection.active && (
+        <SelectionToolbar
+          count={selection.count}
+          total={selection.total}
+          noun={['download', 'downloads']}
+          onSelectAll={selection.selectAll}
+          onInvert={selection.invert}
+          onSelectNone={selection.selectNone}
+          onDone={selection.exit}
+          onRemove={removeSelected}
+          confirmRemove={false}
+          status={bulkStatus}
+        >
+          {selectedTasks.some(isTransferring) && (
+            <Button size="compact" variant="ambient" icon={Pause} onClick={pauseSelected}>
+              Pause
+            </Button>
+          )}
+          {selectedTasks.some(canResume) && (
+            <Button size="compact" variant="ambient" icon={Play} onClick={resumeSelected}>
+              Resume
+            </Button>
+          )}
+        </SelectionToolbar>
       )}
 
       {/* Downloads List */}
@@ -857,6 +942,13 @@ export const DownloadCenter: React.FC<DownloadCenterProps> = ({
                     className="download-group-header"
                     onClick={() => toggleGroupCollapse(group.key)}
                   >
+                    {selection.active && (
+                      <SelectMark
+                        state={groupState(selection.selected, group.tasks.map((t) => t.id))}
+                        onToggle={() => selection.toggleMany(group.tasks.map((t) => t.id))}
+                        label={'Select every episode of ' + group.title}
+                      />
+                    )}
                     <div className="download-group-toggle">
                       {isCollapsed ? <ChevronRight size={18} /> : <ChevronDown size={18} />}
                     </div>
@@ -1054,6 +1146,11 @@ export const DownloadCenter: React.FC<DownloadCenterProps> = ({
                           onPlayFile={onPlayFile}
                           onOpenTitle={onOpenTitle}
                           isEpisode
+                          selection={
+                            selection.active
+                              ? { selected: selection.isSelected(task.id), onToggle: () => selection.toggle(task.id) }
+                              : undefined
+                          }
                         />
                       ))}
                     </div>
@@ -1073,6 +1170,14 @@ export const DownloadCenter: React.FC<DownloadCenterProps> = ({
                 onReveal={onReveal}
                 onPlayFile={onPlayFile}
                 onOpenTitle={onOpenTitle}
+                selection={
+                  selection.active
+                    ? {
+                        selected: selection.isSelected(group.tasks[0].id),
+                        onToggle: () => selection.toggle(group.tasks[0].id),
+                      }
+                    : undefined
+                }
               />
             );
           })}
@@ -1084,6 +1189,7 @@ export const DownloadCenter: React.FC<DownloadCenterProps> = ({
           title={pendingDelete.title}
           count={pendingDelete.ids.length}
           hasFile={pendingDelete.hasFile}
+          activeCount={pendingDelete.activeCount}
           onConfirm={confirmDelete}
           onCancel={() => setPendingDelete(null)}
         />

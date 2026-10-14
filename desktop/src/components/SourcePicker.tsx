@@ -24,6 +24,7 @@ import {
 import {
   DEFAULT_FILTER_STATE,
   filterAndSortSources,
+  foldTorrents,
   type SourceFilterState,
 } from '../utils/sourceFilter';
 import { formatBytes } from '../utils/format';
@@ -180,10 +181,11 @@ export const SourcePicker: React.FC<SourcePickerProps> = ({
 
   const best = useMemo(() => data?.sources[0] ?? null, [data]);
 
-  const displayedSources = useMemo(
-    () => (data ? filterAndSortSources(data.sources, filterState) : []),
-    [data, filterState]
-  );
+  const [showAllTorrents, setShowAllTorrents] = useState(false);
+  const { shown: displayedSources, hidden: foldedTorrents } = useMemo(() => {
+    const filtered = data ? filterAndSortSources(data.sources, filterState) : [];
+    return showAllTorrents ? { shown: filtered, hidden: 0 } : foldTorrents(filtered, filterState);
+  }, [data, filterState, showAllTorrents]);
 
   if (!isOpen) return null;
 
@@ -583,6 +585,11 @@ export const SourcePicker: React.FC<SourcePickerProps> = ({
                 );
               })}
             </ul>
+            {foldedTorrents > 0 && (
+              <button type="button" className="link-button source-picker__more" onClick={() => setShowAllTorrents(true)}>
+                Show {foldedTorrents} more torrent{foldedTorrents === 1 ? '' : 's'}
+              </button>
+            )}
           </>
         )}
 

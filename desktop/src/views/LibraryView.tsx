@@ -10,7 +10,9 @@ import { SavedSourcesList } from '../components/library/SavedSourcesList';
 import { SavedSearchesList } from '../components/library/SavedSearchesList';
 import { ScreenSearch, ScreenSearchNoMatches } from '../components/ScreenSearch';
 import { useScreenSearch } from '../utils/useScreenSearch';
-import { Button, Dialog, DialogActions, Select } from '../components/ui';
+import { Button, Dialog, DialogActions, Select, SelectionToolbar, SelectMark } from '../components/ui';
+import { useListSelection } from '../utils/listSelection';
+import { useFlash } from '../utils/useFlash';
 import { matchesScreenQuery } from '../utils/screenSearch';
 import type { PlayedSource } from '../types/library';
 import type { TorrentResult } from '../types/torrent';
@@ -25,6 +27,7 @@ import {
   RotateCw,
   Database,
   ExternalLink,
+  CheckSquare,
 } from 'lucide-react';
 import type { SearchResponse } from '../types/api';
 import { TvType } from '../types/api';
@@ -153,6 +156,19 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
     for (const entry of found) tally[entry.status] = (tally[entry.status] ?? 0) + 1;
     return tally;
   }, [found]);
+
+  /*
+   * Bulk selection (PRD §116), scoped to the bucket and find query on screen:
+   * switching bucket or narrowing the query takes hidden titles out of the
+   * selection rather than leaving them to be removed unseen.
+   */
+  const entryKeys = useMemo(() => entries.map((entry) => entry.key), [entries]);
+  const selection = useListSelection(entryKeys);
+  const { message: bulkStatus, flash: flashBulkStatus } = useFlash<string>(6000);
+  const { exit: exitSelection } = selection;
+  useEffect(() => {
+    if (mode !== 'watching') exitSelection();
+  }, [mode, exitSelection]);
 
   /**
    * Card states for the whole shelf.
@@ -321,6 +337,42 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
     refresh();
   };
 
+  /**
+   * Applies one change to every selected title and says what happened.
+   *
+   * Each title answers for itself, so one refusal (a private session, a title
+   * removed elsewhere) neither stops the rest nor disappears: the ones that
+   * failed stay selected and the line says how many.
+   */
+  const applyToSelected = async (
+    run: (key: string) => Promise<unknown> | undefined,
+    done: (count: number) => string
+  ) => {
+    const keys = [...selection.selected];
+    if (keys.length === 0) return;
+    const outcomes = await Promise.all(keys.map((key) => Promise.resolve(run(key)).then(Boolean, () => false)));
+    const failed = keys.filter((_, index) => !outcomes[index]);
+    const summary = done(keys.length - failed.length);
+    flashBulkStatus(
+      failed.length === 0
+        ? summary
+        : `${summary} · ${failed.length} could not be changed and ${failed.length === 1 ? 'is' : 'are'} still selected`
+    );
+    selection.keepOnly(failed);
+    await refresh();
+  };
+  const titlesWord = (count: number) => `${count} ${count === 1 ? 'title' : 'titles'}`;
+  const removeSelected = () =>
+    applyToSelected(
+      (key) => window.cloudstream?.removeLibraryEntry(key),
+      (count) => `Removed ${titlesWord(count)} from the library`
+    );
+  const moveSelected = (status: WatchStatus) =>
+    applyToSelected(
+      (key) => window.cloudstream?.setLibraryStatus(key, status),
+      (count) => `Moved ${titlesWord(count)} to ${BUCKETS.find((bucket) => bucket.status === status)?.label ?? status}`
+    );
+
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: '1.5rem' }}>
       <div className="screen-head">
@@ -423,7 +475,7 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
         />
       ) : (
         <>
-      <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
+      <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap', alignItems: 'center' }}>
         {BUCKETS.map(({ status, label }) => (
           <button
             key={status}
@@ -434,7 +486,55 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
             {counts[status] ? ` (${counts[status]})` : ''}
           </button>
         ))}
+        {!selection.active && entries.length > 0 && (
+          <Button
+            size="compact"
+            variant="ambient"
+            icon={CheckSquare}
+            style={{ marginLeft: 'auto' }}
+            onClick={selection.enter}
+            title="Select titles to remove or move"
+          >
+            Select
+          </Button>
+        )}
       </div>
+
+      {selection.active && (
+        <SelectionToolbar
+          count={selection.count}
+          total={selection.total}
+          noun={['title', 'titles']}
+          onSelectAll={selection.selectAll}
+          onInvert={selection.invert}
+          onSelectNone={selection.selectNone}
+          onDone={selection.exit}
+          onRemove={removeSelected}
+          status={bulkStatus}
+        >
+          <Select
+            size="compact"
+            aria-label="Move selected titles to"
+            value=""
+            disabled={selection.count === 0}
+            onChange={(event) => {
+              if (event.target.value) void moveSelected(event.target.value as WatchStatus);
+            }}
+            options={[
+              { value: '', label: 'Move to…' },
+              ...BUCKETS.filter(({ status }) => status !== activeStatus).map(({ status, label }) => ({
+                value: status,
+                label,
+              })),
+            ]}
+          />
+        </SelectionToolbar>
+      )}
+      {!selection.active && bulkStatus && (
+        <p role="status" style={{ margin: 0, color: 'var(--text-muted)', fontSize: '0.8rem' }}>
+          {bulkStatus}
+        </p>
+      )}
 
       {loading ? (
         <p style={{ color: 'var(--text-muted)', fontSize: '0.85rem' }}>Loading…</p>
@@ -483,12 +583,26 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
             const cardState = cardStateFor(interaction);
             const stateBadge = primaryBadge(cardState);
 
+            const selected = selection.active && selection.isSelected(entry.key);
             return (
               <div
                 key={entry.key}
-                className={`poster-card${cardState.visited ? ' poster-card--visited' : ''}`}
+                className={`poster-card${cardState.visited ? ' poster-card--visited' : ''}${
+                  selection.active ? ' is-selectable' : ''
+                }${selected ? ' is-selected' : ''}`}
               >
-                <div className="poster-container" onClick={(e) => openEntry(entry, e)}>
+                <div
+                  className="poster-container"
+                  onClick={(e) => (selection.active ? selection.toggle(entry.key) : openEntry(entry, e))}
+                >
+                  {selection.active && (
+                    <SelectMark
+                      overlay
+                      state={selected}
+                      onToggle={() => selection.toggle(entry.key)}
+                      label={`Select ${entry.title}`}
+                    />
+                  )}
                   {entry.posterUrl ? (
                     <img src={entry.posterUrl} alt={entry.title} loading="lazy" />
                   ) : (
@@ -503,17 +617,20 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
                       <span className="poster-state__label">{badgeLabel(stateBadge)}</span>
                     </span>
                   )}
-                  <div className="poster-overlay">
-                    <button
-                      type="button"
-                      className="play-button-overlay"
-                      aria-label={`Play ${entry.title}`}
-                      title={progressByKey.get(entry.key) ? 'Resume' : 'Play'}
-                      onClick={(e) => playEntry(entry, e)}
-                    >
-                      <Play size={17} fill="#fff" />
-                    </button>
-                  </div>
+                  {/* In selection mode a press on the poster selects; Play would start a film. */}
+                  {!selection.active && (
+                    <div className="poster-overlay">
+                      <button
+                        type="button"
+                        className="play-button-overlay"
+                        aria-label={`Play ${entry.title}`}
+                        title={progressByKey.get(entry.key) ? 'Resume' : 'Play'}
+                        onClick={(e) => playEntry(entry, e)}
+                      >
+                        <Play size={17} fill="#fff" />
+                      </button>
+                    </div>
+                  )}
                   {percent > 0 && (
                     <div className="poster-progress">
                       <div style={{ width: `${Math.min(100, percent)}%` }} />
