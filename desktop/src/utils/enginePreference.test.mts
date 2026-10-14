@@ -18,6 +18,10 @@ test('and in the link title, when the extractor name is generic', () => {
   );
 });
 
+test('and in the provider name, where CNC Verse puts it', () => {
+  assert.equal(asksForExternalPlayer({ providerName: 'Castle TV (Use VLC)', indexerName: 'Castle TV', title: 'Episode 1' }), true);
+});
+
 test('other phrasings of the same request count', () => {
   assert.equal(asksForExternalPlayer({ title: 'Server 2 [Play in MPV]' }), true);
   assert.equal(asksForExternalPlayer({ title: 'Use_VLC' }), true);

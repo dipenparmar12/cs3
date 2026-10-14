@@ -85,6 +85,12 @@ export interface PlaybackEngineDeps {
    */
   inspections?: InspectionStore;
   fetchText: (url: string, bytes: number) => Promise<string | null>;
+  /**
+   * The first bytes of a URL as bytes, for reading an HLS segment's program
+   * table (`media/tsProgram.ts`). Optional: without it a playlist's audio is
+   * what its manifest declares.
+   */
+  fetchBytes?: (url: string, bytes: number) => Promise<Uint8Array | null>;
   /** Asks the source itself why it could not be read. See `main.ts`. */
   describeUnreadable: (url: string) => Promise<ProbeFailure>;
   diagnostics: {
@@ -123,7 +129,8 @@ export class PlaybackEngine {
     this.deps = deps;
     this.inspector = new MediaInspector(
       () => deps.transcoder.resolveFfprobe(),
-      (url) => deps.fetchText(url, MANIFEST_SNIFF_BYTES)
+      (url) => deps.fetchText(url, MANIFEST_SNIFF_BYTES),
+      deps.fetchBytes ?? null
     );
   }
 

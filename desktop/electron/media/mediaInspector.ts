@@ -9,6 +9,7 @@ import type {
 import type { InspectionStrategyType } from './playbackTelemetry.ts';
 import { isDolbyVisionTag, isPlayableAudioCodec, requiresEmeDecryption } from './decisionEngine.ts';
 import { runTool } from './runTool.ts';
+import { readTsStreams, type TsElementaryStream } from './tsProgram.ts';
 import { scopedLogger } from '../logging/logger.ts';
 import { describeError } from '../../src/utils/errors.ts';
 
@@ -594,6 +595,80 @@ export function parseHlsManifest(manifestText: string): MediaMetadata | null {
 }
 
 /**
+ * Where to look next inside a playlist: the first variant of a master, or the
+ * first segment of a media playlist, resolved against the playlist's address.
+ */
+export function firstPlaylistEntry(
+  manifest: string,
+  base: string
+): { kind: 'variant' | 'segment'; url: string } | null {
+  const lines = manifest.split(/\r?\n/).map((line) => line.trim());
+  const isMaster = lines.some((line) => line.startsWith('#EXT-X-STREAM-INF'));
+  for (let i = 0; i < lines.length; i++) {
+    const tag = lines[i];
+    if (!(isMaster ? tag.startsWith('#EXT-X-STREAM-INF') : tag.startsWith('#EXTINF'))) continue;
+    const uri = lines.slice(i + 1).find((line) => line && !line.startsWith('#'));
+    if (!uri) return null;
+    try {
+      return { kind: isMaster ? 'variant' : 'segment', url: new URL(uri, base).toString() };
+    } catch {
+      return null;
+    }
+  }
+  return null;
+}
+
+/**
+ * A manifest's metadata corrected by what its first segment actually carries.
+ *
+ * Audio comes from the segment's own program table, which is ground truth; a
+ * manifest without `#EXT-X-MEDIA` had invented one track. The video codec is
+ * taken from it only where the manifest declared no `CODECS` — then the
+ * playlist's `h264` was a default, and this is the first measurement of it.
+ */
+export function withSegmentStreams(
+  meta: MediaMetadata,
+  streams: TsElementaryStream[],
+  manifest: string
+): MediaMetadata {
+  const audio = streams.filter((stream) => stream.kind === 'audio');
+  if (audio.length === 0) return meta;
+  const video = streams.find((stream) => stream.kind === 'video');
+  const declaredCodecs = /CODECS="/i.test(manifest);
+  const measuredVideo =
+    video && (!meta.video || !declaredCodecs)
+      ? {
+          index: 0,
+          bitDepth: 8,
+          pixelFormat: 'yuv420p',
+          width: 1920,
+          height: 1080,
+          frameRate: 23.976,
+          isHdr: false,
+          isInterlaced: false,
+          ...meta.video,
+          codec: video.codec,
+          codecLongName: video.codec.toUpperCase(),
+        }
+      : meta.video;
+  return {
+    ...meta,
+    video: measuredVideo,
+    audio: audio.map((stream, index) => ({
+      index,
+      codec: stream.codec,
+      codecLongName: stream.codec.toUpperCase(),
+      channels: 2,
+      language: stream.language,
+      isDefault: index === 0,
+      isForced: false,
+      playable: isPlayableAudioCodec(stream.codec),
+    })),
+    audioMuxedInSegments: audio.length > 1 ? true : undefined,
+  };
+}
+
+/**
  * PRD-40.1 §4.2: Parses DASH manifests directly without ffprobe.
  */
 export function parseDashManifest(manifestText: string): MediaMetadata | null {
@@ -875,13 +950,41 @@ export interface InspectionResult {
 export class MediaInspector {
   private resolveFfprobe: () => string | null;
   private fetchHead: (url: string) => Promise<string | null>;
+  /** The first bytes of a segment, as bytes — text decoding would mangle TS. */
+  private fetchBytes: ((url: string, bytes: number) => Promise<Uint8Array | null>) | null;
 
   constructor(
     resolveFfprobe: () => string | null,
-    fetchHead: (url: string) => Promise<string | null>
+    fetchHead: (url: string) => Promise<string | null>,
+    fetchBytes: ((url: string, bytes: number) => Promise<Uint8Array | null>) | null = null
   ) {
     this.resolveFfprobe = resolveFfprobe;
     this.fetchHead = fetchHead;
+    this.fetchBytes = fetchBytes;
+  }
+
+  /**
+   * The elementary streams of a playlist's first segment, when it is MPEG-TS.
+   *
+   * Two short requests at most (a master's first variant, then 64 KB of its
+   * first segment), through the same proxy routes playback uses, so the
+   * provider's `Referer` and the PNG-wrapper unwrapping apply. `null` for fMP4
+   * segments, unreadable bytes or any failure — the manifest's answer stands.
+   */
+  private async segmentStreams(url: string, manifest: string): Promise<TsElementaryStream[] | null> {
+    if (!this.fetchBytes) return null;
+    let entry = firstPlaylistEntry(manifest, url);
+    let playlist = manifest;
+    if (entry?.kind === 'variant') {
+      const variant = await this.fetchHead(entry.url);
+      if (!variant) return null;
+      playlist = variant;
+      entry = firstPlaylistEntry(variant, entry.url);
+    }
+    // fMP4 segments carry their tracks in the init segment, not a PMT.
+    if (!entry || entry.kind !== 'segment' || /#EXT-X-MAP/i.test(playlist)) return null;
+    const bytes = await this.fetchBytes(entry.url, 64 * 1024);
+    return bytes ? readTsStreams(bytes) : null;
   }
 
   public async inspect(url: string, hintM3u8?: boolean): Promise<InspectionResult> {
@@ -929,7 +1032,17 @@ export class MediaInspector {
 
         if (transport === 'hls') {
           const parseStart = Date.now();
-          const meta = parseHlsManifest(head);
+          let meta = parseHlsManifest(head);
+          /*
+           * No audio renditions declared: the languages, if there are several,
+           * are inside the segments where only the program table can see them.
+           * A playlist that does declare them is believed, and hls.js switches
+           * those itself.
+           */
+          if (meta && !/#EXT-X-MEDIA:[^\n]*TYPE=AUDIO/i.test(head)) {
+            const streams = await this.segmentStreams(url, head).catch(() => null);
+            if (streams) meta = withSegmentStreams(meta, streams, head);
+          }
           const parseMs = Date.now() - parseStart;
           return {
             metadata: meta,

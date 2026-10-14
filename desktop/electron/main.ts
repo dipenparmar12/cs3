@@ -906,6 +906,21 @@ const playbackEngine = new PlaybackEngine({
       return null;
     }
   },
+  // A segment's first bytes, for its program table. Short deadline: this runs
+  // before playback starts, and the manifest's answer is the fallback.
+  fetchBytes: async (url, bytes) => {
+    try {
+      const response = await resilientFetch.fetch(
+        url,
+        { headers: { Range: `bytes=0-${bytes - 1}` }, signal: AbortSignal.timeout(4_000) },
+        { operation: 'segment-sniff' }
+      );
+      if (!response.ok && response.status !== 206) return null;
+      return new Uint8Array(await response.arrayBuffer()).subarray(0, bytes);
+    } catch {
+      return null;
+    }
+  },
   describeUnreadable: (url) => describeUnreadableSource(url),
   diagnostics,
 });

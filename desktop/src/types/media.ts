@@ -107,6 +107,12 @@ export interface MediaMetadata {
   video: VideoStreamMetadata | null;
   audio: AudioStreamMetadata[];
   subtitles: SubtitleStreamMetadata[];
+  /**
+   * HLS whose audio languages are elementary streams inside each segment, not
+   * `#EXT-X-MEDIA` renditions (`media/tsProgram.ts`). hls.js plays only the
+   * first of them, so any other track needs a remux — never a re-encode.
+   */
+  audioMuxedInSegments?: boolean;
 }
 
 export type PlaybackStrategyType =

@@ -5,7 +5,7 @@ import { readTsStreams } from './tsProgram.ts';
 
 // The first three packets (SDT, PAT, PMT) of a real Castle TV segment, served
 // as `0.jpg`: one H.264 stream and four AAC languages, no `#EXT-X-MEDIA`.
-const castle = new Uint8Array(fs.readFileSync(new URL('./fixtures/castle-tv-4audio-head.ts', import.meta.url)));
+const castle = new Uint8Array(fs.readFileSync(new URL('./fixtures/castle-tv-4audio-head.m2ts', import.meta.url)));
 
 test('every audio language muxed into the segment is found, in PMT order', () => {
   const streams = readTsStreams(castle);

@@ -771,6 +771,41 @@ function decideBrowserStrategy(
    * `bufferAddCodecError` rather than anything about codecs. That case falls
    * through to the transcoder below.
    */
+  /**
+   * Languages muxed inside the segments, and the wanted one is not the first.
+   *
+   * hls.js demuxes only the first audio stream of a TS segment and cannot be
+   * told otherwise, so handing it over would play English whatever was chosen
+   * (Castle TV: eng/hin/tam/tel in every segment, measured 2026-10-14). The
+   * remedy is a remux that maps the chosen stream — video and audio copied,
+   * nothing decoded — not the re-encode the forced retry used to reach for.
+   * Requires the video codec to have been measured from the segment, which
+   * `withSegmentStreams` did; the first track still goes to hls.js untouched.
+   */
+  if (
+    transport === 'hls' &&
+    metadata.audioMuxedInSegments &&
+    audioIndex > 0 &&
+    videoPlayable &&
+    metadata.video
+  ) {
+    return {
+      directPlayable: false,
+      strategy: audioPlayable ? 'REMUX_CONTAINER' : 'AUDIO_TRANSCODE',
+      plan: {
+        videoAction: 'copy',
+        audioAction: audioPlayable ? 'copy' : 'transcode',
+        targetAudioCodec: audioPlayable ? undefined : 'aac',
+        selectedAudioIndex: audioIndex,
+        containerAction: 'mp4_fragmented',
+        subtitleAction: 'ignore',
+      },
+      explanation:
+        'HLS with its audio languages inside the segments: the chosen language is ' +
+        'remuxed in (copied, not re-encoded), because hls.js only ever plays the first.',
+    };
+  }
+
   if (transport === 'hls' && videoPlayable && audioPlayable) {
     return {
       directPlayable: true,

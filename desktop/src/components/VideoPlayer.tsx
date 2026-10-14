@@ -3385,15 +3385,26 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
         (hlsRef.current && (hlsRef.current.audioTracks?.length ?? 0) > 1)
       );
       if (!hasNativeAudioSwitching && streamUrl && window.cloudstream?.preparePlaybackStream) {
+        /*
+         * Languages muxed in an HLS stream's segments are a known quantity: the
+         * engine remuxes the chosen one in (copy, no decode), or hands the first
+         * back to hls.js. Only an unknown case still takes the forced re-encode,
+         * which for this stream had spent a software H.264 encode on changing
+         * the soundtrack — and mapped the first track anyway.
+         */
+        const inSegments = Boolean(preparedRef.current?.capability?.metadata?.audioMuxedInSegments);
+        // hls.js is already playing the first of them; there is nothing to change.
+        if (inSegments && index === 0 && !isConverted) return;
         setConverting(true);
         try {
           const response = await window.cloudstream.preparePlaybackStream({
             url: streamUrl,
             headers: activeSource?.directHeaders,
+            isM3u8: mimeType === 'application/x-mpegURL',
             provider: providerProvenance?.provider,
             preferredAudioLanguage: language,
-            refresh: true,
-            force: true,
+            refresh: !inSegments,
+            force: !inSegments,
           });
           if (response?.ok && response.playbackUrl) {
             const previous = prepared?.sessionId;
@@ -3415,6 +3426,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
       audioTracks,
       selectAudioTrack,
       streamUrl,
+      mimeType,
       activeSource?.directHeaders,
       providerProvenance?.provider,
     ]
@@ -3427,7 +3439,8 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
         const language = track.language && track.language !== 'und'
           ? track.language.toUpperCase()
           : null;
-        const name = track.title || language || `Track ${track.index + 1}`;
+        // "Hindi", not "HIN": the same words the control bar's trigger uses.
+        const name = track.title || controlLanguageLabel(track.language) || language || `Track ${track.index + 1}`;
         const layout =
           track.channels === 8 ? '7.1'
           : track.channels === 6 ? '5.1'
