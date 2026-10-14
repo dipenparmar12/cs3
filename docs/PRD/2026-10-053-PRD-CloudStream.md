@@ -1874,3 +1874,180 @@ Base the implementation on actual provider responses and the capabilities of the
 Do not solve this problem by simply parsing labels or combining every source returned for a title. Use structured metadata and media inspection where available, conservative inference when necessary, and explicit uncertainty when the source cannot be classified reliably.
 
 The intended outcome is a seamless experience for ordinary users: CS3 identifies valid language and quality options, selects the correct resource, and plays the intended media with minimal manual intervention. Failures caused by the provider or the original hosting resource must remain distinguishable from problems in CS3's own source-selection and playback logic.
+
+
+
+#
+
+[ ] 
+### 124. Reliable Multi-Audio Track Detection, Enumeration, and Selection
+
+**Objective**
+
+Resolve cases where CS3 detects or exposes only the first audio track even though the same media contains multiple language tracks that VLC and other external players can detect and play correctly.
+
+The goal is to make CS3 reliably discover, enumerate, label, and select all audio tracks supported by the active media resource and playback engine. Users should be able to switch languages without manually opening an external player or understanding technical media formats.
+
+Investigate the complete audio-track pipeline before implementing fixes. The issue may originate in media inspection, container demuxing, streaming manifests, player APIs, track metadata normalization, or the synchronization between the player and the application UI.
+
+**Core principle:** Never assume that the first audio track is the only available track. Detect the actual capabilities of the media resource and the active playback engine, then expose every track that can be selected reliably.
+
+#### 124.1 Audit the Existing Audio-Track Pipeline
+
+- Inspect the existing implementations of `playbackSession.ts`, `media/playbackEngine.ts`, `media/decisionEngine.ts`, `media/mediaInspector.ts`, `media/mpvEngine.ts`, `mediaTranscoder.ts`, and the relevant player components and services.
+- Trace how audio-track information flows from the original source through media inspection, playback-engine initialization, track enumeration, UI rendering, and track selection.
+- Identify whether CS3 obtains audio information from the provider response, a streaming manifest, the media container, the native playback API, Shaka Player, MPV, or another inspection utility.
+- Determine why only one track is exposed when VLC can identify several tracks in the same media.
+- Check whether the application reads only the default audio stream, stops enumeration after the first result, filters tracks because their language metadata is missing, or incorrectly caches the initial track list.
+- Inspect whether track information is lost when a source passes through `mediaProxy.ts`, `mediaTranscoder.ts`, or another intermediate processing layer.
+- Verify that audio-track detection is performed against the actual selected resource, rather than an unrelated URL or an earlier source.
+- Reuse existing media inspection and playback abstractions wherever possible. Avoid creating a second, competing audio-track discovery system.
+
+#### 124.2 Detect Audio Tracks Using the Appropriate Media Interface
+
+- Use the active playback engine's supported track-enumeration API as the primary source of information about tracks available during playback.
+- For Chromium-native playback, inspect the available media-track APIs and their browser support. Do not assume that every container exposes all audio tracks through the same HTML media interface.
+- For Shaka Player, inspect its available audio and variant-track information and distinguish audio-only track selection from combined audio/video representation selection.
+- For integrated MPV, use its supported track-list and track-selection interfaces to enumerate available audio streams, including tracks whose language metadata is absent.
+- Where necessary, use existing media inspection utilities, such as FFprobe, to inspect container streams independently of the player.
+- Treat inspection results as supporting evidence, not proof that every discovered track is selectable through the current engine.
+- Do not use provider labels or filename parsing as the only means of detecting embedded audio tracks.
+- Do not infer that a media file contains only one track merely because a browser or player API exposes only one.
+
+#### 124.3 Support Container and Streaming Format Differences
+
+- Investigate audio-track discovery across supported containers and streaming protocols, including MKV, MP4, WebM, HLS, and DASH, where applicable.
+- Determine whether each format exposes its tracks through the active engine, requires manifest inspection, or needs a different playback path.
+- Check whether the native Chromium pipeline is constrained by container demuxing capabilities even when VLC or MPV can read the same file.
+- For formats that the native player cannot enumerate or select correctly, use an appropriate supported engine, such as integrated MPV, when available.
+- Do not assume that changing the UI or parsing a different metadata field can make an unsupported container selectable.
+- Preserve the distinction between embedded audio streams, manifest-level audio groups, and separate provider URLs for different language versions.
+- Handle live streams and dynamically changing manifests according to the capabilities of the relevant engine.
+
+#### 124.4 Normalize and Preserve Track Metadata
+
+For every discovered audio track, retain the information available from the authoritative source, including:
+
+- Track identifier or stream index.
+- Language code and normalized language name.
+- Original track title or label.
+- Default and selected status.
+- Audio codec and channel layout, where available.
+- Accessibility or descriptive-audio indicators, where available.
+- The associated playback engine and resource identity.
+
+Additional requirements:
+
+- Use stable internal identifiers tied to the active resource and engine rather than assuming track number `1` or a language name uniquely identifies a stream.
+- Distinguish zero-based stream indexes, one-based display numbers, engine-specific track IDs, and manifest representation IDs.
+- Do not assume the first track is English, the default track is the preferred language, or missing language metadata means the track is invalid.
+- Normalize common language codes and aliases while preserving the original label for diagnostics.
+- When language information is unavailable, display a neutral label such as `Unknown language` alongside a useful track identifier or codec detail.
+- Do not remove tracks merely because they lack optional metadata.
+- Avoid displaying duplicate tracks when several metadata sources describe the same underlying stream.
+
+#### 124.5 Enumerate Tracks After Playback Initialization
+
+- Ensure track discovery runs at the correct lifecycle stage for each playback engine.
+- Refresh the audio-track list when the media resource has loaded sufficiently for the engine to enumerate its tracks.
+- Subscribe to relevant track-list, manifest, media-information, and playback events supported by the active engine.
+- Account for tracks that become available after the initial load, such as those introduced through a streaming manifest.
+- Update the player UI when the available tracks change.
+- Prevent stale tracks from a previous source or playback session from appearing after navigation, source switching, or fallback.
+- Handle asynchronous enumeration without blocking playback unnecessarily.
+- Avoid repeated probing or event subscriptions that generate duplicate tracks or cause performance issues.
+- If initial enumeration returns only one track, use additional inspection or an appropriate playback-engine capability check when evidence suggests that more tracks may exist.
+
+#### 124.6 Expose Every Selectable Track in the Player
+
+- Populate the audio-language selector from the actual tracks available to the active engine.
+- Show all selectable tracks, not only the default or first audio stream.
+- Use readable language names and concise labels, with codec, channel, or track-number details available when they help distinguish otherwise identical entries.
+- Indicate the currently active track accurately.
+- Allow users to switch tracks directly from the player without opening external applications.
+- Do not show a nonfunctional selector when only one track is available and no meaningful selection action exists.
+- When several tracks are detected but cannot be switched using the current engine, do not falsely present them as selectable. Use a compatible playback path or explain the limitation.
+- Preserve the existing compact player design and avoid exposing raw stream metadata unnecessarily.
+
+#### 124.7 Reliable Audio-Track Switching
+
+- Route selection through the active engine's supported audio-track selection API.
+- Validate the selected track identifier against the current resource and engine before applying the change.
+- Update the selected state only when the engine confirms the change or provides reliable evidence that the requested track became active.
+- If a switch fails, preserve the last known valid selection and provide useful diagnostic information.
+- Avoid restarting playback when the engine can switch tracks in place.
+- If switching requires reinitializing the resource or changing engines, preserve playback position where practical.
+- Prevent track selections from one resource from being applied to another resource whose track identifiers differ.
+- Ensure audio-track switching does not accidentally change subtitle selection, video quality, or the selected media identity.
+
+#### 124.8 Intelligent Engine Selection and Fallback
+
+- Extend the existing playback decision logic to consider audio-track requirements alongside container, codec, resolution, and streaming-protocol compatibility.
+- Prefer the native player when it supports the required media and track-selection behavior.
+- If native playback can play the video but cannot expose or select its embedded audio tracks reliably, consider integrated MPV when available and compatible.
+- If integrated MPV is unavailable or unsuitable, consider other supported external players according to the existing fallback policy.
+- Distinguish unsupported track enumeration from an inaccessible or invalid source.
+- Do not launch another player merely because language metadata is missing if the current engine can still play and select the stream correctly.
+- Preserve the original resource URL, required request headers, authentication context, and relevant playback metadata when switching engines.
+- Keep fallback decisions consistent with the existing playback architecture rather than introducing a separate audio-specific fallback chain.
+
+#### 124.9 Audio Track Detection Through Proxies and Transcoding
+
+- Investigate whether media proxying, transmuxing, transcoding, or other processing removes audio tracks or changes their identifiers.
+- Verify the audio streams before and after processing when diagnosing suspected track loss.
+- Ensure any processing pipeline preserves all required audio streams when the chosen format and conversion settings support doing so.
+- Avoid transcoding a multi-track source into a single-track output unless explicitly required by the selected playback configuration.
+- Where transcoding is necessary, define how the desired audio track is selected and whether the output should retain additional tracks.
+- Preserve track-language metadata where possible when remuxing or transcoding media.
+- Distinguish a source that genuinely contains one audio stream from a processed resource that has lost other streams.
+- Avoid unnecessary transcoding when a compatible playback engine can handle the original resource directly.
+
+#### 124.10 Audio-Track Diagnostics
+
+- Add structured diagnostic information for discovered stream counts, track identifiers, language metadata, active engine, selected track, and track-switching results.
+- Make it possible to compare the track list reported by media inspection tools with the list exposed by the active playback engine.
+- Record whether a track was detected but unavailable for selection, filtered by application logic, or lost during media processing.
+- Keep diagnostics available through the existing developer or advanced troubleshooting interface.
+- Do not expose authorization headers, cookies, private tokens, or sensitive provider information in logs.
+- Provide actionable error information when a requested track cannot be selected.
+- Avoid logging the entire media stream or excessively verbose polling output during normal playback.
+
+#### 124.11 Testing and Regression Coverage
+
+Create a test matrix using representative media samples and streams:
+
+- MKV files with multiple audio languages.
+- MP4 files with multiple audio streams.
+- HLS streams with multiple audio groups.
+- DASH streams with multiple audio representations or language options.
+- Files with multiple tracks but missing language metadata.
+- Files with multiple tracks using the same language.
+- Files with commentary, descriptive audio, or different channel layouts.
+- Sources that require custom HTTP headers or authentication.
+- Sources played directly and through the application's proxy or processing pipeline.
+- Sources supported by VLC or MPV but not fully supported by the native player.
+- Sources that expose tracks only after the manifest or media information has loaded.
+- Source changes, playback recovery, and engine fallback while multiple tracks are available.
+
+For each case, verify that CS3 discovers the expected tracks, displays accurate labels, selects the requested track, and preserves playback state. Compare results against a trusted inspection tool such as FFprobe and the behavior of VLC or MPV.
+
+#### 124.12 Acceptance Criteria
+
+- CS3 no longer assumes that audio track 1 is the only available track.
+- Multi-track media exposes every track that can be selected through the active playback engine.
+- Missing language metadata does not cause valid audio streams to be discarded.
+- Track identifiers remain correct across resource changes and playback-engine transitions.
+- Audio-language selection applies the requested track and updates the UI accurately.
+- Native playback limitations are distinguished from missing metadata and source failures.
+- When necessary, the existing MPV or external-player fallback can play media that the native engine cannot handle correctly.
+- Proxying and transcoding do not silently discard audio tracks that the selected workflow is expected to preserve.
+- Audio-track detection and selection remain responsive and do not introduce duplicate entries, stale UI state, or unnecessary playback restarts.
+- Existing subtitle selection, resolution controls, source switching, and playback recovery continue to work correctly.
+
+#### 124.13 Implementation Principle
+
+Use the current source code and actual playback-engine capabilities as the basis for all changes. First identify where tracks disappear, then correct the relevant detection, normalization, lifecycle, or engine-selection logic.
+
+Do not promise that every audio format or track can be played through every engine. Instead, make CS3 accurately detect the available tracks, expose every supported selection, and choose a compatible playback path when the native engine cannot provide the required functionality.
+
+The intended outcome is that users can play supported multi-language media and switch between its audio tracks seamlessly, with minimal technical knowledge and without needing to open VLC or another external player just to access languages that the original media already contains.
