@@ -1078,51 +1078,38 @@ export class MediaInspector {
     extraArgs: string[] = []
   ): Promise<{ ok: boolean; rawOutput: string | null; error?: string; timedOut: boolean; parseMs: number }> {
     const parseStart = Date.now();
-    const result = await runTool(
-      ffprobe,
-      [
-        '-v', 'error',
-        '-print_format', 'json',
-        '-show_streams',
-        '-show_entries', 'format=duration,format_name,format_long_name,bit_rate,size',
-        '-probesize', String(probeSize || currentProbeConfig.probeSizeBytes),
-        '-analyzeduration', String(probeSize || currentProbeConfig.probeSizeBytes),
-        ...extraArgs,
-        ...inputOptionsFor(url, transport),
-        url,
-      ],
-      currentProbeConfig.probeTimeoutMs
-    );
+    const argsFor = (sequential: boolean) => [
+      '-v', 'error',
+      '-print_format', 'json',
+      '-show_streams',
+      '-show_entries', 'format=duration,format_name,format_long_name,bit_rate,size',
+      '-probesize', String(probeSize || currentProbeConfig.probeSizeBytes),
+      '-analyzeduration', String(probeSize || currentProbeConfig.probeSizeBytes),
+      ...(sequential ? ['-seekable', '0'] : []),
+      ...extraArgs,
+      ...inputOptionsFor(url, transport),
+      url,
+    ];
+    let result = await runTool(ffprobe, argsFor(false), currentProbeConfig.probeTimeoutMs);
+
+    /**
+     * An origin that ignores Range, read front to back instead.
+     *
+     * Matroska keeps its index at the end, so the demuxer's first move is a seek
+     * there. Against an origin that answers every range with a 200 from byte
+     * zero (googleusercontent's GDFlix links), `MediaProxy` refuses to pass the
+     * wrong bytes off as the tail and answers 416 — correct, and fatal to the
+     * probe. The streams are all described in the header, so a probe that never
+     * seeks loses nothing. Matched on the status ffmpeg prints, never a bare
+     * "Range", which also appears in unrelated "out of range" errors.
+     */
+    if (!result.ok && !result.timedOut && /\b416\b/.test(result.stderr ?? '')) {
+      const retry = await runTool(ffprobe, argsFor(true), currentProbeConfig.probeTimeoutMs);
+      if (retry.ok) result = retry;
+    }
     const parseMs = Date.now() - parseStart;
 
     if (!result.ok) {
-      if (result.stderr && (result.stderr.includes('416') || result.stderr.includes('Range'))) {
-        const retryResult = await runTool(
-          ffprobe,
-          [
-            '-v', 'error',
-            '-print_format', 'json',
-            '-show_streams',
-            '-show_entries', 'format=duration,format_name,format_long_name,bit_rate,size',
-            '-probesize', String(probeSize || currentProbeConfig.probeSizeBytes),
-            '-analyzeduration', String(probeSize || currentProbeConfig.probeSizeBytes),
-            '-seekable', '0',
-            ...extraArgs,
-            ...inputOptionsFor(url, transport),
-            url,
-          ],
-          currentProbeConfig.probeTimeoutMs
-        );
-        if (retryResult.ok) {
-          return {
-            ok: true,
-            rawOutput: retryResult.stdout,
-            timedOut: false,
-            parseMs: Date.now() - parseStart,
-          };
-        }
-      }
-
       return {
         ok: false,
         rawOutput: null,

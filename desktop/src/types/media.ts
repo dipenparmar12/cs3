@@ -375,6 +375,12 @@ export interface PlaybackStreamRequest {
   /** Attributed in telemetry; the provider is what a failure belongs to. */
   provider?: string;
   preferredAudioLanguage?: string;
+  /**
+   * The source declared it needs a full player (`Castle TV (Use VLC)`); see
+   * `src/utils/enginePreference.ts`. Routes to mpv when it is available and
+   * allowed, exactly like a forced retry — never for DRM.
+   */
+  preferNativeEngine?: boolean;
 }
 
 export interface PlaybackStreamResponse {

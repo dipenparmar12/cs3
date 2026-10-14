@@ -622,6 +622,18 @@ export class MediaProxy {
   }
 
   /**
+   * What the origin behind a loopback stream has shown about Range, if anything.
+   *
+   * `undefined` until a ranged request has been answered — absence of evidence,
+   * which callers must treat as "seekable", the common case.
+   */
+  public rangeSupportFor(loopbackUrl: string): 'yes' | 'no' | undefined {
+    if (!isLoopback(loopbackUrl)) return undefined
+    const token = loopbackUrl.match(/\/stream\/([0-9a-f]{32})/)?.[1]
+    return token ? this.routes.get(token)?.rangeSupport : undefined
+  }
+
+  /**
    * Serves a file from disk over the same loopback origin.
    *
    * A finished download used to be handed to `shell.openPath` — the OS default

@@ -82,6 +82,7 @@ import { OSD_VISIBLE_MS, describeOsd, nextOsd, type OsdAction, type OsdState } f
 import { describeError } from '../utils/errors';
 import { useIsDeveloper } from '../utils/ExperienceModeContext';
 import { findResolutionVariants, extractResolution } from '../utils/resolutionVariants';
+import { asksForExternalPlayer } from '../utils/enginePreference';
 
 interface VideoPlayerProps {
   streamUrl: string;
@@ -562,6 +563,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
       headers: activeSource?.directHeaders,
       isDash: activeSource?.isDash,
       drm: activeSource?.drm,
+      preferNativeEngine: asksForExternalPlayer(activeSource),
     }),
     // Deliberately keyed on the serialised identity rather than the object.
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -3070,6 +3072,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
         // ffprobe to be misdiagnosed as a corrupt file.
         drm: sourceConfig.drm,
         provider: providerProvenance?.provider,
+        preferNativeEngine: sourceConfig.preferNativeEngine,
       });
       if (cancelled || !response) return;
 

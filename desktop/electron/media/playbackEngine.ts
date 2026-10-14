@@ -564,9 +564,13 @@ export class PlaybackEngine {
      * mpv carries its own FFmpeg and the platform's hardware decoders, so
      * whatever bitstream defeated the element is very likely ordinary to it. If
      * it is not available, or the policy is `off`, the re-encode is still there.
+     *
+     * A source that *declared* it needs a full player (`preferNativeEngine`)
+     * takes the same route up front instead of failing in the element first;
+     * without mpv it falls through to the ordinary decision, not a re-encode.
      */
     const forcedToNative =
-      (request.force || (request.provider && /use[ _-]?vlc/i.test(request.provider))) &&
+      (request.force || request.preferNativeEngine) &&
       capability.requiredStrategy !== 'EME_NATIVE' &&
       !capability.requiresEmeDecryption &&
       (() => {
@@ -671,7 +675,9 @@ export class PlaybackEngine {
     const streamUrl = await this.deps.transcoder.createSession(
       capability.resolvedUrl,
       plan,
-      capability.transport
+      capability.transport,
+      // Learned by the probe, which went through the same route.
+      { sequentialInput: this.deps.proxy.rangeSupportFor(capability.resolvedUrl) === 'no' }
     );
     if (!streamUrl) {
       this.record(request, capability, strategy, startedAt, {

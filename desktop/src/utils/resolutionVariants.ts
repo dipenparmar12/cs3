@@ -1,125 +1,147 @@
 import type { TorrentResult } from '../types/torrent.ts';
-import { Resolution } from '../types/torrent.ts';
 import { coreTitle } from './variantGroups.ts';
 
+/**
+ * One rung of the player's Quality menu that is a *different source*.
+ *
+ * Providers such as Castle TV and VegaMovies answer with one link per
+ * resolution rather than one adaptive stream, so the stream itself has a single
+ * level and the menu would otherwise be a static badge. These are the session's
+ * other links that are the same release at another resolution (PRD §99).
+ */
 export interface ResolutionVariant {
   resolution: number;
   label: string;
   source: TorrentResult;
   isCurrent: boolean;
+  /** Every link at this resolution has already failed in this session. */
+  failed: boolean;
+}
+
+/** `1080p`, `720i`, `2160p` — the number only counts with its scan letter. */
+const SCAN_TOKEN = /(?<![\p{L}\p{N}])(2160|1440|1080|720|480|360|240)[pi](?![\p{L}\p{N}])/giu;
+/** Names a resolution on its own. Bare `HD`/`SD` do not: "HD Rip", "Full HD Audio". */
+const NAMED: Array<[RegExp, number]> = [
+  [/(?<![\p{L}\p{N}])(?:4k|uhd)(?![\p{L}\p{N}])/iu, 2160],
+  [/(?<![\p{L}\p{N}])(?:qhd)(?![\p{L}\p{N}])/iu, 1440],
+  [/(?<![\p{L}\p{N}])(?:fhd|full[ ._-]?hd)(?![\p{L}\p{N}])/iu, 1080],
+];
+/** HLS ladders put the rung in a path segment: `/hls_mps/<id>/720/index.m3u8`. */
+const PATH_SEGMENT = /\/(2160|1440|1080|720|480|360)\//;
+
+/** Every resolution a piece of text states, explicitly. */
+function statedIn(text: string): Set<number> {
+  const found = new Set<number>();
+  for (const match of text.matchAll(SCAN_TOKEN)) found.add(Number(match[1]));
+  for (const [pattern, value] of NAMED) if (pattern.test(text)) found.add(value);
+  return found;
 }
 
 /**
- * Extracts a numeric vertical resolution from parsed metadata, title, or URL.
- * Returns 0 if unknown or unreliable (PRD §99.1).
+ * The vertical resolution a source can be *shown* to have, or 0.
+ *
+ * Evidence in order of trust (PRD §99.1): what the provider declared, then the
+ * link's own name, then its address. A name stating two resolutions
+ * ("720p & 1080p pack") is a conflict and confirms nothing; so is a bare number,
+ * which in a title is as likely a year (`1920`) or an id. Nothing is invented.
  */
 export function extractResolution(source: TorrentResult): number {
-  if (source.parsed?.resolution && source.parsed.resolution > 0) {
-    return source.parsed.resolution;
-  }
-  const text = `${source.title} ${source.directUrl ?? ''}`;
-  if (/\b(?:2160p?|4k|uhd)\b/i.test(text)) return Resolution.UHD_4K;
-  if (/\b(?:1440p?|qhd)\b/i.test(text)) return Resolution.QHD;
-  if (/\b(?:1080[pi]?|fhd)\b/i.test(text)) return Resolution.FHD;
-  if (/\b(?:720p?|hd)\b/i.test(text)) return Resolution.HD;
-  if (/\b(?:480[pi]?|sd)\b/i.test(text)) return Resolution.SD;
-  if (/\b(?:360p?)\b/i.test(text)) return Resolution.LD;
-  if (/\b(?:240p?)\b/i.test(text)) return 240;
-  return 0;
+  const declared = source.parsed?.resolution ?? 0;
+  if (declared > 0) return declared;
+
+  const fromTitle = statedIn(source.title ?? '');
+  if (fromTitle.size === 1) return [...fromTitle][0];
+  if (fromTitle.size > 1) return 0;
+
+  const url = (source.directUrl ?? '').split(/[?#]/)[0];
+  const fromUrl = statedIn(url);
+  if (fromUrl.size === 1) return [...fromUrl][0];
+  if (fromUrl.size > 1) return 0;
+  const segment = url.match(PATH_SEGMENT);
+  return segment ? Number(segment[1]) : 0;
 }
 
-/** Formats numeric resolution into a familiar label: 2160 -> '4K', 1080 -> '1080p', etc. */
+/** 2160 -> '4K', 1080 -> '1080p'. */
 export function formatResolutionLabel(resolution: number): string {
-  if (resolution >= 2160) return '4K';
-  if (resolution === 1440) return '1440p';
-  if (resolution === 1080) return '1080p';
-  if (resolution === 720) return '720p';
-  if (resolution === 480) return '480p';
-  if (resolution === 360) return '360p';
-  if (resolution === 240) return '240p';
-  return `${resolution}p`;
+  return resolution >= 2160 ? '4K' : `${resolution}p`;
 }
+
+const lower = (value: string | undefined) => (value ?? '').toLowerCase().trim();
 
 /**
- * Checks whether two sources represent the same underlying release/media
- * differing only in resolution or quality variant (PRD §99.1 & §99.2).
+ * Whether two links are the same release at (possibly) different resolutions.
+ *
+ * Conservative on every axis PRD §99.2 lists, because a wrong "yes" swaps the
+ * film for another one while the menu says only the quality changed: same
+ * provider (never across providers, however similar the title), same extractor
+ * when both name one, same episode, same title once resolution and file
+ * decorations are stripped, and languages that overlap where both declare any.
  */
 export function areResolutionSiblings(a: TorrentResult, b: TorrentResult): boolean {
   if (a === b) return true;
 
-  // 1. Provider provenance must match
-  const provA = (a.providerName || a.indexerName || '').toLowerCase().trim();
-  const provB = (b.providerName || b.indexerName || '').toLowerCase().trim();
-  if (!provA || !provB || provA !== provB) return false;
+  const providerA = lower(a.providerName || a.indexerName);
+  const providerB = lower(b.providerName || b.indexerName);
+  if (!providerA || providerA !== providerB) return false;
 
-  // 2. Extractor / host match if present
-  if (a.indexerName && b.indexerName && a.providerName && b.providerName) {
-    if (a.indexerName.toLowerCase().trim() !== b.indexerName.toLowerCase().trim()) {
-      return false;
-    }
-  }
+  if (a.providerName && b.providerName && lower(a.indexerName) !== lower(b.indexerName)) return false;
 
-  // 3. Episodic consistency
   if ((a.parsed?.season ?? null) !== (b.parsed?.season ?? null)) return false;
   if ((a.parsed?.episode ?? null) !== (b.parsed?.episode ?? null)) return false;
 
-  // 4. Core title comparison (file decorations and resolution tokens stripped)
-  const coreA = a.parsed?.cleanTitle?.toLowerCase().trim() || coreTitle(a.title);
-  const coreB = b.parsed?.cleanTitle?.toLowerCase().trim() || coreTitle(b.title);
-  if (!coreA || !coreB || coreA !== coreB) return false;
+  const coreA = lower(a.parsed?.cleanTitle) || coreTitle(a.title);
+  const coreB = lower(b.parsed?.cleanTitle) || coreTitle(b.title);
+  if (!coreA || coreA !== coreB) return false;
 
-  // 5. Language compatibility (if both declare languages and they don't overlap)
-  const langsA = a.parsed?.languages ?? [];
-  const langsB = b.parsed?.languages ?? [];
-  if (langsA.length > 0 && langsB.length > 0) {
-    const hasOverlap = langsA.some((l) => langsB.some((ol) => ol.toLowerCase() === l.toLowerCase()));
-    if (!hasOverlap) return false;
-  }
+  const langsA = (a.parsed?.languages ?? []).map(lower);
+  const langsB = new Set((b.parsed?.languages ?? []).map(lower));
+  if (langsA.length > 0 && langsB.size > 0 && !langsA.some((l) => langsB.has(l))) return false;
 
   return true;
 }
 
 /**
- * Finds all confirmed resolution variants for activeSource from allSources.
- * Returns an array sorted descending by resolution (e.g. 1080p -> 720p -> 480p).
- * Deduplicates by resolution.
+ * The Quality menu's source-switching rungs for the playing source.
+ *
+ * Empty unless there is a real choice: the active source's own resolution must
+ * be known (otherwise no rung can be marked current, and "1080p" might be the
+ * very link already playing) and at least one sibling must sit at another
+ * resolution. One link per resolution: the active one for its own rung, then a
+ * sibling that has not failed this session, then the best scored.
  */
 export function findResolutionVariants(
   activeSource: TorrentResult | null | undefined,
-  allSources: TorrentResult[] | undefined
+  allSources: TorrentResult[] | undefined,
+  failedHashes: ReadonlySet<string> = new Set(),
 ): ResolutionVariant[] {
   if (!activeSource || !allSources || allSources.length === 0) return [];
-
   const activeRes = extractResolution(activeSource);
-  const siblings = allSources.filter((s) => areResolutionSiblings(activeSource, s));
+  if (activeRes <= 0) return [];
 
-  // Map resolution -> TorrentResult
-  const byRes = new Map<number, TorrentResult>();
-  // Ensure activeSource is the representative for its resolution
-  if (activeRes > 0) {
-    byRes.set(activeRes, activeSource);
-  }
+  const isFailed = (s: TorrentResult) => Boolean(s.infoHash) && failedHashes.has(s.infoHash);
+  const better = (candidate: TorrentResult, held: TorrentResult) => {
+    if (isFailed(held) !== isFailed(candidate)) return isFailed(held);
+    return (candidate.score ?? 0) > (held.score ?? 0);
+  };
 
-  for (const sibling of siblings) {
+  const byRes = new Map<number, TorrentResult>([[activeRes, activeSource]]);
+  for (const sibling of allSources) {
+    if (sibling === activeSource || sibling.infoHash === activeSource.infoHash) continue;
+    if (!areResolutionSiblings(activeSource, sibling)) continue;
     const res = extractResolution(sibling);
-    if (res <= 0) continue;
-    if (!byRes.has(res)) {
-      byRes.set(res, sibling);
-    } else if (sibling.infoHash === activeSource.infoHash) {
-      byRes.set(res, sibling);
-    } else if (byRes.get(res) !== activeSource && sibling.score > (byRes.get(res)?.score ?? 0)) {
-      byRes.set(res, sibling);
-    }
+    if (res <= 0 || res === activeRes) continue;
+    const held = byRes.get(res);
+    if (!held || better(sibling, held)) byRes.set(res, sibling);
   }
+  if (byRes.size < 2) return [];
 
-  const entries = Array.from(byRes.entries());
-  // Sort descending by resolution
-  entries.sort((a, b) => b[0] - a[0]);
-
-  return entries.map(([res, source]) => ({
-    resolution: res,
-    label: formatResolutionLabel(res),
-    source,
-    isCurrent: source.infoHash === activeSource.infoHash || (activeRes > 0 && res === activeRes),
-  }));
+  return [...byRes.entries()]
+    .sort((a, b) => b[0] - a[0])
+    .map(([resolution, source]) => ({
+      resolution,
+      label: formatResolutionLabel(resolution),
+      source,
+      isCurrent: resolution === activeRes,
+      failed: resolution !== activeRes && isFailed(source),
+    }));
 }

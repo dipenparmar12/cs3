@@ -59,8 +59,45 @@ test('extractResolution parses numeric resolutions correctly', () => {
   assert.equal(extractResolution(createSource({ parsed: { resolution: 0 }, title: 'Movie 4k' })), 2160);
   assert.equal(extractResolution(createSource({ parsed: { resolution: 0 }, title: 'Movie 1080p' })), 1080);
   assert.equal(extractResolution(createSource({ parsed: { resolution: 0 }, title: 'Movie 480p' })), 480);
-  assert.equal(extractResolution(createSource({ parsed: { resolution: 0 }, title: 'Movie SD' })), 480);
+  assert.equal(extractResolution(createSource({ parsed: { resolution: 0 }, title: 'Movie Full HD' })), 1080);
   assert.equal(extractResolution(createSource({ parsed: { resolution: 0 }, title: 'Movie', directUrl: 'https://cdn.example.com/720/index.m3u8' })), 720);
+});
+
+test('extractResolution does not invent a resolution from ambiguous text', () => {
+  const unknown = (title: string, directUrl?: string) =>
+    extractResolution(createSource({ parsed: { resolution: 0 }, title, directUrl }));
+  // Bare HD/SD are release tags, not resolutions.
+  assert.equal(unknown('Movie SD'), 0);
+  assert.equal(unknown('Movie HD Rip'), 0);
+  // A year, or a bare number, is not a resolution.
+  assert.equal(unknown('Nosferatu 1920'), 0);
+  assert.equal(unknown('Server 720'), 0);
+  // A name stating two resolutions confirms neither.
+  assert.equal(unknown('Pack 720p + 1080p'), 0);
+  // An id in a query string is not a rung.
+  assert.equal(unknown('Movie', 'https://cdn.example.com/v.m3u8?id=1080'), 0);
+  // The name outranks the address.
+  assert.equal(unknown('Movie 480p', 'https://cdn.example.com/1080/index.m3u8'), 480);
+});
+
+test('no variants when the playing resolution is unknown or nothing differs', () => {
+  const a = createSource({ infoHash: 'a', providerName: 'P', indexerName: 'X', parsed: { cleanTitle: 'Film', resolution: 0 }, title: 'Film' });
+  const b = createSource({ infoHash: 'b', providerName: 'P', indexerName: 'X', parsed: { cleanTitle: 'Film', resolution: 720 } });
+  assert.deepEqual(findResolutionVariants(a, [a, b]), []);
+  const c = createSource({ infoHash: 'c', providerName: 'P', indexerName: 'X', parsed: { cleanTitle: 'Film', resolution: 720 } });
+  assert.deepEqual(findResolutionVariants(b, [b, c]), []);
+});
+
+test('a sibling that failed this session yields to one that has not', () => {
+  const active = createSource({ infoHash: 'a', providerName: 'P', indexerName: 'X', score: 10, parsed: { cleanTitle: 'Film', resolution: 1080 } });
+  const dead = createSource({ infoHash: 'dead', providerName: 'P', indexerName: 'X', score: 90, parsed: { cleanTitle: 'Film', resolution: 720 } });
+  const live = createSource({ infoHash: 'live', providerName: 'P', indexerName: 'X', score: 20, parsed: { cleanTitle: 'Film', resolution: 720 } });
+  const variants = findResolutionVariants(active, [active, dead, live], new Set(['dead']));
+  assert.equal(variants[1].source.infoHash, 'live');
+  assert.equal(variants[1].failed, false);
+
+  const onlyDead = findResolutionVariants(active, [active, dead], new Set(['dead']));
+  assert.equal(onlyDead[1].failed, true);
 });
 
 test('formatResolutionLabel formats standard resolutions', () => {
