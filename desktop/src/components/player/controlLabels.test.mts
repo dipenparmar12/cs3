@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { controlLanguageLabel, numberedLanguageLabel } from './controlLabels.ts';
+import { controlLanguageLabel, languageLabels } from './controlLabels.ts';
 
 test('player control labels show a language, not subtitle release metadata', () => {
   assert.equal(controlLanguageLabel('', 'English SDH WEB-DL 1080p.srt'), 'English');
@@ -13,18 +13,27 @@ test('player control labels distinguish duplicate language tracks concisely', ()
     { label: 'English commentary' },
     { label: 'Hindi' },
   ];
-  assert.equal(numberedLanguageLabel(undefined, 'English SDH', tracks), 'English 1');
-  assert.equal(numberedLanguageLabel(undefined, 'English commentary', tracks), 'English 2');
-  assert.equal(numberedLanguageLabel(undefined, 'Hindi', tracks), 'Hindi');
+  assert.deepEqual(languageLabels(tracks), ['English 1', 'English 2', 'Hindi']);
+});
+
+test('identically named tracks still get distinct ordinals', () => {
+  // Online results routinely arrive as several files all called "English".
+  assert.deepEqual(languageLabels([{ label: 'English' }, { label: 'English' }, { label: 'English' }]), [
+    'English 1',
+    'English 2',
+    'English 3',
+  ]);
 });
 
 test('player control labels handle single tracks without numbers', () => {
-  const single = [{ label: 'Japanese [Audio]' }];
-  assert.equal(numberedLanguageLabel(undefined, 'Japanese [Audio]', single), 'Japanese');
+  assert.deepEqual(languageLabels([{ label: 'Japanese [Audio]' }]), ['Japanese']);
 });
 
-test('player control labels fallback cleanly for unknown tracks', () => {
+test('player control labels fall back to a position, never a release name', () => {
   assert.equal(controlLanguageLabel('', ''), '');
-  assert.equal(numberedLanguageLabel(undefined, undefined, []), 'Subtitles');
+  assert.deepEqual(languageLabels([{ label: undefined }, { label: 'Some.Very.Long.Release.Name.2023.1080p.WEB-DL.x264-GROUP' }]), [
+    'Track 1',
+    'Track 2',
+  ]);
+  assert.deepEqual(languageLabels([]), []);
 });
-

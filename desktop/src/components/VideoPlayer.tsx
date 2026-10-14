@@ -26,7 +26,7 @@ import {
   variantFromSource,
 } from '../utils/downloadIdentity';
 import { HoverMenu } from './player/HoverMenu';
-import { controlLanguageLabel, numberedLanguageLabel } from './player/controlLabels';
+import { controlLanguageLabel, languageLabels } from './player/controlLabels';
 import { EpisodePanel } from './player/EpisodePanel';
 import { SourcePanel } from './player/SourcePanel';
 import { SourceResolveOverlay } from './player/SourceResolveOverlay';
@@ -81,7 +81,7 @@ import {
 import { OSD_VISIBLE_MS, describeOsd, nextOsd, type OsdAction, type OsdState } from './player/playerOsd';
 import { describeError } from '../utils/errors';
 import { useIsDeveloper } from '../utils/ExperienceModeContext';
-import { findResolutionVariants, extractResolution } from '../utils/resolutionVariants';
+import { findResolutionVariants, extractResolution, formatResolutionLabel } from '../utils/resolutionVariants';
 import { asksForExternalPlayer } from '../utils/enginePreference';
 
 interface VideoPlayerProps {
@@ -510,14 +510,22 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
     );
   }, [sourceSession]);
 
-  const resolutionVariants = useMemo(
-    () => findResolutionVariants(activeSource, sourceSession?.sources),
-    [activeSource, sourceSession?.sources]
+  const failedSourceHashes = useMemo(
+    () =>
+      new Set(
+        Object.entries(sourceSession?.sourceStates ?? {})
+          .filter(([, outcome]) => outcome.state === 'failed')
+          .map(([hash]) => hash)
+      ),
+    [sourceSession?.sourceStates]
   );
-  const activeVariant = useMemo(() => resolutionVariants.find((v) => v.isCurrent), [resolutionVariants]);
+  const resolutionVariants = useMemo(
+    () => findResolutionVariants(activeSource, sourceSession?.sources, failedSourceHashes),
+    [activeSource, sourceSession?.sources, failedSourceHashes]
+  );
   const currentResolution = useMemo(
-    () => activeVariant?.resolution || (activeSource ? extractResolution(activeSource) : 0),
-    [activeVariant, activeSource]
+    () => (activeSource ? extractResolution(activeSource) : 0),
+    [activeSource]
   );
 
   const effectiveInfoHash = useMemo(() => {
@@ -3430,14 +3438,14 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
     return englishFirst;
   }, [subtitles, fetchedSubtitles, prepared?.subtitles]);
 
+  const subtitleLabels = useMemo(
+    () => languageLabels(allSubtitles.map((sub) => ({ label: sub.name }))),
+    [allSubtitles]
+  );
   const subtitleControlLabel = useMemo(() => {
-    const active = activeSubtitle ? allSubtitles.find((sub) => sub.url === activeSubtitle) : undefined;
-    return active
-      ? numberedLanguageLabel(undefined, active.name, allSubtitles.map((sub) => ({ label: sub.name })))
-      : allSubtitles.length > 0
-        ? 'Off'
-        : 'Subtitles';
-  }, [activeSubtitle, allSubtitles]);
+    const index = activeSubtitle ? allSubtitles.findIndex((sub) => sub.url === activeSubtitle) : -1;
+    return index >= 0 ? subtitleLabels[index] : allSubtitles.length > 0 ? 'Off' : 'Subtitles';
+  }, [activeSubtitle, allSubtitles, subtitleLabels]);
 
   const audioControlLabel = useMemo(() => {
     const liveAudio = audioTracks.find((track) => String(track.id) === String(activeAudioTrack));
@@ -3449,8 +3457,8 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
   const qualityControlLabel = useMemo(
     () =>
       qualities.find((item) => item.level === quality)?.label ??
-      (activeVariant ? activeVariant.label : (currentResolution ? `${currentResolution}p` : '')),
-    [activeVariant, currentResolution, qualities, quality]
+      (currentResolution ? formatResolutionLabel(currentResolution) : ''),
+    [currentResolution, qualities, quality]
   );
 
   /**
@@ -5394,13 +5402,9 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
                       label: 'Off',
                       icon: <CaptionsOff size={14} />,
                     },
-                    ...allSubtitles.map((track) => ({
+                    ...allSubtitles.map((track, index) => ({
                       value: track.url,
-                      label: numberedLanguageLabel(
-                        undefined,
-                        track.name,
-                        allSubtitles.map((s) => ({ label: s.name }))
-                      ),
+                      label: subtitleLabels[index],
                       detail: track.detail,
                       icon: <Subtitles size={14} />,
                     })),
@@ -5459,9 +5463,10 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
                 value={currentResolution}
                 onChange={(val) => {
                   const target = resolutionVariants.find((v) => v.resolution === Number(val));
-                  if (target && sourceSession?.onSelectSource) {
-                    sourceSession.onSelectSource(target.source);
-                  }
+                  // Re-picking the playing rung would restart the same link.
+                  if (!target || target.isCurrent) return;
+                  showOsd({ kind: 'text', text: `Quality: ${target.label}` });
+                  sourceSession?.onSelectSource(target.source);
                 }}
                 onOpenChange={onMenuOpenChange}
                 showChevron={true}
@@ -5469,7 +5474,8 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
                 options={resolutionVariants.map((v) => ({
                   value: v.resolution,
                   label: v.label,
-                  detail: v.source.indexerName !== activeSource?.indexerName ? v.source.indexerName : undefined,
+                  // A separate link, so it can have failed where this one played.
+                  detail: v.failed ? 'Failed earlier' : undefined,
                 }))}
               />
             ) : qualityControlLabel ? (

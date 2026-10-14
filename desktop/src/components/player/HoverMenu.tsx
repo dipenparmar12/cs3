@@ -173,14 +173,14 @@ export function HoverMenu<T extends string | number>({
                 }`}
                 onClick={() => commit(option.value)}
               >
-                <div className="hover-menu__option-content">
+                <span className="hover-menu__option-content">
                   {option.icon && <span className="hover-menu__option-icon" aria-hidden="true">{option.icon}</span>}
                   <span className="hover-menu__option-label">{option.label}</span>
-                </div>
-                <div className="hover-menu__option-meta">
+                </span>
+                <span className="hover-menu__option-meta">
                   {option.detail && <span className="hover-menu__detail">{option.detail}</span>}
                   {option.value === value && <Check size={13} className="hover-menu__check" aria-hidden="true" />}
-                </div>
+                </span>
               </button>
             </li>
           ))}
