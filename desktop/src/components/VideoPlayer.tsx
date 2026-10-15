@@ -941,9 +941,20 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
   });
 
   const recordedSourceFor = useRef<string | null>(null);
+  /** Where this stream started playing; ten seconds *from here* is "it played". */
+  const playedFromRef = useRef<{ url: string; at: number } | null>(null);
   useEffect(() => {
-    if (!streamUrl || recordedSourceFor.current === streamUrl) return;
-    if (currentTime < 10) return;
+    if (!streamUrl || recordedSourceFor.current === streamUrl || !hasStartedPlayback) return;
+    /*
+     * Ten seconds of this stream, not a position of ten seconds: resumed at
+     * 2:48, the old test passed on the first frame, and a source that failed a
+     * moment later was remembered as the one that played.
+     */
+    if (playedFromRef.current?.url !== streamUrl) {
+      playedFromRef.current = { url: streamUrl, at: currentTime };
+      return;
+    }
+    if (currentTime - playedFromRef.current.at < 10) return;
     if (!activeSource || !progress?.mediaUrl) return;
 
     recordedSourceFor.current = streamUrl;
@@ -973,6 +984,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
     });
   }, [
     streamUrl,
+    hasStartedPlayback,
     currentTime,
     activeSource,
     progress,
