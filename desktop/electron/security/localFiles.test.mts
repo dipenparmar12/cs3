@@ -20,13 +20,12 @@ test('anything else only from the download folders — never app data or secrets
 });
 
 test('inside means inside: no prefix tricks, no climbing out, case-folded on Windows', () => {
-  assert.equal(path.sep === '\\' ? isInside('D:\\Movies2\\x', 'D:\\Movies', 'win32') : !isInside('/m2/x', '/m'), false);
+  assert.equal(isInside('D:\\Movies2\\x', 'D:\\Movies', 'win32'), false);
+  assert.equal(isInside('/m2/x', '/m', 'linux'), false);
   assert.equal(isInside('/data/movies/../secret', '/data/movies', 'linux'), false);
   assert.equal(isInside('/data/movies/a/b.bin', '/data/movies', 'linux'), true);
-  if (path.sep === '\\') {
-    assert.equal(isInside('d:\\MOVIES\\x.bin', 'D:\\Movies', 'win32'), true);
-    assert.equal(W.isAbsolute('D:\\'), true);
-  }
+  assert.equal(isInside('d:\\MOVIES\\x.bin', 'D:\\Movies', 'win32'), true);
+  assert.equal(W.isAbsolute('D:\\'), true);
 });
 
 test('null bytes are refused', () => {

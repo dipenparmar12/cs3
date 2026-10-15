@@ -24,15 +24,17 @@ const MEDIA_EXTENSIONS = new Set([
   'm3u8', 'm3u', 'mpd',
 ]);
 
-export function isMediaFile(filePath: string): boolean {
-  return MEDIA_EXTENSIONS.has(path.extname(filePath).slice(1).toLowerCase());
+export function isMediaFile(filePath: string, platform: NodeJS.Platform = process.platform): boolean {
+  const p = platform === 'win32' ? path.win32 : path.posix;
+  return MEDIA_EXTENSIONS.has(p.extname(filePath).slice(1).toLowerCase());
 }
 
 /** `child` is `dir` or inside it — by path segments, never a string prefix. */
 export function isInside(child: string, dir: string, platform: NodeJS.Platform = process.platform): boolean {
+  const p = platform === 'win32' ? path.win32 : path.posix;
   const fold = (value: string) => (platform === 'win32' ? value.toLowerCase() : value);
-  const relative = path.relative(fold(dir), fold(child));
-  return relative === '' || (!relative.startsWith('..') && !path.isAbsolute(relative));
+  const relative = p.relative(fold(dir), fold(child));
+  return relative === '' || (!relative.startsWith('..') && !p.isAbsolute(relative));
 }
 
 /**
@@ -45,6 +47,6 @@ export function mayServeLocalFile(
   platform: NodeJS.Platform = process.platform
 ): boolean {
   if (!realPath || realPath.includes('\0')) return false;
-  if (isMediaFile(realPath)) return true;
+  if (isMediaFile(realPath, platform)) return true;
   return downloadDirs.some((dir) => Boolean(dir) && isInside(realPath, dir, platform));
 }
