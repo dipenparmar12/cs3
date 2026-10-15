@@ -27,9 +27,14 @@ export const DeleteDownloadDialog: React.FC<{
   count?: number;
   /** True when a finished file exists — deleting then really does destroy something. */
   hasFile: boolean;
+  /**
+   * How many of these are still transferring. Removing one also cancels it —
+   * a third thing, distinct from both choices below, so it is said up front.
+   */
+  activeCount?: number;
   onConfirm: (deleteFile: boolean, remember: boolean) => void;
   onCancel: () => void;
-}> = ({ title, count = 1, hasFile, onConfirm, onCancel }) => {
+}> = ({ title, count = 1, hasFile, activeCount = 0, onConfirm, onCancel }) => {
   const [remember, setRemember] = useState(false);
 
   // Escape cancels (the safe half of a destructive choice) — the shared Dialog
@@ -38,6 +43,14 @@ export const DeleteDownloadDialog: React.FC<{
 
   return (
     <Dialog title={`Remove ${label}?`} size="sm" onClose={onCancel} className="delete-download">
+        {activeCount > 0 && (
+          <p className="delete-download__note">
+            <AlertTriangle size={13} />
+            {activeCount === count
+              ? `${count === 1 ? 'It is' : 'They are'} still downloading — removing cancels the transfer.`
+              : `${activeCount} of these ${activeCount === 1 ? 'is' : 'are'} still downloading — removing cancels ${activeCount === 1 ? 'it' : 'them'}.`}
+          </p>
+        )}
         <div className="delete-download__choices">
           <button
             type="button"

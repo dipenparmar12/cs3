@@ -190,8 +190,14 @@ export interface SystemRuntimeStatus {
  * died on it in `load()`), and the shim gains `android.webkit.*`, the layouts,
  * `EditText`/`Editable`, `GradientDrawable`, `RippleDrawable` and
  * `ColorStateList`: measured 463 of 468 installed archives loading, from 457.
+ *
+ * Generation 17: `Activity.isFinishing()`/`isDestroyed()` answer `true` instead
+ * of refusing. A donation prompt bundled in several extensions asks before
+ * showing a dialog, and the refusal failed search for AnimePahe, AniDB, Comix,
+ * CimaLight, Zinkmovies, CinemaCity, XDMovies and TwoDHive (logs 2026-10-14). A
+ * provisioned copy still carries the throwing shim.
  */
-const RUNTIME_GENERATION = 16;
+const RUNTIME_GENERATION = 17;
 
 /** Records which build the app-managed copy was taken from. */
 interface RuntimeStamp {

@@ -4,7 +4,7 @@ import { aria2Mirrors, extraSearchDirs, installHint, ytDlpMirrors } from './plat
 import path from 'path';
 import { app } from 'electron';
 import child_process from 'child_process';
-import { FastChunkDownloader, type DownloadProgress } from './fastDownloader';
+import { FastChunkDownloader, type DownloadMirror, type DownloadProgress } from './fastDownloader';
 import { fetchJson } from './torrent/http';
 import { formatSetupSize } from '../src/utils/format.ts';
 
@@ -20,8 +20,7 @@ const MIRRORS_FFMPEG = [
   'https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-essentials.zip',
   // 2. Official GitHub Release upstream
   'https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-master-latest-win64-gpl.zip',
-  // 3. Global CDN proxy fallback
-  'https://ghproxy.net/https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-master-latest-win64-gpl.zip',
+  // (No ghproxy.net copy: "latest" has no digest to verify a mirror against — SEC-03.)
   // 4. Gyan Codex GitHub mirror
   'https://github.com/GyanD/codexffmpeg/releases/download/7.1/ffmpeg-7.1-essentials_build.zip',
 ];
@@ -246,10 +245,15 @@ export class BinaryDownloader {
       /* ignore */
     }
 
-    // Try Windows native tar.exe first (ultra fast & reliable)
+    /*
+     * Arguments, never a command string (audit SEC-04, CWE-78): the paths come
+     * from the user profile, and on macOS/Linux `unzip "…"` ran through
+     * /bin/sh, where a `$(…)` or backtick in the path is executed. PowerShell
+     * reads the paths from its environment, so they are never parsed as script.
+     */
     if (process.platform === 'win32') {
       try {
-        child_process.execSync(`tar.exe -xf "${zipPath}" -C "${destinationDir}"`, {
+        child_process.execFileSync('tar.exe', ['-xf', zipPath, '-C', destinationDir], {
           windowsHide: true,
           timeout: 45000,
           stdio: 'pipe',
@@ -258,11 +262,20 @@ export class BinaryDownloader {
       } catch {
         // Fall back to PowerShell Expand-Archive
         try {
-          const escapedZip = zipPath.replace(/'/g, "''");
-          const escapedDest = destinationDir.replace(/'/g, "''");
-          child_process.execSync(
-            `powershell -NoProfile -Command "Expand-Archive -LiteralPath '${escapedZip}' -DestinationPath '${escapedDest}' -Force"`,
-            { windowsHide: true, timeout: 60000, stdio: 'pipe' }
+          child_process.execFileSync(
+            'powershell',
+            [
+              '-NoProfile',
+              '-NonInteractive',
+              '-Command',
+              'Expand-Archive -LiteralPath $env:CS3_ARCHIVE -DestinationPath $env:CS3_DESTINATION -Force',
+            ],
+            {
+              windowsHide: true,
+              timeout: 60000,
+              stdio: 'pipe',
+              env: { ...process.env, CS3_ARCHIVE: zipPath, CS3_DESTINATION: destinationDir },
+            }
           );
           return true;
         } catch (psErr) {
@@ -271,8 +284,7 @@ export class BinaryDownloader {
       }
     } else {
       try {
-        child_process.execSync(`unzip -o "${zipPath}" -d "${destinationDir}"`, {
-          windowsHide: true,
+        child_process.execFileSync('unzip', ['-o', zipPath, '-d', destinationDir], {
           timeout: 45000,
           stdio: 'pipe',
         });
@@ -437,10 +449,7 @@ export class BinaryDownloader {
         try {
           if (onStatus) onStatus('Downloading aria2c direct binary...', 50);
           await FastChunkDownloader.download({
-            mirrors: [
-              'https://raw.githubusercontent.com/dipenparmar12/cs3/main/bin/aria2c.exe',
-              'https://ghproxy.net/https://raw.githubusercontent.com/dipenparmar12/cs3/main/bin/aria2c.exe',
-            ],
+            mirrors: ['https://raw.githubusercontent.com/dipenparmar12/cs3/main/bin/aria2c.exe'],
             targetPath: targetBinaryPath,
             maxConnections: 2,
             onProgress: (_p: DownloadProgress, statusText: string) => {
@@ -545,9 +554,8 @@ export class BinaryDownloader {
    */
   private static readonly MPV_RELEASE_API =
     'https://api.github.com/repos/zhongfly/mpv-winbuild/releases/latest';
-  private static readonly MIRRORS_MPV_FALLBACK = [
+  private static readonly MIRRORS_MPV_FALLBACK: DownloadMirror[] = [
     'https://github.com/zhongfly/mpv-winbuild/releases/download/2026-08-18-e7191f2a65/mpv-x86_64-20260818-git-e7191f2a65.7z',
-    'https://ghproxy.net/https://github.com/zhongfly/mpv-winbuild/releases/download/2026-08-18-e7191f2a65/mpv-x86_64-20260818-git-e7191f2a65.7z',
   ];
 
   private inFlightMpv: Promise<boolean> | null = null;
@@ -560,13 +568,13 @@ export class BinaryDownloader {
    * process dies before it can say why. A few percent of decode throughput is
    * not worth an app that will not start on a 2013 laptop.
    */
-  private async resolveMpvMirrors(): Promise<string[]> {
+  private async resolveMpvMirrors(): Promise<DownloadMirror[]> {
     try {
       // Through the shared client so this honours the DNS-over-HTTPS setting
       // and the system proxy; a release feed the network cannot reach is
       // exactly the case the fallback mirrors below exist for.
       const release = await fetchJson<{
-        assets?: Array<{ name?: string; browser_download_url?: string }>;
+        assets?: Array<{ name?: string; browser_download_url?: string; digest?: string | null }>;
       }>(BinaryDownloader.MPV_RELEASE_API, {
         headers: { Accept: 'application/vnd.github+json', 'User-Agent': 'cloudstream-desktop' },
         timeoutMs: 10_000,
@@ -576,7 +584,14 @@ export class BinaryDownloader {
           /^mpv-x86_64-\d/.test(candidate.name ?? '') && !/debug|dev/.test(candidate.name ?? '')
       );
       if (asset?.browser_download_url) {
-        return [asset.browser_download_url, `https://ghproxy.net/${asset.browser_download_url}`];
+        /*
+         * GitHub states each new asset's SHA-256 in the release feed. With it,
+         * the download is verified whichever mirror serves it, and the
+         * ghproxy.net copy becomes usable; without it, GitHub only (SEC-03).
+         */
+        const sha256 = /^sha256:([0-9a-f]{64})$/i.exec(asset.digest ?? '')?.[1];
+        const url = asset.browser_download_url;
+        return sha256 ? [{ url, sha256 }, { url: `https://ghproxy.net/${url}`, sha256 }] : [url];
       }
     } catch {
       /* the fallbacks below are exactly for this */

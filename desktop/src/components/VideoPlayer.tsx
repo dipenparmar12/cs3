@@ -7,7 +7,7 @@ import Hls from 'hls.js';
 import { NativeEngineStage, trackLabel } from './player/NativeEngineStage';
 import {
   Play, Pause, Volume2, VolumeX, Maximize, Minimize, ArrowLeft,
-  Loader2, Users, Gauge, Subtitles, AlertTriangle, RotateCcw, RotateCw,
+  Loader2, Users, Gauge, Subtitles, CaptionsOff, AlertTriangle, RotateCcw, RotateCw,
   SkipBack, SkipForward, List, Settings2, MonitorPlay, Radio,
   GripHorizontal, Maximize2, Minimize2, X,
   Search, Info, PictureInPicture2, BookmarkCheck, BookmarkPlus,
@@ -26,6 +26,7 @@ import {
   variantFromSource,
 } from '../utils/downloadIdentity';
 import { HoverMenu } from './player/HoverMenu';
+import { controlLanguageLabel, languageLabels, languageSetLabel } from './player/controlLabels';
 import { EpisodePanel } from './player/EpisodePanel';
 import { SourcePanel } from './player/SourcePanel';
 import { SourceResolveOverlay } from './player/SourceResolveOverlay';
@@ -37,7 +38,7 @@ import { attachShaka, type ShakaAttachment } from '../utils/shakaSession';
 import type { SeriesContext } from './player/seriesContext';
 import type { PlaybackPreferences, StoredSource } from '../types/library';
 import { matchesRelease } from '../../electron/cs3/playedSource';
-import { looksLikeWrongMedia, wrongMediaReason } from '../utils/mediaSanity';
+import { judgeableDuration, looksLikeWrongMedia, wrongMediaReason } from '../utils/mediaSanity';
 import { torrentResultToStoredSource } from '../../electron/cs3/libraryStore';
 import { isPlaceholderOrigin } from '../utils/originName';
 import { canonicalKey } from '../../electron/cs3/libraryStore';
@@ -80,6 +81,9 @@ import {
 import { OSD_VISIBLE_MS, describeOsd, nextOsd, type OsdAction, type OsdState } from './player/playerOsd';
 import { describeError } from '../utils/errors';
 import { useIsDeveloper } from '../utils/ExperienceModeContext';
+import { findResolutionVariants, findLanguageVariants, extractResolution, formatResolutionLabel } from '../utils/resolutionVariants';
+import { isWindowFullScreen, setWindowFullScreen, useWindowFullScreen } from '../utils/useWindowFullScreen';
+import { recordedAudioChoice, wantedAudioLanguage as pickAudioLanguage } from '../utils/audioPreference';
 
 interface VideoPlayerProps {
   streamUrl: string;
@@ -334,6 +338,17 @@ function atTime(url: string, seconds: number): string {
   return seconds > 0 ? `${base}?t=${Math.floor(seconds)}` : base;
 }
 
+/**
+ * Where a conversion begins: the position carried across a switch, else the
+ * resume point — and, as on every other path, never inside the last ten
+ * seconds, where resuming would only end the film.
+ */
+function conversionStart(carried: number | undefined, resumeAt: number | undefined, length: number | undefined): number {
+  const at = carried ?? resumeAt ?? 0;
+  if (!(at > 0)) return 0;
+  return length && at >= length - 10 ? 0 : at;
+}
+
 /** Sentinel for HLS automatic level selection, which hls.js represents as -1. */
 const AUTO_QUALITY = -1;
 
@@ -453,7 +468,18 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
   const [backgroundPlayback, setBackgroundPlayback] = useState<BackgroundPlayback>('continue');
   const [alwaysOnTop, setAlwaysOnTop] = useState(false);
 
-  const [isFullscreen, setIsFullscreen] = useState(false);
+  /**
+   * Fullscreen is the window's (see `useWindowFullScreen`), never the HTML API
+   * on this container — the two stacked, and a player minimised while
+   * HTML-fullscreen shrank to a mini window on a black screen.
+   *
+   * `fullscreenOwnedRef` records whether *this player* turned it on. Going mini,
+   * hiding or closing gives back only what the player took: a viewer who was
+   * already in F11 mode stays there, one who pressed the player's button gets
+   * their windowed app back.
+   */
+  const [isFullscreen] = useWindowFullScreen();
+  const fullscreenOwnedRef = useRef(false);
   const [aspect, setAspect] = useState<AspectRatioMode>(AspectRatioMode.Fit);
   const [showSpeedControl, setShowSpeedControl] = useState(showPlaybackSpeedControl ?? false);
   const [showAspectControl, setShowAspectControl] = useState(showAspectRatioControl ?? false);
@@ -506,6 +532,28 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
       null
     );
   }, [sourceSession]);
+
+  const failedSourceHashes = useMemo(
+    () =>
+      new Set(
+        Object.entries(sourceSession?.sourceStates ?? {})
+          .filter(([, outcome]) => outcome.state === 'failed')
+          .map(([hash]) => hash)
+      ),
+    [sourceSession?.sourceStates]
+  );
+  const resolutionVariants = useMemo(
+    () => findResolutionVariants(activeSource, sourceSession?.sources, failedSourceHashes),
+    [activeSource, sourceSession?.sources, failedSourceHashes]
+  );
+  const languageVariants = useMemo(
+    () => findLanguageVariants(activeSource, sourceSession?.sources, failedSourceHashes),
+    [activeSource, sourceSession?.sources, failedSourceHashes]
+  );
+  const currentResolution = useMemo(
+    () => (activeSource ? extractResolution(activeSource) : 0),
+    [activeSource]
+  );
 
   const effectiveInfoHash = useMemo(() => {
     if (sourceSession) {
@@ -785,13 +833,15 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
   } | null>(null);
   const [externalSnapshot, setExternalSnapshot] = useState<ExternalPlaybackSnapshot | null>(null);
 
+  const externalPlayerId = externalControl?.playerId;
+  const externalCapability = externalControl?.capability;
   useEffect(() => {
-    if (!externalControl) return;
+    if (!externalPlayerId) return;
     const dispose = window.cloudstream?.onExternalUpdate((snapshot) => {
       setExternalSnapshot(snapshot);
       // A capability that downgrades mid-session is reported, not hidden: VLC
       // without its HTTP module plays perfectly and answers nothing.
-      if (snapshot.capability !== externalControl.capability) {
+      if (snapshot.capability !== externalCapability) {
         setExternalControl((current) =>
           current ? { ...current, capability: snapshot.capability } : current
         );
@@ -802,7 +852,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
       }
     });
     return dispose;
-  }, [externalControl?.playerId, externalControl?.capability]);
+  }, [externalPlayerId, externalCapability]);
 
   /**
    * Mirrors the external player's position into the app's own timeline.
@@ -891,9 +941,20 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
   });
 
   const recordedSourceFor = useRef<string | null>(null);
+  /** Where this stream started playing; ten seconds *from here* is "it played". */
+  const playedFromRef = useRef<{ url: string; at: number } | null>(null);
   useEffect(() => {
-    if (!streamUrl || recordedSourceFor.current === streamUrl) return;
-    if (currentTime < 10) return;
+    if (!streamUrl || recordedSourceFor.current === streamUrl || !hasStartedPlayback) return;
+    /*
+     * Ten seconds of this stream, not a position of ten seconds: resumed at
+     * 2:48, the old test passed on the first frame, and a source that failed a
+     * moment later was remembered as the one that played.
+     */
+    if (playedFromRef.current?.url !== streamUrl) {
+      playedFromRef.current = { url: streamUrl, at: currentTime };
+      return;
+    }
+    if (currentTime - playedFromRef.current.at < 10) return;
     if (!activeSource || !progress?.mediaUrl) return;
 
     recordedSourceFor.current = streamUrl;
@@ -923,6 +984,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
     });
   }, [
     streamUrl,
+    hasStartedPlayback,
     currentTime,
     activeSource,
     progress,
@@ -997,14 +1059,26 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
    * duration, so it never delays a working source (`mediaSanity.ts`).
    */
   const sanityCheckedFor = useRef<string | null>(null);
+  /** hls.js says the playlist is live: its duration is a window, not a length. */
+  const hlsLiveRef = useRef(false);
+  /** The stream the element was last given, and the stream whose metadata it has loaded. */
+  const attachedForRef = useRef<string | null>(null);
+  const [metadataFor, setMetadataFor] = useState<string | null>(null);
   useEffect(() => {
     // After this stream has really started: until then `duration` can still be
     // the previous stream's.
     if (!streamUrl || !hasStartedPlayback || sanityCheckedFor.current === streamUrl || duration <= 0) return;
+    const actual = judgeableDuration({
+      reportedSeconds: duration,
+      converted: Boolean(preparedRef.current?.sessionId),
+      sourceSeconds: preparedRef.current?.capability?.metadata?.durationSeconds,
+      isLive: hlsLiveRef.current,
+    });
+    if (actual === undefined) return;
     sanityCheckedFor.current = streamUrl;
     const expected = progress?.expectedDurationSeconds;
-    if (!looksLikeWrongMedia({ actualSeconds: duration, expectedSeconds: expected })) return;
-    const reason = wrongMediaReason(duration, expected!);
+    if (!looksLikeWrongMedia({ actualSeconds: actual, expectedSeconds: expected })) return;
+    const reason = wrongMediaReason(actual, expected!);
     if (sourceSession?.onSourceUnplayable) {
       notify('That source was not the title — trying the next one', 'info');
       sourceSession.onSourceUnplayable(reason);
@@ -1076,7 +1150,15 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
        * the honest response is to say the stream is playing elsewhere rather
        * than to render controls that cannot reach it.
        */
-      const res = await window.cloudstream?.openControlledExternal?.(playerId, streamUrl);
+      /*
+       * The proxy's loopback address for the *original* stream, not the
+       * provider's raw URL: VLC and mpv cannot send the provider's `Referer`
+       * or cookies, and the proxy applies them (PRD §121.8). Not the converted
+       * output either — the external player gets every audio and subtitle
+       * track the file has. The raw URL only when nothing was prepared.
+       */
+      const handoffUrl = preparedRef.current?.capability?.resolvedUrl || streamUrl;
+      const res = await window.cloudstream?.openControlledExternal?.(playerId, handoffUrl);
       if (res?.ok) {
         setExternalControl({ playerId, playerName, capability: res.capability });
         setExtPlayerStatus(
@@ -1180,6 +1262,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
 
   const [audioTracks, setAudioTracks] = useState<AudioTrackInfo[]>([]);
   const [activeAudioTrack, setActiveAudioTrack] = useState<string | number>('default');
+  const detectAudioTracksRef = useRef<(() => void) | null>(null);
 
   /**
    * The prepared stream, and the gate that stops playback racing inspection.
@@ -1387,8 +1470,10 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
    * forced pass does not consult the probe — this runs precisely when the probe
    * has already been wrong about something.
    */
-  const forceTranscodeRef = useRef<(() => void) | null>(null);
+  const forceTranscodeRef = useRef<((options?: { inApp?: boolean }) => void) | null>(null);
   const forcedFor = useRef<string | null>(null);
+  /** The URL "Play in this window" already converted, so a second press is a no-op. */
+  const inAppFor = useRef<string | null>(null);
   /**
    * The one rung every transport steps onto when it gives up.
    *
@@ -1533,6 +1618,8 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
 
     setQualities([]);
     setQuality(AUTO_QUALITY);
+    hlsLiveRef.current = false;
+    attachedForRef.current = streamUrl;
     let hls: Hls | null = null;
     let cancelled = false;
     let clearKey: ClearKeyAttachment | null = null;
@@ -1633,7 +1720,17 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
               detail: level.bitrate ? `${Math.round(level.bitrate / 1000)} kbps` : undefined,
             }))
           );
+          detectAudioTracksRef.current?.();
         });
+
+        hls.on(Hls.Events.LEVEL_LOADED, (_evt, data) => {
+          hlsLiveRef.current = data.details.live;
+        });
+
+        const onHlsAudioChanged = () => detectAudioTracksRef.current?.();
+        hls.on(Hls.Events.AUDIO_TRACKS_UPDATED, onHlsAudioChanged);
+        hls.on(Hls.Events.AUDIO_TRACK_SWITCHED, onHlsAudioChanged);
+        hls.on(Hls.Events.AUDIO_TRACK_LOADED, onHlsAudioChanged);
 
         /**
          * hls.js's failures, finally wired to the ladder the element has had all
@@ -1884,6 +1981,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
 
     setAudioTracks([]);
   }, []);
+  detectAudioTracksRef.current = detectAudioTracks;
 
   const selectAudioTrack = useCallback(
     (trackId: string | number) => {
@@ -2089,6 +2187,16 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
       const dur = probed && probed > 0 ? probed : video.duration;
       setDuration(dur);
       durationRef.current = dur;
+      setMetadataFor(attachedForRef.current);
+
+      const carried = carriedPositionRef.current;
+      if (carried && video.currentSrc !== carried.fromSrc) {
+        setCarriedPosition(null);
+        // The carried position *is* this stream's resume; the session's older
+        // resume point must not land on top of it a render later.
+        resumedRef.current = attachedForRef.current;
+        if (carried.at < dur - 10) video.currentTime = carried.at;
+      }
     };
     const onPlay = () => setIsPlaying(true);
     const onPause = () => {
@@ -2232,18 +2340,90 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
   // Resume from where the last session stopped, once the media knows how long
   // it is. Seeking before metadata loads is silently ignored by the element.
   const resumedRef = useRef<string | null>(null);
+
+  /**
+   * Where the viewer was when they switched quality or language in the player.
+   *
+   * `progress.resumeAt` is fixed when the session starts, so without this a
+   * switch to 720p forty minutes in restarted the film from the session's
+   * opening resume point — or from zero (PRD §123.9). It applies once, to the
+   * next stream only, and takes precedence over the session's resume point.
+   *
+   * Applied where the *new* stream announces itself — the element's
+   * `loadedmetadata` (a different `currentSrc` from the one switched away
+   * from), or mpv's start position — never from an effect, which can run in
+   * the same commit as the switch with the old stream's duration still set.
+   */
+  type CarriedPosition = { at: number; fromUrl: string; fromSrc: string };
+  const [carriedPosition, setCarriedPosition] = useState<CarriedPosition | null>(null);
+  const carriedPositionRef = useRef<CarriedPosition | null>(null);
+  carriedPositionRef.current = carriedPosition;
+  const carriedAt = carriedPosition && carriedPosition.fromUrl !== streamUrl ? carriedPosition.at : undefined;
+  /** Where mpv opens when this stream moved to it mid-play (the forced retry). */
+  const [nativeStartAt, setNativeStartAt] = useState<number | null>(null);
+  useEffect(() => {
+    setNativeStartAt(null);
+  }, [streamUrl]);
+  const nativeStartSeconds = nativeStartAt ?? carriedAt ?? progress?.resumeAt;
+
+  /**
+   * Attaches a re-prepared stream at the position the viewer was at.
+   *
+   * Each engine takes a position its own way: a conversion in its request
+   * (`?t=`), mpv as `startSeconds`, the element as a seek once the new source
+   * has loaded. A `?t=` on anything but a conversion is read by nothing — an
+   * audio switch answered with an hls.js playlist began again from 0:00.
+   */
+  const attachAt = useCallback(
+    (response: PlaybackStreamResponse, at: number) => {
+      if (response.sessionId) {
+        setNativeStartAt(null);
+        setPlaybackOffset(at);
+        setPrepared({ ...response, playbackUrl: atTime(response.playbackUrl, at) });
+        return;
+      }
+      setPlaybackOffset(0);
+      if (response.capability?.requiredStrategy === 'NATIVE_MPV') {
+        setNativeStartAt(at > 0 ? at : null);
+      } else if (at > 5) {
+        // Same stream, new source on the element: `loadedmetadata` seeks to it.
+        setCarriedPosition({ at, fromUrl: streamUrl, fromSrc: videoRef.current?.currentSrc ?? '' });
+      }
+      setPrepared(response);
+    },
+    [streamUrl]
+  );
+  const switchSourceKeepingPosition = useCallback(
+    (source: TorrentResult) => {
+      const at = currentPositionRef.current;
+      setCarriedPosition(
+        at > 5 && streamUrl ? { at, fromUrl: streamUrl, fromSrc: videoRef.current?.currentSrc ?? '' } : null
+      );
+      sourceSession?.onSelectSource(source);
+    },
+    [sourceSession, streamUrl]
+  );
+
   useEffect(() => {
     const video = videoRef.current;
     const resumeAt = progress?.resumeAt;
-    if (!video || !resumeAt || duration <= 0) return;
+    /*
+     * Only on this stream's own metadata. `duration` alone still held the
+     * previous source's length when the session moved on, so this ran once
+     * against the outgoing element, marked the new stream resumed, and the
+     * source that actually played started from 0:00.
+     */
+    if (!video || !resumeAt || duration <= 0 || metadataFor !== streamUrl) return;
     if (resumedRef.current === streamUrl) return;
+    // A switch inside the player carries its own position; see above.
+    if (carriedPositionRef.current) return;
 
     resumedRef.current = streamUrl;
     if (resumeAt < duration - 10) {
       video.currentTime = resumeAt;
       setResumeNotice(resumeAt);
     }
-  }, [progress?.resumeAt, duration, streamUrl]);
+  }, [progress?.resumeAt, duration, metadataFor, streamUrl]);
 
   /**
    * "Resumed at 47:12 · Start over", for a few seconds.
@@ -2354,12 +2534,12 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
   );
 
   useEffect(() => {
-    const at = progress?.resumeAt;
+    const at = nativeStartSeconds;
     if (!isNativeEngine || !hasStartedPlayback || !at || at <= 0) return;
     if (nativeResumeShown.current === streamUrl) return;
     nativeResumeShown.current = streamUrl;
     setResumeNotice(at);
-  }, [isNativeEngine, hasStartedPlayback, progress?.resumeAt, streamUrl]);
+  }, [isNativeEngine, hasStartedPlayback, nativeStartSeconds, streamUrl]);
 
   const startOver = useCallback(() => {
     setResumeNotice(null);
@@ -2429,33 +2609,34 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
     },
   });
 
-  const toggleFullscreen = useCallback(async () => {
-    const container = containerRef.current;
-    if (!container) return;
-    try {
-      if (document.fullscreenElement) {
-        await document.exitFullscreen();
-        setIsFullscreen(false);
-      } else {
-        await container.requestFullscreen();
-        setIsFullscreen(true);
-      }
-    } catch (err) {
-      console.warn('Failed to toggle fullscreen:', err);
-    }
+  const toggleFullscreen = useCallback(() => {
+    // One fullscreen: the button exits it however it was entered (F11 included).
+    const next = !isWindowFullScreen();
+    fullscreenOwnedRef.current = next;
+    setWindowFullScreen(next);
   }, []);
 
   useEffect(() => {
-    const onFullscreenChange = () => {
-      const fs = Boolean(document.fullscreenElement);
-      setIsFullscreen(fs);
-      if (!fs) {
-        setControlsVisible(true);
-      }
-    };
-    document.addEventListener('fullscreenchange', onFullscreenChange);
-    return () => document.removeEventListener('fullscreenchange', onFullscreenChange);
-  }, []);
+    if (!isFullscreen) {
+      // Left by any route — Esc, F11, the menu — so nothing is ours to give back.
+      fullscreenOwnedRef.current = false;
+      setControlsVisible(true);
+    }
+  }, [isFullscreen]);
+
+  // Mini, hidden or gone: give back the fullscreen this player took, and only that.
+  useEffect(() => {
+    if ((mini || hidden) && fullscreenOwnedRef.current) {
+      fullscreenOwnedRef.current = false;
+      setWindowFullScreen(false);
+    }
+  }, [mini, hidden]);
+  useEffect(
+    () => () => {
+      if (fullscreenOwnedRef.current) setWindowFullScreen(false);
+    },
+    []
+  );
 
   /**
    * Volume, mute and speed, remembered across media and across restarts.
@@ -2653,9 +2834,19 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
   /** The source that played this title/episode last time, for the source list's "played before". */
   const [rememberedSource, setRememberedSource] = useState<StoredSource | null>(null);
   const currentTrackChoices = useRef<PlaybackPreferences | null>(null);
+  /**
+   * The audio language picked in this player for this title, if any.
+   *
+   * Outranks everything else for the rest of the title: a source switch, a
+   * resolution change and a retry all re-prepare, and each of them used to
+   * read the stored per-title language instead, putting the viewer back on
+   * the audio they had just switched away from.
+   */
+  const audioChoice = useRef<string | null>(null);
   useEffect(() => {
     titlePreferences.current = playbackPreferences ?? null;
     currentTrackChoices.current = null;
+    audioChoice.current = null;
     setRememberedSource(null);
     if (!title || playbackPreferences) return;
     let cancelled = false;
@@ -2671,6 +2862,14 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
       cancelled = true;
     };
   }, [title, progress?.year, progress?.season, progress?.episode, playbackPreferences]);
+
+  /**
+   * The audio language to ask the engine for: this session's pick, then a
+   * pick stored for this title, then the language the viewer keeps choosing.
+   * The stream's default is what plays only when none of these exists.
+   */
+  const wantedAudioLanguage = (): string | undefined =>
+    pickAudioLanguage(audioChoice.current, titlePreferences.current, preferredAudioLanguage.current);
 
   /** Which row in the list is the release that played last time, if it is there. */
   const rememberedHash = useMemo(() => {
@@ -3014,15 +3213,21 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
 
   // A switch that has landed clears the row spinner; comparing against the
   // session's active hash avoids leaving it spinning when the start failed.
+  const sourceSessionPhase = sourceSession?.phase;
+  const sourceSessionActiveInfoHash = sourceSession?.activeInfoHash;
   useEffect(() => {
-    if (!sourceSession) return;
-    if (sourceSession.phase === 'playing' || sourceSession.phase === 'error') {
+    if (!sourceSessionPhase) return;
+    if (sourceSessionPhase === 'playing' || sourceSessionPhase === 'error') {
       setPendingSourceHash(null);
     }
-  }, [sourceSession?.phase, sourceSession?.activeInfoHash]);
+  }, [sourceSessionPhase, sourceSessionActiveInfoHash]);
 
   const effectiveTime = scrubbingTime !== null ? scrubbingTime : currentTime;
   const progressPercent = duration ? (effectiveTime / duration) * 100 : 0;
+
+  /** Read when a stream is prepared, not a reason to prepare it again. */
+  const resumeAtRef = useRef(progress?.resumeAt);
+  resumeAtRef.current = progress?.resumeAt;
 
   /**
    * Inspects the stream and opens whatever it needs, before anything plays.
@@ -3050,6 +3255,9 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
         // ffprobe to be misdiagnosed as a corrupt file.
         drm: sourceConfig.drm,
         provider: providerProvenance?.provider,
+        // The language the viewer keeps choosing, so the engine plans *that* track
+        // (remuxing it in where the browser cannot pick it) rather than the default.
+        preferredAudioLanguage: wantedAudioLanguage(),
       });
       if (cancelled || !response) return;
 
@@ -3066,16 +3274,51 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
        * not carry it — which is the correct outcome, not a failure.
        */
       const tracks = response.capability?.metadata?.audio ?? [];
-      const wantedAudio = titlePreferences.current?.audioLanguage ?? preferredAudioLanguage.current;
+      const wantedAudio = wantedAudioLanguage();
       const remembered = wantedAudio
         ? tracks.find((track) => track.language === wantedAudio)
         : undefined;
-      const preferred =
-        remembered?.index ?? response.capability?.transformationPlan.selectedAudioIndex ?? -1;
+      /*
+       * Where the engine chose the track itself — it remuxes or converts the
+       * bytes, or hands over a file whose default it confirmed — the menu shows
+       * *that* track. Showing the remembered language regardless was the menu
+       * saying "Hindi" over English audio. Only hls.js renditions and mpv pick
+       * tracks after this, and they keep the remembered one as their target.
+       */
+      const strategy = response.capability?.requiredStrategy;
+      const engineChoseTrack =
+        (strategy !== 'HLS_NATIVE' && strategy !== 'NATIVE_MPV') ||
+        // hls.js plays the first of in-segment languages and cannot be told otherwise.
+        Boolean(response.capability?.metadata?.audioMuxedInSegments);
+      const preferred = engineChoseTrack
+        ? response.capability?.transformationPlan.selectedAudioIndex ?? -1
+        : remembered?.index ?? response.capability?.transformationPlan.selectedAudioIndex ?? -1;
       if (preferred >= 0) setSelectedAudioIndex(preferred);
 
-      setPlaybackOffset(0);
-      setPrepared(response);
+      /*
+       * A conversion begins where the viewer is. Its output has no index, so
+       * nothing can seek into it once attached: the resume effect's
+       * `currentTime = resumeAt` did nothing there, and a resumed episode
+       * started again at 0:00. The position travels in the request instead,
+       * as a seek does — and it is decided here, once, for the resume effect
+       * and the carried position alike.
+       */
+      let startAt = 0;
+      if (response.ok && response.sessionId) {
+        const carried = carriedPositionRef.current;
+        const carriedFrom = carried && carried.fromUrl !== streamUrl ? carried.at : undefined;
+        const resumeFrom = resumedRef.current === streamUrl ? undefined : resumeAtRef.current;
+        startAt = conversionStart(
+          carriedFrom,
+          resumeFrom,
+          response.capability?.metadata?.durationSeconds
+        );
+        resumedRef.current = streamUrl;
+        if (carriedFrom !== undefined) setCarriedPosition(null);
+        else if (startAt > 0) setResumeNotice(startAt);
+      }
+      setPlaybackOffset(startAt);
+      setPrepared(startAt > 0 ? { ...response, playbackUrl: atTime(response.playbackUrl, startAt) } : response);
       if (!response.ok && response.error) setError(response.error);
 
       /**
@@ -3120,13 +3363,26 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
    * nothing in them to match on.
    */
   useEffect(() => {
-    forceTranscodeRef.current = () => {
-      if (forcedFor.current === streamUrl) return;
-      forcedFor.current = streamUrl;
+    forceTranscodeRef.current = (options?: { inApp?: boolean }) => {
+      /*
+       * `inApp` is the native engine's "Play in this window": convert for the
+       * built-in player and never route back to mpv. It used to call this same
+       * forced retry, which (a) returned at once because the forced retry had
+       * already run for this URL — usually it is how mpv was reached — and
+       * (b) would have sent the stream straight back to mpv anyway. Allowed
+       * once per URL, like the automatic retry.
+       */
+      const inApp = Boolean(options?.inApp);
+      const guard = inApp ? inAppFor : forcedFor;
+      if (guard.current === streamUrl) return;
+      guard.current = streamUrl;
 
       void (async () => {
         const previous = prepared?.sessionId;
-        const at = (isConverted ? playbackOffset : 0) + (videoRef.current?.currentTime ?? 0);
+        // Under mpv the element is idle; the engine's own position is the truth.
+        const at = isNativeEngine
+          ? currentPositionRef.current
+          : (isConverted ? playbackOffset : 0) + (videoRef.current?.currentTime ?? 0);
 
         // Still trying, not failed — standard mode says so rather than showing
         // an error panel for the length of a second attempt.
@@ -3139,10 +3395,13 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
             isDash: sourceConfig.isDash,
             drm: sourceConfig.drm,
             provider: providerProvenance?.provider,
+            preferredAudioLanguage: wantedAudioLanguage(),
             // The cached verdict is the one that was wrong; measure again and then
             // override it anyway.
             refresh: true,
             force: true,
+            // "Play in this window": convert for the element, never back to mpv.
+            avoidNativeEngine: inApp,
           });
           if (!response?.ok || !response.playbackUrl) {
             // Conversion is unavailable; the source has had its chance.
@@ -3153,8 +3412,8 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
           }
           if (previous) void window.cloudstream?.closePlaybackStream(previous);
           setError(null);
-          setPlaybackOffset(at);
-          setPrepared({ ...response, playbackUrl: atTime(response.playbackUrl, at) });
+          // mpv used to open at the session's first resume point, not here.
+          attachAt(response, at);
         } finally {
           setConverting(false);
         }
@@ -3168,6 +3427,8 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
     playbackOffset,
     providerProvenance?.provider,
     sourceConfig,
+    isNativeEngine,
+    attachAt,
   ]);
 
   useEffect(() => {
@@ -3253,6 +3514,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
         (track) => track.index === index
       )?.language;
       if (language && language !== 'und') {
+        audioChoice.current = language;
         preferredAudioLanguage.current = language;
         void window.cloudstream?.setPlayerPreferences({ audioLanguage: language });
       }
@@ -3286,24 +3548,37 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
 
       selectAudioTrack(index);
 
-      const hasNativeAudioSwitching = Boolean((video as any)?.audioTracks?.length > 1 || hlsRef.current);
+      const hasNativeAudioSwitching = Boolean(
+        (video as any)?.audioTracks?.length > 1 ||
+        (hlsRef.current && (hlsRef.current.audioTracks?.length ?? 0) > 1)
+      );
       if (!hasNativeAudioSwitching && streamUrl && window.cloudstream?.preparePlaybackStream) {
+        /*
+         * Languages muxed in an HLS stream's segments are a known quantity: the
+         * engine remuxes the chosen one in (copy, no decode), or hands the first
+         * back to hls.js. Only an unknown case still takes the forced re-encode,
+         * which for this stream had spent a software H.264 encode on changing
+         * the soundtrack — and mapped the first track anyway.
+         */
+        const inSegments = Boolean(preparedRef.current?.capability?.metadata?.audioMuxedInSegments);
+        // hls.js is already playing the first of them; there is nothing to change.
+        if (inSegments && index === 0 && !isConverted) return;
         setConverting(true);
         try {
           const response = await window.cloudstream.preparePlaybackStream({
             url: streamUrl,
             headers: activeSource?.directHeaders,
+            isM3u8: mimeType === 'application/x-mpegURL',
             provider: providerProvenance?.provider,
             preferredAudioLanguage: language,
-            refresh: true,
-            force: true,
+            refresh: !inSegments,
+            force: !inSegments,
           });
           if (response?.ok && response.playbackUrl) {
             const previous = prepared?.sessionId;
             if (previous) void window.cloudstream?.closePlaybackStream(previous);
             setError(null);
-            setPlaybackOffset(at);
-            setPrepared({ ...response, playbackUrl: atTime(response.playbackUrl, at) });
+            attachAt(response, at);
           }
         } finally {
           setConverting(false);
@@ -3318,9 +3593,30 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
       audioTracks,
       selectAudioTrack,
       streamUrl,
+      mimeType,
       activeSource?.directHeaders,
       providerProvenance?.provider,
+      attachAt,
     ]
+  );
+
+  /**
+   * A live track (mpv's, or an hls.js rendition) picked from the menu.
+   *
+   * `selectAudioTrack` also serves the player's own automatic picks, so the
+   * viewer's choice is recorded here, where only the menu reaches.
+   */
+  const chooseLiveAudio = useCallback(
+    (trackId: string | number) => {
+      const language = audioTracks.find((track) => String(track.id) === String(trackId))?.language;
+      if (language && language !== 'und') {
+        audioChoice.current = language;
+        preferredAudioLanguage.current = language;
+        void window.cloudstream?.setPlayerPreferences({ audioLanguage: language });
+      }
+      selectAudioTrack(trackId);
+    },
+    [audioTracks, selectAudioTrack]
   );
 
   /** Audio tracks as the inspection reported them, labelled for the picker. */
@@ -3330,7 +3626,8 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
         const language = track.language && track.language !== 'und'
           ? track.language.toUpperCase()
           : null;
-        const name = track.title || language || `Track ${track.index + 1}`;
+        // "Hindi", not "HIN": the same words the control bar's trigger uses.
+        const name = track.title || controlLanguageLabel(track.language) || language || `Track ${track.index + 1}`;
         const layout =
           track.channels === 8 ? '7.1'
           : track.channels === 6 ? '5.1'
@@ -3343,7 +3640,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
           // Worth saying: it is why this track sounds different from the file.
           track.playable && track.channels <= 2 ? undefined : 'converted',
         ].filter(Boolean);
-        return { index: track.index, label: name, detail: facts.join(' · ') };
+        return { index: track.index, label: name, language: track.language, detail: facts.join(' · ') };
       }),
     [capability]
   );
@@ -3404,6 +3701,34 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
     return englishFirst;
   }, [subtitles, fetchedSubtitles, prepared?.subtitles]);
 
+  const subtitleLabels = useMemo(
+    () => languageLabels(allSubtitles.map((sub) => ({ label: sub.name }))),
+    [allSubtitles]
+  );
+  const subtitleControlLabel = useMemo(() => {
+    const index = activeSubtitle ? allSubtitles.findIndex((sub) => sub.url === activeSubtitle) : -1;
+    return index >= 0 ? subtitleLabels[index] : allSubtitles.length > 0 ? 'Off' : 'Subtitles';
+  }, [activeSubtitle, allSubtitles, subtitleLabels]);
+
+  const audioControlLabel = useMemo(() => {
+    const liveAudio = audioTracks.find((track) => String(track.id) === String(activeAudioTrack));
+    const probedAudio = probedAudioTracks.find((track) => track.index === selectedAudioIndex);
+    const selected = isNativeEngine ? liveAudio : probedAudio ?? liveAudio;
+    return controlLanguageLabel(selected?.language, selected?.label) || 'Audio';
+  }, [activeAudioTrack, audioTracks, isNativeEngine, probedAudioTracks, selectedAudioIndex]);
+
+  /** The stream itself offers more than one audio track (Case A); then those win. */
+  const embeddedAudioChoice = isNativeEngine
+    ? audioTracks.length > 1
+    : probedAudioTracks.length > 1 || audioTracks.length > 1;
+
+  const qualityControlLabel = useMemo(
+    () =>
+      qualities.find((item) => item.level === quality)?.label ??
+      (currentResolution ? formatResolutionLabel(currentResolution) : ''),
+    [currentResolution, qualities, quality]
+  );
+
   /**
    * Keeps the played-source record's track choices current.
    *
@@ -3416,12 +3741,17 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
     const subtitle = activeSubtitle ? allSubtitles.find((s) => s.url === activeSubtitle) : undefined;
     const audio =
       audioTracks.find((track) => String(track.id) === String(activeAudioTrack)) ?? undefined;
-    const fileAudio = preparedRef.current?.capability?.metadata?.audio.find(
-      (track) => track.index === selectedAudioIndex
-    );
+    /*
+     * Only a language somebody chose. Recording whatever played wrote the
+     * stream's default (English) into the record ten seconds in, and the next
+     * play read it back as this title's preference — above the Hindi the
+     * viewer keeps picking. Written as `undefined` otherwise, which also
+     * clears a default an older build stored.
+     */
+    const chosen = recordedAudioChoice(audioChoice.current, titlePreferences.current);
     const choices: PlaybackPreferences = {
-      audioLanguage: audio?.language ?? (fileAudio?.language !== 'und' ? fileAudio?.language : undefined),
-      audioLabel: audio?.label,
+      ...chosen,
+      audioLabel: chosen.audioLanguage && audio?.language === chosen.audioLanguage ? audio.label : undefined,
       subtitleMode: subtitle ? 'track' : subtitlesOff.current ? 'off' : undefined,
       subtitleLanguage: subtitle ? (preferredSubtitleLanguage.current ?? subtitle.name) : undefined,
       subtitleLabel: subtitle?.name,
@@ -3670,26 +4000,53 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
 
   const lastSelectedSubtitleRef = useRef<string | null>(null);
 
+  const handleSelectSubtitle = useCallback(
+    (url: string | null, label?: string, detail?: string) => {
+      if (url && !allSubtitles.some((s) => s.url === url)) {
+        setFetchedSubtitles((prev) => [...prev, { name: label ?? 'Subtitle', url, detail }]);
+      }
+      if (activeSubtitle && !url) {
+        lastSelectedSubtitleRef.current = activeSubtitle;
+      }
+      setActiveSubtitle(url);
+
+      if (isNativeEngine) {
+        if (url) {
+          void window.cloudstream?.mpvAddSubtitle(url, label ?? '');
+        } else {
+          void window.cloudstream?.mpvSetSubtitleTrack(null);
+        }
+      }
+
+      /**
+       * The label carries the language; the URL is per-file and worthless
+       * to remember. Turning subtitles *off* is remembered too — an explicit
+       * choice, and the one most likely to be undone by a default.
+       */
+      const language = url ? label?.split(/[^A-Za-z]+/)[0] ?? '' : '';
+      void window.cloudstream?.setPlayerPreferences({ subtitleLanguage: language });
+      preferredSubtitleLanguage.current = language || null;
+      subtitlesOff.current = !url;
+      showOsd({ kind: 'text', text: url ? `Subtitles: ${label ?? 'On'}` : 'Subtitles: Off' });
+    },
+    [activeSubtitle, allSubtitles, isNativeEngine, showOsd]
+  );
+
   const toggleSubtitles = useCallback(() => {
     if (allSubtitles.length === 0) {
       showOsd({ kind: 'text', text: 'No subtitles available' });
       return;
     }
     if (activeSubtitle) {
-      lastSelectedSubtitleRef.current = activeSubtitle;
-      setActiveSubtitle(null);
-      if (isNativeEngine) void window.cloudstream?.mpvSetSubtitleTrack(null);
-      showOsd({ kind: 'text', text: 'Subtitles: Off' });
+      handleSelectSubtitle(null, 'Off');
     } else {
       const target =
         (lastSelectedSubtitleRef.current &&
           allSubtitles.find((s) => s.url === lastSelectedSubtitleRef.current)) ||
         allSubtitles[0];
-      setActiveSubtitle(target.url);
-      if (isNativeEngine) void window.cloudstream?.mpvAddSubtitle(target.url, target.name);
-      showOsd({ kind: 'text', text: `Subtitles: ${target.name}` });
+      handleSelectSubtitle(target.url, target.name, target.detail);
     }
-  }, [activeSubtitle, allSubtitles, isNativeEngine, showOsd]);
+  }, [activeSubtitle, allSubtitles, handleSelectSubtitle, showOsd]);
 
   const cycleSubtitles = useCallback(() => {
     if (allSubtitles.length === 0) {
@@ -3699,21 +4056,14 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
     const currentIndex = allSubtitles.findIndex((s) => s.url === activeSubtitle);
     if (currentIndex === -1) {
       const first = allSubtitles[0];
-      setActiveSubtitle(first.url);
-      if (isNativeEngine) void window.cloudstream?.mpvAddSubtitle(first.url, first.name);
-      showOsd({ kind: 'text', text: `Subtitles: ${first.name}` });
+      handleSelectSubtitle(first.url, first.name, first.detail);
     } else if (currentIndex === allSubtitles.length - 1) {
-      lastSelectedSubtitleRef.current = activeSubtitle;
-      setActiveSubtitle(null);
-      if (isNativeEngine) void window.cloudstream?.mpvSetSubtitleTrack(null);
-      showOsd({ kind: 'text', text: 'Subtitles: Off' });
+      handleSelectSubtitle(null, 'Off');
     } else {
       const next = allSubtitles[currentIndex + 1];
-      setActiveSubtitle(next.url);
-      if (isNativeEngine) void window.cloudstream?.mpvAddSubtitle(next.url, next.name);
-      showOsd({ kind: 'text', text: `Subtitles: ${next.name}` });
+      handleSelectSubtitle(next.url, next.name, next.detail);
     }
-  }, [activeSubtitle, allSubtitles, isNativeEngine, showOsd]);
+  }, [activeSubtitle, allSubtitles, handleSelectSubtitle, showOsd]);
 
   const toggleMute = useCallback(() => {
     const next = !isMuted;
@@ -3995,8 +4345,9 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
             state.setSourcePanelOpen(false);
             state.setSubtitlePanelOpen(false);
             state.setDownloadPanelOpen(false);
-          } else if (document.fullscreenElement) {
-            void document.exitFullscreen().catch(() => {});
+          } else if (isWindowFullScreen()) {
+            fullscreenOwnedRef.current = false;
+            setWindowFullScreen(false);
           } else {
             state.onBack();
           }
@@ -4416,11 +4767,14 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
           headers={activeSource?.directHeaders}
           title={episodeTitle ? `${title} — ${episodeTitle}` : title}
           capability={capability}
-          startSeconds={progress?.resumeAt}
+          startSeconds={nativeStartSeconds}
+          audioLanguage={wantedAudioLanguage()}
           initialVolume={audioSettings.current.volume}
           initialMuted={audioSettings.current.muted}
           externalSubtitles={allSubtitles.map((sub) => ({ name: sub.name, url: sub.url }))}
           onProgress={(position, total) => {
+            // The new stream is playing, so the position it was opened at is spent.
+            if (carriedAt !== undefined && position > 0) setCarriedPosition(null);
             // Feeds the same state the `<video>` path writes, so the existing
             // save interval, the resume point and the up-next card all work
             // without knowing which engine produced the numbers.
@@ -4441,7 +4795,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
           onEnded={() => {
             if (nextEpisode && onSelectEpisode && !upNextDismissed) onSelectEpisode(nextEpisode);
           }}
-          onFallbackToBuiltIn={() => forceTranscodeRef.current?.()}
+          onFallbackToBuiltIn={() => forceTranscodeRef.current?.({ inApp: true })}
           onFindSubtitles={() => {
             setSubtitlePanelOpen(true);
             revealControls();
@@ -4786,20 +5140,6 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
                 <Info size={15} />
               </button>
             )}
-            {onSearchTitle && (
-              <button
-                type="button"
-                className="player__title-search"
-                /* The clean title, not the release name: "Avengers Age of Ultron"
-                   finds the film, while "Avengers.Age.of.Ultron.2015.1080p.WEB-DL"
-                   finds nothing on any catalogue. */
-                onClick={() => onSearchTitle(title)}
-                title={`Search for "${title}"`}
-                aria-label={`Search for ${title}`}
-              >
-                <Search size={15} />
-              </button>
-            )}
             {progress?.mediaUrl && (
               <button
                 type="button"
@@ -4813,6 +5153,20 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
                 aria-label="Save this playback"
               >
                 {playbackSaved ? <BookmarkCheck size={15} /> : <BookmarkPlus size={15} />}
+              </button>
+            )}
+            {onSearchTitle && (
+              <button
+                type="button"
+                className="player__title-search"
+                /* The clean title, not the release name: "Avengers Age of Ultron"
+                   finds the film, while "Avengers.Age.of.Ultron.2015.1080p.WEB-DL"
+                   finds nothing on any catalogue. */
+                onClick={() => onSearchTitle(title)}
+                title={`Search for "${title}"`}
+                aria-label={`Search for ${title}`}
+              >
+                <Search size={15} />
               </button>
             )}
           </div>
@@ -4941,7 +5295,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
           onClose={() => setSourcePanelOpen(false)}
           onSelect={(source) => {
             setPendingSourceHash(source.infoHash);
-            sourceSession.onSelectSource(source);
+            switchSourceKeepingPosition(source);
             // Close on choose: the panel covers the video, and leaving it up
             // over the stream the viewer just asked for is what made picking a
             // source feel like nothing had happened.
@@ -4975,30 +5329,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
         embedded={allSubtitles}
         activeUrl={activeSubtitle}
         onClose={() => setSubtitlePanelOpen(false)}
-        onSelect={(url, label, detail) => {
-          if (url && !allSubtitles.some((s) => s.url === url)) {
-            setFetchedSubtitles((prev) => [...prev, { name: label, url, detail }]);
-          }
-          setActiveSubtitle(url);
-
-          if (isNativeEngine) {
-            if (url) {
-              void window.cloudstream?.mpvAddSubtitle(url, label);
-            } else {
-              void window.cloudstream?.mpvSetSubtitleTrack(null);
-            }
-          }
-
-          /**
-           * The label carries the language; the URL is per-file and worthless
-           * to remember. Turning subtitles *off* is remembered too — an explicit
-           * choice, and the one most likely to be undone by a default.
-           */
-          const language = url ? label?.split(/[^A-Za-z]+/)[0] ?? '' : '';
-          void window.cloudstream?.setPlayerPreferences({ subtitleLanguage: language });
-          preferredSubtitleLanguage.current = language || null;
-          subtitlesOff.current = !url;
-        }}
+        onSelect={handleSelectSubtitle}
         year={progress?.year}
         releaseName={activeSource?.title}
         delay={subtitleDelay}
@@ -5323,103 +5654,212 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
             ) : null}
           </button>
 
-          {/* Subtitle search sits immediately to the right side of the download panel.
-              Optional control: enabled by default, can be toggled via Player Settings. */}
-          {/*
-            One Subtitles button: choose a track, turn them off, or find more
-            online, all in one panel. There were two — a menu that chose and a
-            panel that searched — under the same icon.
-          */}
-          {(showSubtitlesControl || allSubtitles.length > 0) && (
-            <button
-              className={`icon-button ${subtitlePanelOpen ? 'active' : ''}${activeSubtitle ? ' icon-button--on' : ''}`}
-              data-panel-toggle
-              onClick={(e) => {
-                e.stopPropagation();
-                setSubtitlePanelOpen((v) => !v);
-                revealControls();
-              }}
-              aria-label="Subtitles"
-              title={(() => {
-                const current = activeSubtitle ? allSubtitles.find((sub) => sub.url === activeSubtitle) : null;
-                return current ? `Subtitles: ${current.name} (C to toggle)` : 'Subtitles (C to toggle)';
-              })()}
-            >
-              <Subtitles size={18} />
-            </button>
-          )}
+          <div className="player__media-controls" aria-label="Tracks and quality">
+            {(showSubtitlesControl || allSubtitles.length > 0) && (
+              allSubtitles.length > 0 ? (
+                <HoverMenu
+                  icon={activeSubtitle ? <Subtitles size={16} /> : <CaptionsOff size={16} />}
+                  label="Subtitles"
+                  value={activeSubtitle ?? '__off__'}
+                  onChange={(val) => {
+                    if (val === '__off__') {
+                      handleSelectSubtitle(null, 'Off');
+                    } else {
+                      const track = allSubtitles.find((s) => s.url === val);
+                      handleSelectSubtitle(val, track?.name, track?.detail);
+                    }
+                  }}
+                  onOpenChange={onMenuOpenChange}
+                  triggerText={activeSubtitle ? subtitleControlLabel : 'Off'}
+                  triggerClassName={`player__media-control ${activeSubtitle ? 'player__media-control--on' : 'player__media-control--off'}`}
+                  showChevron={true}
+                  options={[
+                    {
+                      value: '__off__',
+                      label: 'Off',
+                      icon: <CaptionsOff size={14} />,
+                    },
+                    ...allSubtitles.map((track, index) => ({
+                      value: track.url,
+                      label: subtitleLabels[index],
+                      detail: track.detail,
+                      icon: <Subtitles size={14} />,
+                    })),
+                  ]}
+                  footer={
+                    <button
+                      type="button"
+                      className="hover-menu__footer-action"
+                      onClick={() => {
+                        setSubtitlePanelOpen(true);
+                        revealControls();
+                      }}
+                    >
+                      <Search size={13} />
+                      <span>Search subtitles online...</span>
+                    </button>
+                  }
+                />
+              ) : (
+                <button
+                  type="button"
+                  className={`player__media-control ${subtitlePanelOpen ? 'active' : ''} player__media-control--empty`}
+                  data-panel-toggle
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    setSubtitlePanelOpen((v) => !v);
+                    revealControls();
+                  }}
+                  aria-label="Search subtitles"
+                  title="Subtitles: None loaded · Click to search online"
+                >
+                  <Subtitles size={16} />
+                  <span>Subtitles</span>
+                </button>
+              )
+            )}
 
-          {qualities.length > 1 && (
-            <HoverMenu
-              icon={<Settings2 size={16} />}
-              label="Quality"
-              value={quality}
-              onChange={setQuality}
-              onOpenChange={onMenuOpenChange}
-              options={[
-                { value: AUTO_QUALITY, label: 'Auto' },
-                ...qualities.map((q) => ({ value: q.level, label: q.label, detail: q.detail })),
-              ]}
-            />
-          )}
+            {qualities.length > 1 ? (
+              <HoverMenu
+                icon={<Settings2 size={16} />}
+                label="Quality"
+                value={quality}
+                onChange={setQuality}
+                onOpenChange={onMenuOpenChange}
+                showChevron={true}
+                triggerText={quality === AUTO_QUALITY ? 'Auto' : (qualityControlLabel || 'Quality')}
+                options={[
+                  { value: AUTO_QUALITY, label: 'Auto', detail: qualityControlLabel || undefined },
+                  ...qualities.map((q) => ({ value: q.level, label: q.label, detail: q.detail })),
+                ]}
+              />
+            ) : resolutionVariants.length > 1 ? (
+              <HoverMenu
+                icon={<Settings2 size={16} />}
+                label="Quality"
+                value={currentResolution}
+                onChange={(val) => {
+                  const target = resolutionVariants.find((v) => v.resolution === Number(val));
+                  // Re-picking the playing rung would restart the same link.
+                  if (!target || target.isCurrent) return;
+                  showOsd({ kind: 'text', text: `Quality: ${target.label}` });
+                  switchSourceKeepingPosition(target.source);
+                }}
+                onOpenChange={onMenuOpenChange}
+                showChevron={true}
+                triggerText={qualityControlLabel || 'Quality'}
+                options={resolutionVariants.map((v) => ({
+                  value: v.resolution,
+                  label: v.label,
+                  // A separate link, so it can have failed where this one played.
+                  detail: v.failed ? 'Failed earlier' : undefined,
+                }))}
+              />
+            ) : qualityControlLabel ? (
+              <span
+                className="player__media-status"
+                title={`Quality: ${qualityControlLabel}`}
+                aria-label={`Quality: ${qualityControlLabel}`}
+              >
+                <Settings2 size={16} />
+                <span>{qualityControlLabel}</span>
+              </span>
+            ) : null}
 
-          {/* Probed tracks take precedence over the element's own list: a
-              `<video>` does not expose tracks it cannot decode at all, so the
-              AC-3 Japanese dub simply would not appear without the probe.
-              Under the native engine, mpv's own live track list is used directly. */}
-          {isNativeEngine ? (
-            audioTracks.length > 1 && (
+            {embeddedAudioChoice ? (isNativeEngine ? (
+              audioTracks.length > 1 && (
+                <HoverMenu
+                  icon={<Volume2 size={16} />}
+                  label="Audio"
+                  value={activeAudioTrack}
+                  onChange={(val) => chooseLiveAudio(val)}
+                  onOpenChange={onMenuOpenChange}
+                  showChevron={true}
+                  triggerText={audioControlLabel}
+                  options={audioTracks.map((track) => ({
+                    value: track.id,
+                    // "Hindi", not "HIN"; the track's own title only when it says something more.
+                    label: controlLanguageLabel(track.language, track.label) || track.label,
+                    detail: track.label && track.label !== controlLanguageLabel(track.language, track.label) ? track.label : undefined,
+                  }))}
+                />
+              )
+            ) : probedAudioTracks.length > 1 ? (
               <HoverMenu
                 icon={<Volume2 size={16} />}
                 label="Audio"
-                value={activeAudioTrack}
-                onChange={(val) => selectAudioTrack(val)}
+                value={selectedAudioIndex}
+                onChange={(val) => void selectProbedAudio(Number(val))}
                 onOpenChange={onMenuOpenChange}
-                triggerText={
-                  audioTracks.find((a) => String(a.id) === String(activeAudioTrack))?.label ?? 'Audio'
-                }
-                options={audioTracks.map((track) => ({
-                  value: track.id,
+                showChevron={true}
+                triggerText={audioControlLabel}
+                options={probedAudioTracks.map((track) => ({
+                  value: track.index,
                   label: track.label,
-                  detail: track.language ? track.language.toUpperCase() : undefined,
+                  detail: track.detail,
                 }))}
               />
-            )
-          ) : probedAudioTracks.length > 1 ? (
-            <HoverMenu
-              icon={<Volume2 size={16} />}
-              label="Audio"
-              value={selectedAudioIndex}
-              onChange={(val) => void selectProbedAudio(Number(val))}
-              onOpenChange={onMenuOpenChange}
-              triggerText={
-                probedAudioTracks.find((t) => t.index === selectedAudioIndex)?.label ?? 'Audio'
-              }
-              options={probedAudioTracks.map((track) => ({
-                value: track.index,
-                label: track.label,
-                detail: track.detail,
-              }))}
-            />
-          ) : (
-            audioTracks.length > 1 && (
+            ) : (
+              audioTracks.length > 1 && (
+                <HoverMenu
+                  icon={<Volume2 size={16} />}
+                  label="Audio"
+                  value={activeAudioTrack}
+                  onChange={(val) => chooseLiveAudio(val)}
+                  onOpenChange={onMenuOpenChange}
+                  showChevron={true}
+                  triggerText={audioControlLabel}
+                  options={audioTracks.map((track) => ({
+                    value: track.id,
+                    // "Hindi", not "HIN"; the track's own title only when it says something more.
+                    label: controlLanguageLabel(track.language, track.label) || track.label,
+                    detail: track.label && track.label !== controlLanguageLabel(track.language, track.label) ? track.label : undefined,
+                  }))}
+                />
+              )
+            )) : languageVariants.length > 1 ? (
+              /* The provider sent each language as its own link (PRD §123.4 Case B):
+                 choosing one switches source, it is not an embedded track. */
               <HoverMenu
                 icon={<Volume2 size={16} />}
                 label="Audio"
-                value={activeAudioTrack}
-                onChange={(val) => selectAudioTrack(val)}
+                value={languageVariants.find((v) => v.isCurrent)?.key ?? ''}
+                onChange={(key) => {
+                  const target = languageVariants.find((v) => v.key === key);
+                  if (!target || target.isCurrent) return;
+                  const label = languageSetLabel(target.languages);
+                  // A change of language that also had to change quality says so.
+                  const qualityNote =
+                    currentResolution && target.resolution && target.resolution !== currentResolution
+                      ? ` · ${formatResolutionLabel(target.resolution)} (${formatResolutionLabel(currentResolution)} isn't available in ${label})`
+                      : '';
+                  showOsd({ kind: 'text', text: `Audio: ${label}${qualityNote}` });
+                  switchSourceKeepingPosition(target.source);
+                }}
                 onOpenChange={onMenuOpenChange}
-                triggerText={
-                  audioTracks.find((a) => String(a.id) === String(activeAudioTrack))?.label ?? 'Audio'
-                }
-                options={audioTracks.map((track) => ({
-                  value: track.id,
-                  label: track.label,
-                  detail: track.language ? track.language.toUpperCase() : undefined,
+                showChevron={true}
+                triggerText={languageSetLabel(languageVariants.find((v) => v.isCurrent)?.languages ?? []) || audioControlLabel}
+                options={languageVariants.map((v) => ({
+                  value: v.key,
+                  label: languageSetLabel(v.languages),
+                  detail: v.failed
+                    ? 'Failed earlier'
+                    : !v.isCurrent && v.resolution && v.resolution !== currentResolution
+                      ? formatResolutionLabel(v.resolution)
+                      : undefined,
                 }))}
               />
-            )
-          )}
+            ) : audioControlLabel !== 'Audio' ? (
+              <span
+                className="player__media-status"
+                title={`Audio: ${audioControlLabel}`}
+                aria-label={`Audio: ${audioControlLabel}`}
+              >
+                <Volume2 size={16} />
+                <span>{audioControlLabel}</span>
+              </span>
+            ) : null}
+          </div>
 
           {showSpeedControl && (
             <HoverMenu
@@ -5470,6 +5910,8 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
             allSources={sourceSession?.sources}
             download={currentDownload ?? null}
             onOpenChange={onMenuOpenChange}
+            externalPlayers={externalPlayers}
+            onOpenExternal={(playerId) => void handleOpenExternalPlayer(playerId)}
             playerState={() => ({
               position: `${Math.floor(currentTime)}s`,
               duration: duration ? `${Math.floor(duration)}s` : undefined,

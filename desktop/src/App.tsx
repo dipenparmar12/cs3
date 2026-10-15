@@ -25,6 +25,7 @@ import { ErrorBoundary } from './components/ErrorBoundary';
 import { ViewSkeleton } from './components/ViewSkeleton';
 import { FirstRunBanner } from './components/FirstRunBanner';
 import { RegionOnboarding } from './components/regions/RegionOnboarding';
+import { AdultSessionPrompt } from './components/AdultSessionPrompt';
 
 import { TvType, type Episode, type SearchOptions, type SearchResponse } from './types/api';
 import type { HistoryEvent } from './types/history';
@@ -46,6 +47,8 @@ import { durableAddress } from './utils/durableAddress';
 import { canonicalKey } from '../electron/cs3/libraryStore';
 import { SCREEN_SEARCH_FOCUS_EVENT, screenSearchAvailable } from './utils/screenSearch';
 import { classifyDroppedPaths, droppedLinkKind, isSupportedDrag } from './utils/dropSupport';
+import { useFlash } from './utils/useFlash';
+import { isWindowFullScreen, setWindowFullScreen, useWindowFullScreen } from './utils/useWindowFullScreen';
 import {
   depthOf,
   emptyNavigation,
@@ -171,6 +174,18 @@ export const App: React.FC = () => {
       document.removeEventListener('fullscreenchange', handleFullscreenChange);
     };
   }, []);
+
+  /*
+   * The window's fullscreen, and a moment's word on how to leave it. Without
+   * it, fullscreen entered by F11 or the View menu had no visible exit at all.
+   */
+  const [windowFullScreen] = useWindowFullScreen();
+  const { message: fullScreenHint, flash: flashFullScreenHint } = useFlash<string>(2600);
+  const wasFullScreen = useRef(false);
+  useEffect(() => {
+    if (windowFullScreen && !wasFullScreen.current) flashFullScreenHint('Full screen · press Esc or F11 to exit');
+    wasFullScreen.current = windowFullScreen;
+  }, [windowFullScreen, flashFullScreenHint]);
 
   const [activeTab, setActiveTab] = useState<ActiveTab>('home');
   const [searchQuery, setSearchQuery] = useState('');
@@ -720,7 +735,7 @@ export const App: React.FC = () => {
       disposeSettings?.();
       disposeLicences?.();
     };
-  }, [refreshOttPlatforms, activeTab]);
+  }, [refreshOttPlatforms, activeTab, switchTab]);
 
   /**
    * Play a file the user already has on disk.
@@ -1061,7 +1076,11 @@ export const App: React.FC = () => {
     if (!window.cloudstream) return;
     try {
       const response = await window.cloudstream.startSearch(query, options);
-      if (response.snapshot) setSearch(response.snapshot);
+      if (response.snapshot) {
+        setSearch(response.snapshot);
+        // An IMDb link comes back searched as the title it names; say so.
+        if (response.snapshot.query !== query) setSearchQuery(response.snapshot.query);
+      }
       if (!response.ok && response.error) setSearchError(response.error);
     } catch (err) {
       setSearchError(describeError(err));
@@ -1379,9 +1398,7 @@ export const App: React.FC = () => {
     try {
       await request.onRequestEpisode(episode);
     } catch (error) {
-      setSwitchError(
-        error instanceof Error ? error.message : 'Could not start that episode.'
-      );
+      setSwitchError(describeError(error));
     } finally {
       setSwitchingTo(null);
     }
@@ -1774,8 +1791,9 @@ export const App: React.FC = () => {
    * emit once more, and those results answer a different question — the previous
    * episode, or the search the viewer just replaced.
    */
+  const refreshSessionId = playbackRefresh?.sessionId;
   useEffect(() => {
-    if (!playbackRefresh || !playbackRefresh.sessionId) return;
+    if (!refreshSessionId) return;
 
     const dispose = window.cloudstream?.onPlaybackUpdate((snapshot) => {
       if (snapshot.sessionId !== playbackRefreshRef.current) return;
@@ -1801,7 +1819,7 @@ export const App: React.FC = () => {
     });
 
     return dispose;
-  }, [playbackRefresh?.sessionId]);
+  }, [refreshSessionId]);
 
   /**
    * Whether pressing Download asks first, and the pending question if it does.
@@ -1972,6 +1990,26 @@ export const App: React.FC = () => {
        * stopped it or marked it handled before it got here, and a key aimed at
        * a field or a modal still open is theirs.
        */
+      /*
+       * In fullscreen, an Escape nothing else wanted means "leave fullscreen",
+       * as everywhere else on the desktop — and before it means Back. The
+       * window's fullscreen has no visible way out otherwise, which is how
+       * someone ends up stuck in F11 mode. The player handles its own.
+       */
+      if (
+        event.key === 'Escape' &&
+        !event.defaultPrevented &&
+        !playerInFront &&
+        isWindowFullScreen() &&
+        !document.querySelector('[aria-modal="true"], .modal-overlay')
+      ) {
+        const field = event.target as HTMLElement | null;
+        if (!field?.isContentEditable && !/^(INPUT|TEXTAREA|SELECT)$/.test(field?.tagName ?? '')) {
+          event.preventDefault();
+          setWindowFullScreen(false);
+          return;
+        }
+      }
       if (
         event.key !== 'Escape' ||
         event.defaultPrevented ||
@@ -1996,10 +2034,15 @@ export const App: React.FC = () => {
     };
   }, [goBack, playerInFront]);
 
-  const isIncognitoBorderActive = incognito && !isFullscreen;
+  const isIncognitoBorderActive = incognito && !isFullscreen && !windowFullScreen;
 
   return (
     <div className={`app-container${isIncognitoBorderActive ? ' app-container--incognito' : ''}`}>
+      {fullScreenHint && (
+        <div className="fullscreen-hint" role="status">
+          {fullScreenHint}
+        </div>
+      )}
       {/* Sidebar Navigation */}
       <Sidebar
         activeTab={activeTab}
@@ -2097,6 +2140,8 @@ export const App: React.FC = () => {
         <FirstRunBanner />
         {/* Asked once, before anything installs (PRD-54). */}
         <RegionOnboarding />
+        {/* "Ask every time" asks, once per launch, after onboarding. */}
+        <AdultSessionPrompt />
 
         {/*
           One boundary for every route, placed inside `main` rather than around
@@ -2431,6 +2476,7 @@ export const App: React.FC = () => {
                     savedView={savedView}
                     onSaveResults={handleSaveSearch}
                     onClearResults={handleClearSearchResults}
+                    onSearch={(query) => void handleSearch(query)}
                   />
                 </ErrorBoundary>
               )}

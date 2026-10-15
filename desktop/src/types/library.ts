@@ -187,6 +187,12 @@ export interface PlayedSource {
 export interface PlaybackPreferences {
   audioLanguage?: string;
   audioLabel?: string;
+  /**
+   * The viewer picked `audioLanguage`; absent, it is only what happened to
+   * play. Records written before this flag hold the stream's default as if it
+   * were a choice, and honouring them pinned every later play to it.
+   */
+  audioChosen?: boolean;
   /** `off` is a choice, distinct from never having chosen. */
   subtitleMode?: 'off' | 'track';
   subtitleLanguage?: string;

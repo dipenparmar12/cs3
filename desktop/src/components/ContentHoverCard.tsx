@@ -21,13 +21,15 @@ export const ContentHoverCard: React.FC<ContentHoverCardProps> = ({
   const [details, setDetails] = useState<LoadResponse | null>(null);
   const [loading, setLoading] = useState(false);
 
+  const itemUrl = item?.url;
+
   useEffect(() => {
     let active = true;
     const fetchDetails = async () => {
-      if (!window.cloudstream || !item || !item.url) return;
+      if (!window.cloudstream || !itemUrl) return;
       setLoading(true);
       try {
-        const res = await window.cloudstream.loadMedia(item.url);
+        const res = await window.cloudstream.loadMedia(itemUrl);
         // `loadMedia` answers with an envelope; the card renders the payload.
         if (active && res?.ok) setDetails(res.detail);
       } catch {
@@ -40,7 +42,7 @@ export const ContentHoverCard: React.FC<ContentHoverCardProps> = ({
     return () => {
       active = false;
     };
-  }, [item?.url]);
+  }, [itemUrl]);
 
   const poster = details?.posterUrl || item?.posterUrl;
   const title = details?.name || item?.name || 'Untitled';

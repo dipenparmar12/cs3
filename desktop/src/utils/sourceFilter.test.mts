@@ -9,6 +9,7 @@ import {
   buildFacet,
   detectResolutionCategory,
   filterAndSortSources,
+  foldTorrents,
   isFilterActive,
   matchesLanguage,
   matchesSize,
@@ -189,6 +190,27 @@ test('matchesLanguage correctly checks languages array and title tokens', () => 
 });
 
 // Runner
+test('foldTorrents keeps every stream and the best torrents, folds the tail in order', () => {
+  const torrents = Array.from({ length: 8 }, (_, i) => createSource({ infoHash: `t${i}`, title: `Torrent ${i}` }));
+  const stream = createSource({ infoHash: 's', directUrl: 'https://cdn.example.com/a.m3u8' });
+  const list = [torrents[0], stream, ...torrents.slice(1)];
+  const { shown, hidden } = foldTorrents(list, DEFAULT_FILTER_STATE, undefined, 3);
+  assert.deepEqual(shown.map((s) => s.infoHash), ['t0', 's', 't1', 't2']);
+  assert.equal(hidden, 5);
+});
+
+test('foldTorrents never folds without streams, under a torrent filter, or the playing row', () => {
+  const torrents = Array.from({ length: 8 }, (_, i) => createSource({ infoHash: `t${i}` }));
+  assert.equal(foldTorrents(torrents, DEFAULT_FILTER_STATE, undefined, 3).hidden, 0);
+
+  const stream = createSource({ infoHash: 's', directUrl: 'https://cdn.example.com/a.mp4' });
+  assert.equal(foldTorrents([stream, ...torrents], { kind: 'torrent' }, undefined, 3).hidden, 0);
+
+  const playing = foldTorrents([stream, ...torrents], DEFAULT_FILTER_STATE, (s) => s.infoHash === 't7', 3);
+  assert.ok(playing.shown.some((s) => s.infoHash === 't7'));
+  assert.equal(playing.hidden, 4);
+});
+
 let failed = 0;
 for (const [name, fn] of tests) {
   try {

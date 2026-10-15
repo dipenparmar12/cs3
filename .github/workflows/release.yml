@@ -22,8 +22,11 @@ on:
         description: 'Version to name the artifacts (no leading v), e.g. 1.2.3'
         required: true
 
+# Read-only by default (audit SEC-08): the build jobs run `bun install`, whose
+# dependency scripts must not hold a token that can rewrite the repository or
+# its releases. Only the publish job is given write access, below.
 permissions:
-  contents: write
+  contents: read
 
 concurrency:
   group: release-${{ github.ref }}
@@ -109,18 +112,33 @@ jobs:
         shell: bash
     env:
       VERSION: ${{ needs.version.outputs.version }}
-      # Signing is opt-in: provide CSC_LINK/CSC_KEY_PASSWORD (and APPLE_* for
-      # notarisation) as repository secrets to sign; without them the macOS
-      # app is ad-hoc signed by desktop/scripts/after-pack.cjs.
+      # Code signing, from repository secrets only (docs/release/distribution.md).
+      # Without them the build is unsigned, and the publish job can only release
+      # it as a prerelease. `vars.REQUIRE_SIGNING == 'true'` makes an unsigned or
+      # invalid signature fail this job instead.
       CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+      CSC_LINK: ${{ secrets.CSC_LINK }}
+      CSC_KEY_PASSWORD: ${{ secrets.CSC_KEY_PASSWORD }}
+      AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+      AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+      AZURE_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}
+      AZURE_SIGNING_ENDPOINT: ${{ vars.AZURE_SIGNING_ENDPOINT }}
+      AZURE_SIGNING_ACCOUNT: ${{ vars.AZURE_SIGNING_ACCOUNT }}
+      AZURE_CERT_PROFILE: ${{ vars.AZURE_CERT_PROFILE }}
+      AZURE_PUBLISHER_NAME: ${{ vars.AZURE_PUBLISHER_NAME }}
+      APPLE_ID: ${{ secrets.APPLE_ID }}
+      APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+      APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
     steps:
       - uses: actions/checkout@v4
+      # `with` belongs to its step. Written as its own list item it was a step
+      # with neither `uses` nor `run`, which GitHub rejects before running anything.
       - uses: actions/setup-node@v4
-      - with:
+        with:
           node-version: ${{ env.NODE_VERSION }}
       - uses: oven-sh/setup-bun@v2
       - uses: actions/setup-java@v4
-      - with:
+        with:
           distribution: temurin
           java-version: ${{ env.JAVA_VERSION }}
           cache: maven
@@ -143,12 +161,27 @@ jobs:
         run: node tools/package/build-installer.mjs --fast --arch ${{ matrix.arch }} --version "$VERSION"
       - name: Check the package carries its runtime
         run: node tools/package/verify-package.mjs --arch ${{ matrix.arch }}
+      - name: Check the signatures on what users download
+        # After packaging, on the final artifacts. Required when the repository
+        # says so; otherwise reported, and recorded for the publish job.
+        id: signatures
+        run: >-
+          node tools/package/verify-signatures.mjs
+          ${{ vars.REQUIRE_SIGNING == 'true' && runner.os != 'Linux' && '--require' || '' }}
+      - name: Record the signing state
+        run: echo "${{ runner.os == 'Linux' && 'n/a' || steps.signatures.outputs.signed }}" > "desktop/release/SIGNING-${{ matrix.label }}.txt"
+      - name: Software bill of materials
+        if: matrix.label == 'linux-x64'
+        working-directory: desktop
+        run: npx --yes @cyclonedx/cyclonedx-npm@6 --omit dev --ignore-npm-errors --output-file release/CS3-sbom.cdx.json
       - name: Upload packages
         uses: actions/upload-artifact@v4
         with:
           name: cs3-${{ matrix.label }}
           if-no-files-found: error
           path: |
+            desktop/release/SIGNING-*.txt
+            desktop/release/CS3-sbom.cdx.json
             desktop/release/CS3-*.exe
             desktop/release/CS3-*.zip
             desktop/release/CS3-*.dmg
@@ -161,6 +194,9 @@ jobs:
     needs: [version, build]
     if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
+    # The one job that publishes, and so the only one that may write.
+    permissions:
+      contents: write
     steps:
       - uses: actions/checkout@v4
       - uses: actions/download-artifact@v4
@@ -171,12 +207,26 @@ jobs:
       - name: Checksums
         working-directory: dist
         run: sha256sum CS3-* > SHA256SUMS.txt && cat SHA256SUMS.txt
+      - name: Signing state across platforms
+        # Any Windows or macOS artifact that is not validly signed makes this a
+        # prerelease: an unsigned build is never published as a normal release
+        # by accident (PRD §126.6). Linux records `n/a`.
+        id: signing
+        working-directory: dist
+        run: |
+          cat SIGNING-*.txt
+          if grep -qx 'false' SIGNING-*.txt; then
+            echo "complete=false" >> "$GITHUB_OUTPUT"
+            echo "::warning::Some Windows/macOS artifacts are unsigned; publishing as a prerelease."
+          else
+            echo "complete=true" >> "$GITHUB_OUTPUT"
+          fi
       - name: Create the release
         uses: softprops/action-gh-release@v2
         with:
-          name: CloudStream 3 Desktop ${{ needs.version.outputs.version }}
+          name: CloudStream 3 Desktop ${{ needs.version.outputs.version }}${{ steps.signing.outputs.complete != 'true' && ' (unsigned preview)' || '' }}
           generate_release_notes: true
-          prerelease: ${{ contains(needs.version.outputs.version, '-') }}
+          prerelease: ${{ contains(needs.version.outputs.version, '-') || steps.signing.outputs.complete != 'true' }}
           body_path: .github/release-notes.md
           files: |
             dist/CS3-*

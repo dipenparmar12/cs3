@@ -17,6 +17,8 @@ import { describeError } from '../../utils/errors';
  * The roles filter appears only when there is more than one role to filter
  * by: an actor's page needs no "Acting" chip, a writer-director's does.
  */
+const EMPTY_WORKS: FilmographyWork[] = [];
+
 export const FilmographyDialog: React.FC<{
   request: FilmographyRequest;
   /** The person's photo and job on the title in view, shown while loading. */
@@ -50,7 +52,7 @@ export const FilmographyDialog: React.FC<{
     };
   }, [request]);
 
-  const works = state.data?.works ?? [];
+  const works = state.data?.works ?? EMPTY_WORKS;
   const roles = useMemo(() => {
     const counts = new Map<FilmographyRole, number>();
     for (const work of works) for (const r of work.roles) counts.set(r, (counts.get(r) ?? 0) + 1);

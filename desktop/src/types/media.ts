@@ -107,6 +107,12 @@ export interface MediaMetadata {
   video: VideoStreamMetadata | null;
   audio: AudioStreamMetadata[];
   subtitles: SubtitleStreamMetadata[];
+  /**
+   * HLS whose audio languages are elementary streams inside each segment, not
+   * `#EXT-X-MEDIA` renditions (`media/tsProgram.ts`). hls.js plays only the
+   * first of them, so any other track needs a remux — never a re-encode.
+   */
+  audioMuxedInSegments?: boolean;
 }
 
 export type PlaybackStrategyType =
@@ -175,6 +181,13 @@ export interface TransformationPlan {
 
   audioAction: 'copy' | 'transcode' | 'none';
   targetAudioCodec?: 'aac';
+  /**
+   * The codec being copied, when `audioAction` is `copy` and the planner knew
+   * it. AAC copied out of MPEG-TS is ADTS, which the MP4 muxer refuses
+   * ("Malformed AAC bitstream") without `aac_adtstoasc` — and that filter
+   * errors on any other codec, so it is applied only when this says `aac`.
+   */
+  copiedAudioCodec?: string;
   /** Ordinal among audio streams; `-1` when the file has no audio. */
   selectedAudioIndex: number;
 
@@ -375,6 +388,11 @@ export interface PlaybackStreamRequest {
   /** Attributed in telemetry; the provider is what a failure belongs to. */
   provider?: string;
   preferredAudioLanguage?: string;
+  /**
+   * Never route to mpv: the viewer pressed "Play in this window" on the native
+   * engine. The stream is converted for the built-in player instead.
+   */
+  avoidNativeEngine?: boolean;
 }
 
 export interface PlaybackStreamResponse {

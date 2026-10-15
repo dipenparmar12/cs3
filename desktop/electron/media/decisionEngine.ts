@@ -430,6 +430,7 @@ export function planForAudioTrack(
     selectedAudioIndex: track.index,
     audioAction: playable ? 'copy' : 'transcode',
     targetAudioCodec: playable ? undefined : 'aac',
+    copiedAudioCodec: playable ? track.codec : undefined,
   };
 }
 
@@ -448,7 +449,7 @@ function describeResolution(width: number, height: number): string {
  * we re-encode; that always produces something playable, at a cost that is only
  * paid on a source that has already failed once.
  */
-export function blindFallbackPlan(host: HostEncodeCapability): TransformationPlan {
+export function blindFallbackPlan(host: HostEncodeCapability, audioIndex = 0): TransformationPlan {
   return {
     videoAction: host.hardware ? 'transcode' : 'downscale',
     targetVideoCodec: 'h264',
@@ -457,7 +458,10 @@ export function blindFallbackPlan(host: HostEncodeCapability): TransformationPla
     hardwareAccelerator: host.accelerator,
     audioAction: 'transcode',
     targetAudioCodec: 'aac',
-    selectedAudioIndex: 0,
+    // The track the viewer chose, which the decision already resolved; a
+    // re-encode reads any of them. Fixed at 0, "Play in this window" and the
+    // automatic retry both went back to the default language.
+    selectedAudioIndex: audioIndex >= 0 ? audioIndex : 0,
     containerAction: 'mp4_fragmented',
     subtitleAction: 'ignore',
   };
@@ -746,6 +750,7 @@ function decideBrowserStrategy(
         hardwareAccelerator: videoPlayable ? undefined : host.accelerator,
         audioAction: audioPlayable ? 'copy' : 'transcode',
         targetAudioCodec: audioPlayable ? undefined : 'aac',
+        copiedAudioCodec: audioPlayable ? track?.codec : undefined,
         selectedAudioIndex: audioIndex,
         containerAction: 'mp4_fragmented',
         subtitleAction,
@@ -771,6 +776,54 @@ function decideBrowserStrategy(
    * `bufferAddCodecError` rather than anything about codecs. That case falls
    * through to the transcoder below.
    */
+  /**
+   * Languages muxed inside the segments, and the wanted one is not the first.
+   *
+   * hls.js demuxes only the first audio stream of a TS segment and cannot be
+   * told otherwise, so handing it over would play English whatever was chosen
+   * (Castle TV: eng/hin/tam/tel in every segment, measured 2026-10-14). The
+   * remedy is a remux that maps the chosen stream — video and audio copied,
+   * nothing decoded — not the re-encode the forced retry used to reach for.
+   * Requires the video codec to have been measured from the segment, which
+   * `withSegmentStreams` did; the first track still goes to hls.js untouched.
+   */
+  /*
+   * The same holds for a progressive file with several audio tracks: Chromium
+   * exposes no audio-track API, so the element plays the file's default track
+   * whatever is wanted. Handing it over while the player's menu named the
+   * remembered language was "I chose Hindi and it plays English" after every
+   * source switch and resume. Any other track is remuxed in.
+   */
+  const defaultAudioIndex = (metadata.audio.find((a) => a.isDefault) ?? metadata.audio[0])?.index ?? 0;
+  const elementCannotPick =
+    (transport === 'hls' && metadata.audioMuxedInSegments && audioIndex > 0) ||
+    (transport === 'progressive' &&
+      metadata.audio.length > 1 &&
+      audioIndex >= 0 &&
+      audioIndex !== defaultAudioIndex &&
+      containerPlayable);
+  if (elementCannotPick && videoPlayable && metadata.video) {
+    return {
+      directPlayable: false,
+      strategy: audioPlayable ? 'REMUX_CONTAINER' : 'AUDIO_TRANSCODE',
+      plan: {
+        videoAction: 'copy',
+        audioAction: audioPlayable ? 'copy' : 'transcode',
+        targetAudioCodec: audioPlayable ? undefined : 'aac',
+        copiedAudioCodec: audioPlayable ? track?.codec : undefined,
+        selectedAudioIndex: audioIndex,
+        containerAction: 'mp4_fragmented',
+        subtitleAction: 'ignore',
+      },
+      explanation:
+        transport === 'hls'
+          ? 'HLS with its audio languages inside the segments: the chosen language is ' +
+            'remuxed in (copied, not re-encoded), because hls.js only ever plays the first.'
+          : 'A file with several audio tracks: the chosen one is remuxed in (copied, not ' +
+            're-encoded), because the browser always plays the file\'s default track.',
+    };
+  }
+
   if (transport === 'hls' && videoPlayable && audioPlayable) {
     return {
       directPlayable: true,
@@ -829,6 +882,7 @@ function decideBrowserStrategy(
       plan: {
         videoAction: 'copy',
         audioAction: 'copy',
+        copiedAudioCodec: track?.codec,
         selectedAudioIndex: audioIndex,
         containerAction: 'mp4_fragmented',
         subtitleAction,
@@ -873,6 +927,7 @@ function decideBrowserStrategy(
       hardwareAccelerator: host.accelerator,
       audioAction: audioPlayable ? 'copy' : 'transcode',
       targetAudioCodec: audioPlayable ? undefined : 'aac',
+      copiedAudioCodec: audioPlayable ? track?.codec : undefined,
       selectedAudioIndex: audioIndex,
       containerAction: 'mp4_fragmented',
       subtitleAction,

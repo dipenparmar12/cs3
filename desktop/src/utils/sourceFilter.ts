@@ -215,6 +215,47 @@ export function filterAndSortSources(
   );
 }
 
+/** How many torrent rows stay visible beside direct streams before the rest fold. */
+export const TORRENTS_SHOWN_BESIDE_STREAMS = 5;
+
+/**
+ * Keeps a long torrent tail from burying the direct streams.
+ *
+ * An indexer sweep returns dozens of torrents for a popular title while the
+ * providers return three or four streams that start in a second, and a list
+ * that is 90% magnets reads as "this is a torrent app". Only the *tail* folds:
+ * every direct stream stays, the best-ranked torrents stay in their place, and
+ * the rest are one press away — nothing is removed, and the order is the
+ * ranking's, untouched.
+ *
+ * No fold when there is nothing else to show (all torrents), when the viewer
+ * asked for torrents with the kind filter, or for a row that must stay visible
+ * (the one playing).
+ */
+export function foldTorrents(
+  sources: TorrentResult[],
+  state: Pick<SourceFilterState, 'kind'>,
+  keepVisible: (source: TorrentResult) => boolean = () => false,
+  limit = TORRENTS_SHOWN_BESIDE_STREAMS
+): { shown: TorrentResult[]; hidden: number } {
+  const hasDirect = sources.some((source) => Boolean(source.directUrl));
+  if (!hasDirect || state.kind === 'torrent') return { shown: sources, hidden: 0 };
+
+  let torrentsShown = 0;
+  let hidden = 0;
+  const shown = sources.filter((source) => {
+    if (source.directUrl) return true;
+    if (torrentsShown < limit) {
+      torrentsShown++;
+      return true;
+    }
+    if (keepVisible(source)) return true;
+    hidden++;
+    return false;
+  });
+  return { shown, hidden };
+}
+
 export interface FacetCount {
   value: string;
   label: string;

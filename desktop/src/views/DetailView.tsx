@@ -53,6 +53,7 @@ import type { PrefetchState } from '../../electron/cs3/sourcePrefetcher';
 import type { PageSnapshot } from '../../electron/cs3/pageSnapshot';
 import { detailFromSnapshot, mergeDetail, savedCopyAge } from '../utils/savedPage';
 import { FranchiseRail } from '../components/detail/FranchiseRail';
+import { distinctRecommendations } from '../utils/relatedRails';
 
 /** Cards the rail is sized for before "Show all" is worth offering. */
 const RAIL_PREVIEW = 8;
@@ -383,16 +384,18 @@ export const DetailView: React.FC<DetailViewProps> = ({
   const [selectedEpisode, setSelectedEpisode] = useState<Episode | null>(null);
 
   const [pickerOpen, setPickerOpen] = useState(false);
-  // Providers repeat a title across their own rows; one card per address.
-  const recommendations = useMemo(() => {
-    const seen = new Set<string>();
-    return (detail?.recommendations ?? []).filter((item) => {
-      const key = `${item.apiName}:${item.url}`;
-      if (seen.has(key)) return false;
-      seen.add(key);
-      return true;
-    });
-  }, [detail?.recommendations]);
+  // One card per address, and nothing the page already shows — the title
+  // itself, or the franchise rail's entries (PRD §120.6).
+  const recommendations = useMemo(
+    () =>
+      detail
+        ? distinctRecommendations(detail.recommendations ?? [], {
+            current: { name: detail.name, year: detail.year, imdbId: detail.imdbId || extended?.ids?.imdb },
+            franchise: extended?.franchise?.entries,
+          })
+        : [],
+    [detail, extended?.ids?.imdb, extended?.franchise?.entries]
+  );
   const [pickerData, setPickerData] = useState<SourcePickerData | null>(null);
   const [pickerError, setPickerError] = useState<string | undefined>();
   /** One line under the picker's heading — what clearing the cache did. */

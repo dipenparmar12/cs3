@@ -22,6 +22,7 @@ import type {
 import type { TitleVideo } from '../../types/metadata';
 import { TitleVideoKind } from '../../types/metadata';
 import { formatVideoDuration } from '../../utils/videoGallery';
+import { describeError } from '../../utils/errors';
 import { DetailSection, SectionAction } from './DetailSection';
 
 export interface ReviewsAndExplanationsProps {
@@ -141,7 +142,7 @@ export const ReviewsAndExplanations: React.FC<ReviewsAndExplanationsProps> = ({
         }
       } catch (err) {
         if (!controller.signal.aborted) {
-          setErrorMessage(err instanceof Error ? err.message : 'Could not fetch reviews and explanations.');
+          setErrorMessage(describeError(err));
           setStatus('error');
         }
       } finally {

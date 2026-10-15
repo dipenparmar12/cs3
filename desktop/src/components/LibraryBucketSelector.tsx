@@ -105,13 +105,14 @@ export const LibraryBucketSelector: React.FC<LibraryBucketSelectorProps> = ({
     setEntryKey(knownKey ?? null);
   }, [knownStatus, knownKey]);
 
+  const itemUrl = item?.url;
   const shouldFetch = known === undefined && (!deferFetch || open);
   useEffect(() => {
     if (!shouldFetch) return;
     let active = true;
     const fetchStatus = async () => {
-      if (!window.cloudstream || !item || !item.url) return;
-      const entry = await window.cloudstream.getLibraryEntryForUrl(item.url);
+      if (!window.cloudstream || !itemUrl) return;
+      const entry = await window.cloudstream.getLibraryEntryForUrl(itemUrl);
       if (active && entry) {
         setCurrentStatus(entry.status);
         setEntryKey(entry.key);
@@ -124,7 +125,7 @@ export const LibraryBucketSelector: React.FC<LibraryBucketSelectorProps> = ({
     return () => {
       active = false;
     };
-  }, [item?.url, shouldFetch]);
+  }, [itemUrl, shouldFetch]);
 
   useEffect(() => {
     if (!open) return;

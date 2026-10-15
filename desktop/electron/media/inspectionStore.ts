@@ -36,6 +36,18 @@ const KEY = 'media_inspection_v1';
  */
 const TTL_MS = 30 * 24 * 60 * 60 * 1000;
 
+/**
+ * What the inspector knew how to measure when an entry was written.
+ *
+ * A file's codecs never change, but what we can *see* of them does: before 2
+ * an HLS media playlist without `#EXT-X-MEDIA` was recorded as one audio
+ * track, and a cached record would go on hiding the other three languages for
+ * a month; before 3 an HLS playlist had no duration, so a converted HLS title
+ * had no length at all. Entries from an older measurement are misses, and
+ * re-probed.
+ */
+const MEASUREMENT = 3;
+
 /** Bounded like every other cache here; this one holds a few KB per entry. */
 const MAX_ENTRIES = 400;
 
@@ -56,6 +68,8 @@ interface StoredInspection {
   drm: DrmConfiguration;
   at: number;
   lastUsedAt: number;
+  /** {@link MEASUREMENT} when written; absent on entries older than it. */
+  v?: number;
 }
 
 export class InspectionStore {
@@ -112,13 +126,13 @@ export class InspectionStore {
     const key = InspectionStore.keyFor(originUrl);
     if (isPrivateSession()) {
       const v = this.volatile.get(key);
-      if (v && Date.now() - v.at < TTL_MS) {
+      if (v && v.v === MEASUREMENT && Date.now() - v.at < TTL_MS) {
         return { metadata: v.metadata, transport: v.transport, drm: v.drm };
       }
     }
     const entries = this.load();
     const entry = entries.find((candidate) => candidate.key === key);
-    if (!entry) return null;
+    if (!entry || entry.v !== MEASUREMENT) return null;
     if (Date.now() - entry.at >= TTL_MS) return null;
 
     if (!isPrivateSession()) {
@@ -145,11 +159,11 @@ export class InspectionStore {
     const key = InspectionStore.keyFor(originUrl);
     const now = Date.now();
     if (isPrivateSession()) {
-      this.volatile.set(key, { key, metadata, transport, drm, at: now, lastUsedAt: now });
+      this.volatile.set(key, { key, metadata, transport, drm, at: now, lastUsedAt: now, v: MEASUREMENT });
       return;
     }
     const entries = this.load().filter((entry) => entry.key !== key);
-    entries.push({ key, metadata, transport, drm, at: now, lastUsedAt: now });
+    entries.push({ key, metadata, transport, drm, at: now, lastUsedAt: now, v: MEASUREMENT });
     this.save(entries);
   }
 

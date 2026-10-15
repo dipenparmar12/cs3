@@ -61,7 +61,7 @@ export async function fetchWikidataReviewStatements(
       score: b.score?.value,
       reviews: b.reviews?.value,
     }));
-  } catch (error) {
+  } catch {
     // Wikidata under load or SPARQL syntax/timeout issues should fail cleanly
     // without affecting the rest of the application.
     return [];

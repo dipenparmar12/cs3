@@ -65,8 +65,10 @@ function useProviderReferences(): Map<string, string[]> {
 export const BulkConfirmDialog: React.FC<Props> = ({ verb, plan, onConfirm, onCancel }) => {
   const words = VERB[verb];
   const references = useProviderReferences();
-  const part: { extensions: ExtensionRef[]; providers: ProviderRef[] } =
-    verb === 'uninstall' ? { extensions: plan.uninstall, providers: [] } : plan[verb];
+  const part: { extensions: ExtensionRef[]; providers: ProviderRef[] } = useMemo(
+    () => (verb === 'uninstall' ? { extensions: plan.uninstall, providers: [] } : plan[verb]),
+    [verb, plan],
+  );
 
   const groups = useMemo(() => {
     const byRepo = new Map<string, { extensions: ExtensionRef[]; providers: ProviderRef[] }>();

@@ -36,7 +36,9 @@ startup.watch();
  */
 const endServiceGraph = startup.span('constructServices');
 
-import { app, BrowserWindow, ipcMain, dialog, Menu, net, screen, shell } from 'electron';
+import { app, BrowserWindow, ipcMain, dialog, Menu, net, screen, session, shell } from 'electron';
+import { byteStringHeaders, isElectronHeaderByteStringError } from './util/headerBytes.ts';
+import { appMayUse } from './security/permissions.ts';
 import { BackupService } from './cs3/backupService.ts';
 import { runReset, summarise, type ResetAreaDefinition } from './cs3/userDataReset.ts';
 import type { UserDataResetRequest } from '../src/types/userData';
@@ -56,6 +58,7 @@ import {
 } from './cs3/extensionIssues';
 import { Aria2Engine } from './aria2Engine';
 import { DownloadService } from './downloadService';
+import { resolveSafeRevealTarget } from './download/revealTarget.ts';
 import { PluginManager } from './pluginManager';
 import type { SearchScope } from './searchScope';
 import {
@@ -138,7 +141,7 @@ import { DiagnosticsLog } from './cs3/diagnostics';
 import { ProviderAnalytics } from './cs3/providerAnalytics';
 import { ProviderRanking } from './cs3/providerRanking';
 import { ProviderRecommender } from './cs3/providerRecommendations';
-import { ExternalPlayerService } from './externalPlayer';
+import { ExternalPlayerService, customPlayerId, validatePlayerPath } from './externalPlayer';
 import {
   continueWatchingEnabled,
   setContinueWatchingEnabled,
@@ -694,8 +697,13 @@ downloadService.setAnalytics(providerAnalytics);
 // Stream failures are otherwise invisible: the request succeeded, and the break
 // happens minutes later with nothing watching.
 contentService.getProxy().setDiagnostics(diagnostics);
+/*
+ * The folders downloads land in may serve any file; elsewhere only media and
+ * subtitles (audit SEC-05). `userData` is deliberately not one: it holds the
+ * datastore, server keys included. The viewer's own download folder joins when
+ * it is chosen (`download:setDirectory`).
+ */
 try {
-  contentService.getProxy().addAllowedDirectory(app.getPath('userData'));
   contentService.getProxy().addAllowedDirectory(app.getPath('downloads'));
 } catch {}
 // A private session discovers into memory only; leaving it drops what was found.
@@ -905,6 +913,21 @@ const playbackEngine = new PlaybackEngine({
       return null;
     }
   },
+  // A segment's first bytes, for its program table. Short deadline: this runs
+  // before playback starts, and the manifest's answer is the fallback.
+  fetchBytes: async (url, bytes) => {
+    try {
+      const response = await resilientFetch.fetch(
+        url,
+        { headers: { Range: `bytes=0-${bytes - 1}` }, signal: AbortSignal.timeout(4_000) },
+        { operation: 'segment-sniff' }
+      );
+      if (!response.ok && response.status !== 206) return null;
+      return new Uint8Array(await response.arrayBuffer()).subarray(0, bytes);
+    } catch {
+      return null;
+    }
+  },
   describeUnreadable: (url) => describeUnreadableSource(url),
   diagnostics,
 });
@@ -1038,6 +1061,23 @@ function installProcessGuards(): void {
 
   process.on('uncaughtException', (error) => {
     if (swallow(error, 'uncaughtException')) return;
+    /*
+     * Electron's own `net.fetch` choking on a header byte, which the session
+     * hook above should already prevent. If one still slips through, it is a
+     * single request that will never settle — every caller has a deadline —
+     * not a reason to take the window down.
+     */
+    if (isElectronHeaderByteStringError(error)) {
+      logger.error('app', 'net_header_bytestring', { error: error.message });
+      diagnostics.record({
+        level: 'warn',
+        stage: 'runtime',
+        source: 'network',
+        message: 'Recovered from a response header Electron could not read',
+        detail: error.stack,
+      });
+      return;
+    }
 
     // Not ours to swallow. Report it the way Electron would have, and let the
     // default behaviour stand.
@@ -1362,10 +1402,16 @@ function createWindow() {
     backgroundColor: '#0c0f17',
     show: false,
     webPreferences: {
-      preload: path.join(__dirname, 'preload.js'),
+      preload: path.join(__dirname, 'preload.cjs'),
       contextIsolation: true,
       nodeIntegration: false,
-      sandbox: false,
+      /*
+       * Sandboxed (audit SEC-01). The renderer draws text and images from
+       * third-party providers; with the sandbox off, a renderer compromise is
+       * one step from the OS. The preload needs nothing a sandbox withholds —
+       * `contextBridge`, `ipcRenderer` and `webUtils` are all available.
+       */
+      sandbox: true,
       autoplayPolicy: 'no-user-gesture-required',
     },
   });
@@ -1399,6 +1445,14 @@ function createWindow() {
     boundsTimer = setTimeout(saveWindowBounds, 400);
     boundsTimer.unref?.();
   };
+  // Whoever changed it — the player, the menu, F11 — the renderer hears it.
+  const reportFullScreen = () => {
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.send('window:fullScreenChanged', mainWindow.isFullScreen());
+    }
+  };
+  mainWindow.on('enter-full-screen', reportFullScreen);
+  mainWindow.on('leave-full-screen', reportFullScreen);
   mainWindow.on('resize', rememberBounds);
   mainWindow.on('move', rememberBounds);
   mainWindow.on('maximize', rememberBounds);
@@ -1697,6 +1751,34 @@ app.whenReady().then(async () => {
    */
   setHttpFetch((input, init) => resilientFetch.fetch(input, init));
   network.apply();
+
+  /**
+   * Response headers `net.fetch` can survive. A non-Latin-1 header value — a
+   * `【…】` file name in `Content-Disposition` — makes Electron's own `Headers`
+   * construction throw where no caller can catch it, which crashed the app
+   * mid-search (see `util/headerBytes.ts`). The default session is the one
+   * `net.fetch` uses; nothing else registers `onHeadersReceived` on it, and
+   * the common case answers "unchanged" after one scan.
+   */
+  session.defaultSession.webRequest.onHeadersReceived((details, callback) => {
+    const responseHeaders = byteStringHeaders(details.responseHeaders);
+    callback(responseHeaders ? { responseHeaders } : {});
+  });
+
+  /**
+   * Permissions are an allowlist (audit SEC-02, `security/permissions.ts`):
+   * Electron grants every request when no handler is set. The app's own page
+   * keeps clipboard writes, HTML fullscreen and ClearKey EME; nothing else, and
+   * no other origin, gets anything. The WebView partition refuses everything
+   * itself (`webViewHost.ts`).
+   */
+  const devServerUrl = process.env.VITE_DEV_SERVER_URL;
+  session.defaultSession.setPermissionRequestHandler((contents, permission, callback, details) =>
+    callback(appMayUse(permission, details.requestingUrl || contents.getURL(), devServerUrl))
+  );
+  session.defaultSession.setPermissionCheckHandler((contents, permission, requestingOrigin) =>
+    appMayUse(permission, requestingOrigin || contents?.getURL() || '', devServerUrl)
+  );
 
   startup.stage('createWindow', () => createWindow());
 
@@ -2129,6 +2211,13 @@ ipcMain.handle('api:searchAll', async (_, query: string, options?: SearchOptions
  */
 ipcMain.handle('search:start', async (_, query: string, options?: SearchOptions) => {
   try {
+    // An IMDb id or link is searched as the work it names, by title. A caller
+    // that already pinned a work (a picked suggestion) keeps its own.
+    const exact = options?.exact ? null : await contentService.exactFromImdbQuery(query);
+    if (exact) {
+      query = exact.title;
+      options = { ...options, exact };
+    }
     const snapshot = contentService.startSearch(query, options ?? {});
     /**
      * Recorded now, not when the search finishes.
@@ -3715,11 +3804,68 @@ ipcMain.handle('shell:openExternal', async (_, url: string) => {
   return { ok: true };
 });
 
-ipcMain.handle('player:listExternal', async (_, refresh?: boolean) => ({
-  ok: true,
-  players: refresh ? externalPlayers.refresh() : externalPlayers.list(),
-  downloads: externalPlayers.getDownloads(),
-}));
+/**
+ * Players the viewer added by hand, read on first use rather than at module
+ * scope (the datastore is a multi-megabyte parse; see §12). A setting, so the
+ * backup's settings section carries it.
+ */
+const CUSTOM_PLAYERS_KEY = 'external_player_custom_paths';
+let customPlayersLoaded = false;
+function ensureCustomPlayers(): void {
+  if (customPlayersLoaded) return;
+  customPlayersLoaded = true;
+  externalPlayers.setCustomPlayers(datastore.getObject<string[]>(CUSTOM_PLAYERS_KEY, [], true) ?? []);
+}
+function saveCustomPlayers(paths: string[]) {
+  const kept = externalPlayers.setCustomPlayers(paths);
+  datastore.setObject(CUSTOM_PLAYERS_KEY, kept.map((player) => player.path), true);
+  return { ok: true, players: externalPlayers.list(), downloads: externalPlayers.getDownloads() };
+}
+
+ipcMain.handle('player:listExternal', async (_, refresh?: boolean) => {
+  ensureCustomPlayers();
+  return {
+    ok: true,
+    players: refresh ? externalPlayers.refresh() : externalPlayers.list(),
+    downloads: externalPlayers.getDownloads(),
+  };
+});
+
+/**
+ * "Add a player…" (PRD §121.7): for an install detection cannot find — a
+ * portable build, an unusual folder. The path comes from the OS file picker
+ * here in main, never typed into the renderer, and is validated before it is
+ * kept; it is launched with `spawn` and no shell, like every other player.
+ */
+ipcMain.handle('player:addCustom', async () => {
+  ensureCustomPlayers();
+  const options: Electron.OpenDialogOptions = {
+    title: 'Choose a media player',
+    properties: ['openFile'],
+    filters:
+      process.platform === 'win32'
+        ? [{ name: 'Programs', extensions: ['exe'] }]
+        : process.platform === 'darwin'
+          ? [{ name: 'Applications', extensions: ['app'] }]
+          : [],
+  };
+  const picked =
+    mainWindow && !mainWindow.isDestroyed()
+      ? await dialog.showOpenDialog(mainWindow, options)
+      : await dialog.showOpenDialog(options);
+  if (picked.canceled || picked.filePaths.length === 0) {
+    return { ok: true, cancelled: true, players: externalPlayers.list(), downloads: externalPlayers.getDownloads() };
+  }
+  const chosen = picked.filePaths[0];
+  const problem = validatePlayerPath(chosen);
+  if (problem) return { ok: false, error: problem, players: externalPlayers.list(), downloads: externalPlayers.getDownloads() };
+  return saveCustomPlayers([...externalPlayers.customPlayerPaths().filter((p) => p !== chosen), chosen]);
+});
+
+ipcMain.handle('player:removeCustom', async (_, playerId: string) => {
+  ensureCustomPlayers();
+  return saveCustomPlayers(externalPlayers.customPlayerPaths().filter((p) => customPlayerId(p) !== playerId));
+});
 
 /**
  * Hands a stream to an external player **and keeps a channel to it** where one
@@ -3739,6 +3885,7 @@ ipcMain.handle('external:open', async (_, playerId: string, url: string) => {
     const result = await mpvEngine.open({ url, title: 'CloudStream' });
     return { ...result, capability: result.ok ? 'full' : 'none', engine: 'mpv' };
   }
+  ensureCustomPlayers();
   const result = await externalPlayers.openControlled(playerId, url);
   if (!result.ok) {
     diagnostics.record({
@@ -3855,6 +4002,7 @@ ipcMain.handle('external:stop', async () => {
 });
 
 ipcMain.handle('player:openExternal', async (_, playerId: string, url: string) => {
+  ensureCustomPlayers();
   const result = externalPlayers.open(playerId, url);
   if (!result.ok) {
     diagnostics.record({
@@ -4105,6 +4253,31 @@ ipcMain.handle('window:setAlwaysOnTop', async (_, onTop: boolean) => {
 ipcMain.handle('window:getAlwaysOnTop', async () => ({
   ok: true,
   alwaysOnTop: Boolean(mainWindow && !mainWindow.isDestroyed() && mainWindow.isAlwaysOnTop()),
+}));
+
+/**
+ * The one fullscreen: the window's.
+ *
+ * The player used the HTML Fullscreen API on its own container while the window
+ * had its own (View → Toggle Full Screen, F11), and the two stacked. Minimising
+ * a player that was fullscreen through the HTML API shrank it *inside* the
+ * still-fullscreen container — a small picture on a black screen with no app
+ * behind it and no visible way out. Driving the window instead means there is a
+ * single state, the mini player always sits over the real app, and every
+ * surface (player button, menu, F11) reads and changes the same thing.
+ * `window:fullScreenChanged` carries every transition, whoever started it.
+ */
+ipcMain.handle('window:setFullScreen', async (_, fullScreen: boolean) => {
+  if (!mainWindow || mainWindow.isDestroyed()) {
+    return { ok: false, error: 'The window is gone.', fullScreen: false };
+  }
+  mainWindow.setFullScreen(fullScreen === true);
+  return { ok: true, fullScreen: fullScreen === true };
+});
+
+ipcMain.handle('window:getFullScreen', async () => ({
+  ok: true,
+  fullScreen: Boolean(mainWindow && !mainWindow.isDestroyed() && mainWindow.isFullScreen()),
 }));
 
 ipcMain.handle('mpv:setVideoEnabled', async (_, enabled: boolean) => {
@@ -4559,7 +4732,7 @@ ipcMain.handle(
       });
       if (!task) return { ok: false, error: 'That file could not be queued.' };
 
-      return await downloadService.request(task);
+      return await downloadService.request(fromRenderer(task));
     } catch (error) {
       return fail(error);
     }
@@ -4636,11 +4809,23 @@ ipcMain.handle('sources:savePreferences', async (_, prefs: Partial<SourcePrefere
 
 // --- downloads -----------------------------------------------------------
 
+/**
+ * A download as the renderer describes it, minus where to write it (audit SEC-06).
+ *
+ * `enqueue` kept a caller-supplied `targetFilePath`, so whoever drives this IPC
+ * chose any path on disk to write a provider's bytes to — a Startup folder
+ * included. The renderer never sets one (`downloadIdentity.ts` sends ''); the
+ * path is always built here from the sanitised title, inside the download folder.
+ */
+function fromRenderer(task: DownloadTask): DownloadTask {
+  return { ...task, targetFilePath: '' };
+}
+
 ipcMain.handle('download:enqueue', async (_, task: DownloadTask) => {
   if (privacyMode.isActive() && !privacyMode.getState().settings.allowDownloads) {
     throw new Error('Downloads are turned off in Incognito.');
   }
-  return downloadService.enqueue(task);
+  return downloadService.enqueue(fromRenderer(task));
 });
 /**
  * The state-aware Download press.
@@ -4960,6 +5145,8 @@ ipcMain.handle('download:getQueue', async () => downloadService.getTasks());
 ipcMain.handle('download:getPlayableUrl', async (_, filePath: string) => {
   try {
     if (!filePath) return { ok: false, error: 'That download has no file path recorded.' };
+    // Read here, not at module scope: it is a datastore lookup (§12).
+    contentService.getProxy().addAllowedDirectory(storage.downloadsDir());
     return { ok: true, url: await contentService.serveLocalFile(filePath) };
   } catch (error) {
     logger.warn('download', 'local_playback_failed', { error: String(error) });
@@ -4985,7 +5172,11 @@ ipcMain.handle('download:getActiveBatches', async () => batchDownloader.getActiv
 
 ipcMain.handle('download:revealInFolder', async (_, targetPath?: string) => {
   const defaultDir = storage.downloadsDir();
-  const target = targetPath || defaultDir;
+  const target = resolveSafeRevealTarget(
+    targetPath,
+    [defaultDir, app.getPath('downloads'), storage.dataDir],
+    downloadService.getTasks().map((task) => task.targetFilePath)
+  );
   try {
     const normalized = path.normalize(target);
     if (fs.existsSync(normalized)) {
@@ -6831,6 +7022,8 @@ ipcMain.handle('download:setDirectory', async (_, directory: string | null) => {
       fs.mkdirSync(resolved, { recursive: true });
       fs.accessSync(resolved, fs.constants.W_OK);
       datastore.setString(DOWNLOAD_DIRECTORY_KEY, resolved, true);
+      // Finished downloads there must play in-app, whatever their extension.
+      contentService.getProxy().addAllowedDirectory(resolved);
     } else {
       datastore.setString(DOWNLOAD_DIRECTORY_KEY, '', true);
     }

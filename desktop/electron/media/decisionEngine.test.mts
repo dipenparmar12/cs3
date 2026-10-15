@@ -698,6 +698,14 @@ test('the blind fallback never copies video', () => {
   assert.equal(blindFallbackPlan(GPU).audioAction, 'transcode');
 });
 
+test('the blind fallback converts the chosen audio track, not the first', () => {
+  // "Play in this window" and the automatic retry both go through it; fixed
+  // at track 0, they put a viewer who chose Hindi back on the English default.
+  assert.equal(blindFallbackPlan(GPU, 2).selectedAudioIndex, 2);
+  assert.equal(blindFallbackPlan(GPU).selectedAudioIndex, 0);
+  assert.equal(blindFallbackPlan(GPU, -1).selectedAudioIndex, 0);
+});
+
 // --- extended format & codec test suite ------------------------------------
 
 test('10-bit H.264 (Hi10P) and 4:2:2 chroma formats trigger video transcode', () => {

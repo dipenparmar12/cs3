@@ -100,6 +100,24 @@ export function parseBareImdbUrl(url: string): string | null {
   return match ? match[1] : null;
 }
 
+/**
+ * The IMDb title a search query *is*, when the whole query is one.
+ *
+ * Accepts a bare id (`tt1160419`) or an IMDb title page in any of its spellings
+ * (`https://www.imdb.com/title/tt1160419/?ref_=…`, `m.imdb.com`, no scheme).
+ * A query that merely *contains* an id among other words is left alone — the
+ * viewer typed text, and text is what gets searched.
+ */
+export function imdbIdFromQuery(query: string): string | null {
+  const trimmed = query.trim();
+  const bare = trimmed.match(/^(tt\d{7,10})$/i);
+  if (bare) return bare[1].toLowerCase();
+  const page = trimmed.match(
+    /^(?:https?:\/\/)?(?:www\.|m\.)?imdb\.com\/(?:[a-z]{2}(?:-[a-z]{2})?\/)?title\/(tt\d{7,10})(?:[/?#][^\s]*)?$/i
+  );
+  return page ? page[1].toLowerCase() : null;
+}
+
 /** `releaseInfo` is "2024", "2008–2013", or "2019–". Take the first year. */
 function parseYear(releaseInfo: string | undefined): number | undefined {
   const match = releaseInfo?.match(/(\d{4})/);
@@ -196,6 +214,47 @@ export class CinemetaProvider {
     collect(series, 'series');
 
     return rankByRelevance(results, query);
+  }
+
+  /**
+   * Which work an IMDb id names, without knowing whether it is a film or a show.
+   *
+   * Both catalogues are asked at once, and **the series answer wins** whenever
+   * there is one. The two are not symmetric — measured 2026-10-14 on nine ids:
+   * the series catalogue answered no `meta` for every film id, while the movie
+   * catalogue answered *every* series id with an unrelated film under the same
+   * id (Breaking Bad → "Mirror", Rick and Morty → "Eye Contact", The Office →
+   * "The Story of an African Farm"). Preferring the movie answer would search
+   * for the wrong work and pin the results to it.
+   *
+   * `null` when neither knows it — or when the host is unreachable, which the
+   * caller treats the same: search the text.
+   */
+  public async resolveImdb(
+    imdbId: string,
+    signal?: AbortSignal
+  ): Promise<{ title: string; year?: number; type: TvType; imdbId: string; posterUrl?: string } | null> {
+    const ask = async (type: 'movie' | 'series') => {
+      const response = await fetchJson<MetaResponse>(`${BASE}/meta/${type}/${imdbId}.json`, {
+        signal,
+        timeoutMs: 8_000,
+      });
+      const meta = response.meta;
+      return meta?.name
+        ? {
+            title: meta.name,
+            year: parseYear(meta.releaseInfo),
+            type: toTvType(type, meta.genres),
+            imdbId,
+            posterUrl: meta.poster,
+          }
+        : null;
+    };
+    const [movie, series] = await Promise.allSettled([ask('movie'), ask('series')]);
+    return (
+      (series.status === 'fulfilled' ? series.value : null) ??
+      (movie.status === 'fulfilled' ? movie.value : null)
+    );
   }
 
   public async load(

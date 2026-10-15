@@ -154,6 +154,15 @@ export class VlcController {
       return { ok: false, error: describeError(error) };
     }
 
+    // A start that fails (moved or removed executable) arrives as `error`, later;
+    // unheard it is an uncaught exception in main. Reported as the session ending.
+    this.process.on('error', () => {
+      this.process = null;
+      this.stopPolling();
+      this.snapshot = { ...this.snapshot, state: 'closed', paused: true };
+      this.deps.onUpdate(this.snapshot);
+    });
+
     this.process.on('exit', () => {
       /**
        * The viewer closed VLC. That is the end of playback, and the app has to

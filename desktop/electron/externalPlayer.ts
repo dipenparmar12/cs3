@@ -1,5 +1,5 @@
 import { spawn } from 'child_process';
-import { VlcController, controlCapabilityFor } from './externalPlayerControl';
+import { VlcController, controlCapabilityFor } from './externalPlayerControl.ts';
 import type { ExternalPlaybackSnapshot } from '../src/types/player';
 import fs from 'fs';
 import os from 'os';
@@ -175,6 +175,24 @@ export class ExternalPlayerService {
    */
   private vlc: VlcController | null = null;
   private onSnapshot: ((snapshot: ExternalPlaybackSnapshot) => void) | null = null;
+  /**
+   * Players the viewer pointed at by hand (PRD §121.7): a portable build, an
+   * install in a folder detection never looks in. Kept apart from the detection
+   * cache so a rescan never drops them, and validated on the way in.
+   */
+  private custom: ExternalPlayer[] = [];
+
+  /** Replaces the hand-added players; returns the ones that still exist. */
+  public setCustomPlayers(paths: readonly string[]): ExternalPlayer[] {
+    this.custom = paths
+      .filter((candidate) => validatePlayerPath(candidate) === null)
+      .map((candidate) => ({ id: customPlayerId(candidate), name: customPlayerName(candidate), path: candidate }));
+    return this.custom;
+  }
+
+  public customPlayerPaths(): string[] {
+    return this.custom.map((player) => player.path);
+  }
 
   /** Snapshots are forwarded to the renderer by `main.ts`. */
   public setSnapshotListener(listener: (snapshot: ExternalPlaybackSnapshot) => void): void {
@@ -272,7 +290,7 @@ export class ExternalPlayerService {
 
   /** Detects all players present on the current machine across Windows, macOS, and Linux. */
   public list(): ExternalPlayer[] {
-    if (this.cache) return this.cache;
+    if (this.cache) return this.withCustom(this.cache);
 
     const currentPlatform = process.platform;
     const found: ExternalPlayer[] = [];
@@ -380,7 +398,16 @@ export class ExternalPlayerService {
     });
 
     this.cache = found;
-    return found;
+    return this.withCustom(found);
+  }
+
+  /** Hand-added players sit after the detected ones and before the OS default. */
+  private withCustom(detected: ExternalPlayer[]): ExternalPlayer[] {
+    if (this.custom.length === 0) return detected;
+    const known = new Set(detected.map((player) => player.path.toLowerCase()));
+    const extra = this.custom.filter((player) => !known.has(player.path.toLowerCase()));
+    const fallback = detected.filter((player) => player.id === 'system-default');
+    return [...detected.filter((player) => player.id !== 'system-default'), ...extra, ...fallback];
   }
 
   /** Returns download suggestions tailored to the current operating system. */
@@ -412,7 +439,12 @@ export class ExternalPlayerService {
         if (process.platform === 'darwin') {
           child = spawn('open', [url], { detached: true, stdio: 'ignore' });
         } else if (process.platform === 'win32') {
-          child = spawn('cmd.exe', ['/c', 'start', '', url], {
+          /*
+           * Never `cmd /c start "" <url>`: cmd parses the URL, and a provider's
+           * query string is full of `&` — `…?a=1&calc` would run `calc`. The
+           * protocol handler takes the URL as one argument, with no shell.
+           */
+          child = spawn('rundll32.exe', ['url.dll,FileProtocolHandler', url], {
             detached: true,
             stdio: 'ignore',
             windowsHide: true,
@@ -420,6 +452,9 @@ export class ExternalPlayerService {
         } else {
           child = spawn('xdg-open', [url], { detached: true, stdio: 'ignore' });
         }
+        // A detached child that fails to start emits `error` later; unheard, it
+        // is an uncaught exception in main.
+        child.on('error', (error) => console.warn('[external-player] system default failed:', describeError(error)));
         child.unref();
         return { ok: true };
       } catch (error) {
@@ -447,10 +482,38 @@ export class ExternalPlayerService {
         });
       }
 
+      child.on('error', (error) => console.warn(`[external-player] ${player.name} failed:`, describeError(error)));
       child.unref();
       return { ok: true };
     } catch (error) {
       return { ok: false, error: describeError(error) };
     }
   }
+}
+
+/**
+ * Why a path cannot be a player, or `null` when it can: it must exist, be a
+ * file (an `.app` bundle on macOS), and on Windows be an `.exe` — a `.bat` or
+ * `.cmd` would run through cmd, which parses the URL we hand it.
+ */
+export function validatePlayerPath(candidate: string, platform: NodeJS.Platform = process.platform): string | null {
+  if (!candidate || !path.isAbsolute(candidate)) return 'Choose the player program itself.';
+  if (platform === 'win32' && !/\.exe$/i.test(candidate)) return "Choose the player's .exe file.";
+  try {
+    const stat = fs.statSync(candidate);
+    if (platform === 'darwin' && candidate.endsWith('.app')) return stat.isDirectory() ? null : 'That is not an application.';
+    return stat.isFile() ? null : 'That is a folder, not a program.';
+  } catch {
+    return 'That file no longer exists.';
+  }
+}
+
+export function customPlayerId(candidate: string): string {
+  return `custom:${candidate}`;
+}
+
+/** `C:\Tools\mpv\mpv.exe` → "mpv", `/Applications/Elmedia.app` → "Elmedia". */
+export function customPlayerName(candidate: string): string {
+  const base = path.basename(candidate).replace(/\.(?:exe|app)$/i, '');
+  return base || candidate;
 }

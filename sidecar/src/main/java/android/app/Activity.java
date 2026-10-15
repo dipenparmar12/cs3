@@ -45,12 +45,27 @@ public class Activity extends Context {
         super(pluginId, scopedDir);
     }
 
+    /**
+     * {@code true}: this Activity can never show anything, and these two queries
+     * are how Android code asks exactly that before it tries.
+     *
+     * <p>Not a refusal, because the question has a true answer here. Measured
+     * 2026-10-14: a donation prompt bundled in several extensions
+     * ({@code com.raghav.donation.DonationManager.waitForActivityAndShow})
+     * checks {@code isFinishing()} before building its dialog, and the throw
+     * failed <em>search</em> for AnimePahe, AniDB, Comix, CimaLight, Zinkmovies,
+     * CinemaCity, XDMovies and TwoDHive — scraping that never needed a window.
+     * Answering {@code false} would only move the failure to
+     * {@code AlertDialog.show()}. The operations that would need a window
+     * ({@link #finish()}, {@link #getWindow()} …) still refuse.
+     */
     public boolean isFinishing() {
-        throw new UnsupportedAndroidApiException("android.app.Activity.isFinishing");
+        return true;
     }
 
+    /** See {@link #isFinishing()}. */
     public boolean isDestroyed() {
-        throw new UnsupportedAndroidApiException("android.app.Activity.isDestroyed");
+        return true;
     }
 
     public void finish() {

@@ -27,6 +27,7 @@ Dated post-mortems and measurements moved verbatim out of `AGENTS.md` (nothing r
 - When we cannot play it, hand it to something that can
 - Provider links need the provider's headers, and a browser cannot send them
 - The media proxy's tokens were `1`, `2`, `3` (2026-08-27)
+- Switching the audio track did nothing, three times over (2026-10-15)
 
 ---
 
@@ -938,3 +939,34 @@ stable so nothing downstream changed, and a `Host` header that does not name loo
 refused — binding to 127.0.0.1 says nothing about DNS rebinding. Pinned by two new cases in
 `mediaProxy.test.mts`; `fetch` refuses to set `Host`, so that one uses a raw `http.request`.
 
+### Switching the audio track did nothing, three times over (2026-10-15)
+
+Castle TV ships one HLS stream with eng/hin/tam/tel inside each TS segment. Picking Hindi
+"kept playing the default", and positions reset to 0:00. Two fixes were made against the
+wrong theory first (mpv language hints; an "AAC header missing" re-encode). What settled
+it was **watching the real player**: the app run with `--remote-debugging-port`,
+`HTMLMediaElement.prototype.src`/`load` patched over CDP to log a stack per assignment,
+and a harness (the app's own proxy + inspector + decision + transcoder feeding a
+`<video>` in Electron) — which played the Hindi remux, copy or re-encode, without fault.
+The pipeline was never broken. Three player bugs were:
+
+1. **The "is this the film?" check judged a conversion by the element's duration.** A
+   live fMP4 reports what ffmpeg has muxed so far — 7.68 s one second in — so every
+   converted episode was "an 8 s clip, not the 29 min title" and was skipped within
+   ~0.1 s of `playing`; the session fell through every other source and landed on one
+   in its default language. Now only a measured length is judged (`judgeableDuration`),
+   and the inspection records a finished HLS playlist's length from its `#EXTINF`s.
+2. **The capability cache was keyed on the URL alone.** From hls.js on English, picking
+   Hindi re-prepared and was answered in **2 ms** with the cached English verdict
+   (`HLS_NATIVE`), then reattached hls.js — first PID, English — at 0:08, because a
+   `?t=` on a playlist URL is read by nothing. Keyed on the inputs of the verdict now;
+   re-prepares are attached by `attachAt`, which positions each engine its own way.
+3. **Positions were applied in the wrong form or at the wrong time.** A conversion was
+   resumed with `currentTime` (it has no index: resumed at 0:00); the resume effect fired
+   on the previous source's `duration` when the session moved on (new source at 0:00);
+   `blindFallbackPlan` converted track 0 for "Play in this window" and the forced retry.
+
+Verified in the app afterwards: resume at 2:48 on the Hindi remux, then English, 720p
+(hls.js, position carried), Hindi, Telugu — each `-map 0:a:N` at the live position, no
+skips, no forced retries. Private mode was on in that profile, which is why nothing was
+recorded between runs; check `privacy:getState` before blaming the resume code.

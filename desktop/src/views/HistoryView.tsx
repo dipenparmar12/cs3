@@ -48,7 +48,8 @@ import {
 } from '../utils/historyGrouping';
 import { downloadHistoryCsv, toHistoryCsv } from '../utils/historyExport';
 import { ScreenSearch } from '../components/ScreenSearch';
-import { Button, Dialog, DialogActions, Menu, Select } from '../components/ui';
+import { Button, Dialog, DialogActions, Menu, Select, SelectionToolbar } from '../components/ui';
+import { useListSelection } from '../utils/listSelection';
 import { useScreenSearch } from '../utils/useScreenSearch';
 
 interface HistoryViewProps {
@@ -162,9 +163,16 @@ export const HistoryView: React.FC<HistoryViewProps> = ({ onSelectMedia, onPlayD
   const [mediaTypeFilter, setMediaTypeFilter] = useSessionState<'all' | 'movie' | 'series' | 'anime'>('history.type', 'all');
   const [sortBy, setSortBy] = useSessionState<'recent' | 'oldest' | 'played' | 'failed' | 'downloaded'>('history.sort', 'recent');
 
-  // Multi-selection
-  const [selectMode, setSelectMode] = useState(false);
-  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  /*
+   * Multi-selection (PRD §116), the same model as Library and Downloads.
+   * `events` is already what the filters and find query left, so Select all
+   * and Invert act on exactly the visits on screen.
+   */
+  const eventIds = useMemo(() => events.map((event) => event.id), [events]);
+  const selection = useListSelection(eventIds);
+  const selectMode = selection.active;
+  const selectedIds = selection.selected;
+  const { message: bulkStatus, flash: flashBulkStatus } = useFlash<string>(6000);
 
   // Export CSV State & Dropdown
   const [exporting, setExporting] = useState(false);
@@ -283,8 +291,7 @@ export const HistoryView: React.FC<HistoryViewProps> = ({ onSelectMedia, onPlayD
     if (!window.cloudstream) return;
     await window.cloudstream.clearHistory?.();
     setConfirmClearOpen(false);
-    setSelectedIds(new Set());
-    setSelectMode(false);
+    selection.exit();
     fetchHistory();
   };
 
@@ -307,46 +314,34 @@ export const HistoryView: React.FC<HistoryViewProps> = ({ onSelectMedia, onPlayD
     fetchHistory();
   };
 
+  /**
+   * The store answers with how many it removed; anything short of the whole
+   * selection is said, and what is left stays selected after the refresh
+   * (removed visits leave the scope and drop out of the selection by themselves).
+   */
   const handleDeleteSelected = async () => {
     if (!window.cloudstream || selectedIds.size === 0) return;
-    await window.cloudstream.deleteHistoryItems?.([...selectedIds]);
-    setSelectedIds(new Set());
-    setSelectMode(false);
+    const ids = [...selectedIds];
+    const removed = (await window.cloudstream.deleteHistoryItems?.(ids).catch(() => 0)) ?? 0;
+    const word = (count: number) => `${count} ${count === 1 ? 'visit' : 'visits'}`;
+    if (inspectingItem && ids.includes(inspectingItem.id)) setInspectingItem(null);
+    if (removed >= ids.length) {
+      flashBulkStatus(`Removed ${word(removed)} from history`);
+      selection.exit();
+    } else {
+      flashBulkStatus(`Removed ${word(removed)} · ${ids.length - removed} could not be removed and stay selected`);
+    }
     fetchHistory();
   };
 
   const toggleSelect = (id: string, e?: React.MouseEvent) => {
     e?.stopPropagation();
-    setSelectedIds((prev) => {
-      const next = new Set(prev);
-      if (next.has(id)) next.delete(id);
-      else next.add(id);
-      return next;
-    });
+    selection.toggle(id);
   };
 
   const toggleSelectGroup = (item: GroupedHistoryItem, e?: React.MouseEvent) => {
     e?.stopPropagation();
-    const groupEventIds = item.events.map((ev) => ev.id);
-    const isFullySelected = groupEventIds.every((id) => selectedIds.has(id));
-
-    setSelectedIds((prev) => {
-      const next = new Set(prev);
-      if (isFullySelected) {
-        groupEventIds.forEach((id) => next.delete(id));
-      } else {
-        groupEventIds.forEach((id) => next.add(id));
-      }
-      return next;
-    });
-  };
-
-  const selectAll = () => {
-    if (selectedIds.size === events.length) {
-      setSelectedIds(new Set());
-    } else {
-      setSelectedIds(new Set(events.map((e) => e.id)));
-    }
+    selection.toggleMany(item.events.map((ev) => ev.id));
   };
 
   // Navigates to Metadata Details page (synopsis, cast, season picker)
@@ -523,28 +518,7 @@ export const HistoryView: React.FC<HistoryViewProps> = ({ onSelectMedia, onPlayD
             hint="titles, episodes, years, providers, quality and errors"
           />
 
-          {selectMode ? (
-            <>
-              <Button size="compact" onClick={selectAll}>
-                {selectedIds.size === events.length ? 'Select none' : 'Select all'}
-              </Button>
-              {selectedIds.size > 0 && (
-                <Button size="compact" variant="destructive" icon={Trash2} onClick={handleDeleteSelected}>
-                  Delete {selectedIds.size}
-                </Button>
-              )}
-              <Button
-                size="compact"
-                variant="ambient"
-                onClick={() => {
-                  setSelectMode(false);
-                  setSelectedIds(new Set());
-                }}
-              >
-                Done
-              </Button>
-            </>
-          ) : (
+          {!selectMode && (
             <Menu
               label="History actions"
               trigger={(props) => (
@@ -573,10 +547,7 @@ export const HistoryView: React.FC<HistoryViewProps> = ({ onSelectMedia, onPlayD
                         label: 'Select…',
                         description: 'Pick entries to delete',
                         icon: CheckSquare,
-                        onSelect: () => {
-                          setSelectMode(true);
-                          setSelectedIds(new Set());
-                        },
+                        onSelect: selection.enter,
                       },
                       {
                         label: `Export current view (${events.length})`,
@@ -693,6 +664,25 @@ export const HistoryView: React.FC<HistoryViewProps> = ({ onSelectMedia, onPlayD
           )}
         </div>
       </div>
+
+      {selectMode && (
+        <SelectionToolbar
+          count={selection.count}
+          total={selection.total}
+          noun={['visit', 'visits']}
+          onSelectAll={selection.selectAll}
+          onInvert={selection.invert}
+          onSelectNone={selection.selectNone}
+          onDone={selection.exit}
+          onRemove={handleDeleteSelected}
+          status={bulkStatus}
+        />
+      )}
+      {!selectMode && bulkStatus && (
+        <p role="status" style={{ margin: 0, color: 'var(--text-muted)', fontSize: '0.8rem' }}>
+          {bulkStatus}
+        </p>
+      )}
 
       {/* History List */}
       <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem', flex: 1 }}>

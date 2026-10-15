@@ -175,6 +175,17 @@ export class WebViewHost {
     if (this.handlersInstalled) return;
     this.handlersInstalled = true;
 
+    /*
+     * Only third-party pages ever run in this partition, so they get nothing
+     * a challenge does not need (audit SEC-02): no permission is granted —
+     * Electron's default with no handler is to grant all of them, camera and
+     * microphone included — and nothing downloads to disk. Solving a challenge
+     * needs neither.
+     */
+    ses.setPermissionRequestHandler((_contents, _permission, callback) => callback(false));
+    ses.setPermissionCheckHandler(() => false);
+    ses.on('will-download', (event) => event.preventDefault());
+
     // Cancels the assets a resolve has no use for. Separate from the collector
     // below because this is the only hook that can cancel, and that one is the
     // only hook that carries request headers.
@@ -297,6 +308,9 @@ export class WebViewHost {
     });
 
     const id = win.webContents.id;
+    // A popup would be a second, unwatched window running the third-party page;
+    // Android's WebView does not open them either.
+    win.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
 
     let settled = false;
     let failure: string | undefined;

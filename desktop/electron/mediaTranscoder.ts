@@ -128,6 +128,14 @@ interface Session {
    * ordinary session leaves it unset and is measured exactly as before.
    */
   outputs?: DeclaredOutput;
+  /**
+   * The origin was seen answering a ranged request with a 200 from byte zero.
+   *
+   * Only then is ffmpeg told the input cannot seek. Saying so for every HTTP
+   * input would cost two things that work today: `-reconnect` resuming a
+   * dropped connection at its offset, and MP4s whose `moov` sits at the end.
+   */
+  sequentialInput?: boolean;
 }
 
 /** Codecs a session's caller guarantees, for a probe that can then be skipped. */
@@ -273,7 +281,7 @@ export class MediaTranscoder {
     url: string,
     plan: TransformationPlan,
     transport: MediaTransport = 'progressive',
-    options: { audioUrl?: string; outputs?: DeclaredOutput } = {}
+    options: { audioUrl?: string; outputs?: DeclaredOutput; sequentialInput?: boolean } = {}
   ): Promise<string | null> {
     if (!this.isAvailable()) return null;
     await this.ensureServer();
@@ -290,6 +298,7 @@ export class MediaTranscoder {
       transport,
       audioUrl: options.audioUrl,
       outputs: options.outputs,
+      sequentialInput: options.sequentialInput,
     });
     return `http://127.0.0.1:${this.port}/media/${token}`;
   }
@@ -474,7 +483,17 @@ export class MediaTranscoder {
              * exists to fix.
              */
             ['-c:a', 'aac', '-b:a', '192k', '-ac', '2']
-          : ['-c:a', 'copy'])
+          : [
+              '-c:a', 'copy',
+              /*
+               * ADTS AAC (MPEG-TS, HLS) into MP4: measured on Castle TV's Hindi
+               * track, the muxer stopped after 0.24s with "Malformed AAC
+               * bitstream"; with the filter, 20s remuxed in 1.5s. A no-op on AAC
+               * that is already in MP4 form; refused by other codecs, hence the
+               * check.
+               */
+              ...(plan.copiedAudioCodec === 'aac' ? ['-bsf:a', 'aac_adtstoasc'] : []),
+            ])
       );
     }
 
@@ -499,9 +518,13 @@ export class MediaTranscoder {
 
     // Before -i: seeks by keyframe without decoding everything up to it.
     const seek = seekSeconds > 0 ? ['-ss', String(seekSeconds)] : [];
+    // Sequential demux of an origin that ignores Range: Matroska's opening seek
+    // to its index would be refused (416) and take the whole session with it.
+    const seekableOpt = session.sequentialInput && seekSeconds === 0 ? ['-seekable', '0'] : [];
 
     return [
       '-hide_banner', '-loglevel', 'error',
+      ...seekableOpt,
       ...inputOptionsFor(session.url, session.transport),
       ...decryption,
       ...seek,

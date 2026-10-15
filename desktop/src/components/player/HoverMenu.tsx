@@ -1,4 +1,5 @@
 import React, { useCallback, useEffect, useId, useRef, useState } from 'react';
+import { Check, ChevronDown } from 'lucide-react';
 
 /**
  * A control that opens on hover and commits on a single click.
@@ -24,6 +25,8 @@ export interface HoverMenuOption<T> {
   label: string;
   /** Secondary text, e.g. a bitrate under a resolution. */
   detail?: string;
+  /** Optional icon displayed next to the option label. */
+  icon?: React.ReactNode;
 }
 
 interface HoverMenuProps<T> {
@@ -34,7 +37,10 @@ interface HoverMenuProps<T> {
   onChange: (value: T) => void;
   /** Text on the trigger; falls back to the active option's label. */
   triggerText?: string;
+  triggerClassName?: string;
   align?: 'left' | 'right';
+  showChevron?: boolean;
+  footer?: React.ReactNode;
   onOpenChange?: (open: boolean) => void;
 }
 
@@ -47,7 +53,10 @@ export function HoverMenu<T extends string | number>({
   options,
   onChange,
   triggerText,
+  triggerClassName,
   align = 'right',
+  showChevron,
+  footer,
   onOpenChange,
 }: HoverMenuProps<T>) {
   const [open, setOpen] = useState(false);
@@ -86,6 +95,7 @@ export function HoverMenu<T extends string | number>({
 
   const activeIndex = options.findIndex((o) => o.value === value);
   const activeLabel = triggerText ?? options[activeIndex]?.label ?? label;
+  const hasChevron = showChevron ?? (options.length > 1);
 
   const commit = useCallback(
     (next: T) => {
@@ -117,6 +127,7 @@ export function HoverMenu<T extends string | number>({
     <div
       ref={rootRef}
       className="hover-menu"
+      data-open={open ? 'true' : 'false'}
       onPointerDown={(e) => e.stopPropagation()}
       onClick={(e) => e.stopPropagation()}
       onMouseEnter={() => {
@@ -127,7 +138,7 @@ export function HoverMenu<T extends string | number>({
     >
       <button
         type="button"
-        className="hover-menu__trigger icon-button"
+        className={`hover-menu__trigger icon-button ${triggerClassName ?? ''}`.trim()}
         aria-haspopup="listbox"
         aria-expanded={open}
         aria-controls={menuId}
@@ -138,6 +149,7 @@ export function HoverMenu<T extends string | number>({
       >
         {icon}
         <span className="hover-menu__value">{activeLabel}</span>
+        {hasChevron && <ChevronDown size={11} className="hover-menu__chevron" aria-hidden="true" />}
       </button>
 
       {open && (
@@ -161,11 +173,22 @@ export function HoverMenu<T extends string | number>({
                 }`}
                 onClick={() => commit(option.value)}
               >
-                <span>{option.label}</span>
-                {option.detail && <span className="hover-menu__detail">{option.detail}</span>}
+                <span className="hover-menu__option-content">
+                  {option.icon && <span className="hover-menu__option-icon" aria-hidden="true">{option.icon}</span>}
+                  <span className="hover-menu__option-label">{option.label}</span>
+                </span>
+                <span className="hover-menu__option-meta">
+                  {option.detail && <span className="hover-menu__detail">{option.detail}</span>}
+                  {option.value === value && <Check size={13} className="hover-menu__check" aria-hidden="true" />}
+                </span>
               </button>
             </li>
           ))}
+          {footer && (
+            <li className="hover-menu__footer" role="presentation">
+              {footer}
+            </li>
+          )}
         </ul>
       )}
     </div>

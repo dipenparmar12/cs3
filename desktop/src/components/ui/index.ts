@@ -12,3 +12,5 @@ export { Dialog, DialogActions } from './Dialog';
 export { FormField, Input, Select, SearchInput, type SearchVariant, type FieldControlProps } from './Field';
 export { Checkbox, RadioGroup, Switch } from './Choice';
 export { Menu, type MenuItem } from './Menu';
+export { SelectionToolbar } from './SelectionToolbar';
+export { SelectMark } from './SelectMark';

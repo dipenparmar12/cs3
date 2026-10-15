@@ -5,7 +5,7 @@
  *   node --experimental-strip-types src/utils/mediaSanity.test.mts
  */
 import assert from 'node:assert/strict';
-import { looksLikeWrongMedia, wrongMediaReason } from './mediaSanity.ts';
+import { judgeableDuration, looksLikeWrongMedia, wrongMediaReason } from './mediaSanity.ts';
 
 const tests: Array<[string, () => void]> = [];
 const test = (name: string, fn: () => void) => tests.push([name, fn]);
@@ -32,6 +32,26 @@ test('a different cut or a long recap is not flagged', () => {
   assert.equal(looksLikeWrongMedia({ actualSeconds: 22 * 60, expectedSeconds: 45 * 60 }), false);
   // Seven minutes is past the placeholder ceiling, whatever the ratio.
   assert.equal(looksLikeWrongMedia({ actualSeconds: 7 * 60, expectedSeconds: 180 * 60 }), false);
+});
+
+test('a conversion is judged by the source length, never by what ffmpeg has muxed so far', () => {
+  // The reported case: a 29 min Castle TV episode converted for its Hindi
+  // track, whose element said 7.68 s one second in.
+  assert.equal(judgeableDuration({ reportedSeconds: 7.68, converted: true }), undefined);
+  assert.equal(judgeableDuration({ reportedSeconds: 7.68, converted: true, sourceSeconds: 1735 }), 1735);
+  const actual = judgeableDuration({ reportedSeconds: 7.68, converted: true, sourceSeconds: 1735 })!;
+  assert.equal(looksLikeWrongMedia({ actualSeconds: actual, expectedSeconds: 29 * 60 }), false);
+});
+
+test('a conversion of a real clip is still caught, from the source length', () => {
+  const actual = judgeableDuration({ reportedSeconds: 3, converted: true, sourceSeconds: 45 })!;
+  assert.equal(looksLikeWrongMedia({ actualSeconds: actual, expectedSeconds: 120 * 60 }), true);
+});
+
+test('a live window is not a length; a stream the element plays is', () => {
+  assert.equal(judgeableDuration({ reportedSeconds: 100, converted: false, isLive: true }), undefined);
+  assert.equal(judgeableDuration({ reportedSeconds: 45, converted: false }), 45);
+  assert.equal(judgeableDuration({ reportedSeconds: Infinity, converted: false }), undefined);
 });
 
 test('the reason states both lengths', () => {

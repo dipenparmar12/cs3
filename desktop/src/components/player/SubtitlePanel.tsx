@@ -14,6 +14,7 @@ import {
   Sliders,
   ChevronDown,
   ChevronUp,
+  Subtitles,
 } from 'lucide-react';
 import type { SavedSubtitle } from '../../../electron/subtitles/subtitleLibrary';
 import type { SubtitleFindResult, SubtitleSearchResult } from '../../../electron/subtitleService';
@@ -27,9 +28,11 @@ import {
   type SubtitleStyle,
 } from '../../utils/subtitleStyle';
 import { getLanguageFlag, getLanguageName } from '../../utils/languageFlag';
+import { describeError } from '../../utils/errors';
 import { FlagIcon } from '../FlagIcon';
 import { orderLanguageChips, preferredLanguageKeys } from '../../utils/subtitleLanguageOrder';
 import { Globe } from 'lucide-react';
+import { InfoHint } from '../settings/InfoHint';
 
 export { getLanguageFlag, getLanguageName };
 
@@ -349,7 +352,7 @@ export const SubtitlePanel: React.FC<SubtitlePanelProps> = ({
         }
       } catch (err) {
         setLoading(false);
-        setError(err instanceof Error ? err.message : 'Subtitle search failed.');
+        setError(describeError(err));
       }
     },
     [searchQuery, searchSeason, searchEpisode, searchYear, season, episode, imdbId, title, providerCanAnswer, mediaUrl, languages, releaseName]
@@ -486,7 +489,10 @@ export const SubtitlePanel: React.FC<SubtitlePanelProps> = ({
     >
       <header className="player-panel__head">
         <div>
-          <h3>Subtitles</h3>
+          <div className="player-panel__title-row">
+            <Subtitles size={18} className="player-panel__head-icon" aria-hidden="true" />
+            <h3>Subtitles</h3>
+          </div>
           <div className="player-panel__facts">
             <span>
               {results.length > 0
@@ -1053,16 +1059,12 @@ export const SubtitlePanel: React.FC<SubtitlePanelProps> = ({
                   return (
                     <li key={item.id} className="subtitle-panel__row">
                       <button
-                        className={`player-panel__sub subtitle-panel__result${item.best ? ' subtitle-panel__result--best' : ''}`}
+                        className="player-panel__sub subtitle-panel__result"
                         onClick={() => applySubtitle(item)}
                         disabled={applying !== null}
-                        title={[
-                          item.fileName,
-                          item.best ? 'Best match for what is playing' : undefined,
-                          item.matchReasons?.length ? item.matchReasons.join(' · ') : undefined,
-                        ]
-                          .filter(Boolean)
-                          .join('\n')}
+                        aria-label={`${rowLabel(item, `${language}${items.length > 1 ? ` #${index + 1}` : ''}`)}${
+                          item.best ? ', recommended for what is playing' : ''
+                        }`}
                       >
                         {applying === item.id ? (
                           <Loader2 className="spin" size={13} />
@@ -1071,26 +1073,45 @@ export const SubtitlePanel: React.FC<SubtitlePanelProps> = ({
                         )}
                         <span className="subtitle-panel__result-text">
                           <span className="player-panel__sub-label">
-                            {item.best && (
-                              <Star
-                                size={12}
-                                className="subtitle-panel__star"
-                                fill="currentColor"
-                                style={{ marginRight: '0.3rem', verticalAlign: '-1px' }}
-                              />
-                            )}
                             {rowLabel(item, `${language}${items.length > 1 ? ` #${index + 1}` : ''}`)}
                           </span>
-                          <span className="subtitle-panel__result-meta">
-                            {item.best && <span className="subtitle-panel__best">Best match</span>}
-                            <span>{originLabel(item)}</span>
-                            {item.downloads ? <span>{compactCount(item.downloads)} downloads</span> : null}
-                            {item.rating ? <span>★ {item.rating.toFixed(1)}</span> : null}
-                            {item.hearingImpaired && <span title="Includes sound descriptions">HI</span>}
-                            {item.machineTranslated && <span>machine translated</span>}
-                          </span>
                         </span>
+                        {/* The few facts worth seeing at a glance; the rest is behind ⓘ (PRD §119.1). */}
+                        {item.hearingImpaired && (
+                          <span className="subtitle-panel__tag" title="Includes sound descriptions">
+                            HI
+                          </span>
+                        )}
+                        {/* A recommendation from release and episode matching — not a
+                            promise that it is in sync, so it says no more than that. */}
+                        {item.best && (
+                          <span className="subtitle-panel__star" title="Recommended: the closest match to what is playing">
+                            <Star size={12} fill="currentColor" aria-hidden="true" />
+                          </span>
+                        )}
                       </button>
+                      <InfoHint label="Subtitle details">
+                        <span className="subtitle-panel__details">
+                          {(item.fileName || item.releaseName) && (
+                            <span className="subtitle-panel__details-name">{item.fileName || item.releaseName}</span>
+                          )}
+                          {item.best && <span>Closest match to what is playing</span>}
+                          {item.matchReasons?.length ? <span>{item.matchReasons.join(' · ')}</span> : null}
+                          <span>From {originLabel(item)}</span>
+                          {item.downloads || item.rating ? (
+                            <span>
+                              {[
+                                item.downloads ? `${compactCount(item.downloads)} downloads` : '',
+                                item.rating ? `rated ${item.rating.toFixed(1)}` : '',
+                              ]
+                                .filter(Boolean)
+                                .join(' · ')}
+                            </span>
+                          ) : null}
+                          {item.hearingImpaired && <span>Includes sound descriptions (HI)</span>}
+                          {item.machineTranslated && <span>Machine translated</span>}
+                        </span>
+                      </InfoHint>
                   <button
                     className="icon-button subtitle-panel__download"
                     onClick={() => void downloadResult(item, state?.status === 'saved')}

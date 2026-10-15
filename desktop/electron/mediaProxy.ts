@@ -52,7 +52,16 @@ import type { SourceLease } from './media/sourceLease.ts'
  * headers, and must never be reachable from off the machine.
  */
 
-import os from 'os'
+import { mayServeLocalFile } from './security/localFiles.ts'
+
+/** The path with links and junctions resolved, or as given when it does not exist (yet). */
+function realPathOf(p: string): string {
+  try {
+    return fs.realpathSync.native(p)
+  } catch {
+    return p
+  }
+}
 
 /** Attempts to resume a broken stream before giving up on it. */
 const MAX_RESUME_ATTEMPTS = 4
@@ -510,11 +519,8 @@ export class MediaProxy {
 
   constructor(fetchImpl: FetchLike) {
     this.fetchImpl = fetchImpl
-    // Default safe directory whitelist
-    this.allowedDirectories.add(path.resolve(os.tmpdir()))
-    try {
-      this.allowedDirectories.add(path.resolve(process.cwd()))
-    } catch {}
+    // No default folders: `process.cwd()` was one, which for a packaged app is
+    // wherever it was launched from. See `security/localFiles.ts` (SEC-05).
   }
 
   /**
@@ -530,14 +536,7 @@ export class MediaProxy {
    */
   public isPathAllowed(filePath: string): boolean {
     if (!filePath || filePath.includes('\0')) return false
-    const resolved = path.resolve(filePath)
-    for (const allowed of this.allowedDirectories) {
-      const normalizedAllowed = allowed.endsWith(path.sep) ? allowed : allowed + path.sep
-      if (resolved === allowed || resolved.startsWith(normalizedAllowed)) {
-        return true
-      }
-    }
-    return false
+    return mayServeLocalFile(realPathOf(path.resolve(filePath)), [...this.allowedDirectories].map(realPathOf))
   }
 
   /**
@@ -599,10 +598,15 @@ export class MediaProxy {
    * The proxy holds the lease, not just the raw URL. When token expiration occurs,
    * the proxy re-resolves the fresh URL beneath the same loopback token.
    */
-  public async wrapLease(lease: SourceLease): Promise<string> {
-    const loopbackUrl = await this.wrap(lease.url, lease.headers)
+  public async wrapLease(
+    lease: SourceLease,
+    options: {
+      boundedRanges?: boolean
+    } = {},
+  ): Promise<string> {
+    const loopbackUrl = await this.wrap(lease.url, lease.headers, options)
     const token = loopbackUrl.match(/\/stream\/([0-9a-f]{32})/)?.[1]
-    if (token) {
+    if (token && !this.leases.has(token)) {
       this.leases.set(token, lease)
     }
     return loopbackUrl
@@ -619,6 +623,18 @@ export class MediaProxy {
       if (route) return { url: route.url, headers: { ...route.headers } }
     }
     return null
+  }
+
+  /**
+   * What the origin behind a loopback stream has shown about Range, if anything.
+   *
+   * `undefined` until a ranged request has been answered — absence of evidence,
+   * which callers must treat as "seekable", the common case.
+   */
+  public rangeSupportFor(loopbackUrl: string): 'yes' | 'no' | undefined {
+    if (!isLoopback(loopbackUrl)) return undefined
+    const token = loopbackUrl.match(/\/stream\/([0-9a-f]{32})/)?.[1]
+    return token ? this.routes.get(token)?.rangeSupport : undefined
   }
 
   /**
@@ -640,11 +656,12 @@ export class MediaProxy {
       throw new Error(`Invalid file path: ${filePath}`)
     }
 
-    const resolved = path.resolve(filePath)
-
-    // Whitelist path verification to prevent path traversal
-    if (this.allowedDirectories.size > 0 && !this.isPathAllowed(resolved)) {
-      throw new Error(`Access denied: path outside allowed directories: ${resolved}`)
+    // Through links and junctions first: the file actually read is what is checked.
+    const resolved = realPathOf(path.resolve(filePath))
+    if (!this.isPathAllowed(resolved)) {
+      throw new Error(
+        `Access denied: ${path.basename(resolved)} is not a media file and is not in a download folder`
+      )
     }
 
     // Checked here rather than at play time so a moved or deleted file is a

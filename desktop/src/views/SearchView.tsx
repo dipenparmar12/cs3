@@ -1,7 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useTitleInteractions } from '../components/useTitleInteractions';
 import { EmptyState } from '../components/EmptyState';
-import type { SearchResponse } from '../types/api';
+import type { SearchHistoryEntry, SearchResponse } from '../types/api';
 import { TYPE_TABS, matchesTab, tabsFor } from '../utils/contentTypes';
 import { groupResults, type ResultGroup, type ResultGroupId } from '../utils/resultGroups';
 import type { SearchSnapshot, SearchSourceOutcome } from '../../electron/searchSession';
@@ -68,6 +68,8 @@ interface SearchViewProps {
   onSaveResults?: () => Promise<boolean>;
   /** Clears active search results and returns view to clean state. */
   onClearResults?: () => void;
+  /** Runs a query; the idle screen's recent searches use it. */
+  onSearch?: (query: string) => void;
 }
 
 /** "3 Sep 2026, 14:05" — a date a person reads, not a relative age that drifts. */
@@ -250,6 +252,60 @@ const SearchFailure: React.FC<{ message: string }> = ({ message }) => {
   );
 };
 
+/**
+ * The Search tab before anything has been asked.
+ *
+ * It used to fall through to the results branch with zero rows and say
+ * "Nothing found" — a verdict about a search nobody ran. What belongs here is
+ * where to type, and the searches already made, one press from running again.
+ */
+const SearchIdle: React.FC<{ onSearch?: (query: string) => void }> = ({ onSearch }) => {
+  const [recent, setRecent] = useState<SearchHistoryEntry[]>([]);
+  useEffect(() => {
+    let live = true;
+    void window.cloudstream?.getSearchHistory?.().then((entries) => {
+      if (live && Array.isArray(entries)) setRecent(entries.slice(0, 8));
+    });
+    return () => {
+      live = false;
+    };
+  }, []);
+
+  return (
+    <div className="search-idle">
+      <EmptyState
+        icon={Search}
+        title="Find something to watch"
+        description="Type a film, show or anime in the search box. Every source you have enabled is asked at once, and results appear as each one answers."
+        action={{
+          label: 'Start a search',
+          onClick: () => window.dispatchEvent(new CustomEvent('cs3:focus-navbar-search')),
+        }}
+      />
+      {onSearch && recent.length > 0 && (
+        <section className="search-idle__recent" aria-label="Recent searches">
+          <h3>Recent searches</h3>
+          <ul>
+            {recent.map((entry) => (
+              <li key={entry.query}>
+                <button
+                  type="button"
+                  className={`search-idle__chip${entry.resultCount === 0 ? ' search-idle__chip--empty' : ''}`}
+                  onClick={() => onSearch(entry.query)}
+                  title={entry.resultCount === 0 ? 'Found nothing last time' : `Search for "${entry.query}" again`}
+                >
+                  <RotateCw size={12} aria-hidden="true" />
+                  {entry.query}
+                </button>
+              </li>
+            ))}
+          </ul>
+        </section>
+      )}
+    </div>
+  );
+};
+
 export const SearchView: React.FC<SearchViewProps> = ({
   query,
   search,
@@ -264,6 +320,7 @@ export const SearchView: React.FC<SearchViewProps> = ({
   savedView,
   onSaveResults,
   onClearResults,
+  onSearch,
 }) => {
   const { sourceFilter, typeTab, openGroups } = ui;
   /** The provider names the fix modal is open for, or null when it is closed. */
@@ -360,9 +417,16 @@ export const SearchView: React.FC<SearchViewProps> = ({
     );
   };
 
-  // Nothing has arrived yet and nothing has been asked: the only state where a
-  // full-page spinner is right, because there is genuinely nothing to show.
-  if (running && results.length === 0 && (search?.settled ?? 0) === 0) {
+  // No snapshot and no query: nothing has been asked. A query without a
+  // snapshot is the moment between pressing Enter and the first reply (longer
+  // for an IMDb link, which is resolved to its title first) — that is a search
+  // in progress, not an empty screen and certainly not "Nothing found".
+  const awaitingFirstReply = !search && !error && !savedView && Boolean(query.trim());
+  if (!search && !error && !savedView && !awaitingFirstReply) return <SearchIdle onSearch={onSearch} />;
+
+  // Nothing has arrived yet: the only state where a full-page spinner is
+  // right, because there is genuinely nothing to show.
+  if (awaitingFirstReply || (running && results.length === 0 && (search?.settled ?? 0) === 0)) {
     return (
       <div className="search-boot">
         <div className="search-boot__ring">
@@ -370,8 +434,9 @@ export const SearchView: React.FC<SearchViewProps> = ({
         </div>
         <h3>{query ? `Searching for "${query}"…` : 'Searching…'}</h3>
         <p>
-          Asking {search?.total ?? 0} source{search?.total === 1 ? '' : 's'} · results appear as
-          each one answers
+          {search
+            ? <>Asking {search.total} source{search.total === 1 ? '' : 's'} · results appear as each one answers</>
+            : 'Starting the search…'}
         </p>
         {onCancel && (
           <button className="btn btn-secondary" onClick={onCancel}>

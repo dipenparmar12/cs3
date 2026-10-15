@@ -18,7 +18,7 @@ export function normalizeMediaTitle(title: string): string {
   let cleaned = title.replace(/[._]/g, ' ');
   cleaned = cleaned.replace(NOISE_PATTERN, ' ');
   // Collapse brackets and extra whitespace
-  cleaned = cleaned.replace(/[\[\](){}]/g, ' ');
+  cleaned = cleaned.replace(/[[\](){}]/g, ' ');
   cleaned = cleaned.replace(/\s+/g, ' ').trim();
   return cleaned;
 }

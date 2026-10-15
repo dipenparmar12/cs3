@@ -524,6 +524,45 @@ if (fs.existsSync(releaseDir)) {
  */
 if (QUICK) info('compression: store (--quick) — larger artifact, for testing rather than release');
 if (VERSION) info(`version ${VERSION}`);
+
+/**
+ * Code signing, from the environment only (PRD §126.2): no certificate,
+ * password or account detail is ever in the repository.
+ *
+ * - Windows, Microsoft Artifact Signing: AZURE_TENANT_ID, AZURE_CLIENT_ID and
+ *   AZURE_CLIENT_SECRET authenticate; AZURE_SIGNING_ENDPOINT,
+ *   AZURE_SIGNING_ACCOUNT, AZURE_CERT_PROFILE and AZURE_PUBLISHER_NAME name the
+ *   account and become `win.azureSignOptions`.
+ * - Windows/macOS, a certificate file: CSC_LINK + CSC_KEY_PASSWORD (or
+ *   WIN_CSC_LINK), which electron-builder reads itself.
+ * - macOS notarisation: APPLE_ID + APPLE_APP_SPECIFIC_PASSWORD + APPLE_TEAM_ID,
+ *   or APPLE_API_KEY + APPLE_API_KEY_ID + APPLE_API_ISSUER, also read directly.
+ *
+ * The report says which applied, so an unsigned build is never mistaken for one.
+ */
+const env = process.env;
+const azure = ['AZURE_SIGNING_ENDPOINT', 'AZURE_SIGNING_ACCOUNT', 'AZURE_CERT_PROFILE', 'AZURE_PUBLISHER_NAME'];
+const azureSigning = OS === 'win' && azure.every((name) => env[name]);
+const certSigning = Boolean(env.CSC_LINK || (OS === 'win' && env.WIN_CSC_LINK) || env.CSC_NAME);
+const notarising = OS === 'mac' && Boolean(
+  (env.APPLE_ID && env.APPLE_APP_SPECIFIC_PASSWORD && env.APPLE_TEAM_ID) ||
+  (env.APPLE_API_KEY && env.APPLE_API_KEY_ID && env.APPLE_API_ISSUER)
+);
+const signingArgs = azureSigning
+  ? [
+      `-c.win.azureSignOptions.endpoint=${env.AZURE_SIGNING_ENDPOINT}`,
+      `-c.win.azureSignOptions.codeSigningAccountName=${env.AZURE_SIGNING_ACCOUNT}`,
+      `-c.win.azureSignOptions.certificateProfileName=${env.AZURE_CERT_PROFILE}`,
+      `-c.win.azureSignOptions.publisherName=${env.AZURE_PUBLISHER_NAME}`,
+    ]
+  : [];
+info(
+  azureSigning
+    ? `signing: Microsoft Artifact Signing (${env.AZURE_PUBLISHER_NAME})`
+    : certSigning
+      ? `signing: certificate${notarising ? ' + notarisation' : ''}`
+      : 'signing: none — an unsigned build, for development or a prerelease'
+);
 run(
   requireBin('electron-builder'),
   [
@@ -533,6 +572,7 @@ run(
     '--publish',
     'never',
     ...(QUICK ? ['-c.compression=store'] : []),
+    ...signingArgs,
     // The release names every artifact after the tag, not after whatever
     // package.json says on the commit it was cut from.
     ...(VERSION ? [`-c.extraMetadata.version=${VERSION}`] : []),

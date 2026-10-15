@@ -376,7 +376,7 @@ export const TitleAbout: React.FC<TitleAboutProps> = ({
     const revenue = formatMoney(metadata?.revenue, metadata?.currency);
     if (revenue) rows.push({ label: 'Box office', value: revenue });
     return rows;
-  }, [metadata]);
+  }, [metadata, onSelectStudio]);
 
   const extraGenres = useMemo(() => {
     const known = new Set((providerTags ?? []).map((tag) => tag.trim().toLowerCase()));

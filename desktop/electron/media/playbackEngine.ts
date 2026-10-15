@@ -21,7 +21,9 @@ import {
   planForAudioTrack,
 } from './decisionEngine.ts';
 import { MediaInspector, drmRequiresEme, transportFromUrl } from './mediaInspector.ts';
+import { SourceLease } from './sourceLease.ts';
 import { drmFromProvider } from '../cs3/providerLinks.ts';
+import { describeError } from '../../src/utils/errors.ts';
 import type { InspectionStore } from './inspectionStore.ts';
 import { scopedLogger } from '../logging/logger.ts';
 
@@ -85,6 +87,12 @@ export interface PlaybackEngineDeps {
    */
   inspections?: InspectionStore;
   fetchText: (url: string, bytes: number) => Promise<string | null>;
+  /**
+   * The first bytes of a URL as bytes, for reading an HLS segment's program
+   * table (`media/tsProgram.ts`). Optional: without it a playlist's audio is
+   * what its manifest declares.
+   */
+  fetchBytes?: (url: string, bytes: number) => Promise<Uint8Array | null>;
   /** Asks the source itself why it could not be read. See `main.ts`. */
   describeUnreadable: (url: string) => Promise<ProbeFailure>;
   diagnostics: {
@@ -123,7 +131,8 @@ export class PlaybackEngine {
     this.deps = deps;
     this.inspector = new MediaInspector(
       () => deps.transcoder.resolveFfprobe(),
-      (url) => deps.fetchText(url, MANIFEST_SNIFF_BYTES)
+      (url) => deps.fetchText(url, MANIFEST_SNIFF_BYTES),
+      deps.fetchBytes ?? null
     );
   }
 
@@ -187,7 +196,10 @@ export class PlaybackEngine {
    * the provider actually gave us.
    */
   public async inspect(
-    request: Pick<PlaybackStreamRequest, 'url' | 'headers' | 'isM3u8' | 'isDash' | 'drm' | 'refresh'>
+    request: Pick<
+      PlaybackStreamRequest,
+      'url' | 'headers' | 'isM3u8' | 'isDash' | 'drm' | 'refresh' | 'provider' | 'preferredAudioLanguage' | 'avoidNativeEngine'
+    >
   ): Promise<SourceCapabilityModel> {
     /**
      * A stream this process is already producing is not measured again.
@@ -219,9 +231,31 @@ export class PlaybackEngine {
       ...(targetRoute?.headers ?? {}),
       ...(request.headers ?? {}),
     };
-    const resolvedUrl = await this.deps.proxy.wrap(originUrl, effectiveHeaders);
+    const isYt = /googlevideo\.com|youtube\.com|youtu\.be/i.test(originUrl);
+    const lease = new SourceLease({
+      initialSource: {
+        url: originUrl,
+        headers: effectiveHeaders,
+        provider: request.provider,
+      },
+    });
+    const resolvedUrl = await this.deps.proxy.wrapLease(lease, {
+      boundedRanges: request.isDash || isYt,
+    });
 
-    const cacheKey = `${originUrl} ${JSON.stringify(effectiveHeaders)}`;
+    /*
+     * The model holds a *verdict*, and the verdict depends on what was asked as
+     * well as on the file. Keyed on the URL alone, the Hindi request for an HLS
+     * stream with four languages in its segments was answered from the cache
+     * with the English verdict — `HLS_NATIVE`, which plays only the first —
+     * so picking Hindi reattached the same English stream (measured, 2 ms).
+     */
+    const cacheKey = [
+      originUrl,
+      JSON.stringify(effectiveHeaders),
+      request.preferredAudioLanguage ?? '',
+      request.avoidNativeEngine ? 'in-app' : '',
+    ].join(' ');
 
     if (!request.refresh) {
       const hit = this.cache.get(cacheKey);
@@ -262,7 +296,7 @@ export class PlaybackEngine {
           results[i] = this.unmeasured(
             requests[i].url,
             transportFromUrl(requests[i].url, requests[i].isM3u8),
-            error instanceof Error ? error.message : 'Inspection failed'
+            describeError(error)
           );
         }
       }
@@ -300,7 +334,7 @@ export class PlaybackEngine {
   private async measure(
     resolvedUrl: string,
     originUrl: string,
-    request: Pick<PlaybackStreamRequest, 'isM3u8' | 'isDash' | 'drm' | 'headers' | 'preferredAudioLanguage'>
+    request: Pick<PlaybackStreamRequest, 'isM3u8' | 'isDash' | 'drm' | 'headers' | 'preferredAudioLanguage' | 'avoidNativeEngine'>
   ): Promise<SourceCapabilityModel> {
     const host = await this.hostCapability();
     const { isM3u8 } = request;
@@ -430,6 +464,16 @@ export class PlaybackEngine {
           .join(' · ') || undefined,
       });
 
+      /*
+       * A stream ffprobe could not read stays with the app: a failed probe is
+       * usually the link (a timeout, a refusal), not a format the app cannot
+       * play, so the in-app path gets its turn and mpv follows only if it fails
+       * on the media. Straight to mpv only when Settings make it the first
+       * choice (`aggressive`).
+       */
+      const native = this.deps.nativeEngine();
+      const toMpv =
+        !failure.dead && native.available && native.policy === 'aggressive' && !request.avoidNativeEngine;
       return {
         resolvedUrl,
         transport: inspection.transport,
@@ -439,8 +483,10 @@ export class PlaybackEngine {
         failure,
         directPlayable: false,
         // INV-RACE-3: unknown video is never copied.
-        requiredStrategy: 'FULL_TRANSCODE',
-        transformationPlan: blindFallbackPlan(host),
+        requiredStrategy: toMpv ? 'NATIVE_MPV' : 'FULL_TRANSCODE',
+        transformationPlan: toMpv
+          ? { videoAction: 'none', audioAction: 'none', selectedAudioIndex: -1, containerAction: 'passthrough', subtitleAction: 'ignore' }
+          : blindFallbackPlan(host),
         drm: inspection.drm,
         requiresEmeDecryption: false,
         explanation: failure.reason,
@@ -564,9 +610,16 @@ export class PlaybackEngine {
      * mpv carries its own FFmpeg and the platform's hardware decoders, so
      * whatever bitstream defeated the element is very likely ordinary to it. If
      * it is not available, or the policy is `off`, the re-encode is still there.
+     *
+     * Only after the in-app player has had its turn: a provider's name asking
+     * for VLC ("Castle TV (Use VLC)") is not a reason to skip it. The app plays
+     * first; mpv is for what it cannot play, or when Settings make it default.
      */
     const forcedToNative =
       request.force &&
+      // "Play in this window" on the native engine: the one request that must
+      // never be answered with mpv again.
+      !request.avoidNativeEngine &&
       capability.requiredStrategy !== 'EME_NATIVE' &&
       !capability.requiresEmeDecryption &&
       (() => {
@@ -576,7 +629,7 @@ export class PlaybackEngine {
 
     const plan =
       request.force && !forcedToNative
-        ? blindFallbackPlan(await this.hostCapability())
+        ? blindFallbackPlan(await this.hostCapability(), capability.transformationPlan.selectedAudioIndex)
         : capability.transformationPlan;
     const strategy = forcedToNative
       ? 'NATIVE_MPV'
@@ -595,6 +648,14 @@ export class PlaybackEngine {
      */
     if (forcedToNative) {
       capability = { ...capability, requiredStrategy: 'NATIVE_MPV', directPlayable: false };
+    } else if (request.force) {
+      /*
+       * The re-encode was chosen, so the model must say so. Left as the
+       * decision's own strategy — `NATIVE_MPV` for a stream it had routed to
+       * mpv — the renderer would hand the URL back to mpv while a conversion
+       * session sat unused: "Play in this window" did nothing.
+       */
+      capability = { ...capability, requiredStrategy: 'FULL_TRANSCODE', directPlayable: false, transformationPlan: plan };
     }
 
     /**
@@ -671,7 +732,9 @@ export class PlaybackEngine {
     const streamUrl = await this.deps.transcoder.createSession(
       capability.resolvedUrl,
       plan,
-      capability.transport
+      capability.transport,
+      // Learned by the probe, which went through the same route.
+      { sequentialInput: this.deps.proxy.rangeSupportFor(capability.resolvedUrl) === 'no' }
     );
     if (!streamUrl) {
       this.record(request, capability, strategy, startedAt, {

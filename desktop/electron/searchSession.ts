@@ -103,6 +103,14 @@ interface SessionDependencies {
   notify: (snapshot: SearchSnapshot) => void;
   /** Lets the content service keep its `cs3ext://` alternate-route memory warm. */
   onResults: (results: SearchResponse[]) => void;
+  /**
+   * Extension providers that have answered "does not implement that operation"
+   * to a search in this launch — catalogue-only ones (Disney, Marvel, Pixar,
+   * Star Wars, IPTV lists). Measured 2026-10-14: each was asked, and logged
+   * failing, ~17 times in one day. They are reported `unsupported` without the
+   * JVM round trip. Per launch, never persisted: an update may add search.
+   */
+  searchUnsupported?: Set<string>;
 }
 
 /** Free-text title search against indexers caps out well below source discovery. */
@@ -318,18 +326,28 @@ export class SearchSession {
 
     const nativeNames = new Set(this.deps.natives.enabledProviderNames());
     const natives = names.filter((name) => nativeNames.has(name));
-    const extensions = names.filter((name) => !nativeNames.has(name));
+    const known = this.deps.searchUnsupported;
+    const extensions = names.filter((name) => !nativeNames.has(name) && !known?.has(name));
+    for (const name of names) {
+      if (!nativeNames.has(name) && known?.has(name)) {
+        this.record(name, name, 'provider', [], { error: 'This provider does not implement that operation.' });
+      }
+    }
 
     await Promise.all([
       extensions.length > 0
         ? this.deps.plugins.searchEach(
             this.query,
             extensions,
-            (outcome) =>
+            (outcome) => {
+              if (outcome.error && classifyFailure(outcome.error) === 'unsupported-operation') {
+                known?.add(outcome.provider);
+              }
               this.record(outcome.provider, outcome.provider, 'provider', outcome.results, {
                 error: outcome.error,
                 latencyMs: outcome.latencyMs,
-              }),
+              });
+            },
             this.controller.signal
           )
         : Promise.resolve(),
@@ -598,7 +616,7 @@ export class SearchSessionManager {
   private deps: Omit<SessionDependencies, 'notify'>;
 
   constructor(deps: Omit<SessionDependencies, 'notify'>) {
-    this.deps = deps;
+    this.deps = { ...deps, searchUnsupported: deps.searchUnsupported ?? new Set<string>() };
   }
 
   public setNotifier(notifier: (snapshot: SearchSnapshot) => void): void {

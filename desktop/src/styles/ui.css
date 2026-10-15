@@ -516,3 +516,71 @@ select.ui-select:disabled { opacity: var(--control-disabled-opacity); cursor: no
 .collection-dialog__grid--people { grid-template-columns: repeat(auto-fill, minmax(120px, 1fr)); }
 .collection-dialog__grid--wide .video-card { width: 100%; }
 .collection-dialog__grid--people .credit-card { width: 100%; }
+
+/* ── Bulk selection (PRD §116): SelectionToolbar + the per-item mark ─────── */
+.ui-selection-bar {
+  position: sticky;
+  top: 0.5rem;
+  z-index: 20;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem 0.9rem;
+  padding: 0.4rem 0.6rem 0.4rem 0.85rem;
+  border: 1px solid var(--border-color);
+  border-radius: var(--control-radius);
+  background: color-mix(in srgb, var(--bg-card) 92%, transparent);
+  backdrop-filter: blur(10px);
+  font-size: var(--control-font-size-compact);
+}
+.ui-selection-bar__count {
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  color: var(--text-primary, #fff);
+}
+.ui-selection-bar__scope,
+.ui-selection-bar__actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.25rem;
+}
+.ui-selection-bar__actions { margin-left: auto; }
+.ui-selection-bar__status {
+  flex-basis: 100%;
+  color: var(--text-muted);
+}
+
+/* The mark: a box, not a colour — selection must read without colour vision. */
+.ui-select-mark {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border: 1.5px solid rgba(255, 255, 255, 0.75);
+  border-radius: 5px;
+  background: rgba(0, 0, 0, 0.55);
+  color: #fff;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+.ui-select-mark[aria-checked='true'],
+.ui-select-mark[aria-checked='mixed'] {
+  border-color: var(--accent-primary);
+  background: var(--accent-primary);
+}
+.ui-select-mark:focus-visible { outline: 2px solid var(--accent-primary); outline-offset: 2px; }
+.ui-select-mark--overlay {
+  position: absolute;
+  top: 0.45rem;
+  left: 0.45rem;
+  z-index: 3;
+}
+.is-selectable { cursor: pointer; }
+.is-selected {
+  outline: 2px solid var(--accent-primary);
+  outline-offset: 2px;
+  border-radius: var(--radius-md);
+}

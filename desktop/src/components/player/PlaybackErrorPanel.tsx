@@ -260,7 +260,8 @@ export const PlaybackErrorPanel: React.FC<{
           in VLC, and sending someone to install a player that cannot help is
           worse than saying nothing.
         */}
-        {!dead && <ExternalPlayerFallback streamUrl={streamUrl} compact />}
+        {/* The proxied original, which carries the provider's headers (PRD §121.8). */}
+        {!dead && <ExternalPlayerFallback streamUrl={capability?.resolvedUrl || streamUrl} compact />}
       </div>
     </div>
   );

@@ -13,6 +13,7 @@ import { useIsDeveloper } from '../../utils/ExperienceModeContext';
 import {
   DEFAULT_FILTER_STATE,
   filterAndSortSources,
+  foldTorrents,
   type SourceFilterState,
 } from '../../utils/sourceFilter';
 import { formatReleaseSize } from '../../utils/format';
@@ -143,10 +144,13 @@ export const SourcePanel: React.FC<SourcePanelProps> = ({
     }
   }, [setCopiedLink]);
 
-  const displayedSources = useMemo(
-    () => filterAndSortSources(sources, filterState),
-    [sources, filterState]
-  );
+  const [showAllTorrents, setShowAllTorrents] = useState(false);
+  const { shown: displayedSources, hidden: foldedTorrents } = useMemo(() => {
+    const filtered = filterAndSortSources(sources, filterState);
+    return showAllTorrents
+      ? { shown: filtered, hidden: 0 }
+      : foldTorrents(filtered, filterState, (source) => source.infoHash === activeInfoHash);
+  }, [sources, filterState, showAllTorrents, activeInfoHash]);
 
   useEffect(() => {
     if (!open) return;
@@ -456,6 +460,12 @@ export const SourcePanel: React.FC<SourcePanelProps> = ({
           );
         })}
       </ul>
+
+      {foldedTorrents > 0 && (
+        <button type="button" className="link-button player-panel__more" onClick={() => setShowAllTorrents(true)}>
+          Show {foldedTorrents} more torrent{foldedTorrents === 1 ? '' : 's'}
+        </button>
+      )}
 
       {sources.length === 0 && (
         <p className="player-panel__empty">

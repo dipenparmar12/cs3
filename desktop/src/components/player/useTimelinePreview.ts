@@ -72,7 +72,8 @@ export function useTimelinePreview({
     videoRef.current = video;
     canvasRef.current = document.createElement('canvas');
 
-    cacheRef.current.clear();
+    const cache = cacheRef.current;
+    cache.clear();
     readyRef.current = false;
     setPreview({ image: null, loading: false });
 
@@ -106,7 +107,7 @@ export function useTimelinePreview({
       video.load();
       videoRef.current = null;
       canvasRef.current = null;
-      cacheRef.current.clear();
+      cache.clear();
       pendingRef.current = null;
       seekingRef.current = false;
     };
