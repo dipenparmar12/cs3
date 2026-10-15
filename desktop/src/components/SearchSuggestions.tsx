@@ -12,8 +12,8 @@ import type { SavedSearchSummary } from '../../electron/savedSearches';
  * different stages of typing — an empty box is a recall problem, a half-typed
  * box is a spelling problem.
  *
- * Saved searches are integrated directly into recent history items with clear
- * visual highlighting rather than pinned in a separate section at the top.
+ * Saved searches are integrated directly into recent history items with a subtle,
+ * non-dominant indicator rather than loud row highlighting or pinned sections.
  */
 
 interface SearchSuggestionsProps {
@@ -126,14 +126,12 @@ export const SearchSuggestions: React.FC<SearchSuggestionsProps> = ({
               <span className="search-suggest__label">{entry.query}</span>
               {isSaved && (
                 <span className="search-suggest__saved-badge" title="Results saved for this search">
-                  <BookmarkCheck size={10} />
+                  <BookmarkCheck size={10} className="search-suggest__saved-badge-icon" />
                   <span>Saved</span>
                 </span>
               )}
               <span className="search-suggest__meta">
-                {isSaved
-                  ? `${entry.savedResultCount ?? entry.resultCount ?? 0} saved · ${relativeTime(entry.savedAt ?? entry.at)}`
-                  : `${entry.resultCount !== undefined ? `${entry.resultCount} results · ` : ''}${relativeTime(entry.at)}`}
+                {relativeTime(isSaved ? (entry.savedAt ?? entry.at) : entry.at)}
               </span>
             </button>
             {isSaved && onRunFreshSearch && (
