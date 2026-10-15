@@ -182,7 +182,7 @@ export const LibraryBucketSelector: React.FC<LibraryBucketSelectorProps> = ({
     if (!window.cloudstream || !entryKey) return;
     setLoading(true);
     try {
-      await window.cloudstream.removeLibraryEntry(entryKey);
+      await window.cloudstream.removeLibraryEntry(entryKey, item?.url);
       await window.cloudstream.recordHistoryEvent?.({
         title: item.name,
         year: item.year,

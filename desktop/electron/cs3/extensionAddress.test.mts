@@ -1,10 +1,12 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
+  addressKey,
   buildExtensionUrl,
   looksLikeLinksHandle,
   looksLikePageAddress,
   parseExtensionUrl,
+  urlsMatch,
 } from './extensionAddress.ts';
 
 /**
@@ -167,3 +169,35 @@ test('a bare id is neither, which is the honest answer', () => {
 test('leading whitespace does not hide a page address', () => {
   assert.equal(looksLikePageAddress('  https://x.test/'), true);
 });
+
+test('addressKey strips query parameters but keeps path', () => {
+  assert.equal(addressKey('https://example.com/movie?token=123&res=1080'), 'https://example.com/movie');
+  assert.equal(addressKey('https://example.com/movie'), 'https://example.com/movie');
+  assert.equal(addressKey(''), '');
+});
+
+test('urlsMatch compares exact, normalized, and extension URLs correctly', () => {
+  // Exact match
+  assert.equal(urlsMatch('https://x.com/a', 'https://x.com/a'), true);
+
+  // Address key strips query parameters
+  assert.equal(urlsMatch('https://x.com/a?q=1', 'https://x.com/a?q=2'), true);
+
+  // Extension URL unpacked matches target URL
+  const extCastle = buildExtensionUrl('Castle TV', 'https://x.com/a');
+  assert.equal(urlsMatch(extCastle, 'https://x.com/a'), true);
+  assert.equal(urlsMatch('https://x.com/a', extCastle), true);
+
+  // Same provider and same target match
+  assert.equal(urlsMatch(extCastle, extCastle), true);
+
+  // Different providers with same target DO NOT match
+  const extCine = buildExtensionUrl('CineTv', 'https://x.com/a');
+  assert.equal(urlsMatch(extCastle, extCine), false);
+
+  // Different URLs do not match
+  assert.equal(urlsMatch('https://x.com/a', 'https://x.com/b'), false);
+  assert.equal(urlsMatch(undefined, 'https://x.com/a'), false);
+  assert.equal(urlsMatch('https://x.com/a', undefined), false);
+});
+

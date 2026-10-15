@@ -145,4 +145,6 @@ export interface TitleInteractionQuery {
   url: string;
   title: string;
   year?: number;
+  apiName?: string;
 }
+

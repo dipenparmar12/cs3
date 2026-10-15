@@ -39,8 +39,8 @@
  */
 
 import type { DatastoreManager } from '../datastore.ts';
-import type { DownloadTask } from '../../src/types/download';
-import { DownloadState } from '../../src/types/download';
+import type { DownloadTask } from '../../src/types/download.ts';
+import { DownloadState } from '../../src/types/download.ts';
 import type {
   DownloadSummary,
   SourceReadiness,
@@ -48,10 +48,12 @@ import type {
   TitleInteractionQuery,
   VisitRecord,
   WatchSummary,
-} from '../../src/types/interactions';
-import { canonicalKey, type LibraryStore } from './libraryStore.ts';
+} from '../../src/types/interactions.ts';
+import { canonicalKey, type LibraryEntry, type LibraryStore, type WatchProgress } from './libraryStore.ts';
+import type { PlayedSource } from '../../src/types/library.ts';
 import type { TitleOutcomeStore } from './titleOutcomes.ts';
 import { isPrivateSession } from './privacyMode.ts';
+import { urlsMatch } from './extensionAddress.ts';
 
 const KEY = 'cs3_title_visits';
 
@@ -189,7 +191,8 @@ export class TitleInteractionStore {
   }
 
   /**
-   * Watch progress for a title, collapsed to one number.
+   * Watch progress for a title, collapsed to one number and matched specifically
+   * to this query's source identity.
    *
    * A series has one record per episode. The one that matters to a card is the
    * **furthest episode with history**, which is the rule `resumePoint.ts`
@@ -197,11 +200,21 @@ export class TitleInteractionStore {
    * because rewatching episode 1 of a season somebody finished must not make
    * the card say they are 4% through the series.
    */
-  private watchFor(key: string): WatchSummary | undefined {
+  private watchFor(
+    key: string,
+    query: TitleInteractionQuery,
+    playedSources: PlayedSource[],
+    entry?: LibraryEntry | null
+  ): WatchSummary | undefined {
     const entries = this.deps.library.getProgressForKey(key);
     if (entries.length === 0) return undefined;
 
-    const best = [...entries].sort((a, b) => {
+    const matching = entries.filter((p) =>
+      watchMatchesQuery(p, playedSources, query, entry)
+    );
+    if (matching.length === 0) return undefined;
+
+    const best = [...matching].sort((a, b) => {
       const season = (b.season ?? 0) - (a.season ?? 0);
       if (season !== 0) return season;
       const episode = (b.episode ?? 0) - (a.episode ?? 0);
@@ -210,6 +223,13 @@ export class TitleInteractionStore {
     })[0];
 
     if (!best) return undefined;
+    if (best.dismissedAt !== undefined && best.dismissedAt >= best.updatedAt) {
+      return undefined;
+    }
+    if (best.positionSeconds < 30 && !best.completed) {
+      return undefined;
+    }
+
     const percent =
       best.durationSeconds > 0
         ? Math.min(100, (best.positionSeconds / best.durationSeconds) * 100)
@@ -251,8 +271,12 @@ export class TitleInteractionStore {
       const key = canonicalKey(query.title ?? '', query.year);
       const visit = visits.get(key);
       const outcome = outcomes[query.url];
-      const played = this.deps.library.getPlayedSourcesForKey(key)[0];
+      const playedSources = this.deps.library.getPlayedSourcesForKey(key);
+      const played = playedSources[0];
       const entry = this.deps.library.getEntry(key);
+
+      const entryMatches = entry ? entryMatchesQuery(entry, query) : false;
+      const watchSummary = this.watchFor(key, query, playedSources, entry);
 
       out[query.url] = {
         url: query.url,
@@ -260,16 +284,97 @@ export class TitleInteractionStore {
         visited: visit
           ? { firstAt: visit.firstAt, lastAt: visit.lastAt, count: visit.count }
           : undefined,
-        watch: this.watchFor(key),
+        watch: watchSummary,
         outcome: outcome
           ? { kind: outcome.kind, reason: outcome.reason, at: outcome.at }
           : undefined,
         download: summariseDownloads(downloadsByKey.get(key) ?? []),
         sources: query.url ? this.deps.sourceReadiness(query.url) : undefined,
-        lastProvider: played?.source?.providerName ?? undefined,
-        library: entry ? { key: entry.key, status: entry.status } : undefined,
+        lastProvider: (watchSummary || entryMatches) ? (played?.source?.providerName ?? undefined) : undefined,
+        library: entryMatches && entry ? { key: entry.key, status: entry.status } : undefined,
       };
     }
     return out;
   }
 }
+
+/**
+ * Whether a saved library entry represents the specific search result / card queried.
+ *
+ * Distinguishes content identity (canonical key) from source/provider identity (URL),
+ * preventing saved/bookmark indicators from leaking across multiple providers returning
+ * the same title.
+ */
+export function entryMatchesQuery(
+  entry: LibraryEntry | null | undefined,
+  query: TitleInteractionQuery
+): boolean {
+  if (!entry || !query) return false;
+  const queryKey = canonicalKey(query.title ?? '', query.year);
+  if (entry.key !== queryKey) return false;
+
+  // Direct key match (e.g. in LibraryView when an entry has no URLs yet)
+  if (query.url === entry.key) return true;
+
+  const candidateUrls: string[] = [...(entry.urls ?? []), ...(entry.sourceAddresses ?? [])];
+  for (const s of entry.sources ?? []) {
+    if (s.directUrl) candidateUrls.push(s.directUrl);
+    if (s.torrentUrl) candidateUrls.push(s.torrentUrl);
+    if (s.magnet) candidateUrls.push(s.magnet);
+  }
+
+  for (const candidate of candidateUrls) {
+    if (urlsMatch(candidate, query.url)) return true;
+  }
+
+  return false;
+}
+
+/**
+ * Whether a watch progress record belongs to the specific search result / card queried.
+ *
+ * Ensures that watching a stream on one provider (e.g. Castle TV) does not badge
+ * other providers (CineTv, Movix, etc.) with Continue Watching.
+ */
+export function watchMatchesQuery(
+  p: WatchProgress,
+  playedSources: PlayedSource[],
+  query: TitleInteractionQuery,
+  entry?: LibraryEntry | null
+): boolean {
+  if (!p || !query) return false;
+
+  const queryKey = canonicalKey(query.title ?? '', query.year);
+  if (p.key !== queryKey) return false;
+
+  // Direct key match (e.g. in LibraryView)
+  if (query.url === p.key) return true;
+
+  const candidateUrls: string[] = [];
+  if (p.mediaUrl) candidateUrls.push(p.mediaUrl);
+
+  const relevantPlayed = playedSources.filter((ps) => {
+    if (p.season !== undefined && ps.season !== undefined && p.season !== ps.season) return false;
+    if (p.episode !== undefined && ps.episode !== undefined && p.episode !== ps.episode) return false;
+    return true;
+  });
+
+  for (const ps of relevantPlayed) {
+    if (ps.origin?.mediaUrl) candidateUrls.push(ps.origin.mediaUrl);
+  }
+
+  for (const candidate of candidateUrls) {
+    if (urlsMatch(candidate, query.url)) return true;
+  }
+
+  // Legacy fallback: if progress has no mediaUrl and played sources has no mediaUrl,
+  // only match if the query is the library entry itself (e.g. in LibraryView).
+  if (candidateUrls.length === 0 && entry) {
+    if (query.url === entry.key || (entry.urls?.length && urlsMatch(entry.urls[0], query.url))) {
+      return true;
+    }
+  }
+
+  return false;
+}
+

@@ -6153,7 +6153,10 @@ ipcMain.handle('library:setUserRating', async (_, key: string, rating?: number) 
   libraryStore.setUserRating(key, rating)
 );
 
-ipcMain.handle('library:removeEntry', async (_, key: string) => libraryStore.removeEntry(key));
+ipcMain.handle('library:removeEntry', async (_, key: string, mediaUrl?: string) =>
+  libraryStore.removeEntry(key, mediaUrl)
+);
+
 
 ipcMain.handle('library:getEntryForUrl', async (_, mediaUrl: string) =>
   libraryStore.getEntryForUrl(mediaUrl)

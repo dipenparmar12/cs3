@@ -10,7 +10,7 @@ import type {
 } from '../../src/types/library';
 import type { TorrentResult } from '../../src/types/torrent';
 import { deadlineFromUrl } from '../sourceCache.ts';
-import { looksLikeLinksHandle, parseExtensionUrl } from './extensionAddress.ts';
+import { addressKey, looksLikeLinksHandle, parseExtensionUrl, urlsMatch } from './extensionAddress.ts';
 import { isPrivateSession, allowsExplicitSaves } from './privacyMode.ts';
 
 export { WatchStatus };
@@ -233,11 +233,6 @@ function compactStoredSource(source: StoredSource): StoredSource {
   return rest;
 }
 
-/** A page address without its query, which is how the source cache keys it. */
-function addressKey(url: string): string {
-  const index = url.indexOf('?');
-  return index >= 0 ? url.slice(0, index) : url;
-}
 
 /**
  * Converts a StoredSource back into a TorrentResult format for playback or download.
@@ -416,8 +411,27 @@ export class LibraryStore {
     return entry;
   }
 
-  public removeEntry(key: string): boolean {
+  public removeEntry(key: string, mediaUrl?: string): boolean {
     if (isPrivateSession() && !allowsExplicitSaves()) return false;
+    const entry = this.entries.get(key);
+    if (!entry) return false;
+
+    if (mediaUrl && entry.urls.length > 1) {
+      entry.urls = entry.urls.filter((u) => !urlsMatch(u, mediaUrl));
+      if (entry.sourceAddresses) {
+        entry.sourceAddresses = entry.sourceAddresses.filter((u) => !urlsMatch(u, mediaUrl));
+      }
+      entry.updatedAt = Date.now();
+      for (const [id, p] of this.progress) {
+        if (p.key === key && urlsMatch(p.mediaUrl, mediaUrl)) {
+          this.progress.delete(id);
+        }
+      }
+      this.persistEntries();
+      this.persistProgress();
+      return true;
+    }
+
     const removed = this.entries.delete(key);
     if (removed) {
       for (const [id, p] of this.progress) if (p.key === key) this.progress.delete(id);
@@ -438,8 +452,14 @@ export class LibraryStore {
   }
 
   public getEntryForUrl(mediaUrl: string): LibraryEntry | null {
+    if (!mediaUrl) return null;
     for (const entry of this.entries.values()) {
-      if (entry.urls.includes(mediaUrl)) return entry;
+      if (
+        entry.urls.some((u) => urlsMatch(u, mediaUrl)) ||
+        entry.sourceAddresses?.some((u) => urlsMatch(u, mediaUrl))
+      ) {
+        return entry;
+      }
     }
     return null;
   }

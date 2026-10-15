@@ -96,3 +96,63 @@ export function looksLikePageAddress(target: string): boolean {
   const head = target.trimStart();
   return head.startsWith('http://') || head.startsWith('https://');
 }
+
+/** A page address without its query parameters. */
+export function addressKey(url: string | undefined): string {
+  if (!url) return '';
+  const index = url.indexOf('?');
+  return index >= 0 ? url.slice(0, index) : url;
+}
+
+/**
+ * Extracts the provider (if extension-addressed) and clean base address from a URL.
+ */
+export function unpackUrlAddress(url: string | undefined): { provider?: string; address: string } {
+  if (!url) return { address: '' };
+  const ext = parseExtensionUrl(url);
+  if (ext) {
+    return {
+      provider: ext.provider.trim().toLowerCase(),
+      address: addressKey(ext.target).toLowerCase(),
+    };
+  }
+  return {
+    address: addressKey(url).toLowerCase(),
+  };
+}
+
+/**
+ * Whether two URLs refer to the same media item or page across extension-wrapped
+ * and raw URLs, ignoring query parameters and encoding differences.
+ * If both specify an extension provider, the providers must also match.
+ */
+export function urlsMatch(a: string | undefined, b: string | undefined): boolean {
+  if (!a || !b) return false;
+  if (a === b) return true;
+
+  const aNorm = unpackUrlAddress(a);
+  const bNorm = unpackUrlAddress(b);
+
+  if (aNorm.address && bNorm.address) {
+    if (aNorm.address === bNorm.address) {
+      if (aNorm.provider && bNorm.provider) {
+        return aNorm.provider === bNorm.provider;
+      }
+      return true;
+    }
+
+    try {
+      const decA = decodeURIComponent(aNorm.address);
+      const decB = decodeURIComponent(bNorm.address);
+      if (decA === decB) {
+        if (aNorm.provider && bNorm.provider) {
+          return aNorm.provider === bNorm.provider;
+        }
+        return true;
+      }
+    } catch {}
+  }
+
+  return false;
+}
+

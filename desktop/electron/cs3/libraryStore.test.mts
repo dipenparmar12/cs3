@@ -253,6 +253,54 @@ test('saved sources are capped, newest first', () => {
   assert.equal(merged[0].id, 'new');
 });
 
+test('getEntryForUrl matches exact, query-stripped, and extension-wrapped URLs', () => {
+  const s = store();
+  s.upsertEntry({ title: 'Dune', year: 2024, mediaUrl: 'cs3ext://Castle%20TV/https%3A%2F%2Fcastle.test%2Fdune' });
+  const key = s.getEntryForUrl('cs3ext://Castle%20TV/https%3A%2F%2Fcastle.test%2Fdune')?.key;
+  assert.ok(key);
+
+  // Matches stripped query parameters
+  assert.equal(s.getEntryForUrl('cs3ext://Castle%20TV/https%3A%2F%2Fcastle.test%2Fdune?foo=1')?.key, key);
+
+  // Different provider does not match
+  assert.equal(s.getEntryForUrl('cs3ext://CineTv/https%3A%2F%2Fcastle.test%2Fdune'), null);
+});
+
+test('removeEntry with mediaUrl removes only that URL from a multi-provider entry', () => {
+  const s = store();
+  const url1 = 'https://castle.test/film';
+  const url2 = 'https://cinetv.test/film';
+
+  s.upsertEntry({ title: 'Film', year: 2024, mediaUrl: url1 });
+  s.upsertEntry({ title: 'Film', year: 2024, mediaUrl: url2 });
+  s.recordProgress({ title: 'Film', year: 2024, mediaUrl: url1, positionSeconds: 100, durationSeconds: 500 });
+  s.recordProgress({ title: 'Film', year: 2024, mediaUrl: url2, positionSeconds: 200, durationSeconds: 500 });
+
+  const key = s.getEntryForUrl(url1)!.key;
+  assert.equal(s.getEntry(key)?.urls.length, 2);
+
+  // Remove only url1
+  const removedPart = s.removeEntry(key, url1);
+  assert.equal(removedPart, true);
+
+  const entryAfter = s.getEntry(key);
+  assert.ok(entryAfter);
+  assert.deepEqual(entryAfter.urls, [url2]);
+  assert.equal(s.getEntryForUrl(url1), null);
+  assert.ok(s.getEntryForUrl(url2));
+
+  // Progress for url2 remains intact
+  assert.ok(s.getProgress(key));
+  assert.equal(s.getProgress(key)?.mediaUrl, url2);
+
+  // Removing the last remaining URL removes the whole entry and its progress
+  const removedAll = s.removeEntry(key, url2);
+  assert.equal(removedAll, true);
+  assert.equal(s.getEntry(key), null);
+  assert.equal(s.getProgress(key), null);
+});
+
+
 // --- runner ----------------------------------------------------------------
 
 let failed = 0;

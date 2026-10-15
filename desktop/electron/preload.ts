@@ -1711,7 +1711,7 @@ export interface CloudStreamElectronAPI {
   }) => Promise<LibraryEntry | null>;
   setLibraryStatus: (key: string, status: WatchStatus) => Promise<LibraryEntry | null>;
   setLibraryUserRating: (key: string, rating?: number) => Promise<LibraryEntry | null>;
-  removeLibraryEntry: (key: string) => Promise<boolean>;
+  removeLibraryEntry: (key: string, mediaUrl?: string) => Promise<boolean>;
   getLibraryEntryForUrl: (mediaUrl: string) => Promise<LibraryEntry | null>;
   recordWatchProgress: (input: {
     title: string;
@@ -2495,7 +2495,7 @@ const api: CloudStreamElectronAPI = {
   upsertLibraryEntry: (input) => ipcRenderer.invoke('library:upsertEntry', input),
   setLibraryStatus: (key, status) => ipcRenderer.invoke('library:setStatus', key, status),
   setLibraryUserRating: (key, rating) => ipcRenderer.invoke('library:setUserRating', key, rating),
-  removeLibraryEntry: (key) => ipcRenderer.invoke('library:removeEntry', key),
+  removeLibraryEntry: (key, mediaUrl) => ipcRenderer.invoke('library:removeEntry', key, mediaUrl),
   getLibraryEntryForUrl: (mediaUrl) => ipcRenderer.invoke('library:getEntryForUrl', mediaUrl),
   recordWatchProgress: (input) => ipcRenderer.invoke('library:recordProgress', input),
   getProgressForKey: (key) => ipcRenderer.invoke('library:getProgressForKey', key),
