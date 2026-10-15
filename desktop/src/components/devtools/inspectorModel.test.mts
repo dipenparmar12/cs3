@@ -11,8 +11,12 @@
 import assert from 'node:assert/strict';
 import {
   FiberTag,
+  analyzeDependencies,
+  classifyState,
   componentPath,
   componentState,
+  contextProvidersAbove,
+  findImmediateChildren,
   formatForAgent,
   parseLocation,
   preview,
@@ -122,6 +126,117 @@ test('without stamps the report says how to get them instead of inventing a loca
     hierarchy: [],
   };
   assert.match(formatForAgent(inspection, undefined), /no source location — run the app with `bun run dev`/);
+});
+
+test('findImmediateChildren discovers child components across host nodes without recursing into them', () => {
+  const root = fiber(FiberTag.FunctionComponent, fn('SearchView', 'src/views/SearchView.tsx:10:1'));
+  const container = fiber(FiberTag.HostComponent, 'div', {}, root);
+  root.child = container;
+
+  const tabs = fiber(FiberTag.FunctionComponent, fn('TypeTabs', 'src/components/TypeTabs.tsx:5:1'), {}, container);
+  const facet = fiber(FiberTag.FunctionComponent, fn('FacetMenu', 'src/components/FacetMenu.tsx:8:1'), {}, container);
+  const deepChild = fiber(FiberTag.FunctionComponent, fn('TabItem', 'src/components/TabItem.tsx:1:1'), {}, tabs);
+  tabs.child = deepChild;
+
+  container.child = tabs;
+  tabs.sibling = facet;
+
+  const immediate = findImmediateChildren(root);
+  assert.deepEqual(immediate.map((c) => c.name), ['TypeTabs', 'FacetMenu']);
+});
+
+test('contextProvidersAbove reads Context providers in ancestor chain', () => {
+  const ctx = { displayName: 'ExperienceModeContext' };
+  const providerFiber: Fiber = {
+    tag: FiberTag.ContextProvider,
+    type: { _context: ctx },
+    return: null,
+    child: null,
+    sibling: null,
+    memoizedProps: { value: 'developer' },
+  };
+  const childComp = fiber(FiberTag.FunctionComponent, fn('SearchView'), {}, providerFiber);
+
+  const contexts = contextProvidersAbove(childComp);
+  assert.equal(contexts.length, 1);
+  assert.equal(contexts[0].name, 'ExperienceModeContext');
+  assert.equal(contexts[0].value, 'developer');
+});
+
+test('classifyState categorizes flags, filters, status, and collections, ignoring noise', () => {
+  assert.equal(classifyState(true, 0)?.category, 'flag');
+  assert.equal(classifyState('all', 1)?.category, 'filter');
+  assert.equal(classifyState(42, 2)?.category, 'status');
+  assert.equal(classifyState([1, 2, 3], 3)?.category, 'data');
+  assert.equal(classifyState(undefined, 4), null);
+  assert.equal(classifyState({ width: 0, height: 0, top: 0, left: 0 }, 5), null);
+});
+
+test('analyzeDependencies identifies State Owner, Controlled Component, and Presentational roles', () => {
+  // State Owner: has local state and coordinates
+  const searchView = fiber(FiberTag.FunctionComponent, fn('SearchView'), { query: 'Madame Web' });
+  searchView.memoizedState = { memoizedState: 'all', queue: { dispatch() {} }, next: null };
+  const infoOwner = {
+    name: 'SearchView',
+    kind: 'app' as const,
+    props: { query: 'Madame Web' },
+    state: ['all'],
+    fiber: searchView,
+  };
+  const analysisOwner = analyzeDependencies(infoOwner);
+  assert.equal(analysisOwner.role, 'State Owner');
+
+  // Controlled Component: has value prop and onChange callback
+  const facetMenu = fiber(FiberTag.FunctionComponent, fn('FacetMenu'), { value: 'all', onChange() {} });
+  const infoControlled = {
+    name: 'FacetMenu',
+    kind: 'app' as const,
+    props: { value: 'all', onChange() {} },
+    state: [],
+    fiber: facetMenu,
+  };
+  const analysisControlled = analyzeDependencies(infoControlled);
+  assert.equal(analysisControlled.role, 'Controlled Component');
+
+  // Presentational: has data props only
+  const badge = fiber(FiberTag.FunctionComponent, fn('CardBadge'), { count: 5 });
+  const infoBadge = {
+    name: 'CardBadge',
+    kind: 'app' as const,
+    props: { count: 5 },
+    state: [],
+    fiber: badge,
+  };
+  const analysisBadge = analyzeDependencies(infoBadge);
+  assert.equal(analysisBadge.role, 'Presentational');
+});
+
+test('formatForAgent includes immediate children, data role, and categorized state', () => {
+  const root = fiber(FiberTag.FunctionComponent, fn('SearchView', 'src/views/SearchView.tsx:10:1'));
+  const container = fiber(FiberTag.HostComponent, 'div', {}, root);
+  root.child = container;
+  const tabs = fiber(FiberTag.FunctionComponent, fn('TypeTabs', 'src/components/TypeTabs.tsx:5:1'), {}, container);
+  container.child = tabs;
+
+  const inspection: Inspection = {
+    element: { tag: 'div', classes: ['search-view'], attributes: [], handlers: [], size: { width: 100, height: 50 } },
+    hierarchy: [
+      {
+        name: 'SearchView',
+        kind: 'app',
+        definedAt: 'src/views/SearchView.tsx:10:1',
+        props: { query: 'Madame Web' },
+        state: ['all', true],
+        fiber: root,
+      },
+    ],
+  };
+
+  const output = formatForAgent(inspection, inspection.hierarchy[0]);
+  assert.match(output, /Immediate Children:\n\s+TypeTabs/);
+  assert.match(output, /Role: State Owner/);
+  assert.match(output, /\[0\] "all"\s+\(filter\)/);
+  assert.match(output, /\[1\] true\s+\(flag\)/);
 });
 
 let failed = 0;

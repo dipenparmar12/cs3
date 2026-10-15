@@ -35,7 +35,7 @@ interface NavbarProps {
   isSearching?: boolean;
   /** Fired when the scope picker closes having changed the scope. */
   onScopeChange?: () => void;
-  onOpenInspector: () => void;
+  onOpenInspector?: () => void;
   /**
    * The query the app believes is running, when it was not typed here.
    *
@@ -86,7 +86,6 @@ export const Navbar: React.FC<NavbarProps> = ({
   onTorrentPickFailed,
   isSearching = false,
   onScopeChange,
-  onOpenInspector,
   externalQuery,
   onOpenSavedSearch,
 }) => {

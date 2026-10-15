@@ -12,6 +12,8 @@ import {
   X,
 } from 'lucide-react';
 import {
+  analyzeDependencies,
+  classifyState,
   firstHostNode,
   formatForAgent,
   inspect,
@@ -195,8 +197,9 @@ const Section: React.FC<{
 
 const DEFAULT_SECTIONS: Record<string, boolean> = {
   hierarchy: true,
+  dependencies: true,
   props: true,
-  state: false,
+  state: true,
   interaction: true,
   element: false,
 };
@@ -336,6 +339,11 @@ export const UiInspector: React.FC = () => {
 
   // --- what is highlighted ---------------------------------------------------
   const focused: ComponentInfo | undefined = selection?.inspection.hierarchy[selection.focus];
+  const analysis = useMemo(() => {
+    if (!focused) return null;
+    return analyzeDependencies(focused, selection?.inspection.owner);
+  }, [focused, selection?.inspection.owner]);
+
   const focusNode = useMemo(() => {
     if (!selection || !focused) return selection?.element ?? null;
     // The clicked element when the focus is the component that drew it,
@@ -470,6 +478,11 @@ export const UiInspector: React.FC = () => {
             <div className="ui-inspector__identity">
               <div className="ui-inspector__name">
                 {focused?.name ?? `<${element.tag}>`}
+                {analysis && (
+                  <span className="ui-inspector__badge" title={analysis.roleSummary}>
+                    {analysis.role}
+                  </span>
+                )}
                 {focused && focused.kind !== 'app' && (
                   <span className="ui-inspector__kind">{focused.kind}</span>
                 )}
@@ -491,6 +504,9 @@ export const UiInspector: React.FC = () => {
                 <p className="ui-inspector__muted">
                   No source location. Source stamps exist only in a development run (`bun run dev`).
                 </p>
+              )}
+              {analysis && (
+                <p className="ui-inspector__role-summary">{analysis.roleSummary}</p>
               )}
               <dl className="ui-inspector__facts">
                 {focused?.renderedAt && (
@@ -562,8 +578,94 @@ export const UiInspector: React.FC = () => {
                 />
                 Show library and framework components{hiddenCount > 0 ? ` (${hiddenCount} hidden)` : ''}
               </label>
+              {analysis && analysis.immediateChildren.length > 0 && (
+                <div className="ui-inspector__children-block">
+                  <span className="ui-inspector__subheading">
+                    Immediate children ({analysis.immediateChildren.length}):
+                  </span>
+                  <div className="ui-inspector__chip-grid">
+                    {analysis.immediateChildren.map((child, idx) => (
+                      <button
+                        key={idx}
+                        type="button"
+                        className="ui-inspector__chip"
+                        title={child.definedAt ?? child.name}
+                        onClick={() => {
+                          const childNode = firstHostNode(child.fiber);
+                          if (childNode) select(childNode);
+                        }}
+                      >
+                        {child.name}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              )}
               {focused && !firstHostNode(focused.fiber) && (
                 <p className="ui-inspector__muted">This component renders no element of its own.</p>
+              )}
+            </Section>
+
+            <Section
+              id="dependencies"
+              title="Data & Dependencies"
+              open={sections.dependencies}
+              onToggle={toggleSection}
+            >
+              {analysis ? (
+                <div className="ui-inspector__dep-panel">
+                  <div className="ui-inspector__dep-item">
+                    <span className="ui-inspector__dep-label">Role:</span>
+                    <span className="ui-inspector__dep-value">
+                      <strong>{analysis.role}</strong> — {analysis.roleSummary}
+                    </span>
+                  </div>
+                  {analysis.contexts.length > 0 && (
+                    <div className="ui-inspector__dep-item">
+                      <span className="ui-inspector__dep-label">Contexts ({analysis.contexts.length}):</span>
+                      <ul className="ui-inspector__dep-list">
+                        {analysis.contexts.map((ctx) => (
+                          <li key={ctx.name}>
+                            <code>{ctx.name}</code>
+                            {ctx.value !== undefined && (
+                              <span className="ui-inspector__dep-preview"> = {preview(ctx.value)}</span>
+                            )}
+                          </li>
+                        ))}
+                      </ul>
+                    </div>
+                  )}
+                  {analysis.dataProps.length > 0 && (
+                    <div className="ui-inspector__dep-item">
+                      <span className="ui-inspector__dep-label">
+                        Data Props ({analysis.dataProps.length} from parent):
+                      </span>
+                      <div className="ui-inspector__chip-grid">
+                        {analysis.dataProps.map(([k, v]) => (
+                          <span key={k} className="ui-inspector__prop-chip" title={`${k}: ${preview(v)}`}>
+                            <code>{k}</code>
+                          </span>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                  {analysis.callbackProps.length > 0 && (
+                    <div className="ui-inspector__dep-item">
+                      <span className="ui-inspector__dep-label">
+                        Action Callbacks ({analysis.callbackProps.length}):
+                      </span>
+                      <div className="ui-inspector__chip-grid">
+                        {analysis.callbackProps.map((k) => (
+                          <span key={k} className="ui-inspector__action-chip">
+                            <code>{k}</code>
+                          </span>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                </div>
+              ) : (
+                <p className="ui-inspector__muted">No dependency information.</p>
               )}
             </Section>
 
@@ -593,15 +695,26 @@ export const UiInspector: React.FC = () => {
               ) : (
                 <table className="ui-inspector__table">
                   <tbody>
-                    {focused.state.map((value, index) => (
-                      <tr key={index}>
-                        <th>[{index}]</th>
-                        <td title={preview(value)}>{preview(value)}</td>
-                        <td>
-                          <CopyButton value={preview(value)} label={`Copy state ${index}`} onCopied={notify} />
-                        </td>
-                      </tr>
-                    ))}
+                    {focused.state.map((value, index) => {
+                      const classified = classifyState(value, index);
+                      const cat = classified?.category ?? 'general';
+                      return (
+                        <tr key={index}>
+                          <th>
+                            [{index}]
+                            {cat !== 'general' && (
+                              <span className={`ui-inspector__cat-tag ui-inspector__cat-tag--${cat}`}>
+                                {cat}
+                              </span>
+                            )}
+                          </th>
+                          <td title={preview(value)}>{preview(value)}</td>
+                          <td>
+                            <CopyButton value={preview(value)} label={`Copy state ${index}`} onCopied={notify} />
+                          </td>
+                        </tr>
+                      );
+                    })}
                   </tbody>
                 </table>
               )}

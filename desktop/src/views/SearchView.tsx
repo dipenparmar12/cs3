@@ -448,7 +448,7 @@ export const SearchView: React.FC<SearchViewProps> = ({
   }
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: '1.25rem' }}>
+    <div style={{ display: 'flex', flexDirection: 'column', gap: '0.85rem' }}>
       {/*
         One quiet toolbar instead of a heading, a scope paragraph and three
         buttons. The query is already in the search box, so "Search Results for

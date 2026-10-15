@@ -93,6 +93,31 @@ export interface HandlerInfo {
   depth: number;
 }
 
+export interface ContextInfo {
+  name: string;
+  value?: unknown;
+}
+
+export type ComponentRole = 'State Owner' | 'Controlled Component' | 'Presentational' | 'Layout';
+
+export type StateCategory = 'flag' | 'filter' | 'selection' | 'data' | 'status' | 'general';
+
+export interface ClassifiedState {
+  index: number;
+  category: StateCategory;
+  value: unknown;
+  preview: string;
+}
+
+export interface DataDependencyAnalysis {
+  role: ComponentRole;
+  roleSummary: string;
+  dataProps: Array<[string, unknown]>;
+  callbackProps: string[];
+  contexts: ContextInfo[];
+  immediateChildren: ComponentInfo[];
+}
+
 export interface Inspection {
   element: ElementInfo;
   /** Root first, the nearest component last. */
@@ -101,6 +126,10 @@ export interface Inspection {
   responsible?: ComponentInfo;
   /** The component whose render produced the element (its JSX owner). */
   owner?: ComponentInfo;
+  /** Immediate child components of the focused component. */
+  immediateChildren?: ComponentInfo[];
+  /** React Context providers supplying data to this component. */
+  contexts?: ContextInfo[];
 }
 
 /** Wrappers that are infrastructure, not UI anyone would ask to change. */
@@ -227,6 +256,153 @@ export function firstHostNode(fiber: Fiber | null): Element | null {
   return null;
 }
 
+/**
+ * Immediate child components rendered by this component fiber.
+ *
+ * Traverses down through host nodes and fragments until finding the
+ * first component fibers in each branch of the subtree, without recursing
+ * into their own children.
+ */
+export function findImmediateChildren(fiber: Fiber | null): ComponentInfo[] {
+  if (!fiber || !fiber.child) return [];
+  const children: ComponentInfo[] = [];
+  const queue: Fiber[] = [fiber.child];
+  const seenFibers = new Set<Fiber>();
+
+  while (queue.length > 0 && children.length < 30) {
+    const current = queue.shift()!;
+    if (seenFibers.has(current)) continue;
+    seenFibers.add(current);
+
+    if (isComponentFiber(current)) {
+      children.push(describeComponent(current));
+    } else {
+      if (current.child) queue.push(current.child);
+    }
+    if (current.sibling) queue.push(current.sibling);
+  }
+  return children;
+}
+
+/**
+ * Finds React Context providers above the given fiber in the tree.
+ * Extracts context name and current value.
+ */
+export function contextProvidersAbove(fiber: Fiber | null): ContextInfo[] {
+  const contexts: ContextInfo[] = [];
+  const seen = new Set<string>();
+
+  for (let current = fiber?.return; current; current = current.return) {
+    if (
+      current.tag === FiberTag.ContextProvider ||
+      (current.type && typeof current.type === 'object' && '_context' in (current.type as Record<string, unknown>))
+    ) {
+      const type = current.type as Record<string, unknown>;
+      const ctx = (type._context ?? type) as Record<string, unknown>;
+      const rawName = (ctx?.displayName ?? type?.displayName ?? type?.name ?? '') as string;
+      const name = rawName || 'Context';
+      if (!seen.has(name)) {
+        seen.add(name);
+        contexts.push({
+          name,
+          value: current.memoizedProps?.value,
+        });
+      }
+    }
+  }
+  return contexts;
+}
+
+/**
+ * Classifies local state values into meaningful categories.
+ * Skips noisy internal variables (e.g. uninitialized refs, zero rects).
+ */
+export function classifyState(value: unknown, index: number): ClassifiedState | null {
+  if (value === undefined) return null;
+  if (value === null) {
+    return { index, category: 'status', value, preview: 'null' };
+  }
+  if (typeof value === 'boolean') {
+    return { index, category: 'flag', value, preview: String(value) };
+  }
+  if (typeof value === 'number') {
+    return { index, category: 'status', value, preview: String(value) };
+  }
+  if (typeof value === 'string') {
+    const cat = value.length <= 40 ? 'filter' : 'general';
+    return { index, category: cat, value, preview: preview(value) };
+  }
+  if (Array.isArray(value)) {
+    return { index, category: 'data', value, preview: `Array(${value.length})` };
+  }
+  if (value instanceof Set) {
+    return { index, category: 'data', value, preview: `Set(${value.size})` };
+  }
+  if (value instanceof Map) {
+    return { index, category: 'data', value, preview: `Map(${value.size})` };
+  }
+  if (typeof value === 'object') {
+    const record = value as Record<string, unknown>;
+    const keys = Object.keys(record);
+    if (keys.length === 0) return null;
+    if (keys.length === 4 && 'top' in record && 'left' in record && 'width' in record && 'height' in record) {
+      if (record.width === 0 && record.height === 0) return null;
+    }
+    return { index, category: 'general', value, preview: preview(value) };
+  }
+  return { index, category: 'general', value, preview: preview(value) };
+}
+
+/**
+ * Analyzes component role, data flow, props, contexts, and immediate children.
+ */
+export function analyzeDependencies(
+  info: ComponentInfo,
+  owner?: ComponentInfo
+): DataDependencyAnalysis {
+  const propEntries = Object.entries(info.props);
+  const callbackProps = propEntries
+    .filter(([k, v]) => /^on[A-Z]/.test(k) && typeof v === 'function')
+    .map(([k]) => k);
+  const dataProps = propEntries.filter(([k]) => !/^on[A-Z]/.test(k));
+  const hasLocalState = info.state.length > 0;
+
+  let role: ComponentRole = 'Layout';
+  let roleSummary = 'Structural layout container';
+
+  const isControlled =
+    callbackProps.length > 0 &&
+    dataProps.some(([dp]) =>
+      callbackProps.some((cp) => cp.toLowerCase().includes(dp.toLowerCase()) || cp === 'onChange' || cp === 'onSelect')
+    );
+
+  if (isControlled) {
+    role = 'Controlled Component';
+    roleSummary = `Controlled by ${owner?.name ?? 'parent'} (receives state & event callbacks)`;
+  } else if (hasLocalState && callbackProps.length === 0) {
+    role = 'State Owner';
+    roleSummary = `Coordinates local state (${info.state.length} active hook${info.state.length === 1 ? '' : 's'}) and child components`;
+  } else if (hasLocalState) {
+    role = 'State Owner';
+    roleSummary = `Coordinates local state and dispatches actions to children`;
+  } else if (dataProps.length > 0) {
+    role = 'Presentational';
+    roleSummary = `Renders data received via ${dataProps.length} prop${dataProps.length === 1 ? '' : 's'}`;
+  }
+
+  const contexts = contextProvidersAbove(info.fiber);
+  const immediateChildren = findImmediateChildren(info.fiber);
+
+  return {
+    role,
+    roleSummary,
+    dataProps,
+    callbackProps,
+    contexts,
+    immediateChildren,
+  };
+}
+
 const SKIPPED_ATTRIBUTES = new Set(['class', 'style', 'data-cs3-loc', 'data-cs3-site']);
 
 function reactProps(element: Element): Record<string, unknown> {
@@ -278,11 +454,17 @@ export function inspect(element: Element): Inspection {
   const hierarchy = componentPath(fiber);
   const responsible = [...hierarchy].reverse().find((entry) => entry.kind === 'app');
   const ownerFiber = fiber?._debugOwner && isComponentFiber(fiber._debugOwner) ? fiber._debugOwner : null;
+  const targetFiber = responsible?.fiber ?? ownerFiber ?? (hierarchy.length ? hierarchy[hierarchy.length - 1].fiber : null);
+  const immediateChildren = targetFiber ? findImmediateChildren(targetFiber) : [];
+  const contexts = targetFiber ? contextProvidersAbove(targetFiber) : [];
+
   return {
     element: describeElement(element),
     hierarchy,
     responsible,
     owner: ownerFiber ? describeComponent(ownerFiber) : undefined,
+    immediateChildren,
+    contexts,
   };
 }
 
@@ -348,6 +530,32 @@ export function formatForAgent(inspection: Inspection, selected: ComponentInfo |
     lines.push('');
   }
 
+  const immediateChildren = focus?.fiber ? findImmediateChildren(focus.fiber) : inspection.immediateChildren ?? [];
+  const appChildren = immediateChildren.filter((c) => c.kind === 'app');
+  if (appChildren.length > 0) {
+    const childNames = [...new Set(appChildren.map((c) => c.name))];
+    lines.push('Immediate Children:');
+    lines.push(`  ${childNames.join(', ')}`);
+    lines.push('');
+  }
+
+  if (focus) {
+    const analysis = analyzeDependencies(focus, inspection.owner);
+    lines.push('Data Sources & Role:');
+    lines.push(`  Role: ${analysis.role} — ${analysis.roleSummary}`);
+    if (analysis.contexts.length > 0) {
+      const contextStr = analysis.contexts
+        .map((c) => `${c.name}${c.value !== undefined ? ` (${preview(c.value)})` : ''}`)
+        .join(', ');
+      lines.push(`  Contexts: ${contextStr}`);
+    }
+    if (analysis.dataProps.length > 0) {
+      const dataPropNames = analysis.dataProps.map(([k]) => k).slice(0, 10).join(', ');
+      lines.push(`  Data Props (${analysis.dataProps.length} from parent): ${dataPropNames}`);
+    }
+    lines.push('');
+  }
+
   const element = inspection.element;
   lines.push('Element:');
   lines.push(`  <${element.tag}${element.id ? `#${element.id}` : ''}>  ${element.size.width}×${element.size.height}`);
@@ -364,7 +572,11 @@ export function formatForAgent(inspection: Inspection, selected: ComponentInfo |
   }
   if (focus?.state.length) {
     lines.push(`State (${focus.name}, hook order):`);
-    focus.state.slice(0, 15).forEach((value, index) => lines.push(`  [${index}] ${preview(value)}`));
+    focus.state.slice(0, 15).forEach((value, index) => {
+      const classified = classifyState(value, index);
+      const tag = classified && classified.category !== 'general' ? `  (${classified.category})` : '';
+      lines.push(`  [${index}] ${preview(value)}${tag}`);
+    });
     lines.push('');
   }
   const handlers = [
