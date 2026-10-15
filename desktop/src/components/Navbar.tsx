@@ -1,7 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Search, Bug, Loader2, Paperclip, EyeOff, X, Square, Trash2 } from 'lucide-react';
+import { Search, Loader2, Paperclip, EyeOff, X, Square, Trash2 } from 'lucide-react';
 import { usePrivacy } from '../utils/usePrivacy';
-import { DeveloperOnly } from '../utils/ExperienceModeContext';
 import { SearchScopePicker } from './SearchScopePicker';
 import type {
   ExactMedia,
@@ -554,21 +553,6 @@ export const Navbar: React.FC<NavbarProps> = ({
           {incognito && <span>Incognito</span>}
         </button>
 
-        {/*
-          The inspector is a debugger, and a bug icon in the main toolbar is the
-          single clearest signal that this is a developer tool rather than a
-          place to watch films. It is in developer mode only; F12 opens it there
-          too, and that shortcut is gated with it so the two cannot disagree.
-        */}
-        <DeveloperOnly>
-          <button
-            onClick={onOpenInspector}
-            className="btn btn-secondary btn-icon"
-            title="F12 — provider inspector"
-          >
-            <Bug size={16} />
-          </button>
-        </DeveloperOnly>
       </div>
     </header>
   );
