@@ -4056,9 +4056,6 @@
   gap: 0.75rem;
   transition: padding 0.2s ease;
 }
-.adult-setting--collapsed {
-  gap: 0;
-}
 .adult-setting header,
 .adult-setting__head {
   display: flex;
@@ -4066,34 +4063,12 @@
   justify-content: space-between;
   gap: 0.5rem;
   color: #fff;
-  cursor: pointer;
-  user-select: none;
-  border-radius: 4px;
-  transition: color 0.15s ease;
-}
-.adult-setting__head:hover {
-  color: var(--accent-light, #93c5fd);
 }
 .adult-setting__title-wrap {
   display: inline-flex;
   align-items: center;
   gap: 0.5rem;
   flex: 1;
-}
-.adult-setting__collapse-icon {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  color: var(--text-muted);
-  opacity: 0.38;
-  margin-left: 0.5rem;
-  transition: opacity 0.15s ease, transform 0.2s cubic-bezier(0.16, 1, 0.3, 1);
-}
-.adult-setting__head:hover .adult-setting__collapse-icon {
-  opacity: 0.85;
-}
-.adult-setting__collapse-icon--collapsed {
-  transform: rotate(-90deg);
 }
 .adult-setting h3 {
   margin: 0;
@@ -9080,6 +9055,17 @@ video::cue {
   border: 1px solid var(--border-color);
   background: var(--bg-elevated, rgba(255, 255, 255, 0.02));
 }
+.adult-setting__badges {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.4rem;
+}
+.adult-setting__row-control {
+  display: flex;
+  align-items: center;
+  flex-shrink: 0;
+}
 .adult-setting__row-info {
   display: flex;
   flex-direction: column;
@@ -9097,43 +9083,6 @@ video::cue {
   font-size: 0.76rem;
   color: var(--text-muted);
   line-height: 1.4;
-}
-.adult-setting__seg {
-  display: inline-flex;
-  align-items: center;
-  padding: 2px;
-  border-radius: 6px;
-  background: rgba(0, 0, 0, 0.22);
-  border: 1px solid var(--border-color);
-}
-.adult-setting__seg-btn {
-  display: inline-flex;
-  align-items: center;
-  gap: 0.35rem;
-  padding: 0.28rem 0.6rem;
-  border: 0;
-  border-radius: 4px;
-  background: transparent;
-  color: var(--text-muted);
-  font-size: 0.75rem;
-  font-weight: 500;
-  cursor: pointer;
-  transition: all 0.12s ease;
-  white-space: nowrap;
-}
-.adult-setting__seg-btn:hover:not(:disabled) {
-  color: #fff;
-  background: rgba(255, 255, 255, 0.06);
-}
-.adult-setting__seg-btn--active {
-  background: var(--accent-primary, #3b82f6);
-  color: #fff;
-  font-weight: 600;
-  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.3);
-}
-.adult-setting__seg-btn--warn.adult-setting__seg-btn--active {
-  background: rgba(239, 68, 68, 0.85);
-  color: #fff;
 }
 .adult-setting__confirm {
   display: flex;
