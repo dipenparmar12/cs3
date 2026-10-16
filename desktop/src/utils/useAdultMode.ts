@@ -1,5 +1,6 @@
 import { useEffect, useSyncExternalStore } from 'react';
 import type { AdultStateSnapshot } from '../../electron/cs3/bootstrap';
+import { isEmergencyBlurEvent } from './emergencyBlur';
 
 export type AdultMode = 'off' | 'ask' | 'on';
 
@@ -100,8 +101,37 @@ const start = () => {
   if (started) return;
   if (typeof window === 'undefined' || !window.cloudstream) return;
   started = true;
+  bindEmergencyKey();
   window.cloudstream.onAdultChanged?.((next) => publish(next));
   void refreshAdultState();
+};
+
+/**
+ * Re-blurs everything now. Applied locally and synchronously before the main
+ * process is told, so nothing can reappear while the round trip runs; the
+ * main process then pushes the same state to every other window. Blur only:
+ * it never reveals, and never touches availability or saved preferences.
+ */
+export const blurAdultNow = (): void => {
+  if (!state.blurred || state.revealedKeys.size > 0) {
+    state = { ...state, blurred: true, revealedKeys: EMPTY_REVEALED };
+    emit();
+  }
+  void window.cloudstream?.setAdultAllowed?.({ blurred: true });
+};
+
+let emergencyKeyBound = false;
+const bindEmergencyKey = () => {
+  if (emergencyKeyBound || typeof window === 'undefined') return;
+  emergencyKeyBound = true;
+  // Capture phase: no screen, dialog or the player can swallow it first.
+  window.addEventListener(
+    'keydown',
+    (event) => {
+      if (isEmergencyBlurEvent(event)) blurAdultNow();
+    },
+    true
+  );
 };
 
 // Start immediately if the preload bridge is ready so state resolves as early as possible.

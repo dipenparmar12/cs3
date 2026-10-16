@@ -1,5 +1,6 @@
 import React from 'react';
 import { SettingRow } from './SettingRow';
+import { EMERGENCY_BLUR_KEY_LABEL } from '../../utils/emergencyBlur';
 
 interface ShortcutItem {
   action: string;
@@ -69,6 +70,12 @@ const SHORTCUT_CATEGORIES: ShortcutCategory[] = [
       { action: 'Previous Episode', keys: ['P'] },
       { action: 'Toggle Episodes Drawer', keys: ['E'] },
     ],
+  },
+  {
+    title: 'Privacy (any screen)',
+    note: 'Works everywhere except while typing; blur only, never reveals',
+    keywords: 'privacy blur panic hide nsfw adult emergency backtick',
+    items: [{ action: 'Blur adult content now', keys: [EMERGENCY_BLUR_KEY_LABEL] }],
   },
 ];
 

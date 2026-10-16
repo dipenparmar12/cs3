@@ -1,15 +1,13 @@
 import React, { useState } from 'react';
-import { EyeOff, ShieldAlert } from 'lucide-react';
+import { Bell, BellOff, EyeOff, ShieldAlert } from 'lucide-react';
 import { InfoHint } from './settings/InfoHint';
-import { Button, RadioGroup, Switch } from './ui';
+import { Button, Switch } from './ui';
 import {
   setAdultAvailability,
   setAdultDoNotAskAgain,
   setAdultVisualBlurred,
   useAdultState,
 } from '../utils/useAdultMode';
-
-type StartupChoice = 'ask' | 'skip';
 
 /**
  * Adult content & visual privacy controls (§129.2, §129.7). Shared by Settings
@@ -121,17 +119,28 @@ export const AdultContentSetting: React.FC = () => {
             <p>Ask to confirm adult content access each time the application launches.</p>
           </div>
           <div className="adult-setting__row-control">
-            <RadioGroup<StartupChoice>
-              legend={<span className="sr-only">Startup prompt</span>}
-              inline
-              disabled={busy}
-              value={doNotAskAgain ? 'skip' : 'ask'}
-              options={[
-                { value: 'ask', label: 'Ask' },
-                { value: 'skip', label: "Don't Ask" },
-              ]}
-              onChange={(choice) => void run(() => setAdultDoNotAskAgain(choice === 'skip'))}
-            />
+            <div className="adult-setting__seg" role="group" aria-label="Startup prompt">
+              <button
+                type="button"
+                className={`adult-setting__seg-btn${!doNotAskAgain ? ' adult-setting__seg-btn--active' : ''}`}
+                aria-pressed={!doNotAskAgain}
+                onClick={() => void run(() => setAdultDoNotAskAgain(false))}
+                disabled={busy}
+              >
+                <Bell size={13} />
+                Ask
+              </button>
+              <button
+                type="button"
+                className={`adult-setting__seg-btn${doNotAskAgain ? ' adult-setting__seg-btn--active' : ''}`}
+                aria-pressed={doNotAskAgain}
+                onClick={() => void run(() => setAdultDoNotAskAgain(true))}
+                disabled={busy}
+              >
+                <BellOff size={13} />
+                Don't Ask
+              </button>
+            </div>
           </div>
         </div>
       </div>

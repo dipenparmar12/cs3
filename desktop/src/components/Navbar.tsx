@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Search, Loader2, Paperclip, Eye, EyeOff, X, Square, Trash2 } from 'lucide-react';
 import { usePrivacy } from '../utils/usePrivacy';
 import { isAdultMedia, isSensitiveTitle } from '../utils/adultContent';
+import { EMERGENCY_BLUR_KEY_LABEL } from '../utils/emergencyBlur';
 import { setAdultVisualBlurred, useAdultMode } from '../utils/useAdultMode';
 import { SearchScopePicker } from './SearchScopePicker';
 import type {
@@ -578,7 +579,7 @@ export const Navbar: React.FC<NavbarProps> = ({
             title={
               adult.blurred
                 ? 'Adult content posters are blurred for privacy. Click to unblur for this session.'
-                : 'Adult content posters are visible for this session. Click to blur them.'
+                : `Adult content posters are visible for this session. Click to blur them, or press ${EMERGENCY_BLUR_KEY_LABEL} anywhere.`
             }
           >
             {adult.blurred ? <Eye size={14} /> : <EyeOff size={14} />}
