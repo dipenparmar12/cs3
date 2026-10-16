@@ -38,6 +38,7 @@ const endServiceGraph = startup.span('constructServices');
 
 import { app, BrowserWindow, ipcMain, dialog, Menu, net, screen, session, shell } from 'electron';
 import { byteStringHeaders, isElectronHeaderByteStringError } from './util/headerBytes.ts';
+import { SMOKE_LAUNCH_KEY, prepareSmokeTest, runSmokeTest, smokeTestRequested } from './smokeTest.ts';
 import { appMayUse } from './security/permissions.ts';
 import { BackupService } from './cs3/backupService.ts';
 import { runReset, summarise, type ResetAreaDefinition } from './cs3/userDataReset.ts';
@@ -204,6 +205,8 @@ export const APP_TITLE = IS_DEV ? 'CloudStream 3 Desktop [Dev]' : 'CloudStream 3
  */
 app.name = APP_NAME;
 app.setAppUserModelId(APP_ID);
+// A release smoke run gets a throwaway profile before anything reads userData.
+prepareSmokeTest(app);
 
 let mainWindow: BrowserWindow | null = null;
 
@@ -1788,6 +1791,31 @@ app.whenReady().then(async () => {
   );
 
   startup.stage('createWindow', () => createWindow());
+
+  if (smokeTestRequested) {
+    // The release pipeline's self-check (`smokeTest.ts`); inert otherwise.
+    void runSmokeTest({
+      app,
+      window: () => mainWindow,
+      testBinary: (name) => binaryDownloader.testBinary(name),
+      isBundled: (name) => binaryDownloader.isBundled(name),
+      sidecarStatus: () => pluginManager.getSidecar().status(),
+      javaPath: () => pluginManager.getSidecar().getProvisioner().getStatus(true).javaPath,
+      readLaunchCount: () => datastore.getInt(SMOKE_LAUNCH_KEY, 0),
+      writeLaunchCount: (count) => {
+        datastore.setInt(SMOKE_LAUNCH_KEY, count);
+        datastore.flushSync();
+      },
+      startTorrentEngine: () => torrentEngine.warmUp(),
+      reachRepository: async () => {
+        const repositories = bootstrap.visibleRepositories();
+        const repository = repositories.find((r) => r.bundled) ?? repositories[0];
+        if (!repository) throw new Error('no repository is listed');
+        const listing = await pluginManager.fetchRepository(repository.url, { remember: false });
+        return `${listing.name}: ${listing.plugins.length} extensions`;
+      },
+    });
+  }
 
   downloadService.setProgressCallback((tasks: DownloadTask[]) => {
     if (mainWindow && !mainWindow.isDestroyed()) {

@@ -1,6 +1,6 @@
 import fs from 'fs';
 import os from 'node:os';
-import { aria2Mirrors, extraSearchDirs, installHint, ytDlpMirrors } from './platform/binarySources.ts';
+import { aria2Mirrors, extraSearchDirs, installHint, windowsTar, ytDlpMirrors } from './platform/binarySources.ts';
 import path from 'path';
 import { app } from 'electron';
 import child_process from 'child_process';
@@ -253,7 +253,9 @@ export class BinaryDownloader {
      */
     if (process.platform === 'win32') {
       try {
-        child_process.execFileSync('tar.exe', ['-xf', zipPath, '-C', destinationDir], {
+        // System32's libarchive tar by path: a GNU tar earlier on PATH reads
+        // neither zip nor mpv's 7z, and Expand-Archive below cannot read 7z.
+        child_process.execFileSync(windowsTar() ?? 'tar.exe', ['-xf', zipPath, '-C', destinationDir], {
           windowsHide: true,
           timeout: 45000,
           stdio: 'pipe',
