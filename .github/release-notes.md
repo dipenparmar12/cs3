@@ -16,6 +16,6 @@
 
 - **Windows**: the packages are not code-signed, so SmartScreen may say "Windows protected your PC" — choose *More info → Run anyway*.
 - **macOS**: the app is not notarised. Open it with right-click → *Open* the first time, or run `xattr -dr com.apple.quarantine "/Applications/CloudStream 3 Desktop.app"`. On Apple silicon, install ffmpeg with `brew install ffmpeg`; mpv (`brew install mpv`) adds the native engine for formats the built-in player cannot decode.
-- **Linux**: make the AppImage executable (`chmod +x CS3-*.AppImage`). The native engine and the fast downloader come from your distribution: `sudo apt install mpv aria2` (the `.deb` recommends both).
+- **Linux**: make the AppImage executable (`chmod +x CS3-*.AppImage`). It needs FUSE 2 (`sudo apt install libfuse2`, or `libfuse2t64` on Ubuntu 24.04), or run it with `--appimage-extract-and-run`; on Ubuntu 23.10 and later, started from a terminal it may also need `--no-sandbox`. The `.deb` needs neither. The native engine and the fast downloader come from your distribution: `sudo apt install mpv aria2` (the `.deb` recommends both).
 
 Everything you set up — repositories, extensions, library, history — is kept across updates.
