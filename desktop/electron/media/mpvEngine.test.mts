@@ -68,10 +68,16 @@ execFileSync(
 
 const failures: string[] = [];
 const snapshots: MpvSnapshot[] = [];
+const stamps: number[] = [];
+const actions: string[] = [];
 
 const engine = new MpvEngine({
   resolveBinary: (name) => which(name),
-  onUpdate: (snapshot) => snapshots.push(snapshot),
+  onUpdate: (snapshot) => {
+    snapshots.push(snapshot);
+    stamps.push(performance.now());
+  },
+  onAction: (action) => actions.push(action),
 });
 
 const check = (name: string, fn: () => void) => {
@@ -99,7 +105,7 @@ async function waitFor(
     if (predicate(snapshot)) return snapshot;
     await sleep(100);
   }
-  throw new Error(`timed out after ${timeoutMs}ms waiting for ${what}`);
+  throw new Error(`timed out after ${timeoutMs}ms waiting for ${what}; last snapshot ${JSON.stringify({ state: engine.snapshot().state, paused: engine.snapshot().paused, vid: engine.snapshot().selectedVideoId, pos: engine.snapshot().positionSeconds })}`);
 }
 
 try {
@@ -304,6 +310,124 @@ try {
     // ESC leaves fullscreen. It is the reflex for "get me out of this", and in
     // mpv's own defaults that reflex quits the player.
     assert.equal(bound.get('ESC'), 'set fullscreen no');
+  });
+
+
+  // --- privacy (PRD §130) ----------------------------------------------------
+  // Latency runs from before the command is sent to the first pushed snapshot
+  // that shows the effect: what the renderer would see.
+
+  const raw = engine as unknown as {
+    command(command: unknown[]): Promise<{ ok: boolean; data?: unknown }>;
+  };
+
+  async function timed(
+    send: () => Promise<unknown>,
+    predicate: (s: MpvSnapshot) => boolean,
+    timeoutMs = 3000
+  ): Promise<number> {
+    const from = snapshots.length;
+    const started = performance.now();
+    await send();
+    while (performance.now() < started + timeoutMs) {
+      for (let i = from; i < snapshots.length; i++) {
+        if (predicate(snapshots[i])) return stamps[i] - started;
+      }
+      await sleep(1);
+    }
+    throw new Error(`no pushed snapshot matched within ${timeoutMs}ms`);
+  }
+
+  /** `vid` is not an observed property, so the video track is asked for directly. */
+  const videoHidden = async () => {
+    const answer = await raw.command(['get_property', 'vid']);
+    return answer.data === false || answer.data === 'no';
+  };
+
+  check('the panic key is bound, hides and pauses itself, and never quits or changes fullscreen', () => {
+    const command = new Map(NATIVE_KEY_BINDINGS.map(([key, c]) => [key, c])).get('`') ?? '';
+    assert.match(command, /set pause yes/);
+    assert.match(command, /set vid no/);
+    assert.match(command, /script-message cs3-protect/);
+    assert.doesNotMatch(command, /quit|fullscreen/);
+  });
+
+  // A fresh start: the earlier checks leave the 8 s fixture at or near its end.
+  await engine.open({ url: fixture, title: 'privacy', volume: 0 });
+  await waitFor((s) => s.state === 'playing' && s.positionSeconds > 0.3, 15_000, 'playback before the panic key');
+  await engine.setFullscreen(false);
+  const keyLatency = await timed(() => raw.command(['keypress', '`']), (s) => s.paused);
+  const keyHidden = await videoHidden();
+  console.log(`  info mpv panic key: paused, pushed to the app ${keyLatency.toFixed(1)} ms after the key`);
+  check('the panic key pauses, drops the video track and tells the app, without moving anything', () => {
+    assert.equal(engine.snapshot().paused, true);
+    assert.equal(keyHidden, true);
+    assert.deepEqual(actions, ['protect']);
+    assert.ok(keyLatency < 250, `panic key took ${keyLatency}ms`);
+  });
+
+  const frozenAt = engine.snapshot().positionSeconds;
+  await sleep(600);
+  check('a protected stream stays where it stopped', () => {
+    assert.ok(Math.abs(engine.snapshot().positionSeconds - frozenAt) < 0.1);
+  });
+
+  // The app's own path: what the renderer sends when the verdict changes.
+  await engine.setVideoEnabled(true);
+  await engine.setPaused(false);
+  await waitFor((s) => s.state === 'playing' && s.positionSeconds > frozenAt, 8000, 'reveal to bring the film back');
+  const shownAgain = !(await videoHidden());
+  check('revealing brings the picture back and the film moves on', () => {
+    assert.equal(shownAgain, true);
+    assert.equal(engine.snapshot().paused, false);
+  });
+
+  const appStart = performance.now();
+  const appLatency = await timed(
+    async () => {
+      await engine.setPaused(true);
+      await engine.setVideoEnabled(false);
+    },
+    (s) => s.paused
+  );
+  const appTotal = performance.now() - appStart;
+  const appHidden = await videoHidden();
+  console.log(
+    `  info mpv app path (setPaused + setVideoEnabled): both applied in ${appTotal.toFixed(1)} ms, pause pushed after ${appLatency.toFixed(1)} ms`
+  );
+  check('the app path pauses and hides within a quarter second', () => {
+    assert.equal(appHidden, true);
+    assert.ok(appTotal < 250, `took ${appTotal}ms`);
+  });
+
+  await engine.setVideoEnabled(true);
+  await engine.setPaused(false);
+  await sleep(300);
+
+  const protectedOpen = await engine.open({ url: fixture, title: 'protected', volume: 0, startProtected: true });
+  await waitFor((s) => s.durationSeconds > 0, 15_000, 'a protected file to load');
+  await sleep(1200);
+  const protectedHidden = await videoHidden();
+  check('a protected open loads paused with no video track and never plays a frame', () => {
+    assert.equal(protectedOpen.ok, true, protectedOpen.error ?? '');
+    assert.equal(engine.snapshot().paused, true);
+    assert.equal(protectedHidden, true);
+    assert.ok(engine.snapshot().positionSeconds < 0.2, `advanced to ${engine.snapshot().positionSeconds}`);
+  });
+  await engine.setVideoEnabled(true);
+  await engine.setPaused(false);
+  await waitFor((s) => s.state === 'playing' && s.positionSeconds > 0.3, 8000, 'a revealed protected file to play');
+  const revealedShown = !(await videoHidden());
+  check('a revealed protected open plays with its picture', () => {
+    assert.equal(revealedShown, true);
+  });
+
+  // Reused process, unprotected next file: the earlier hide must not leak into it.
+  await engine.open({ url: fixture, title: 'next', volume: 0 });
+  await waitFor((s) => s.state === 'playing' && s.positionSeconds > 0.2, 15_000, 'an unprotected reopen');
+  const nextShown = !(await videoHidden());
+  check('an unprotected file opened after a protected one has its video', () => {
+    assert.equal(nextShown, true);
   });
 
   /** An explicit stop is not the credits; reporting `ended` advances an episode. */

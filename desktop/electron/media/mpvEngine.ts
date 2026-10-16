@@ -184,13 +184,24 @@ export const NATIVE_KEY_BINDINGS: ReadonlyArray<readonly [key: string, command: 
    */
   ['s', 'set fullscreen no; script-message cs3-subtitles'],
   ['S', 'set fullscreen no; script-message cs3-subtitles'],
+  /**
+   * Privacy, from the window the viewer is actually looking at.
+   *
+   * Pausing and dropping the video track are done here, by mpv itself, so the
+   * picture is gone in the same input event rather than after a round trip to
+   * the app; the script-message then tells the app to blur everything else.
+   * Fullscreen is left alone — it is one disruption too many for a panic key.
+   * Backquote is the app-wide key (`utils/emergencyBlur.ts`).
+   */
+  ['`', 'set pause yes; set vid no; script-message cs3-protect'],
 ] as const;
 
 /** What a `script-message` from mpv's window can ask the app for. */
-export type NativeAppAction = 'subtitles';
+export type NativeAppAction = 'subtitles' | 'protect';
 
 export const NATIVE_APP_ACTIONS: Record<string, NativeAppAction> = {
   'cs3-subtitles': 'subtitles',
+  'cs3-protect': 'protect',
 };
 
 /**
@@ -482,6 +493,12 @@ export class MpvEngine {
     if (fields.length > 0) options['http-header-fields'] = fields.join(',');
 
     if (request.title) options['force-media-title'] = request.title;
+    // Per file, not per process, so a reused mpv protects the next episode too: the
+    // file loads paused and with no video track, and no frame is drawn before a reveal.
+    if (request.startProtected) {
+      options.pause = 'yes';
+      options.vid = 'no';
+    }
     if (request.startSeconds && request.startSeconds > 0) {
       options.start = String(Math.floor(request.startSeconds));
     }
@@ -938,7 +955,9 @@ export class MpvEngine {
         const action = NATIVE_APP_ACTIONS[String(args[0] ?? '')];
         if (action) {
           this.deps.onAction?.(action);
-          void this.command(['show-text', 'Subtitle search is open in CloudStream', 3000]);
+          if (action === 'subtitles') {
+            void this.command(['show-text', 'Subtitle search is open in CloudStream', 3000]);
+          }
         }
         break;
       }

@@ -777,6 +777,12 @@ const mpvEngine = new MpvEngine({
   // A key pressed in mpv's window asking for something only the app has — the
   // subtitle search. The app window comes forward so the panel is seen.
   onAction: (action) => {
+    // The panic key: mpv has already paused and hidden itself. Blur the rest of
+    // the app without moving any window — it is a privacy action, not navigation.
+    if (action === 'protect') {
+      bootstrap.setAdultVisualBlurred(true);
+      return;
+    }
     if (!mainWindow || mainWindow.isDestroyed()) return;
     if (mainWindow.isMinimized()) mainWindow.restore();
     mainWindow.show();
