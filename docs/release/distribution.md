@@ -13,11 +13,19 @@ Signing establishes **who published** a file. It does not make SmartScreen silen
 | Platform | Artifacts | Contents users need nothing else for |
 |---|---|---|
 | Windows x64 | `CS3-<v>-windows-x64-installer.exe` (NSIS, per-user, no admin) · `…-portable.exe` · `…-portable.zip` | Electron app, jlinked Java 21 runtime + extension sidecar, ffmpeg/ffprobe, mpv |
-| macOS x64 / arm64 | `CS3-<v>-macos-<arch>.dmg` · `.zip` | Same; arm64 uses Homebrew's ffmpeg (no static arm64 build exists) |
-| Linux x64 / arm64 | `.AppImage` · `.deb` · `.tar.gz` | Same; mpv from the distribution (`deb` recommends `mpv`, `aria2`) |
+| macOS x64 / arm64 | `CS3-<v>-macos-<arch>.dmg` · `CS3-<v>-macos-<arch>.zip` | Same, minus mpv (`brew install mpv`, or mpv.app — both are found); arm64 uses Homebrew's ffmpeg (no static arm64 build exists) |
+| Linux x64 / arm64 | `CS3-<v>-linux-<arch>.AppImage` · `.deb` · `.tar.gz` | Same, minus mpv (the distribution's, wired to VA-API; the `deb` recommends `mpv`, `aria2`) |
 | All | `SHA256SUMS.txt`, `CS3-sbom.cdx.json` (CycloneDX 1.6) | — |
 
+Thirteen packages and two support files per release; `tools/package/package-layout.mjs` is the list the pipeline checks against. The architecture is spelled `x64`/`arm64` in every name — electron-builder's own Linux spelling (`x86_64` for an AppImage, `amd64` for a deb) is overridden by `build-installer.mjs`; the deb's control field still says `amd64`, which is what dpkg reads.
+
 No user installs Node, Bun, Java, Maven or ffmpeg to run a release. Tools the app downloads on first use (aria2c, yt-dlp, mpv on Windows) are verified before use: a publisher's own HTTPS origin, or a pinned SHA-256 for any mirror (audit SEC-03).
+
+Per-platform facts a user can hit:
+
+- **Linux AppImage** is the classic FUSE 2 type (electron-builder's default toolset): it needs `libfuse2` (`libfuse2t64` on Ubuntu 24.04), or run it with `--appimage-extract-and-run`. On Ubuntu 23.10+ the kernel restricts the user namespaces Chromium's sandbox uses; the AppImage's desktop entry passes `--no-sandbox`, but launched by hand from a terminal it may need `--no-sandbox` too. The **deb** installs an AppArmor profile and sets up `chrome-sandbox` in its postinst, so it needs neither. The tarball behaves like the AppImage without FUSE.
+- **Linux arm64** has no uTP: `utp-native` publishes no linux-arm64 prebuild, and webtorrent falls back to TCP-only peers (it logs `WebTorrent: uTP not supported`). Torrents work; some swarms are slower.
+- **macOS, unsigned builds** are signed ad hoc by `desktop/scripts/after-pack.cjs` — every Mach-O under `Contents/Resources` (JRE, ffmpeg, native modules) first, then the bundle — because `codesign --deep` does not sign binaries in Resources and Apple silicon kills an arm64 binary whose signature does not hold.
 
 ## 2. What the owner needs to provide
 
@@ -49,15 +57,63 @@ Once credentials work, set the repository variable **`REQUIRE_SIGNING=true`**. F
 
 `.github/workflows/release.yml` on a `v*` tag:
 
-1. Checks (typecheck, unit tests) on all three OSes.
-2. Per platform: `tools/package/build-installer.mjs` builds. Its report states the signing mode (`Microsoft Artifact Signing (<publisher>)`, `certificate + notarisation`, or `none`).
-3. `tools/package/verify-package.mjs` checks the package carries its runtime (sidecar, JRE, jars, media tools).
-4. `tools/package/verify-signatures.mjs` checks the **final** artifacts: Authenticode status *Valid* for the installer, portable exe and app exe; `codesign --verify --deep --strict` and `spctl --assess` for the `.app`, and whether a notarisation ticket is stapled. With `REQUIRE_SIGNING`, anything else fails the job.
-5. Publish: SHA-256 sums for every artifact, the SBOM, and the release. If any Windows/macOS artifact is unsigned, the release is a **prerelease named "(unsigned preview)"**.
+1. Checks on Windows, Linux and macOS: `tsc -b`, `bun run test --fast`, and the sidecar's `mvn test` (on all three — archive replacement and class-loader file handles are what differ on Windows).
+2. One build job per target — `windows-latest` (x64), `macos-15-intel` (x64; `macos-13` was retired in December 2025), `macos-14` (arm64), `ubuntu-22.04` (x64), `ubuntu-22.04-arm` (arm64; 22.04 on both so the packages need glibc 2.35, not 2.39). `tools/package/build-installer.mjs` builds; its report states the signing mode (`Microsoft Artifact Signing (<publisher>)`, `certificate + notarisation`, or `none`). It refuses to package for another architecture than the machine's: the JRE is jlinked from the host JDK and the media tools are verified by running them.
+3. `tools/package/verify-package.mjs --arch <a> --version <v>` checks the package carries its runtime — sidecar jar, JRE, the classpath with `library-jvm` and the bridge, ffmpeg/ffprobe (and mpv + `mpv.com` on Windows), `node-datachannel` unpacked from the asar — that **every executable is built for the target CPU** (read from its ELF/PE/Mach-O header) and, off Windows, marked executable (`jspawnhelper` included), that `media/` holds no other platform's binary, and that every artifact exists under its release name.
+4. `tools/package/smoke-package.mjs --installed` **installs and launches** the unpacked app and every artifact a user downloads (Windows: silent per-user NSIS install + uninstall, the portable exe, the zip; macOS: the dmg mounted and copied out, the zip; Linux: the AppImage via `APPIMAGE_EXTRACT_AND_RUN`, the deb via `apt-get install` + remove, the tarball), each **twice** against one throwaway profile, under xvfb on Linux. With `CS3_SMOKE_REPORT` set the app checks itself (`desktop/electron/smokeTest.ts`) and quits through its normal shutdown — see §3.1. A failed launch's logs are uploaded as `smoke-logs-<target>`.
+5. `tools/package/verify-signatures.mjs` checks the **final** artifacts: Authenticode status *Valid* for the installer, portable exe and app exe; `codesign --verify --deep --strict` and `spctl --assess` for the `.app`, and whether a notarisation ticket is stapled. With `REQUIRE_SIGNING`, anything else fails the job.
+6. Publish, only if every build job passed: `tools/package/verify-release.mjs` checks all thirteen packages, the SBOM and one signing record per target are present by name (a build that succeeded but uploaded less fails here), then SHA-256 sums, then the release is created **as a draft**, every file uploaded, and only then published — an upload that fails half-way leaves an invisible draft, never a release missing a platform. If any Windows/macOS artifact is unsigned, the release is a **prerelease named "(unsigned preview)"**.
 
-Credentials are exposed only to the build steps of tag releases and are never available to pull requests (`release.yml` does not run on `pull_request`). Workflows run with read-only tokens except the publish job.
+Credentials are exposed only to the build steps of tag releases and are never available to pull requests (`release.yml` does not run on `pull_request`). Workflows run with read-only tokens except the publish job. Every job has a `timeout-minutes`, so a hung launch fails the run instead of holding it for six hours.
 
-Run the verifier locally after `bun run dist:win`: `node tools/package/verify-signatures.mjs`.
+Run the same checks locally after `bun run dist:win` (or `dist:mac`/`dist:linux` on those machines):
+
+```bash
+node tools/package/verify-package.mjs --version 1.0.0
+```
+
+```bash
+node tools/package/smoke-package.mjs --installed --version 1.0.0
+```
+
+```bash
+node tools/package/verify-signatures.mjs
+```
+
+### 3.1 What a smoke launch proves, and what it cannot
+
+Each launch writes a report; a failed **required** check fails the release.
+
+| Check | Required | Proves |
+|---|---|---|
+| `renderer` | yes | The window loaded, the preload bridge (`window.cloudstream`) exists, React drew into `#root` |
+| `ffmpeg`, `ffprobe` | where bundled (all but macOS arm64) | The tool runs, and it is the **bundled** copy — a runner's own ffmpeg does not count |
+| `mpv` | Windows | Same, for the native engine |
+| `sidecar` | yes | The runtime provisioned into the profile, the JVM started **on the bundled JRE** (CI machines have their own Java; a fallback to it fails), answered `ping`, and can execute providers (`library-jvm` + bridge loaded) |
+| `torrent` | yes | webtorrent and its native modules loaded for this OS/arch and the loopback stream server bound |
+| `persistence` | yes | Launch 2 reads the counter launch 1 wrote and flushed — data survives quit + restart |
+| `network` | no (`--require-network` makes it so) | One bundled repository's index fetched through the app's own network stack (`net.fetch`, DoH) |
+
+From outside, `smoke-package.mjs` adds: exit code 0 within the deadline, the JVM's pid gone within 10 s of exit (no orphaned sidecar), no `shutdown_timeout` in the profile's log, and the reported version equals the tag.
+
+Not covered by CI — no extension is installed in a smoke profile (that needs a region choice, a network download and a DEX translation), nothing is searched, played or downloaded, and a CI runner has no GPU. Those are §3.2.
+
+### 3.2 Manual checklist on real hardware
+
+Before the first non-preview release, and after any change to packaging, the sidecar, the media runtime or Electron: on **each** of Windows 11 x64, macOS on Apple silicon, macOS on Intel, Ubuntu 24.04 x64 (Wayland session), and one Linux arm64 machine. Record the date, machine and result for each line here.
+
+1. **Install** the user-facing artifact (installer / dmg / deb; AppImage on one Linux machine), from a browser download so quarantine and SmartScreen apply. Note every warning shown; macOS: right-click → Open, or `xattr -dr com.apple.quarantine "/Applications/CloudStream 3 Desktop.app"`.
+2. **Launch** from the Start menu / Launchpad / the desktop entry — not a terminal (a GUI launch has a different PATH: Homebrew's ffmpeg/mpv must still be found).
+3. **Settings**: the extension runtime reports ready on the bundled Java (its path is under the app's resources), and the media tools show ffmpeg/ffprobe as included (Homebrew's on Apple silicon) and mpv where installed.
+4. **Regions → extensions**: pick a region, let the starter extensions install, confirm the Extensions screen shows their providers loaded, and that no extension fails here that loads on Windows.
+5. **Search** a common title; results arrive from several providers and indexers.
+6. **Play** one direct HTTP source, one HLS source, one torrent; one HEVC/AC-3 file through the conversion path; one through mpv (its own window, hardware decode — `mpv:status`). Switch audio track and subtitles.
+7. **Download** one direct source and one torrent; open the finished file from Downloads.
+8. **Persist**: add to library, watch 2 minutes, quit, relaunch — Continue watching resumes the same source at the same position.
+9. **Quit** from the menu and from the window close button; confirm no `java`/`mpv`/`aria2c` process survives (Task Manager / Activity Monitor / `ps`).
+10. **Open with**: double-click a `.torrent`, click a `magnet:` link in a browser — the running app receives it; a second launch focuses the first window.
+11. **Upgrade in place**: install this release over the previous one; library, extensions and settings are kept, and the runtime refreshes (`runtime-stamp.json` generation matches).
+12. **Uninstall**: the app is removed; the profile (`%APPDATA%`, `~/Library/Application Support`, `~/.config`) is kept, by design.
 
 ## 4. What users see, and how to verify a download
 
@@ -87,7 +143,7 @@ Verifying a download:
 
 ## 6. Known limitations
 
-- **None of the macOS or Linux packages has been built or launched yet** (AGENTS.md §3), and the release workflow has never run on GitHub. Its first run should be a `v<x>-rc` tag.
+- **None of the macOS or Linux packages has been built or launched yet** (AGENTS.md §3), and the release workflow — including its install-and-launch smoke test (§3) — has never run on GitHub. Its first run should be a `v<x>-rc` tag or a manual `workflow_dispatch`, which tests everything and publishes nothing. The Windows smoke test has been run locally (see AGENTS.md, Packaging).
 - macOS signing and notarisation are configured but untested without a Developer ID; the entitlements are the documented minimum for Electron + a bundled JRE and may need adjusting on first notarisation.
 - The Microsoft Store is not a target yet. CS3 downloads and runs third-party extension code and executables at run time; whether that is acceptable under the Store's current policies for desktop apps has to be checked against them before investing in an MSIX build, which would also need the JVM sidecar's process model reviewed.
 - `appId` is `com.lagradost.cloudstream3.desktop` (the upstream author's namespace). Changing it changes the Windows install identity (uninstaller entry, user-data folder), so it needs a migration plan before a first signed release, not after.
