@@ -9048,10 +9048,7 @@ video::cue {
 .scope-modal__health--average   { background: rgba(245, 158, 11, .16); color: #fbbf24; }
 .scope-modal__health--poor      { background: rgba(239, 68, 68, .16);  color: #f87171; }
 
-/* --- adult content: three states ------------------------------------------
-   Cards rather than a <select>, because the difference between the middle
-   option and the other two is a sentence, not a word — and hiding that
-   sentence in a dropdown is how someone picks "Ask" expecting it to persist. */
+/* --- adult content: availability, visual privacy, and startup prompt (PRD §129) --- */
 .adult-setting__modes { display: flex; flex-direction: column; gap: .45rem; margin: .75rem 0; }
 .adult-setting__mode {
   display: flex; flex-direction: column; gap: .15rem;
@@ -9066,13 +9063,206 @@ video::cue {
 .adult-setting__mode strong { font-size: .88rem; font-weight: 600; }
 .adult-setting__mode em { font-style: normal; font-size: .78rem; color: var(--text-muted); line-height: 1.45; }
 
-.adult-setting__session {
-  display: flex; align-items: center; flex-wrap: wrap; gap: .5rem;
-  padding: .55rem .7rem; border-radius: 8px;
-  background: rgba(0,0,0,.18); font-size: .82rem;
+.adult-setting__rows {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  margin: 0.6rem 0;
 }
-.adult-setting__session .btn { display: inline-flex; align-items: center; gap: .3rem; }
-.adult-setting__current { font-size: .78rem; margin-top: .5rem; }
+.adult-setting__row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.85rem;
+  flex-wrap: wrap;
+  padding: 0.65rem 0.85rem;
+  border-radius: var(--radius-sm, 6px);
+  border: 1px solid var(--border-color);
+  background: var(--bg-elevated, rgba(255, 255, 255, 0.02));
+}
+.adult-setting__row-info {
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+  flex: 1 1 240px;
+  min-width: 0;
+}
+.adult-setting__row-info strong {
+  font-size: 0.84rem;
+  font-weight: 600;
+  color: var(--text-main, #fff);
+}
+.adult-setting__row-info p {
+  margin: 0;
+  font-size: 0.76rem;
+  color: var(--text-muted);
+  line-height: 1.4;
+}
+.adult-setting__seg {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px;
+  border-radius: 6px;
+  background: rgba(0, 0, 0, 0.22);
+  border: 1px solid var(--border-color);
+}
+.adult-setting__seg-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  padding: 0.28rem 0.6rem;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--text-muted);
+  font-size: 0.75rem;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.12s ease;
+  white-space: nowrap;
+}
+.adult-setting__seg-btn:hover:not(:disabled) {
+  color: #fff;
+  background: rgba(255, 255, 255, 0.06);
+}
+.adult-setting__seg-btn--active {
+  background: var(--accent-primary, #3b82f6);
+  color: #fff;
+  font-weight: 600;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.3);
+}
+.adult-setting__seg-btn--warn.adult-setting__seg-btn--active {
+  background: rgba(239, 68, 68, 0.85);
+  color: #fff;
+}
+.adult-setting__confirm {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+  padding: 0.6rem 0.85rem;
+  border-radius: var(--radius-sm, 6px);
+  background: rgba(239, 68, 68, 0.08);
+  border: 1px solid rgba(239, 68, 68, 0.28);
+  animation: fadeIn 0.15s ease-out;
+}
+.adult-setting__confirm-text {
+  font-size: 0.78rem;
+  color: var(--text-main, #f3f4f6);
+  flex: 1 1 240px;
+}
+.adult-setting__confirm-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+
+/* Startup confirmation dialog note */
+.adult-prompt__note {
+  font-size: 0.78rem !important;
+  color: var(--text-muted) !important;
+  padding: 0.45rem 0.65rem;
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid var(--border-color);
+  margin-bottom: 0.5rem;
+}
+
+/* Contextual top navigation Unblur / Blur control (§129.5) */
+.navbar-adult-blur-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  height: 28px;
+  padding: 0 0.65rem;
+  border-radius: var(--radius-full, 999px);
+  border: 1px solid var(--border-color);
+  background: rgba(255, 255, 255, 0.04);
+  color: var(--text-muted);
+  font-size: 0.74rem;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.15s ease;
+  white-space: nowrap;
+}
+.navbar-adult-blur-btn:hover {
+  background: rgba(255, 255, 255, 0.08);
+  border-color: rgba(255, 255, 255, 0.25);
+  color: #fff;
+}
+.navbar-adult-blur-btn--revealed {
+  background: rgba(239, 68, 68, 0.12);
+  border-color: rgba(239, 68, 68, 0.35);
+  color: #fca5a5;
+}
+.navbar-adult-blur-btn--revealed:hover {
+  background: rgba(239, 68, 68, 0.2);
+  border-color: rgba(239, 68, 68, 0.55);
+  color: #fff;
+}
+
+/* Visual blur protection on posters, thumbnails, hero backdrops (§129.3, §129.4) */
+.cs-poster--blurred {
+  filter: blur(20px) brightness(0.68) saturate(0.6);
+  transform: scale(1.06);
+  transition: filter 0.2s ease, transform 0.2s ease;
+}
+.detail-hero--blurred-backdrop::before {
+  filter: blur(28px) brightness(0.4) saturate(0.5) !important;
+}
+.cs-poster-privacy {
+  position: absolute;
+  inset: 0;
+  z-index: 4;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 0.4rem;
+  padding: 0.4rem;
+  background: rgba(10, 12, 18, 0.45);
+  pointer-events: none;
+}
+.cs-poster-privacy--revealed {
+  inset: auto 0.35rem 0.35rem auto;
+  padding: 0;
+  background: none;
+}
+.cs-poster-privacy__badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.2rem;
+  padding: 0.12rem 0.42rem;
+  border-radius: var(--radius-full, 999px);
+  background: rgba(15, 20, 30, 0.88);
+  backdrop-filter: blur(8px);
+  border: 1px solid rgba(239, 68, 68, 0.4);
+  color: #fca5a5;
+  font-size: 0.65rem;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+}
+.cs-poster-privacy__btn {
+  pointer-events: auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  padding: 0.22rem 0.55rem;
+  border-radius: var(--radius-full, 999px);
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  background: rgba(15, 20, 30, 0.85);
+  backdrop-filter: blur(8px);
+  color: #fff;
+  font-size: 0.68rem;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background 0.15s ease, border-color 0.15s ease;
+}
+.cs-poster-privacy__btn:hover {
+  background: rgba(30, 40, 60, 0.95);
+  border-color: rgba(255, 255, 255, 0.4);
+}
 
 /*
   Share, wherever it appears.

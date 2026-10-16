@@ -556,6 +556,7 @@ function captureLibrarySources(
     .finally(() => libraryCapturing.delete(mediaUrl));
 }
 const bootstrap = new BootstrapService(datastore, pluginManager);
+contentService.getNativeProviders().setAdultGate(() => bootstrap.isAdultAllowed());
 
 /**
  * Install, update and add-repository presses, run behind the screen.
@@ -5311,20 +5312,48 @@ ipcMain.handle('search:setConcurrency', async (_, value: number) => ({
 
 /** One push for every change to the adult gate, whoever made it. */
 bootstrap.onAdultChange(() => {
-  const state = { mode: bootstrap.adultMode(), allowed: bootstrap.isAdultAllowed() };
+  const state = bootstrap.adultState();
   BrowserWindow.getAllWindows().forEach((w) => w.webContents.send('adult:changed', state));
 });
-
-ipcMain.handle('extension:getAdultAllowed', async () => bootstrap.isAdultAllowed());
 
 /**
  * Turning adult content off must take effect at once, not at next launch: the
  * provider registry is re-read so anything already loaded stops being offered.
+ * Also supports updating session visual protection (`blurred`) or startup prompt
+ * suppression (`doNotAskAgain`) independently without mutating other preferences.
  */
-ipcMain.handle('extension:setAdultAllowed', async (_, enabled: boolean) => {
-  const value = bootstrap.setAdultAllowed(Boolean(enabled));
-  return { ok: true, enabled: value, providers: await pluginManager.listEnabledProviders() };
-});
+ipcMain.handle(
+  'extension:setAdultAllowed',
+  async (
+    _,
+    enabledOrOptions:
+      | boolean
+      | { enabled?: boolean; doNotAskAgain?: boolean; blurred?: boolean },
+    options?: { doNotAskAgain?: boolean; blurred?: boolean }
+  ) => {
+    if (typeof enabledOrOptions === 'object' && enabledOrOptions !== null) {
+      if (enabledOrOptions.enabled !== undefined) {
+        bootstrap.setAdultAllowed(Boolean(enabledOrOptions.enabled), enabledOrOptions);
+      } else {
+        if (enabledOrOptions.doNotAskAgain !== undefined) {
+          bootstrap.setDoNotAskAgain(Boolean(enabledOrOptions.doNotAskAgain));
+        }
+        if (enabledOrOptions.blurred !== undefined) {
+          bootstrap.setAdultVisualBlurred(Boolean(enabledOrOptions.blurred));
+        }
+      }
+    } else {
+      bootstrap.setAdultAllowed(Boolean(enabledOrOptions), options);
+    }
+    const state = bootstrap.adultState();
+    return {
+      ok: true,
+      enabled: state.allowed,
+      ...state,
+      providers: await pluginManager.listEnabledProviders(),
+    };
+  }
+);
 
 /**
  * PRD-54: the viewer's content regions. `regions:set` answers at once with
@@ -5343,58 +5372,62 @@ ipcMain.handle('regions:set', async (_, selection: string[], options?: { crossRe
 });
 
 /**
- * The three-state gate.
- *
- * `allowed` and `mode` are both reported because they answer different
- * questions: the mode is the setting, `allowed` is whether adult providers are
- * being offered *right now*, and under `ask` those differ until someone asks.
+ * Full adult content availability, visual privacy, and startup prompt state.
  */
 ipcMain.handle('extension:getAdultMode', async () => ({
   ok: true,
-  mode: bootstrap.adultMode(),
-  allowed: bootstrap.isAdultAllowed(),
+  ...bootstrap.adultState(),
 }));
 
-ipcMain.handle('extension:setAdultMode', async (_, mode: 'off' | 'ask' | 'on') => {
-  if (mode !== 'off' && mode !== 'ask' && mode !== 'on') {
-    return { ...fail(new Error(`Unknown adult content mode: ${mode}`)), mode: bootstrap.adultMode() };
+ipcMain.handle(
+  'extension:setAdultMode',
+  async (
+    _,
+    mode: 'off' | 'ask' | 'on',
+    options?: { blurred?: boolean; doNotAskAgain?: boolean }
+  ) => {
+    if (mode !== 'off' && mode !== 'ask' && mode !== 'on') {
+      return {
+        ...fail(new Error(`Unknown adult content mode: ${mode}`)),
+        ...bootstrap.adultState(),
+      };
+    }
+    bootstrap.setAdultMode(mode, options);
+    return {
+      ok: true,
+      ...bootstrap.adultState(),
+      providers: await pluginManager.listEnabledProviders(),
+    };
   }
-  const value = bootstrap.setAdultMode(mode);
-  return {
-    ok: true,
-    mode: value,
-    allowed: bootstrap.isAdultAllowed(),
-    providers: await pluginManager.listEnabledProviders(),
-  };
-});
+);
 
 /**
- * Reveals adult providers for the rest of this run of the app.
- *
- * Refused unless the setting is `ask` — `BootstrapService.unlockAdultForSession`
- * enforces that, and it matters because this channel is reachable from the
- * renderer: revealing must never be a way to change the setting, which is where
- * the consent step lives.
+ * Permits adult content for the current session (e.g. from the startup confirmation prompt).
+ * Visual protection remains active (`blurred: true`) until the user explicitly chooses Unblur.
  */
-ipcMain.handle('extension:unlockAdultForSession', async () => {
-  const allowed = bootstrap.unlockAdultForSession();
-  return {
-    ok: true,
-    mode: bootstrap.adultMode(),
-    allowed,
-    providers: await pluginManager.listEnabledProviders(),
-  };
-});
+ipcMain.handle(
+  'extension:unlockAdultForSession',
+  async (_, options?: { doNotAskAgain?: boolean; blurred?: boolean }) => {
+    bootstrap.unlockAdultForSession(options);
+    return {
+      ok: true,
+      ...bootstrap.adultState(),
+      providers: await pluginManager.listEnabledProviders(),
+    };
+  }
+);
 
-ipcMain.handle('extension:lockAdultForSession', async () => {
-  bootstrap.lockAdultForSession();
-  return {
-    ok: true,
-    mode: bootstrap.adultMode(),
-    allowed: bootstrap.isAdultAllowed(),
-    providers: await pluginManager.listEnabledProviders(),
-  };
-});
+ipcMain.handle(
+  'extension:lockAdultForSession',
+  async (_, options?: { doNotAskAgain?: boolean; blurred?: boolean }) => {
+    bootstrap.lockAdultForSession(options);
+    return {
+      ok: true,
+      ...bootstrap.adultState(),
+      providers: await pluginManager.listEnabledProviders(),
+    };
+  }
+);
 
 /** What a repository offered last time, instantly. Fetches nothing. */
 ipcMain.handle('extension:peekRepository', async (_, repoUrl: string) => {

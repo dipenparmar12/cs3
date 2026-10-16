@@ -30,6 +30,8 @@ import {
 } from 'lucide-react';
 import { formatDownloadSize, formatEtaDuration, formatTransferRate } from '../utils/format';
 import { variantFromTask, variantLabel } from '../utils/downloadIdentity';
+import { useAdultMode, isAdultItemBlurred, useRegisterAdultPresence } from '../utils/useAdultMode';
+import { isAdultMedia } from '../utils/adultContent';
 
 interface DownloadCenterProps {
   tasks: DownloadTask[];
@@ -100,6 +102,11 @@ const SingleTaskRow: React.FC<SingleTaskRowProps> = ({
   selection,
 }) => {
   const isDeveloper = useIsDeveloper();
+  const adult = useAdultMode();
+  const taskAdult = isAdultMedia(
+    { title: task.title, apiName: task.providerName },
+    adult.adultProviders
+  );
   const { message: copiedMeta, flash: setCopiedMeta } = useFlash<boolean>(2500);
 
   const percent =
@@ -188,6 +195,11 @@ const SingleTaskRow: React.FC<SingleTaskRowProps> = ({
             <img
               src={task.posterUrl}
               alt={task.title}
+              className={
+                isAdultItemBlurred(adult, taskAdult, task.parentMediaUrl ?? task.mediaUrl ?? task.id)
+                  ? 'cs-poster--blurred'
+                  : undefined
+              }
               style={{ width: '100%', height: '100%', objectFit: 'cover' }}
             />
           ) : (
@@ -381,7 +393,7 @@ export type DownloadFilterTab = 'all' | 'downloading' | 'paused' | 'failed' | 'c
 export type DownloadSortMode = 'recent' | 'oldest' | 'name' | 'size';
 
 export const DownloadCenter: React.FC<DownloadCenterProps> = ({
-  tasks,
+  tasks: rawTasks,
   hasBinaries = true,
   onPause,
   onResume,
@@ -391,6 +403,20 @@ export const DownloadCenter: React.FC<DownloadCenterProps> = ({
   onOpenTitle,
   onPlayFile,
 }) => {
+  const adult = useAdultMode();
+  const isTaskAdult = useCallback(
+    (t: DownloadTask) => isAdultMedia({ title: t.title, apiName: t.providerName }, adult.adultProviders),
+    [adult.adultProviders]
+  );
+  const tasks = useMemo(
+    () => (adult.allowed ? rawTasks : rawTasks.filter((t) => !isTaskAdult(t))),
+    [rawTasks, adult.allowed, isTaskAdult]
+  );
+  const hasAdultTasks = useMemo(
+    () => adult.allowed && tasks.some((t) => isTaskAdult(t)),
+    [adult.allowed, tasks, isTaskAdult]
+  );
+  useRegisterAdultPresence(hasAdultTasks);
   const [collapsedGroups, setCollapsedGroups] = useSessionState<Record<string, boolean>>('downloads.collapsed', {});
   const [activeFilter, setActiveFilter] = useSessionState<DownloadFilterTab>('downloads.filter', 'all');
   const [searchQuery, setSearchQuery] = useSessionState('downloads.query', '');
@@ -977,6 +1003,15 @@ export const DownloadCenter: React.FC<DownloadCenterProps> = ({
                         <img
                           src={group.posterUrl}
                           alt={group.title}
+                          className={
+                            isAdultItemBlurred(
+                              adult,
+                              group.tasks.some((t) => isTaskAdult(t)),
+                              group.tasks[0]?.parentMediaUrl ?? group.tasks[0]?.mediaUrl ?? group.key
+                            )
+                              ? 'cs-poster--blurred'
+                              : undefined
+                          }
                           style={{ width: '100%', height: '100%', objectFit: 'cover' }}
                         />
                       ) : (

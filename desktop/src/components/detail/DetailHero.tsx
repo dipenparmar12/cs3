@@ -2,6 +2,11 @@ import React, { useCallback, useMemo, useRef, useState } from 'react';
 import { useIsDeveloper } from '../../utils/ExperienceModeContext';
 import { Poster } from '../Poster';
 import {
+  isAdultItemBlurred,
+  useAdultMode,
+  useRegisterAdultPresence,
+} from '../../utils/useAdultMode';
+import {
   Bookmark as BookmarkIcon,
   BookmarkCheck,
   Clock,
@@ -73,6 +78,10 @@ interface DetailHeroProps {
   posterUrl?: string;
   /** Wide artwork behind the masthead; decorative, so a background. */
   backdropUrl?: string;
+  /** Whether this title is classified as adult/NSFW content. */
+  sensitive?: boolean;
+  /** Stable key for individual item unblur tracking. */
+  itemKey?: string;
   plot?: string;
   /**
    * Other descriptions of the title, provider's first (`plotChoices`). With
@@ -130,6 +139,8 @@ export const DetailHero: React.FC<DetailHeroProps> = ({
   type,
   posterUrl,
   backdropUrl,
+  sensitive = false,
+  itemKey,
   plot: providedPlot,
   plotChoices,
   rating,
@@ -156,6 +167,10 @@ export const DetailHero: React.FC<DetailHeroProps> = ({
   libraryControl,
 }) => {
   const isDeveloper = useIsDeveloper();
+  const adult = useAdultMode();
+  useRegisterAdultPresence(sensitive);
+  const resolvedItemKey = itemKey || provenance.imdbId || title;
+  const backdropBlurred = sensitive && isAdultItemBlurred(adult, resolvedItemKey);
   const [menuOpen, setMenuOpen] = useState(false);
   const [plotOpen, setPlotOpen] = useState(false);
   const [plotChoiceId, setPlotChoiceId] = useState<string | null>(null);
@@ -209,7 +224,7 @@ export const DetailHero: React.FC<DetailHeroProps> = ({
           it a URL rather than syntax.
         */
         <span
-          className="detail-hero__backdrop"
+          className={`detail-hero__backdrop${backdropBlurred ? ' cs-poster--blurred' : ''}`}
           aria-hidden="true"
           style={{ backgroundImage: `url("${encodeURI(backdropUrl)}")` }}
         />
@@ -229,6 +244,8 @@ export const DetailHero: React.FC<DetailHeroProps> = ({
             src={posterUrl}
             title={title}
             decorative
+            sensitive={sensitive}
+            itemKey={resolvedItemKey}
             className="detail-art__image"
             fallback={<div className="detail-art__placeholder" aria-hidden />}
           />

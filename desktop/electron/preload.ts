@@ -94,7 +94,12 @@ import type {
   UpdateSettings,
 } from './cs3/extensionUpdater';
 import type { BatchDownloadRequest, BatchProgress } from './cs3/batchDownloader';
-import type { BootstrapProgress, RegionAffectedRepository, RegionState } from './cs3/bootstrap';
+import type {
+  AdultStateSnapshot,
+  BootstrapProgress,
+  RegionAffectedRepository,
+  RegionState,
+} from './cs3/bootstrap';
 import type { TitleOutcome, TitleOutcomeKind } from './cs3/titleOutcomes';
 import type { UserDataResetRequest, UserDataResetResult, UserDataSummary } from '../src/types/userData';
 import type {
@@ -373,7 +378,11 @@ export interface CloudStreamElectronAPI {
   updatePrivacySettings: (partial: Partial<IncognitoSettings>) => Promise<PrivacyState>;
   onPrivacyChanged: (callback: (state: PrivacyState) => void) => () => void;
   /** The adult gate changed, from any screen, the backup restore or the session unlock. */
-  onAdultChanged: (callback: (state: { mode: 'off' | 'ask' | 'on'; allowed: boolean }) => void) => () => void;
+  onAdultChanged: (
+    callback: (
+      state: Partial<AdultStateSnapshot> & { mode: 'off' | 'ask' | 'on'; allowed: boolean }
+    ) => void
+  ) => () => void;
   /** Saves a subtitle to the subtitle folder; reuses an existing copy unless `refresh`. */
   downloadSubtitle: (request: SubtitleDownloadRequest) => Promise<Envelope & { entry: SavedSubtitle | null; reused: boolean }>;
   /** Subtitles saved for one title (and episode). */
@@ -515,20 +524,18 @@ export interface CloudStreamElectronAPI {
    * Adult content, off by default. Turning it off hides adult repositories from
    * the catalogue and withdraws every NSFW provider from search immediately.
    */
-  getAdultAllowed: () => Promise<boolean>;
   setAdultAllowed: (
-    enabled: boolean
-  ) => Promise<Envelope & { enabled: boolean; providers: string[] }>;
+    enabledOrOptions:
+      | boolean
+      | { enabled?: boolean; doNotAskAgain?: boolean; blurred?: boolean },
+    options?: { doNotAskAgain?: boolean; blurred?: boolean }
+  ) => Promise<Envelope & Partial<AdultStateSnapshot> & { enabled: boolean; providers: string[] }>;
   /**
-   * The gate, in three states rather than two.
-   *
-   * `mode` is the setting and `allowed` is whether adult providers are being
-   * offered right now; under `ask` those differ until someone asks. The unlock
-   * lasts only for this run of the app — a middle setting that persisted its
-   * unlock would be "on" with extra steps, which is the opposite of what
-   * someone sharing a machine chooses it for.
+   * Full adult content availability, visual privacy, and startup prompt state.
    */
-  getAdultMode: () => Promise<Envelope & { mode: 'off' | 'ask' | 'on'; allowed: boolean }>;
+  getAdultMode: () => Promise<
+    Envelope & Partial<AdultStateSnapshot> & { mode: 'off' | 'ask' | 'on'; allowed: boolean }
+  >;
   /** PRD-54: the viewer's content regions, and whether they have been asked yet. */
   getRegions: () => Promise<RegionState>;
   /**
@@ -540,13 +547,31 @@ export interface CloudStreamElectronAPI {
     options?: { crossRegion?: boolean }
   ) => Promise<Envelope & { state: RegionState; affected: RegionAffectedRepository[] }>;
   setAdultMode: (
-    mode: 'off' | 'ask' | 'on'
-  ) => Promise<Envelope & { mode: 'off' | 'ask' | 'on'; allowed?: boolean; providers?: string[] }>;
-  unlockAdultForSession: () => Promise<
-    Envelope & { mode: 'off' | 'ask' | 'on'; allowed: boolean; providers: string[] }
+    mode: 'off' | 'ask' | 'on',
+    options?: { blurred?: boolean; doNotAskAgain?: boolean }
+  ) => Promise<
+    Envelope &
+      Partial<AdultStateSnapshot> & {
+        mode: 'off' | 'ask' | 'on';
+        allowed?: boolean;
+        providers?: string[];
+      }
   >;
-  lockAdultForSession: () => Promise<
-    Envelope & { mode: 'off' | 'ask' | 'on'; allowed: boolean; providers: string[] }
+  unlockAdultForSession: (options?: { doNotAskAgain?: boolean; blurred?: boolean }) => Promise<
+    Envelope &
+      Partial<AdultStateSnapshot> & {
+        mode: 'off' | 'ask' | 'on';
+        allowed: boolean;
+        providers: string[];
+      }
+  >;
+  lockAdultForSession: (options?: { doNotAskAgain?: boolean; blurred?: boolean }) => Promise<
+    Envelope &
+      Partial<AdultStateSnapshot> & {
+        mode: 'off' | 'ask' | 'on';
+        allowed: boolean;
+        providers: string[];
+      }
   >;
 
   getExtensionProviders: () => Promise<
@@ -2154,14 +2179,15 @@ const api: CloudStreamElectronAPI = {
 
   getBootstrapProgress: () => ipcRenderer.invoke('extension:getBootstrapProgress'),
   onBootstrapProgress: (callback) => subscribe('extension:bootstrapProgress', callback),
-  getAdultAllowed: () => ipcRenderer.invoke('extension:getAdultAllowed'),
-  setAdultAllowed: (enabled) => ipcRenderer.invoke('extension:setAdultAllowed', enabled),
+  setAdultAllowed: (enabledOrOptions, options) =>
+    ipcRenderer.invoke('extension:setAdultAllowed', enabledOrOptions, options),
   getAdultMode: () => ipcRenderer.invoke('extension:getAdultMode'),
   getRegions: () => ipcRenderer.invoke('regions:get'),
   setRegions: (selection, options) => ipcRenderer.invoke('regions:set', selection, options),
-  setAdultMode: (mode) => ipcRenderer.invoke('extension:setAdultMode', mode),
-  unlockAdultForSession: () => ipcRenderer.invoke('extension:unlockAdultForSession'),
-  lockAdultForSession: () => ipcRenderer.invoke('extension:lockAdultForSession'),
+  setAdultMode: (mode, options) => ipcRenderer.invoke('extension:setAdultMode', mode, options),
+  unlockAdultForSession: (options) =>
+    ipcRenderer.invoke('extension:unlockAdultForSession', options),
+  lockAdultForSession: (options) => ipcRenderer.invoke('extension:lockAdultForSession', options),
 
   getExtensionProviders: () => ipcRenderer.invoke('extension:getProviders'),
   setProviderEnabled: (name, enabled) =>

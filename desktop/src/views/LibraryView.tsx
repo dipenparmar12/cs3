@@ -33,6 +33,9 @@ import type { SearchResponse } from '../types/api';
 import { TvType } from '../types/api';
 import type { LibraryEntry, WatchProgress, WatchStatus } from '../../electron/cs3/libraryStore';
 import type { Bookmark } from '../../electron/cs3/bookmarkStore';
+import { Poster } from '../components/Poster';
+import { useAdultMode } from '../utils/useAdultMode';
+import { isAdultMedia } from '../utils/adultContent';
 
 /**
  * The user's own library, built from what they actually watched.
@@ -132,6 +135,36 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
   const [allEntries, setAllEntries] = useState<LibraryEntry[]>([]);
   const [query, setQuery] = useScreenSearch('library');
   const searching = query.trim() !== '';
+  const adult = useAdultMode();
+
+  const isEntryAdult = useCallback(
+    (entry: LibraryEntry) =>
+      isAdultMedia(
+        {
+          title: entry.title,
+          type: entry.type,
+          apiName: providerFromAddress(entry.urls?.[0] ?? '') ?? entry.metadata?.provider,
+          genres: entry.genres,
+        },
+        adult.adultProviders
+      ),
+    [adult.adultProviders]
+  );
+
+  const isBookmarkAdult = useCallback(
+    (bookmark: Bookmark) =>
+      isAdultMedia(
+        {
+          title: bookmark.title,
+          type: bookmark.type,
+          apiName: bookmark.origin.provider,
+          genres: bookmark.genres,
+          plot: bookmark.plot,
+        },
+        adult.adultProviders
+      ),
+    [adult.adultProviders]
+  );
 
   const [mode, setMode] = useSessionState<LibraryMode>('library.mode', 'watching');
   const [savedSearchCount, setSavedSearchCount] = useState(0);
@@ -142,10 +175,15 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
   const [activeStatus, setActiveStatus] = useSessionState<WatchStatus>('library.status', 'Watching');
   const [savedSearchMatches, setSavedSearchMatches] = useState<number | undefined>(undefined);
 
+  const visibleEntries = useMemo(
+    () => (adult.allowed ? allEntries : allEntries.filter((entry) => !isEntryAdult(entry))),
+    [allEntries, adult.allowed, isEntryAdult]
+  );
+
   /** Entries the query leaves, across every bucket — what the bucket chips count. */
   const found = useMemo(
-    () => (searching ? allEntries.filter((entry) => entryMatches(entry, query)) : allEntries),
-    [allEntries, query, searching]
+    () => (searching ? visibleEntries.filter((entry) => entryMatches(entry, query)) : visibleEntries),
+    [visibleEntries, query, searching]
   );
   const entries = useMemo(
     () => found.filter((entry) => entry.status === activeStatus),
@@ -181,12 +219,12 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
   const { interactionFor } = useTitleInteractions(
     useMemo(
       () =>
-        allEntries.map((entry) => ({
+        visibleEntries.map((entry) => ({
           url: entry.urls?.[0] ?? entry.key,
           name: entry.title,
           year: entry.year,
         })),
-      [allEntries]
+      [visibleEntries]
     )
   );
   const [progressByKey, setProgressByKey] = useState<Map<string, WatchProgress>>(new Map());
@@ -239,10 +277,15 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
    * screen until the dialog was closed and reopened.
    */
   const [sourcesModalKey, setSourcesModalKey] = useState<string | null>(null);
-  const sourcesModalEntry = allEntries.find((entry) => entry.key === sourcesModalKey) ?? null;
+  const sourcesModalEntry = visibleEntries.find((entry) => entry.key === sourcesModalKey) ?? null;
   const setSourcesModalEntry = (entry: LibraryEntry | null) => setSourcesModalKey(entry?.key ?? null);
 
-  const shownBookmarks = bookmarks.filter(
+  const visibleBookmarks = useMemo(
+    () => (adult.allowed ? bookmarks : bookmarks.filter((bookmark) => !isBookmarkAdult(bookmark))),
+    [bookmarks, adult.allowed, isBookmarkAdult]
+  );
+
+  const shownBookmarks = visibleBookmarks.filter(
     (bookmark) =>
       (!providerFilter || bookmark.origin.provider === providerFilter) &&
       (!searching || bookmarkMatches(bookmark, query))
@@ -417,7 +460,7 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
           className={`chip ${mode === 'saved' ? 'active' : ''}`}
           onClick={() => setMode('saved')}
         >
-          <BookmarkCheck size={13} /> Saved pages{bookmarks.length ? ` (${bookmarks.length})` : ''}
+          <BookmarkCheck size={13} /> Saved pages{visibleBookmarks.length ? ` (${visibleBookmarks.length})` : ''}
         </button>
         <button
           role="tab"
@@ -440,6 +483,7 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
       ) : mode === 'saved' ? (
         <SavedPages
           bookmarks={shownBookmarks}
+          isAdult={isBookmarkAdult}
           query={searching ? query : ''}
           onClearQuery={() => setQuery('')}
           providers={bookmarkFacets.providers}
@@ -603,11 +647,12 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
                       label={`Select ${entry.title}`}
                     />
                   )}
-                  {entry.posterUrl ? (
-                    <img src={entry.posterUrl} alt={entry.title} loading="lazy" />
-                  ) : (
-                    <div className="poster-image--empty">{entry.title.slice(0, 1)}</div>
-                  )}
+                  <Poster
+                    src={entry.posterUrl}
+                    title={entry.title}
+                    sensitive={isEntryAdult(entry)}
+                    itemKey={entry.urls?.[0] ?? entry.key}
+                  />
                   {entry.type && <span className="poster-badge">{entry.type}</span>}
                   {stateBadge && (
                     <span
@@ -816,6 +861,7 @@ function savedPlaybackHint(bookmark: Bookmark): string {
 
 const SavedPages: React.FC<{
   bookmarks: Bookmark[];
+  isAdult: (bookmark: Bookmark) => boolean;
   /** The find query already applied to `bookmarks`, or empty. */
   query: string;
   onClearQuery: () => void;
@@ -827,7 +873,7 @@ const SavedPages: React.FC<{
   onSearch?: (query: string) => void;
   /** Plays a saved playback back exactly: episode, place, source, tracks. */
   onResumePlayback?: (bookmark: Bookmark) => void;
-}> = ({ bookmarks, query, onClearQuery, providers, providerFilter, onProviderFilter, onOpen, onRemove, onSearch, onResumePlayback }) => {
+}> = ({ bookmarks, isAdult, query, onClearQuery, providers, providerFilter, onProviderFilter, onOpen, onRemove, onSearch, onResumePlayback }) => {
   if (bookmarks.length === 0 && !providerFilter && !query) {
     return (
       <div className="library-empty">
@@ -888,11 +934,13 @@ const SavedPages: React.FC<{
                   onClick={() => onOpen(bookmark)}
                   aria-label={`Open ${bookmark.title}`}
                 >
-                  {bookmark.posterUrl ? (
-                    <img src={bookmark.posterUrl} alt="" loading="lazy" />
-                  ) : (
-                    <span>{bookmark.title.slice(0, 1)}</span>
-                  )}
+                  <Poster
+                    src={bookmark.posterUrl}
+                    title={bookmark.title}
+                    sensitive={isAdult(bookmark)}
+                    itemKey={bookmark.mediaUrl}
+                    allowIndividualReveal={false}
+                  />
                 </button>
 
                 <div className="saved-row__body">

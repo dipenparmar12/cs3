@@ -54,6 +54,8 @@ import type { PageSnapshot } from '../../electron/cs3/pageSnapshot';
 import { detailFromSnapshot, mergeDetail, savedCopyAge } from '../utils/savedPage';
 import { FranchiseRail } from '../components/detail/FranchiseRail';
 import { distinctRecommendations } from '../utils/relatedRails';
+import { filterAdultItems, isAdultMedia } from '../utils/adultContent';
+import { useAdultMode } from '../utils/useAdultMode';
 
 /** Cards the rail is sized for before "Show all" is worth offering. */
 const RAIL_PREVIEW = 8;
@@ -384,17 +386,41 @@ export const DetailView: React.FC<DetailViewProps> = ({
   const [selectedEpisode, setSelectedEpisode] = useState<Episode | null>(null);
 
   const [pickerOpen, setPickerOpen] = useState(false);
+  const adult = useAdultMode();
+  const isAdult = useMemo(
+    () =>
+      isAdultMedia(
+        {
+          adult: detail ? (detail as { adult?: boolean }).adult || mediaItem.adult : mediaItem.adult,
+          name: detail?.name ?? mediaItem.name,
+          originalTitle: mediaItem.originalTitle || extended?.originalTitle,
+          type: detail?.type ?? mediaItem.type,
+          apiName: mediaItem.apiName,
+          url: detail?.url ?? mediaItem.url,
+          tags: detail?.tags,
+          genres: extended?.genres,
+          plot: detail?.plot || extended?.plot,
+        },
+        adult.adultProviders
+      ),
+    [detail, mediaItem, extended, adult.adultProviders]
+  );
+
   // One card per address, and nothing the page already shows — the title
   // itself, or the franchise rail's entries (PRD §120.6).
   const recommendations = useMemo(
     () =>
       detail
-        ? distinctRecommendations(detail.recommendations ?? [], {
-            current: { name: detail.name, year: detail.year, imdbId: detail.imdbId || extended?.ids?.imdb },
-            franchise: extended?.franchise?.entries,
-          })
+        ? filterAdultItems(
+            distinctRecommendations(detail.recommendations ?? [], {
+              current: { name: detail.name, year: detail.year, imdbId: detail.imdbId || extended?.ids?.imdb },
+              franchise: extended?.franchise?.entries,
+            }),
+            adult.allowed,
+            adult.adultProviders
+          )
         : [],
-    [detail, extended?.ids?.imdb, extended?.franchise?.entries]
+    [detail, extended?.ids?.imdb, extended?.franchise?.entries, adult.allowed, adult.adultProviders]
   );
   const [pickerData, setPickerData] = useState<SourcePickerData | null>(null);
   const [pickerError, setPickerError] = useState<string | undefined>();
@@ -1877,6 +1903,23 @@ export const DetailView: React.FC<DetailViewProps> = ({
 
   // --- render --------------------------------------------------------------
 
+  if (isAdult && !adult.allowed) {
+    return (
+      <div className="detail-view detail-view--state">
+        <AlertTriangle size={32} />
+        <p>Adult content is currently disabled for this session.</p>
+        <p style={{ color: 'var(--text-muted)', fontSize: '0.85rem', maxWidth: '480px' }}>
+          Sensitive titles, posters, and metadata are hidden while adult content is turned off or awaiting confirmation. You can enable adult content in Settings or Extensions.
+        </p>
+        <div className="detail-view__actions">
+          <button className="btn" onClick={onBack}>
+            <ArrowLeft size={16} /> Back
+          </button>
+        </div>
+      </div>
+    );
+  }
+
   if (isLoading) {
     return (
       <div className="detail-view detail-view--state">
@@ -2080,6 +2123,8 @@ export const DetailView: React.FC<DetailViewProps> = ({
         type={detail.type}
         posterUrl={detail.posterUrl || extended?.posterUrl}
         backdropUrl={extended?.backdropUrl}
+        sensitive={isAdult}
+        itemKey={detail.url || mediaItem.url}
         plot={detail.plot || extended?.plot}
         plotChoices={heroPlotChoices}
         rating={detail.rating}
@@ -2232,6 +2277,8 @@ export const DetailView: React.FC<DetailViewProps> = ({
                         src={episode.posterUrl}
                         title={episode.name ?? ''}
                         decorative
+                        sensitive={isAdult}
+                        itemKey={detail.url || mediaItem.url}
                         className="episode-row__thumb"
                         fallback={null}
                       />
