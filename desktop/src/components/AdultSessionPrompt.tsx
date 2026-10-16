@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { ShieldAlert } from 'lucide-react';
 import { Button, Checkbox, Dialog, DialogActions } from './ui';
+import { InfoHint } from './settings/InfoHint';
 import { revealAdultForSession, useAdultState } from '../utils/useAdultMode';
 
 /**
@@ -57,29 +58,44 @@ export const AdultSessionPrompt: React.FC = () => {
       size="sm"
       icon={<ShieldAlert size={18} />}
       title="NSFW Poster Visibility"
-      description="Choose how NSFW posters and visual assets should appear during this session. NSFW content availability remains managed in the Extensions screen."
+      description={
+        <>
+          Choose how NSFW posters and visual assets appear this session.
+          <InfoHint label="About this choice">
+            NSFW content availability remains managed in the Extensions screen.
+          </InfoHint>
+        </>
+      }
       onClose={() => void answer(false, false)}
+      // Neither answer is the default: nothing is focused on open, so Enter or
+      // Space cannot pick one before the viewer has chosen.
+      initialFocus=".adult-prompt__body"
       footer={
         <DialogActions>
           <Button onClick={() => void answer(false, remember)} disabled={busy}>
             Keep Blurred
           </Button>
-          <Button
-            variant="prominent"
-            onClick={() => void answer(true, remember)}
-            loading={busy}
-          >
+          <Button onClick={() => void answer(true, remember)} loading={busy}>
             Unblur for Session
           </Button>
         </DialogActions>
       }
     >
-      <Checkbox
-        checked={remember}
-        onChange={setRemember}
-        label="Do Not Ask Again"
-        description="Remember this visual presentation choice on future launches. You can change it anytime in Settings."
-      />
+      <div className="adult-prompt__body" tabIndex={-1} style={{ outline: 'none' }}>
+        <Checkbox
+          checked={remember}
+          onChange={setRemember}
+          label={
+            <>
+              Do Not Ask Again
+              <InfoHint label="About Do Not Ask Again">
+                Remember this visual presentation choice on future launches. You can change it
+                anytime in Settings.
+              </InfoHint>
+            </>
+          }
+        />
+      </div>
     </Dialog>
   );
 };
