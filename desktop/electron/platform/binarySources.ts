@@ -12,6 +12,9 @@
  * `x64`, `arm64`).
  */
 
+import fs from 'node:fs';
+import path from 'node:path';
+
 const YTDLP_RELEASE = 'https://github.com/yt-dlp/yt-dlp/releases/latest/download';
 const YTDLP_PINNED = 'https://github.com/yt-dlp/yt-dlp/releases/download/2025.02.19';
 const PROXY = 'https://ghproxy.net/';
@@ -89,10 +92,37 @@ export function installHint(tool: 'mpv' | 'ffmpeg' | 'aria2c', platform: string)
  */
 export function extraSearchDirs(platform: string, home: string): string[] {
   if (platform === 'darwin') {
-    return ['/opt/homebrew/bin', '/usr/local/bin', '/opt/local/bin', `${home}/.local/bin`];
+    return [
+      '/opt/homebrew/bin',
+      '/usr/local/bin',
+      '/opt/local/bin',
+      `${home}/.local/bin`,
+      // The mpv.app bundle from mpv.io, which is what the media runtime tells a
+      // Mac user to install: its binary is inside the bundle, on no PATH at all.
+      '/Applications/mpv.app/Contents/MacOS',
+      `${home}/Applications/mpv.app/Contents/MacOS`,
+    ];
   }
   if (platform === 'linux') {
     return ['/usr/local/bin', '/usr/bin', '/bin', '/snap/bin', `${home}/.local/bin`, '/var/lib/flatpak/exports/bin'];
   }
   return [];
+}
+
+/**
+ * Windows' own `tar.exe` (libarchive: reads zip and 7z), named by path.
+ *
+ * Asked for as plain `tar.exe` it resolves through PATH, where a Git or MSYS
+ * install puts a GNU tar that reads neither — and an extraction then fails on
+ * a machine that has had a capable extractor all along. `null` off Windows,
+ * or where System32 has none (before Windows 10 1803).
+ */
+export function windowsTar(
+  env: NodeJS.ProcessEnv = process.env,
+  platform: string = process.platform,
+  exists: (file: string) => boolean = fs.existsSync
+): string | null {
+  if (platform !== 'win32') return null;
+  const candidate = path.win32.join(env.SystemRoot ?? env.windir ?? 'C:\\Windows', 'System32', 'tar.exe');
+  return exists(candidate) ? candidate : null;
 }

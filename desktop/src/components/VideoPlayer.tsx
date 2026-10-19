@@ -5,6 +5,9 @@ import { Download, EyeOff } from 'lucide-react';
 import { historyEventForTask } from '../utils/historyEvent';
 import Hls from 'hls.js';
 import { NativeEngineStage, trackLabel } from './player/NativeEngineStage';
+import { PlaybackPrivacyOverlay } from './player/PlaybackPrivacyOverlay';
+import { mediaSessionRecord } from './player/playbackPrivacy';
+import { usePlaybackPrivacy } from './player/usePlaybackPrivacy';
 import {
   Play, Pause, Volume2, VolumeX, Maximize, Minimize, ArrowLeft,
   Loader2, Users, Gauge, Subtitles, CaptionsOff, AlertTriangle, RotateCcw, RotateCw,
@@ -2457,7 +2460,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
    * or they disagree. Derived rather than stored, so it can never drift from
    * the state that actually decides it.
    */
-  const togglePlay = useCallback(() => {
+  const togglePlayRaw = useCallback(() => {
     if (externalControl?.capability === 'full') {
       const nextPaused = isPlaying;
       setIsPlaying(!nextPaused);
@@ -2475,6 +2478,42 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
     if (video.paused) video.play().catch(() => undefined);
     else video.pause();
   }, [externalControl?.capability, isPlaying, isNativeEngine]);
+
+  /**
+   * Adult video under privacy (PRD §130). The verdict comes from the same
+   * adult state as the posters; the hook pauses, hides and refuses to play
+   * on whichever engine holds the stream, and resumes only what it paused.
+   */
+  const privacy = usePlaybackPrivacy({
+    media: {
+      title,
+      originalTitle,
+      episodeTitle,
+      providerName: providerProvenance?.provider,
+      url: progress?.mediaUrl,
+    },
+    itemKey: progress?.mediaUrl || title,
+    video: videoRef,
+    isNativeEngine,
+    isPlaying,
+    inFront: !hidden,
+    pause: () => {
+      if (isPlaying) togglePlayRaw();
+    },
+    resume: () => {
+      if (!isPlaying) togglePlayRaw();
+    },
+  });
+
+  /**
+   * The viewer's Play. On a protected video it reveals that video (and only
+   * it) and plays; on a blocked one it does nothing. Media keys and the
+   * background policy go through `controls` below, which never reveal.
+   */
+  const togglePlay = useCallback(() => {
+    if (privacy.state === 'protected') privacy.requestPlay();
+    else if (privacy.state === 'open') togglePlayRaw();
+  }, [privacy.state, privacy.requestPlay, togglePlayRaw]);
 
   /**
    * Seeks, accounting for a remuxed stream having no seekable range.
@@ -2592,22 +2631,29 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
     backgroundPlayback,
     alwaysOnTop,
     isNativeEngine,
-    metadata: {
+    playBlocked: privacy.state !== 'open',
+    // The OS media overlay shows this record: nothing identifying while protected.
+    metadata: mediaSessionRecord(privacy.state, {
       title,
       subtitle: episodeTitle,
       artwork: progress?.posterUrl || series?.posterUrl,
-    },
+    }),
     controls: {
       play: () => {
-        if (!isPlaying) togglePlay();
+        if (!isPlaying && privacy.state === 'open') togglePlayRaw();
       },
       pause: () => {
-        if (isPlaying) togglePlay();
+        if (isPlaying) togglePlayRaw();
       },
       seekBy,
       seekTo,
     },
   });
+
+  // Picture-in-Picture draws raw frames, which CSS cannot blur: leave it.
+  useEffect(() => {
+    if (privacy.state !== 'open' && floating.isPip) void floating.exitPip();
+  }, [privacy.state, floating.isPip, floating.exitPip]);
 
   const toggleFullscreen = useCallback(() => {
     // One fullscreen: the button exits it however it was entered (F11 included).
@@ -4685,7 +4731,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
       )}
       <video
         ref={videoRef}
-        className={`player__video player__video--${aspect}`}
+        className={`player__video player__video--${aspect}${privacy.state === 'open' ? '' : ' player__video--protected'}`}
         playsInline
         crossOrigin="anonymous"
       >
@@ -4696,11 +4742,21 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
         ))}
       </video>
 
+      {privacy.state !== 'open' && (
+        <PlaybackPrivacyOverlay
+          state={privacy.state}
+          onPlay={privacy.requestPlay}
+          onBack={onBack}
+          compact={mini}
+        />
+      )}
+
       {/* Full-bleed click surface that cleanly delegates single-click play/pause and double-click fullscreen */}
       {!mini && (
         <div
           className="player__click-surface"
-          onClick={handleSurfaceClick}
+          // A stray click must not reveal a protected video; Play and Space are the explicit asks.
+          onClick={privacy.state === 'open' ? handleSurfaceClick : undefined}
           onDoubleClick={handleSurfaceDoubleClick}
           role="presentation"
         />
@@ -4767,6 +4823,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
           headers={activeSource?.directHeaders}
           title={episodeTitle ? `${title} — ${episodeTitle}` : title}
           capability={capability}
+          startProtected={privacy.state !== 'open'}
           startSeconds={nativeStartSeconds}
           audioLanguage={wantedAudioLanguage()}
           initialVolume={audioSettings.current.volume}

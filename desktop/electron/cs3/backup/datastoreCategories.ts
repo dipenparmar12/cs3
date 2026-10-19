@@ -140,6 +140,7 @@ export const DATASTORE_CATEGORIES: DatastoreCategory[] = [
     keys: [
       'cs3_adult_content_mode',
       'cs3_adult_content_enabled',
+      'cs3_adult_do_not_ask_again',
       'cs3_content_regions',
       'cs3_content_regions_cross',
     ],
@@ -265,6 +266,7 @@ const KEY_LABELS: Record<string, string> = {
   extension_update_settings: 'Extension updates',
   cs3_adult_content_mode: 'Adult content',
   cs3_adult_content_enabled: 'Adult content (older setting)',
+  cs3_adult_do_not_ask_again: 'Adult content startup confirmation',
   cs3_content_regions: 'Regions',
   cs3_content_regions_cross: 'Search other regions',
   player_preferences: 'Player preferences',

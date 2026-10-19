@@ -104,6 +104,11 @@ export interface MpvOpenRequest {
   startSeconds?: number;
   volume?: number;
   fullscreen?: boolean;
+  /**
+   * Privacy has this stream protected: launched paused and without a video
+   * track, so no frame is ever drawn before the viewer reveals it.
+   */
+  startProtected?: boolean;
   /** mpv track id, not an ffprobe ordinal. See {@link MpvTrack.id}. */
   audioTrackId?: number;
   /**

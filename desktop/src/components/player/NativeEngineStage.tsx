@@ -32,6 +32,8 @@ interface NativeEngineStageProps {
   capability: SourceCapabilityModel;
   /** Resume point, applied at load so the first frame is already in place. */
   startSeconds?: number;
+  /** Privacy has the stream protected: opened paused with no video track. */
+  startProtected?: boolean;
   /** The audio language the viewer wants; read once, when the stream opens. */
   audioLanguage?: string;
   initialVolume: number;
@@ -84,6 +86,7 @@ export const NativeEngineStage: React.FC<NativeEngineStageProps> = ({
   title,
   capability,
   startSeconds,
+  startProtected,
   audioLanguage,
   initialVolume,
   initialMuted,
@@ -119,6 +122,7 @@ export const NativeEngineStage: React.FC<NativeEngineStageProps> = ({
         headers,
         title,
         startSeconds,
+        startProtected,
         audioLanguage,
         volume: initialMuted ? 0 : Math.round(initialVolume * 100),
       });

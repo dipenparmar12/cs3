@@ -52,6 +52,12 @@ export interface DownloadTask {
   retryCount?: number;
   /** True when enqueued during an Incognito session so activity history and telemetry are suppressed. */
   isPrivate?: boolean;
+  /**
+   * The viewer profile that asked for it. A download finishes minutes later,
+   * often after a switch, and its history row belongs to whoever started it.
+   * Absent on tasks from before profiles: those are the default profile's.
+   */
+  profileId?: string;
 
   /**
    * Which downloadable variant of the media this is — see

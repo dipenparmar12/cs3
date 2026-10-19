@@ -1,34 +1,33 @@
 import React, { useEffect, useState } from 'react';
-import { EyeOff } from 'lucide-react';
+import { ShieldAlert } from 'lucide-react';
 import { Button, Checkbox, Dialog, DialogActions } from './ui';
-import { revealAdultForSession, setAdultMode, useAdultState } from '../utils/useAdultMode';
+import { InfoHint } from './settings/InfoHint';
+import { revealAdultForSession, useAdultState } from '../utils/useAdultMode';
 
 /**
- * The launch-time question for "Ask every time" (PRD: adult content privacy, §1/§3).
+ * Startup confirmation prompt for adult/NSFW content (§129.1).
  *
- * The `ask` mode existed and kept adult providers locked each launch, but
- * nothing ever asked: the unlock lived in Settings → Extensions, so "ask"
- * behaved as "off" unless you knew where to look. This asks once per launch,
- * only in that mode — `off` and `on` are answers already, and asking someone
- * who never wanted adult content about it on every start would be the nag the
- * setting exists to avoid.
- *
- * Nothing is revealed until the viewer says so: dismissing (Esc, the close
- * button) keeps it hidden, and the gate stays locked while the question is up.
- * "Don't ask again" turns the answer into the setting (`off` or `on`), which
- * Settings can turn back to "Ask every time".
+ * Appears on application launch whenever the user has not explicitly selected
+ * "Do Not Ask Again" (`promptPending === true`). While confirmation is pending,
+ * adult content remains disabled and visual protection remains active.
+ * Dismissing or closing the dialog keeps adult content disabled for the session
+ * without suppressing future prompts.
  */
 let answeredThisLaunch = false;
 
 export const AdultSessionPrompt: React.FC = () => {
-  const { mode, allowed, loaded } = useAdultState();
+  const { promptPending, doNotAskAgain, savedEnabled, loaded } = useAdultState();
   const [open, setOpen] = useState(false);
   const [remember, setRemember] = useState(false);
   const [busy, setBusy] = useState(false);
 
   useEffect(() => {
-    if (!loaded || answeredThisLaunch || mode !== 'ask' || allowed) return;
-    // Wait behind first-run onboarding or any other dialog; never stack on one.
+    // Only show prompt on startup if adult content is enabled and confirmation is pending
+    if (!loaded || answeredThisLaunch || doNotAskAgain || !promptPending || !savedEnabled) {
+      setOpen(false);
+      return;
+    }
+    // Wait behind first-run region onboarding or any other active modal; never stack dialogs.
     const check = () => {
       if (document.querySelector('[aria-modal="true"], .modal-overlay')) return false;
       setOpen(true);
@@ -37,15 +36,18 @@ export const AdultSessionPrompt: React.FC = () => {
     if (check()) return;
     const timer = window.setInterval(() => {
       if (check()) window.clearInterval(timer);
-    }, 1000);
+    }, 250);
     return () => window.clearInterval(timer);
-  }, [loaded, mode, allowed]);
+  }, [loaded, promptPending, doNotAskAgain, savedEnabled]);
 
-  const answer = async (show: boolean) => {
+  const answer = async (unblur: boolean, applyRemember: boolean) => {
     answeredThisLaunch = true;
     setBusy(true);
-    if (remember) await setAdultMode(show ? 'on' : 'off');
-    else if (show) await revealAdultForSession(true);
+    // Visual presentation choice: unblur === false means Keep Blurred; unblur === true means Unblur
+    await revealAdultForSession(true, {
+      blurred: !unblur,
+      doNotAskAgain: applyRemember,
+    });
     setBusy(false);
     setOpen(false);
   };
@@ -54,27 +56,47 @@ export const AdultSessionPrompt: React.FC = () => {
   return (
     <Dialog
       size="sm"
-      icon={<EyeOff size={18} />}
-      title="Show adult content this session?"
-      description="Some installed extensions publish adult (NSFW) titles. Showing them makes their titles, posters and results appear in search, catalogues and recommendations until you close the app."
-      onClose={() => void answer(false)}
+      icon={<ShieldAlert size={18} />}
+      title="NSFW Poster Visibility"
+      description={
+        <>
+          Choose how NSFW posters and visual assets appear this session.
+          <InfoHint label="About this choice">
+            NSFW content availability remains managed in the Extensions screen.
+          </InfoHint>
+        </>
+      }
+      onClose={() => void answer(false, false)}
+      // Neither answer is the default: nothing is focused on open, so Enter or
+      // Space cannot pick one before the viewer has chosen.
+      initialFocus=".adult-prompt__body"
       footer={
         <DialogActions>
-          <Button onClick={() => void answer(false)} disabled={busy}>
-            Keep hidden
+          <Button onClick={() => void answer(false, remember)} disabled={busy}>
+            Keep Blurred
           </Button>
-          <Button variant="prominent" onClick={() => void answer(true)} loading={busy}>
-            Show this session
+          <Button onClick={() => void answer(true, remember)} loading={busy}>
+            Unblur for Session
           </Button>
         </DialogActions>
       }
     >
-      <Checkbox
-        checked={remember}
-        onChange={setRemember}
-        label="Don't ask again"
-        description="Your answer becomes the setting. Settings → Extensions → Adult content can bring this question back."
-      />
+      <div className="adult-prompt__body" tabIndex={-1} style={{ outline: 'none' }}>
+        <Checkbox
+          checked={remember}
+          onChange={setRemember}
+          label={
+            <>
+              Do Not Ask Again
+              <InfoHint label="About Do Not Ask Again">
+                Remember this visual presentation choice on future launches. You can change it
+                anytime in Settings.
+              </InfoHint>
+            </>
+          }
+        />
+      </div>
     </Dialog>
   );
 };
+

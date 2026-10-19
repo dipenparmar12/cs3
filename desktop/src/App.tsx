@@ -573,6 +573,7 @@ export const App: React.FC = () => {
     let disposeExtensionUpdate: (() => void) | undefined;
     let disposeBootstrap: (() => void) | undefined;
     let disposeInstallProgress: (() => void) | undefined;
+    let disposeAdultChanged: (() => void) | undefined;
     let refreshTimer: ReturnType<typeof setTimeout> | null = null;
 
     if (window.cloudstream) {
@@ -613,6 +614,9 @@ export const App: React.FC = () => {
         if (progress.step === 'complete') {
           debouncedRefresh();
         }
+      });
+      disposeAdultChanged = window.cloudstream.onAdultChanged?.(() => {
+        debouncedRefresh();
       });
     }
 
@@ -729,6 +733,7 @@ export const App: React.FC = () => {
       disposeExtensionUpdate?.();
       disposeBootstrap?.();
       disposeInstallProgress?.();
+      disposeAdultChanged?.();
       disposePlayback?.();
       disposeSearch?.();
       disposeInspector?.();
@@ -2093,6 +2098,9 @@ export const App: React.FC = () => {
           // So a search started from the details page shows in the bar that
           // claims to say what is being searched.
           externalQuery={searchQuery}
+          contentContext={
+            Boolean(selectedMedia) || (activeTab !== 'settings' && activeTab !== 'extensions')
+          }
         />
 
         {/*

@@ -51,6 +51,8 @@ import { ScreenSearch } from '../components/ScreenSearch';
 import { Button, Dialog, DialogActions, Menu, Select, SelectionToolbar } from '../components/ui';
 import { useListSelection } from '../utils/listSelection';
 import { useScreenSearch } from '../utils/useScreenSearch';
+import { useAdultMode, isAdultItemBlurred, useRegisterAdultPresence } from '../utils/useAdultMode';
+import { isAdultMedia } from '../utils/adultContent';
 
 interface HistoryViewProps {
   onSelectMedia: (item: SearchResponse) => void;
@@ -127,7 +129,31 @@ function formatRelativeTime(timestamp: number): string {
 }
 
 export const HistoryView: React.FC<HistoryViewProps> = ({ onSelectMedia, onPlayDirect }) => {
-  const [events, setEvents] = useState<HistoryEvent[]>([]);
+  const [rawEvents, setEvents] = useState<HistoryEvent[]>([]);
+  const adult = useAdultMode();
+  const isEventAdult = useCallback(
+    (item: HistoryEvent) =>
+      isAdultMedia(
+        {
+          title: item.parentTitle || item.title,
+          type: item.type,
+          apiName: item.source?.providerName || item.metadata?.provider,
+          plot: item.metadata?.plot,
+          genres: item.metadata?.genres,
+        },
+        adult.adultProviders
+      ),
+    [adult.adultProviders]
+  );
+  const events = useMemo(
+    () => (adult.allowed ? rawEvents : rawEvents.filter((ev) => !isEventAdult(ev))),
+    [rawEvents, adult.allowed, isEventAdult]
+  );
+  const hasAdultEvents = useMemo(
+    () => adult.allowed && events.some((ev) => isEventAdult(ev)),
+    [adult.allowed, events, isEventAdult]
+  );
+  useRegisterAdultPresence(hasAdultEvents);
   const [stats, setStats] = useState<HistoryStats>({
     total: 0,
     played: 0,
@@ -820,6 +846,11 @@ export const HistoryView: React.FC<HistoryViewProps> = ({ onSelectMedia, onPlayD
                         <img
                           src={group.posterUrl}
                           alt={group.title}
+                          className={
+                            isAdultItemBlurred(adult, isEventAdult(item), item.mediaUrl)
+                              ? 'cs-poster--blurred'
+                              : undefined
+                          }
                           style={{ width: '100%', height: '100%', objectFit: 'cover' }}
                           onError={(e) => {
                             (e.currentTarget as HTMLElement).style.display = 'none';
@@ -1290,6 +1321,11 @@ export const HistoryView: React.FC<HistoryViewProps> = ({ onSelectMedia, onPlayD
                       <img
                         src={item.posterUrl}
                         alt={item.title}
+                        className={
+                          isAdultItemBlurred(adult, isEventAdult(item), item.mediaUrl)
+                            ? 'cs-poster--blurred'
+                            : undefined
+                        }
                         style={{ width: '100%', height: '100%', objectFit: 'cover' }}
                         onError={(e) => {
                           (e.currentTarget as HTMLElement).style.display = 'none';
@@ -1588,6 +1624,11 @@ export const HistoryView: React.FC<HistoryViewProps> = ({ onSelectMedia, onPlayD
                   <img
                     src={inspectingItem.posterUrl}
                     alt={inspectingItem.title}
+                    className={
+                      isAdultItemBlurred(adult, isEventAdult(inspectingItem), inspectingItem.mediaUrl)
+                        ? 'cs-poster--blurred'
+                        : undefined
+                    }
                     style={{ width: '60px', height: '88px', objectFit: 'cover', borderRadius: '6px' }}
                   />
                 )}

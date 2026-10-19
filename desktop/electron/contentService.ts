@@ -45,6 +45,7 @@ import { scopedLogger } from './logging/logger.ts';
 const log = scopedLogger('sources');
 import { SearchScopeStore } from './searchScope';
 import { SourceProfileStore } from './cs3/sourceProfileStore.ts';
+import { perProfile } from './profiles/perProfile.ts';
 import { SearchSessionManager, type SearchSnapshot } from './searchSession';
 import type { SourceDiagnosis } from '../src/types/diagnostics';
 import { SharedDiscovery } from './sharedDiscovery';
@@ -417,8 +418,14 @@ export class ContentService {
      * refresh — keeps reading one `SearchScope` and never learns that
      * profiles exist. See `sourceProfileStore.ts` for why that indirection
      * is the whole design rather than an extra layer.
+     *
+     * One per *viewer* profile: each keeps its set-ups in memory and writes
+     * them through to its own profile's scope.
      */
-    this.profiles = new SourceProfileStore(datastore, this.scope);
+    this.profiles = perProfile((profileId) => {
+      const view = datastore.forProfile(profileId);
+      return new SourceProfileStore(view, new SearchScopeStore(view));
+    }).current;
     this.natives = new NativeProviderRegistry(datastore);
     this.searches = new SearchSessionManager({
       plugins: this.plugins,

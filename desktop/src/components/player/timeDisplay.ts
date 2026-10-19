@@ -4,21 +4,23 @@
  * and both engines read one rule.
  */
 
+import { profileStorage } from '../../utils/profileStorage.ts';
+
 export type TimeDisplayMode = 'total' | 'remaining';
 
 const STORAGE_KEY = 'cs3.player.timeDisplay';
 
-/** A per-viewer reading preference, so localStorage rather than the datastore. */
+/** A per-viewer reading preference, so the profile's localStorage rather than the datastore. */
 export function loadTimeDisplayMode(): TimeDisplayMode {
   try {
-    return localStorage.getItem(STORAGE_KEY) === 'remaining' ? 'remaining' : 'total';
+    return profileStorage.getItem(STORAGE_KEY) === 'remaining' ? 'remaining' : 'total';
   } catch {
     return 'total';
   }
 }
 
 export function saveTimeDisplayMode(mode: TimeDisplayMode): void {
-  try { localStorage.setItem(STORAGE_KEY, mode); } catch { /* private window: not remembered */ }
+  try { profileStorage.setItem(STORAGE_KEY, mode); } catch { /* private window: not remembered */ }
 }
 
 /**

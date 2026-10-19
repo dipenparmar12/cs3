@@ -1,6 +1,9 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Search, Loader2, Paperclip, EyeOff, X, Square, Trash2 } from 'lucide-react';
+import { Search, Loader2, Paperclip, Eye, EyeOff, X, Square, Trash2 } from 'lucide-react';
 import { usePrivacy } from '../utils/usePrivacy';
+import { isAdultMedia, isSensitiveTitle } from '../utils/adultContent';
+import { EMERGENCY_BLUR_KEY_LABEL } from '../utils/emergencyBlur';
+import { setAdultVisualBlurred, useAdultMode } from '../utils/useAdultMode';
 import { SearchScopePicker } from './SearchScopePicker';
 import type {
   ExactMedia,
@@ -11,6 +14,7 @@ import type {
 import { SearchSuggestions } from './SearchSuggestions';
 import type { SavedSearchSummary } from '../../electron/savedSearches';
 import { mergeHistoryAndSaved } from '../utils/searchHistoryMerge';
+import { ProfileMenu } from './profiles/ProfileMenu';
 
 interface NavbarProps {
   onSearch: (query: string, options?: SearchOptions) => void;
@@ -52,6 +56,8 @@ interface NavbarProps {
   externalQuery?: string;
   /** Reopens a search kept with Save results. */
   onOpenSavedSearch?: (id: string) => void;
+  /** Whether the current screen is a content-browsing context where the adult blur toggle is relevant. */
+  contentContext?: boolean;
 }
 
 /**
@@ -88,9 +94,11 @@ export const Navbar: React.FC<NavbarProps> = ({
   onScopeChange,
   externalQuery,
   onOpenSavedSearch,
+  contentContext = true,
 }) => {
   const [query, setQuery] = useState('');
   const { active: incognito, setActive: setIncognito } = usePrivacy();
+  const adult = useAdultMode();
   const [showTorrentAttachment, setShowTorrentAttachment] = useState(false);
 
   useEffect(() => {
@@ -151,8 +159,10 @@ export const Navbar: React.FC<NavbarProps> = ({
   }, []);
 
   const mergedHistory = useMemo(() => {
-    return mergeHistoryAndSaved(history, saved);
-  }, [history, saved]);
+    const list = mergeHistoryAndSaved(history, saved);
+    if (adult.allowed) return list;
+    return list.filter((entry) => !isSensitiveTitle(entry.query));
+  }, [history, saved, adult.allowed]);
 
   const trimmedQuery = query.trim();
   const displayHistory = useMemo(() => {
@@ -164,6 +174,25 @@ export const Navbar: React.FC<NavbarProps> = ({
       .filter((entry) => entry.query.toLowerCase().includes(lower))
       .slice(0, 8);
   }, [mergedHistory, trimmedQuery]);
+
+  const visibleSuggestions = useMemo(() => {
+    if (adult.allowed) return suggestions;
+    return suggestions.filter(
+      (s) =>
+        !isAdultMedia(
+          {
+            adult: s.adult,
+            title: s.title,
+            originalTitle: s.originalTitle,
+            type: s.type,
+            genres: s.genres,
+            plot: s.plot,
+            sources: s.sources,
+          },
+          adult.adultProviders
+        )
+    );
+  }, [suggestions, adult.allowed, adult.adultProviders]);
 
   /**
    * Fetches suggestions for the current query, debounced.
@@ -293,10 +322,10 @@ export const Navbar: React.FC<NavbarProps> = ({
   const orderedRows: Array<{ kind: 'suggestion' | 'history'; index: number }> = historyFirst
     ? [
         ...displayHistory.map((_, index) => ({ kind: 'history' as const, index })),
-        ...suggestions.map((_, index) => ({ kind: 'suggestion' as const, index })),
+        ...visibleSuggestions.map((_, index) => ({ kind: 'suggestion' as const, index })),
       ]
     : [
-        ...suggestions.map((_, index) => ({ kind: 'suggestion' as const, index })),
+        ...visibleSuggestions.map((_, index) => ({ kind: 'suggestion' as const, index })),
         ...displayHistory.map((_, index) => ({ kind: 'history' as const, index })),
       ];
 
@@ -345,7 +374,7 @@ export const Navbar: React.FC<NavbarProps> = ({
         // Enter on a highlighted row is the same commitment as clicking it, so
         // it carries the same identity rather than degrading to a text search.
         if (row.kind === 'suggestion') {
-          pickSuggestion(suggestions[row.index]);
+          pickSuggestion(visibleSuggestions[row.index]);
         } else {
           const entry = displayHistory[row.index];
           if (entry?.isSaved && entry.savedId && onOpenSavedSearch) {
@@ -386,6 +415,11 @@ export const Navbar: React.FC<NavbarProps> = ({
       setPicking(false);
     }
   }, [onTorrentPicked, onTorrentPickFailed]);
+
+  const showAdultBlurControl =
+    adult.allowed &&
+    contentContext &&
+    (adult.visibleAdultCount > 0 || !adult.blurred || adult.adultProviders.size > 0);
 
   return (
     <header className={`navbar${incognito ? ' navbar--incognito' : ''}`}>
@@ -496,7 +530,7 @@ export const Navbar: React.FC<NavbarProps> = ({
         <SearchSuggestions
           open={suggestOpen}
           query={query}
-          suggestions={suggestions}
+          suggestions={visibleSuggestions}
           history={displayHistory}
           loading={suggestLoading}
           highlightedIndex={highlightedIndex}
@@ -535,6 +569,25 @@ export const Navbar: React.FC<NavbarProps> = ({
       </div>
 
       <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', position: 'relative' }}>
+        {showAdultBlurControl && (
+          <button
+            type="button"
+            onClick={() => void setAdultVisualBlurred(!adult.blurred)}
+            className={`btn navbar-adult-blur-btn${
+              adult.blurred ? ' navbar-adult-blur-btn--blurred' : ' navbar-adult-blur-btn--revealed'
+            }`}
+            aria-pressed={!adult.blurred}
+            title={
+              adult.blurred
+                ? 'Adult content posters are blurred for privacy. Click to unblur for this session.'
+                : `Adult content posters are visible for this session. Click to blur them, or press ${EMERGENCY_BLUR_KEY_LABEL} anywhere.`
+            }
+          >
+            {adult.blurred ? <Eye size={14} /> : <EyeOff size={14} />}
+            <span>{adult.blurred ? 'Unblur' : 'Blur'}</span>
+          </button>
+        )}
+
         <SearchScopePicker onScopeChange={onScopeChange} />
 
         <button
@@ -552,6 +605,7 @@ export const Navbar: React.FC<NavbarProps> = ({
           {incognito && <span>Incognito</span>}
         </button>
 
+        <ProfileMenu />
       </div>
     </header>
   );

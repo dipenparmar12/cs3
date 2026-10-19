@@ -61,6 +61,25 @@ Its own file, not the datastore (episode lists run to hundreds of rows, and the 
 
 `indexerName` on an extension link is the file **host** ("Voe"), not the provider — both lists also carry `repository ▸ extension ▸ provider`, batched via `api:getProviderProvenanceMap`. `src/utils/sourceExport.ts` defaults to CSV (sortable/filterable). **The exported address is always the provider's, never loopback** (`sourceAddress` — loopback dies when the app closes). RFC 4180 quoting matters: `Dune, Part Two` unquoted silently shifts every later column, attributing links to the wrong provider.
 
+### 9.7 Viewer profiles (2026-10-19)
+
+Optional by construction: every install has the default profile (`id: 'default'`, never deletable), opens straight into it, and nothing asks a single viewer for a name, a choice or a PIN. The avatar at the top right (`ProfileMenu`) is the only new surface a single viewer sees.
+
+**Where the separation lives.** In the datastore, so no store had to learn profiles exist. `profileKeys.ts` lists the per-person keys; `DatastoreManager` resolves each one for the *current* profile (`profileContext.ts`) — plain key for the default profile, `profile:<id>:<key>` for the rest. Consequences worth knowing:
+- **The upgrade moves nothing.** An existing install's `library_entries` *is* the default profile's library; `initialise()` only writes the profile list, and running it twice changes nothing (tested). A half-finished copy cannot lose a library because there is no copy.
+- **In-memory stores are per profile** (`perProfile.ts`): the library, history and bookmarks keep arrays/maps, and re-reading them on a switch is not enough — a discovery begun on profile A that lands after the switch would write B's rows into A's key. Each profile gets its own instance on a datastore view pinned to it.
+- **Every IPC handler runs as the profile active when it was called** (the `ipcMain.handle` wrap in `main.ts`), and `AsyncLocalStorage` carries that through the work it starts. A download's history row is written with `runAsProfile(task.profileId)` because it finishes outside any handler.
+- **Saved searches** live in their own file: default in `userData/`, others in `userData/profiles/<id>/`.
+- `backups/rows/export` read `visibleEntries` — **a backup carries the profile it was taken in**, and the Android import lands in the profile it was run in. `cs3_user_profiles` (lock hashes) and the active id are non-transferable.
+
+**Switching** (`useUserProfiles.switchProfile`): verify a PIN first (a wrong one must not cost the screen), then unmount `App`, wait two frames + 30 ms so its teardown writes (the player's last progress) reach main *before* the switch, then `activate` — main's `beforeSwitch` stops mpv and flushes. `App` is keyed on the active profile, and `clearSessionState`/`forgetScreenQueries` drop the module-level screen memory, so nothing is held over. Switching while playing therefore stops playback, with the progress saved to the profile that was watching.
+
+**Locks** are a privacy screen, not encryption, and the UI says "lock". Salted scrypt; 4–128 characters of anything (a PIN is suggested, not required); 5 free attempts, then 30 s doubling to 5 min. A locked profile other than the one in use needs its secret to be entered, edited, duplicated or deleted. A launch whose last profile is locked opens **gated**: main's current profile is `LOCKED_PROFILE_ID` (reads empty, writes dropped) and the renderer draws only the lock screen, with the other profiles one click away.
+
+**Duplicate** copies `PREFERENCE_KEYS` (player, subtitles, sidebar platforms, search set-ups) and the per-profile `localStorage` keys; never the library, history, progress, bookmarks, searches or the lock.
+
+**Shared on purpose:** downloads (files on disk; the queue is the computer's), the source cache and page snapshots (caches, keyed by address), provider analytics (aggregates), incognito, the adult gate, extensions, repositories, network. A per-profile adult setting would be a natural next step for a kids profile; it is not built.
+
 ---
 
 ---
@@ -92,6 +111,20 @@ Its own file, not the datastore (episode lists run to hundreds of rows, and the 
 - **A rail draws at most `RAIL_LIMIT` (20) posters and only when within ~700px of the viewport** (`HomeRow`); it used to draw every item every catalogue returned (834 on one install). The rest is behind **"Show all"**, which opens `CategoryGrid`: the whole row, paging via `discover:more` as the sentinel nears (re-observed after each page, or a short page stalls it one page in). A page that adds nothing new after de-duplication is the end of the row — catalogues shift between requests, so overlap is normal.
 - **The grid's state lives in `App` (`homeCategoryState.ts`)**, so a title opened from it returns to the same grid and scroll; Back from the grid restores the rows' scroll after two frames. A page landing after Back must not reopen the grid (unmount guard).
 - **Rows are switched on and off per row** (`RowPicker`), grouped by source; a hidden row is **not fetched**. `discover:rows` lists every row without fetching so a hidden one can be switched back on. Stored in `localStorage` (`home_hidden_rows`); the old `home_include_anime` switch is read once and becomes the `trending-anime` row.
+
+### 10.z The detail page holds still while metadata lands (2026-10-19)
+
+The page opens with the provider's answer; a cached catalogue record, four live catalogues and a ratings lookup land over the next seconds. Measured with Chromium's layout-shift API on a running build: a revisited title scored **CLS 0.262** (poster moved 85px, text 54px, then oscillated ±19/63px as the ratings row flickered), a first visit ~0.12; after, **0** and **0.0003**. The causes, each now a rule:
+
+- **No geometry depends on a backdrop.** `.detail-hero--with-backdrop` added 76px of height and padding when a catalogue's backdrop arrived. The frame is constant (`min-height: 440px`); the poster, blurred past recognition, stands in until the backdrop has *loaded* (`useLoadedImage`), which then fades in.
+- **Text is pinned to the top** (`.detail-hero__inner { align-items: flex-start }`). Bottom-aligned to the poster, every row added above Play lifted the title.
+- **Above Play only what the page opened with**: title, the original title the row or provider carried, the meta line. Below it, latest last: plot + description sources, genres, ratings, fallback note, a catalogue-only original title, provenance. A new late field goes below Play; `detailStability.test.mts` checks the order lexically.
+- **Ratings are one request per work, not per render.** `identity` was rebuilt every hero render and keyed the fetch, so every source-count tick refetched and flipped back to loading — for a title with no ratings the row appeared and collapsed repeatedly. Keyed on title/year/type, refined by ids; a refinement never blanks; the newest request wins; the row holds one chip row while the first answer is out and is omitted if none.
+- **A refinement of the same page never clears its catalogue record** (`clearsExtended`). The effect re-ran when `detail` refined (snapshot → live, background refresh) — and on every refresh via `providerVideos`, a fresh array each time — blanking backdrop, cast and genres and drawing them again. Now cleared only on navigation; the trailer list is a dependency by content.
+- **The cached record is asked for with the page**, not after it draws, so a revisit renders once (it arrived one frame late and every section below rearranged).
+- **Loading is the page's own frame** (`DetailHeroSkeleton`, static blocks — a shimmer for ten seconds reads as busy), not a centred spinner the page then replaces. The quiet "showing your saved copy" note lives in the top bar; the failure warning sits below the masthead — inserted above it, each moved the whole page.
+
+What still moves, deliberately: sections below the masthead appear as their data lands (Chromium's scroll anchoring keeps a scrolled reader in place), and a title with no ratings closes its one placeholder row, which moves only the provenance line under it.
 
 ### 10.y Standard mode: the player's centre and the first run (2026-09-24)
 

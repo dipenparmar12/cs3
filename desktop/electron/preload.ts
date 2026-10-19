@@ -11,6 +11,12 @@ import type {
 } from '../src/types/api';
 import type { OttPlatformView } from './cs3/ottPlatforms';
 import type { ProfileState, SourceProfile } from './cs3/sourceProfiles.ts';
+import type {
+  ProfileActionResult,
+  ProfileAvatarId,
+  ProfileDraft,
+  UserProfilesState,
+} from '../src/types/profiles';
 
 /**
  * The whole profile picture, answered by every profile call.
@@ -94,7 +100,12 @@ import type {
   UpdateSettings,
 } from './cs3/extensionUpdater';
 import type { BatchDownloadRequest, BatchProgress } from './cs3/batchDownloader';
-import type { BootstrapProgress, RegionAffectedRepository, RegionState } from './cs3/bootstrap';
+import type {
+  AdultStateSnapshot,
+  BootstrapProgress,
+  RegionAffectedRepository,
+  RegionState,
+} from './cs3/bootstrap';
 import type { TitleOutcome, TitleOutcomeKind } from './cs3/titleOutcomes';
 import type { UserDataResetRequest, UserDataResetResult, UserDataSummary } from '../src/types/userData';
 import type {
@@ -373,7 +384,11 @@ export interface CloudStreamElectronAPI {
   updatePrivacySettings: (partial: Partial<IncognitoSettings>) => Promise<PrivacyState>;
   onPrivacyChanged: (callback: (state: PrivacyState) => void) => () => void;
   /** The adult gate changed, from any screen, the backup restore or the session unlock. */
-  onAdultChanged: (callback: (state: { mode: 'off' | 'ask' | 'on'; allowed: boolean }) => void) => () => void;
+  onAdultChanged: (
+    callback: (
+      state: Partial<AdultStateSnapshot> & { mode: 'off' | 'ask' | 'on'; allowed: boolean }
+    ) => void
+  ) => () => void;
   /** Saves a subtitle to the subtitle folder; reuses an existing copy unless `refresh`. */
   downloadSubtitle: (request: SubtitleDownloadRequest) => Promise<Envelope & { entry: SavedSubtitle | null; reused: boolean }>;
   /** Subtitles saved for one title (and episode). */
@@ -515,20 +530,18 @@ export interface CloudStreamElectronAPI {
    * Adult content, off by default. Turning it off hides adult repositories from
    * the catalogue and withdraws every NSFW provider from search immediately.
    */
-  getAdultAllowed: () => Promise<boolean>;
   setAdultAllowed: (
-    enabled: boolean
-  ) => Promise<Envelope & { enabled: boolean; providers: string[] }>;
+    enabledOrOptions:
+      | boolean
+      | { enabled?: boolean; doNotAskAgain?: boolean; blurred?: boolean },
+    options?: { doNotAskAgain?: boolean; blurred?: boolean }
+  ) => Promise<Envelope & Partial<AdultStateSnapshot> & { enabled: boolean; providers: string[] }>;
   /**
-   * The gate, in three states rather than two.
-   *
-   * `mode` is the setting and `allowed` is whether adult providers are being
-   * offered right now; under `ask` those differ until someone asks. The unlock
-   * lasts only for this run of the app — a middle setting that persisted its
-   * unlock would be "on" with extra steps, which is the opposite of what
-   * someone sharing a machine chooses it for.
+   * Full adult content availability, visual privacy, and startup prompt state.
    */
-  getAdultMode: () => Promise<Envelope & { mode: 'off' | 'ask' | 'on'; allowed: boolean }>;
+  getAdultMode: () => Promise<
+    Envelope & Partial<AdultStateSnapshot> & { mode: 'off' | 'ask' | 'on'; allowed: boolean }
+  >;
   /** PRD-54: the viewer's content regions, and whether they have been asked yet. */
   getRegions: () => Promise<RegionState>;
   /**
@@ -540,13 +553,31 @@ export interface CloudStreamElectronAPI {
     options?: { crossRegion?: boolean }
   ) => Promise<Envelope & { state: RegionState; affected: RegionAffectedRepository[] }>;
   setAdultMode: (
-    mode: 'off' | 'ask' | 'on'
-  ) => Promise<Envelope & { mode: 'off' | 'ask' | 'on'; allowed?: boolean; providers?: string[] }>;
-  unlockAdultForSession: () => Promise<
-    Envelope & { mode: 'off' | 'ask' | 'on'; allowed: boolean; providers: string[] }
+    mode: 'off' | 'ask' | 'on',
+    options?: { blurred?: boolean; doNotAskAgain?: boolean }
+  ) => Promise<
+    Envelope &
+      Partial<AdultStateSnapshot> & {
+        mode: 'off' | 'ask' | 'on';
+        allowed?: boolean;
+        providers?: string[];
+      }
   >;
-  lockAdultForSession: () => Promise<
-    Envelope & { mode: 'off' | 'ask' | 'on'; allowed: boolean; providers: string[] }
+  unlockAdultForSession: (options?: { doNotAskAgain?: boolean; blurred?: boolean }) => Promise<
+    Envelope &
+      Partial<AdultStateSnapshot> & {
+        mode: 'off' | 'ask' | 'on';
+        allowed: boolean;
+        providers: string[];
+      }
+  >;
+  lockAdultForSession: (options?: { doNotAskAgain?: boolean; blurred?: boolean }) => Promise<
+    Envelope &
+      Partial<AdultStateSnapshot> & {
+        mode: 'off' | 'ask' | 'on';
+        allowed: boolean;
+        providers: string[];
+      }
   >;
 
   getExtensionProviders: () => Promise<
@@ -634,6 +665,26 @@ export interface CloudStreamElectronAPI {
   renameSourceProfile: (id: string, name: string) => Promise<SourceProfileSnapshot>;
   duplicateSourceProfile: (id: string) => Promise<SourceProfileSnapshot>;
   deleteSourceProfile: (id: string) => Promise<SourceProfileSnapshot>;
+  /**
+   * Viewer profiles: separate libraries, histories and preferences. Optional —
+   * every installation has the default profile and opens straight into it.
+   * Every answer carries the whole state. A secret (PIN or password) is sent
+   * in to unlock or change a locked profile and never comes back out.
+   */
+  getUserProfiles: () => Promise<UserProfilesState>;
+  verifyUserProfile: (id: string, secret: string) => Promise<ProfileActionResult>;
+  activateUserProfile: (id: string, secret?: string) => Promise<ProfileActionResult>;
+  createUserProfile: (draft: ProfileDraft) => Promise<ProfileActionResult>;
+  updateUserProfile: (
+    id: string,
+    patch: { name?: string; avatar?: ProfileAvatarId },
+    secret?: string
+  ) => Promise<ProfileActionResult>;
+  setUserProfileLock: (id: string, secret: string, currentSecret?: string) => Promise<ProfileActionResult>;
+  removeUserProfileLock: (id: string, currentSecret: string) => Promise<ProfileActionResult>;
+  duplicateUserProfile: (id: string, secret?: string) => Promise<ProfileActionResult>;
+  deleteUserProfile: (id: string, secret?: string) => Promise<ProfileActionResult>;
+  onUserProfilesChanged: (callback: (state: UserProfilesState) => void) => () => void;
   /** Fires as each installed extension is loaded, so lists can fill in. */
   onProviderLoadProgress: (
     callback: (progress: ProviderLoadProgress) => void
@@ -2154,14 +2205,15 @@ const api: CloudStreamElectronAPI = {
 
   getBootstrapProgress: () => ipcRenderer.invoke('extension:getBootstrapProgress'),
   onBootstrapProgress: (callback) => subscribe('extension:bootstrapProgress', callback),
-  getAdultAllowed: () => ipcRenderer.invoke('extension:getAdultAllowed'),
-  setAdultAllowed: (enabled) => ipcRenderer.invoke('extension:setAdultAllowed', enabled),
+  setAdultAllowed: (enabledOrOptions, options) =>
+    ipcRenderer.invoke('extension:setAdultAllowed', enabledOrOptions, options),
   getAdultMode: () => ipcRenderer.invoke('extension:getAdultMode'),
   getRegions: () => ipcRenderer.invoke('regions:get'),
   setRegions: (selection, options) => ipcRenderer.invoke('regions:set', selection, options),
-  setAdultMode: (mode) => ipcRenderer.invoke('extension:setAdultMode', mode),
-  unlockAdultForSession: () => ipcRenderer.invoke('extension:unlockAdultForSession'),
-  lockAdultForSession: () => ipcRenderer.invoke('extension:lockAdultForSession'),
+  setAdultMode: (mode, options) => ipcRenderer.invoke('extension:setAdultMode', mode, options),
+  unlockAdultForSession: (options) =>
+    ipcRenderer.invoke('extension:unlockAdultForSession', options),
+  lockAdultForSession: (options) => ipcRenderer.invoke('extension:lockAdultForSession', options),
 
   getExtensionProviders: () => ipcRenderer.invoke('extension:getProviders'),
   setProviderEnabled: (name, enabled) =>
@@ -2323,6 +2375,17 @@ const api: CloudStreamElectronAPI = {
   renameSourceProfile: (id, name) => ipcRenderer.invoke('profiles:rename', id, name),
   duplicateSourceProfile: (id) => ipcRenderer.invoke('profiles:duplicate', id),
   deleteSourceProfile: (id) => ipcRenderer.invoke('profiles:delete', id),
+  getUserProfiles: () => ipcRenderer.invoke('userProfiles:get'),
+  verifyUserProfile: (id, secret) => ipcRenderer.invoke('userProfiles:verify', id, secret),
+  activateUserProfile: (id, secret) => ipcRenderer.invoke('userProfiles:activate', id, secret),
+  createUserProfile: (draft) => ipcRenderer.invoke('userProfiles:create', draft),
+  updateUserProfile: (id, patch, secret) => ipcRenderer.invoke('userProfiles:update', id, patch, secret),
+  setUserProfileLock: (id, secret, currentSecret) =>
+    ipcRenderer.invoke('userProfiles:setLock', id, secret, currentSecret),
+  removeUserProfileLock: (id, currentSecret) => ipcRenderer.invoke('userProfiles:removeLock', id, currentSecret),
+  duplicateUserProfile: (id, secret) => ipcRenderer.invoke('userProfiles:duplicate', id, secret),
+  deleteUserProfile: (id, secret) => ipcRenderer.invoke('userProfiles:delete', id, secret),
+  onUserProfilesChanged: (callback) => subscribe('userProfiles:changed', callback),
   getDeleteDownloadPreference: () => ipcRenderer.invoke('download:getDeletePreference'),
   setDeleteDownloadPreference: (preference) =>
     ipcRenderer.invoke('download:setDeletePreference', preference),

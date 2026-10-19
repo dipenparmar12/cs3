@@ -36,7 +36,6 @@ function fakeDeps() {
     jobs: [] as unknown[],
     known: [] as unknown[],
     adultAllowed: false,
-    adultMode: 'off' as 'off' | 'ask' | 'on',
     adultNotified: 0,
   };
   const toggle = (list: string[], names: string[], enabled: boolean) =>
@@ -88,9 +87,7 @@ function fakeDeps() {
     },
     isAdultAllowed: () => state.adultAllowed,
     adult: {
-      adultMode: () => state.adultMode,
-      setAdultMode: (mode: 'off' | 'ask' | 'on') => {
-        state.adultMode = mode;
+      notifyAdultChange: () => {
         state.adultNotified++;
       },
     },

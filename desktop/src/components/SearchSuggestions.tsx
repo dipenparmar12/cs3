@@ -3,6 +3,8 @@ import { Poster } from './Poster';
 import { BookmarkCheck, Clock, Loader2, Search, Trash2, X } from 'lucide-react';
 import type { SearchHistoryEntry, SearchSuggestion } from '../types/api';
 import type { SavedSearchSummary } from '../../electron/savedSearches';
+import { isAdultMedia } from '../utils/adultContent';
+import { useAdultMode } from '../utils/useAdultMode';
 
 /**
  * The panel under the search box: what you searched before, and what you
@@ -62,6 +64,7 @@ export const SearchSuggestions: React.FC<SearchSuggestionsProps> = ({
   onClearHistory,
   onRunFreshSearch,
 }) => {
+  const { adultProviders } = useAdultMode();
   if (!open) return null;
 
   const hasQuery = query.trim().length >= 2;
@@ -179,6 +182,18 @@ export const SearchSuggestions: React.FC<SearchSuggestionsProps> = ({
 
       {suggestions.map((suggestion, index) => {
         const combinedIndex = historyFirst ? history.length + index : index;
+        const isAdult = isAdultMedia(
+          {
+            adult: suggestion.adult,
+            title: suggestion.title,
+            originalTitle: suggestion.originalTitle,
+            type: suggestion.type,
+            genres: suggestion.genres,
+            plot: suggestion.plot,
+            sources: suggestion.sources,
+          },
+          adultProviders
+        );
         return (
           <button
             key={`${suggestion.url}-${suggestion.title}`}
@@ -196,6 +211,8 @@ export const SearchSuggestions: React.FC<SearchSuggestionsProps> = ({
               src={suggestion.posterUrl}
               title={suggestion.title}
               decorative
+              sensitive={isAdult}
+              itemKey={suggestion.url || suggestion.title}
               fallback={
                 <div className="search-suggest__poster-empty">
                   {suggestion.title.slice(0, 1)}

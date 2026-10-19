@@ -8,12 +8,15 @@ import { Play, History, Loader2, RefreshCw, Sparkles, X, Trash2, ChevronDown, Ch
 import type { WatchProgress } from '../../electron/cs3/libraryStore';
 import type { DiscoverySection } from '../../electron/cs3/discovery';
 import { TvType } from '../types/api';
+import { Poster } from '../components/Poster';
 import { PosterCard } from '../components/PosterCard';
 import { CataloguePicker } from '../components/home/CataloguePicker';
 import { CategoryGrid } from '../components/home/CategoryGrid';
 import { HomeRow } from '../components/home/HomeRow';
 import { RowPicker } from '../components/home/RowPicker';
 import { describeError } from '../utils/errors';
+import { filterAdultItems, isAdultMedia } from '../utils/adultContent';
+import { isAdultItemBlurred, useAdultMode } from '../utils/useAdultMode';
 import {
   RAIL_LIMIT,
   readContinueWatchingCollapsed,
@@ -22,13 +25,15 @@ import {
   writeHiddenRows,
 } from '../utils/homeRows';
 import type { HomeCategoryState } from './homeCategoryState';
+import { profileStorage } from '../utils/profileStorage';
 
 /** Anime is a row like any other now; this id is also how the old switch is read. */
 const ANIME_ROW = 'trending-anime';
 
-function storage(): Storage | null {
+/** The home layout is a person's, so it is read through the active profile. */
+function storage(): typeof profileStorage | null {
   try {
-    return window.localStorage;
+    return window.localStorage ? profileStorage : null;
   } catch {
     return null;
   }
@@ -91,6 +96,7 @@ export const HomeView: React.FC<HomeViewProps> = ({
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [continueWatching, setContinueWatching] = useState<WatchProgress[]>([]);
+  const adult = useAdultMode();
 
   const resumeRow = (row: WatchProgress) => {
     (document.activeElement as HTMLElement)?.blur();
@@ -222,9 +228,34 @@ export const HomeView: React.FC<HomeViewProps> = ({
     [onSelectMedia, onSearch]
   );
 
+  const filteredSections = useMemo(
+    () =>
+      sections
+        .map((section) => ({
+          ...section,
+          items: filterAdultItems(section.items, adult.allowed, adult.adultProviders),
+        }))
+        .filter((section) => section.items.length > 0),
+    [sections, adult.allowed, adult.adultProviders]
+  );
+
+  const visibleContinueWatching = useMemo(
+    () =>
+      adult.allowed
+        ? continueWatching
+        : continueWatching.filter(
+            (row) =>
+              !isAdultMedia(
+                { title: row.title, url: row.mediaUrl },
+                adult.adultProviders
+              )
+          ),
+    [continueWatching, adult.allowed, adult.adultProviders]
+  );
+
   const allItems = useMemo(
-    () => sections.flatMap((section) => section.items),
-    [sections]
+    () => filteredSections.flatMap((section) => section.items),
+    [filteredSections]
   );
 
   const typeTabs = useMemo(() => tabsFor(allItems), [allItems]);
@@ -232,13 +263,13 @@ export const HomeView: React.FC<HomeViewProps> = ({
 
   const visibleSections = useMemo(
     () =>
-      sections
+      filteredSections
         .map((section) => ({
           ...section,
           items: section.items.filter((item) => matchesTab(item, activeTab)),
         }))
         .filter((section) => section.items.length > 0),
-    [sections, activeTab]
+    [filteredSections, activeTab]
   );
 
   /**
@@ -290,7 +321,9 @@ export const HomeView: React.FC<HomeViewProps> = ({
   }, [category?.returnScroll, onCategoryChange]);
 
   const hero = visibleSections[0]?.items[0];
-  const hasAnything = sections.length > 0 || continueWatching.length > 0;
+  const heroIsAdult = Boolean(hero && isAdultMedia(hero, adult.adultProviders));
+  const heroBlurred = Boolean(hero && heroIsAdult && isAdultItemBlurred(adult, hero.url || hero.name));
+  const hasAnything = filteredSections.length > 0 || visibleContinueWatching.length > 0;
 
   if (category) {
     return (
@@ -329,7 +362,7 @@ export const HomeView: React.FC<HomeViewProps> = ({
         <div
           className="home-hero"
           style={
-            hero.posterUrl
+            hero.posterUrl && !heroBlurred
               ? {
                   backgroundImage: `linear-gradient(90deg, rgba(10,10,12,0.96) 0%, rgba(10,10,12,0.55) 60%, rgba(10,10,12,0.25) 100%), url(${hero.posterUrl})`,
                 }
@@ -397,7 +430,7 @@ export const HomeView: React.FC<HomeViewProps> = ({
       )}
 
       {/* Local, so it lands before anything from the network. */}
-      {continueWatching.length > 0 && (
+      {visibleContinueWatching.length > 0 && (
         <section className="home-row">
           <header>
             <History size={17} />
@@ -412,7 +445,7 @@ export const HomeView: React.FC<HomeViewProps> = ({
             >
               {continueWatchingCollapsed ? (
                 <>
-                  <ChevronRight size={13} /> Expand ({continueWatching.length})
+                  <ChevronRight size={13} /> Expand ({visibleContinueWatching.length})
                 </>
               ) : (
                 <>
@@ -460,12 +493,16 @@ export const HomeView: React.FC<HomeViewProps> = ({
           </header>
           {!continueWatchingCollapsed && (
             <div className="home-rail">
-            {continueWatching.map((row) => {
+            {visibleContinueWatching.map((row) => {
               const percent = row.durationSeconds
                 ? (row.positionSeconds / row.durationSeconds) * 100
                 : 0;
               const minutesLeft = Math.round(
                 Math.max(0, row.durationSeconds - row.positionSeconds) / 60
+              );
+              const rowAdult = isAdultMedia(
+                { title: row.title, url: row.mediaUrl },
+                adult.adultProviders
               );
 
               return (
@@ -497,13 +534,19 @@ export const HomeView: React.FC<HomeViewProps> = ({
                       }
                     }}
                   >
-                    {row.posterUrl ? (
-                      <img src={row.posterUrl} alt="" loading="lazy" />
-                    ) : (
-                      <div className="poster-image poster-image--empty">
-                        {row.title.slice(0, 1)}
-                      </div>
-                    )}
+                    <Poster
+                      src={row.posterUrl}
+                      title={row.title}
+                      decorative
+                      sensitive={rowAdult}
+                      itemKey={row.mediaUrl || row.key}
+                      allowIndividualReveal={rowAdult}
+                      fallback={
+                        <div className="poster-image poster-image--empty">
+                          {row.title.slice(0, 1)}
+                        </div>
+                      }
+                    />
                     <div className="poster-overlay">
                       <span className="play-button-overlay" aria-hidden>
                         <Play size={17} fill="#fff" />
@@ -576,7 +619,7 @@ export const HomeView: React.FC<HomeViewProps> = ({
           hasMore={section.pageable}
           onShowAll={() => {
             // The whole row, not the part the type filter left showing.
-            const full = sections.find((entry) => entry.id === section.id) ?? section;
+            const full = filteredSections.find((entry) => entry.id === section.id) ?? section;
             showAll(full);
           }}
           renderCard={(item, index) => (

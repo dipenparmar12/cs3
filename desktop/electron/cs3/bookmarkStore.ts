@@ -1,4 +1,4 @@
-import type { DatastoreManager } from '../datastore';
+import type { Datastore } from '../datastore';
 import type { SavedPlayback } from '../../src/types/library.ts';
 import type { TvType } from '../../src/types/api';
 import { prune } from '../util/prune.ts';
@@ -95,10 +95,10 @@ export interface Bookmark {
 }
 
 export class BookmarkStore {
-  private datastore: DatastoreManager;
+  private datastore: Datastore;
   private bookmarks: Bookmark[] = [];
 
-  constructor(datastore: DatastoreManager) {
+  constructor(datastore: Datastore) {
     this.datastore = datastore;
     this.restore();
   }

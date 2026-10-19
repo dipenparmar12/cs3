@@ -120,3 +120,164 @@ export function isSensitiveRow(row: {
   const hits = items.filter((item) => isSensitiveTitle(item.name)).length;
   return hits >= TITLE_MIN && hits / items.length >= TITLE_SHARE;
 }
+
+const ADULT_TAG_PATTERNS = [
+  /^(?:18\s*[+＋]|nsfw|xxx|adult|erotica|erotic|hentai|porn|pornography|uncensored|ecchi|jav)$/i,
+];
+
+/** True when a genre or tag string explicitly classifies a title as 18+/NSFW. */
+export function isAdultGenreOrTag(tag: string | undefined): boolean {
+  if (!tag) return false;
+  const trimmed = tag.trim();
+  if (!trimmed) return false;
+  return ADULT_TAG_PATTERNS.some((pattern) => pattern.test(trimmed)) || isSensitiveTitle(trimmed);
+}
+
+/**
+ * A synopsis is trusted only for an explicit mark. Ordinary films name their
+ * subject ("the pornography industry", "an erotic thriller" — Boogie Nights,
+ * Basic Instinct), and with adult content off those must stay visible.
+ */
+const EXPLICIT_MARKS = [/(^|[^0-9])18\s*[+＋]/, /\(\s*18\s*[+＋]?\s*\)/, /\b(xxx|nsfw)\b/i];
+
+/** True when a plot/synopsis string contains an explicit NSFW mark. */
+export function isSensitiveDescription(text: string | undefined): boolean {
+  if (!text) return false;
+  return EXPLICIT_MARKS.some((pattern) => pattern.test(text));
+}
+
+export interface AdultCheckable {
+  adult?: boolean;
+  type?: string;
+  mediaType?: string;
+  name?: string;
+  title?: string;
+  parentTitle?: string;
+  originalTitle?: string;
+  episodeTitle?: string;
+  apiName?: string;
+  providerName?: string;
+  provider?: string;
+  sources?: readonly string[];
+  url?: string;
+  mediaUrl?: string;
+  parentMediaUrl?: string;
+  plot?: string;
+  description?: string;
+  tags?: readonly string[];
+  genres?: readonly string[];
+}
+
+/**
+ * Unified classification for any media item, library entry, history event,
+ * bookmark, download task, or search suggestion across the application.
+ */
+export function isAdultMedia(
+  item: AdultCheckable | null | undefined,
+  adultProviders?: ReadonlySet<string>
+): boolean {
+  if (!item) return false;
+  if (item.adult === true) return true;
+  if (
+    String(item.type ?? '').toUpperCase() === 'NSFW' ||
+    String(item.mediaType ?? '').toUpperCase() === 'NSFW'
+  ) {
+    return true;
+  }
+
+  const provider = item.apiName || item.providerName || item.provider;
+  if (provider) {
+    if (adultProviders?.has(provider)) return true;
+    if (isSensitiveTitle(provider)) return true;
+  }
+  if (item.sources?.some((s) => adultProviders?.has(s) || isSensitiveTitle(s))) {
+    return true;
+  }
+
+  const urls = [item.url, item.mediaUrl, item.parentMediaUrl];
+  for (const u of urls) {
+    if (!u) continue;
+    if (adultProviders && u.startsWith('cs3ext://')) {
+      const rest = u.slice('cs3ext://'.length);
+      const slash = rest.indexOf('/');
+      const extProvider = decodeURIComponent(slash >= 0 ? rest.slice(0, slash) : rest);
+      if (adultProviders.has(extProvider) || isSensitiveTitle(extProvider)) return true;
+    }
+  }
+
+  if (
+    isSensitiveTitle(item.name) ||
+    isSensitiveTitle(item.title) ||
+    isSensitiveTitle(item.parentTitle) ||
+    isSensitiveTitle(item.originalTitle) ||
+    isSensitiveTitle(item.episodeTitle)
+  ) {
+    return true;
+  }
+
+  if (item.tags?.some((tag) => isAdultGenreOrTag(tag))) return true;
+  if (item.genres?.some((genre) => isAdultGenreOrTag(genre))) return true;
+  if (isSensitiveDescription(item.plot) || isSensitiveDescription(item.description)) return true;
+
+  return false;
+}
+
+/**
+ * Filters out adult items when adult content is not permitted for the current session.
+ */
+export function filterAdultItems<T extends AdultCheckable>(
+  items: readonly T[],
+  adultAllowed: boolean,
+  adultProviders?: ReadonlySet<string>
+): T[] {
+  if (adultAllowed) return [...items];
+  return items.filter((item) => !isAdultMedia(item, adultProviders));
+}
+
+export type AdultSessionDecision = 'pending' | 'enabled' | 'disabled';
+
+export interface AdultSessionEvaluation {
+  mode: 'off' | 'ask' | 'on';
+  allowed: boolean;
+  savedEnabled: boolean;
+  doNotAskAgain: boolean;
+  promptPending: boolean;
+  blurred: boolean;
+}
+
+/**
+ * Pure evaluation of adult content availability, startup confirmation prompt,
+ * and visual protection state from persistent preferences and session choices
+ * (PRD §129.1–§129.3, §129.8).
+ *
+ *  - `blurred` is session-only and starts `true` on every launch.
+ *  - `promptPending` is `true` until the user answers in this session, unless
+ *    `doNotAskAgain` is persisted.
+ *  - While `promptPending` is `true`, `allowed` is `false` even if `savedEnabled`
+ *    is `true` (§129.1, §129.8 Scenario 1).
+ */
+export function evaluateAdultSessionState(params: {
+  savedEnabled: boolean;
+  doNotAskAgain: boolean;
+  sessionDecision: AdultSessionDecision;
+  sessionBlurred: boolean;
+}): AdultSessionEvaluation {
+  const { savedEnabled, doNotAskAgain, sessionDecision, sessionBlurred } = params;
+  // Adult content availability is determined by savedEnabled (managed via Extensions/Settings).
+  // Startup confirmation asks about visual presentation (Blur vs Unblur) when adult content is enabled.
+  const promptPending = savedEnabled && sessionDecision === 'pending' && !doNotAskAgain;
+  // Availability is controlled by savedEnabled (set in Settings/Extensions).
+  // Visual presentation decisions for the session (Blur vs Unblur) never disable adult content availability.
+  const allowed = savedEnabled;
+  const mode: 'off' | 'ask' | 'on' = !savedEnabled ? 'off' : doNotAskAgain ? 'on' : 'ask';
+  return {
+    mode,
+    allowed,
+    savedEnabled,
+    doNotAskAgain,
+    promptPending,
+    blurred: sessionBlurred,
+  };
+}
+
+

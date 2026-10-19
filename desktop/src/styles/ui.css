@@ -402,8 +402,13 @@ select.ui-select:disabled { opacity: var(--control-disabled-opacity); cursor: no
 .ui-menu__item--danger { color: #f87171; }
 .ui-menu__icon { flex: 0 0 auto; margin-top: 0.1rem; color: var(--text-subtle); }
 .ui-menu__item--danger .ui-menu__icon { color: inherit; }
-.ui-menu__text { display: flex; flex-direction: column; gap: 0.1rem; }
+.ui-menu__text { display: flex; flex-direction: column; gap: 0.1rem; flex: 1; min-width: 0; }
 .ui-menu__description { font-size: 0.7rem; font-weight: 400; color: var(--text-subtle); }
+.ui-menu__header { padding: 0.45rem 0.6rem 0.5rem; }
+.ui-menu__separator { height: 1px; margin: 0.25rem 0.3rem; background: rgba(255, 255, 255, 0.08); }
+.ui-menu__leading { flex: 0 0 auto; display: inline-flex; }
+.ui-menu__item:has(.ui-menu__leading) { align-items: center; }
+.ui-menu__trailing { flex: 0 0 auto; display: inline-flex; align-self: center; color: var(--text-subtle); }
 
 /* Library card controls on the shared tokens. */
 .library-card__status { flex: 1; min-width: 0; }

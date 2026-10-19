@@ -1,4 +1,4 @@
-import type { DatastoreManager } from '../datastore';
+import type { Datastore } from '../datastore';
 import type { TvType } from '../../src/types/api';
 import { WatchStatus } from '../../src/types/api.ts';
 import type {
@@ -276,12 +276,12 @@ export function storedSourceToTorrentResult(src: StoredSource): TorrentResult {
 }
 
 export class LibraryStore {
-  private datastore: DatastoreManager;
+  private datastore: Datastore;
   private entries = new Map<string, LibraryEntry>();
   private progress = new Map<string, WatchProgress>();
   private sources = new Map<string, SourceMemory>();
 
-  constructor(datastore: DatastoreManager) {
+  constructor(datastore: Datastore) {
     this.datastore = datastore;
     this.restore();
   }

@@ -1,184 +1,149 @@
 import React, { useState } from 'react';
-import { ChevronDown, Eye, EyeOff, ShieldAlert } from 'lucide-react';
+import { Bell, BellOff, EyeOff, ShieldAlert } from 'lucide-react';
 import { InfoHint } from './settings/InfoHint';
-import { useSettingCollapse } from './settings/useSettingCollapse';
+import { Button, Switch } from './ui';
 import {
-  revealAdultForSession,
-  setAdultMode,
+  setAdultAvailability,
+  setAdultDoNotAskAgain,
+  setAdultVisualBlurred,
   useAdultState,
-  type AdultMode,
 } from '../utils/useAdultMode';
 
-const MODES: Array<{ value: AdultMode; label: string; detail: string }> = [
-  {
-    value: 'off',
-    label: 'Off',
-    detail:
-      'Adult providers are not installed, not searched and not listed anywhere — even inside a repository you have for its other providers.',
-  },
-  {
-    value: 'ask',
-    label: 'Ask before showing',
-    detail:
-      'They stay installed and configured but hidden. Each launch starts hidden and asks once; revealing them lasts until you close the app.',
-  },
-  {
-    value: 'on',
-    label: 'Enabled',
-    detail: 'Adult providers appear in search, in the extensions list and in the catalogue.',
-  },
-];
-
 /**
- * The adult-content gate, in three states.
- *
- * Two could not express the useful middle one. Someone on a shared machine
- * wants these providers installed and working and *not on screen by default* —
- * "off" throws away the configuration and "on" leaves it in front of whoever
- * opens the app next. `ask` keeps the setup and starts every launch hidden.
- *
- * The unlock is deliberately session-only and lives in memory in
- * `BootstrapService`, never in the datastore. A middle setting that quietly
- * remembered its unlock would be "on" with extra steps, which is the exact
- * opposite of what it is chosen for.
- *
- * Two steps on the way up, one click on the way down — unchanged, and for the
- * unchanged reason: enabling shows material a household member may not expect
- * and is worth a confirmation; disabling is the safe direction and must never
- * be made awkward. `PluginManager.enabledProviderNames` re-reads the gate on
- * every call, so both directions take effect immediately rather than at next
- * launch.
+ * Adult content & visual privacy controls (§129.2, §129.7). Shared by Settings
+ * and the Extensions screen, so it draws only from the shared adult state.
  */
 export const AdultContentSetting: React.FC = () => {
-  // The state is shared with every other screen that shows this setting.
-  const { mode, allowed } = useAdultState();
-  const [confirming, setConfirming] = useState<AdultMode | null>(null);
+  const { allowed, doNotAskAgain, blurred } = useAdultState();
+  const [confirmingEnable, setConfirmingEnable] = useState(false);
   const [busy, setBusy] = useState(false);
 
-  const apply = async (next: AdultMode) => {
+  const run = async (action: () => Promise<unknown>) => {
     setBusy(true);
-    await setAdultMode(next);
-    setConfirming(null);
+    await action();
     setBusy(false);
   };
 
-  const choose = (next: AdultMode) => {
-    if (next === mode) return;
-    // Only the direction that reveals something needs confirming.
-    if (next === 'off' || mode === 'on') void apply(next);
-    else setConfirming(next);
+  const handleSetAvailability = (enable: boolean) => {
+    setConfirmingEnable(false);
+    return run(() => setAdultAvailability(enable));
   };
-
-  const reveal = async (unlock: boolean) => {
-    setBusy(true);
-    await revealAdultForSession(unlock);
-    setBusy(false);
-  };
-
-  const [collapsed, toggleCollapse] = useSettingCollapse('adult-content');
 
   return (
-    <section className={`adult-setting${collapsed ? ' adult-setting--collapsed' : ''}`}>
-      <header
-        className="adult-setting__head"
-        onClick={toggleCollapse}
-        role="button"
-        tabIndex={0}
-        aria-expanded={!collapsed}
-        onKeyDown={(e) => {
-          if (e.key === 'Enter' || e.key === ' ') {
-            e.preventDefault();
-            toggleCollapse();
-          }
-        }}
-      >
+    <section className="adult-setting">
+      <header className="adult-setting__head">
         <div className="adult-setting__title-wrap">
           {allowed ? <ShieldAlert size={16} /> : <EyeOff size={16} />}
-          <h3>Adult content</h3>
-          <span onClick={(e) => e.stopPropagation()}>
-            <InfoHint label="About adult content">
-              Some extensions publish providers marked <code>NSFW</code>. This decides whether they
-              are offered in search, source discovery, downloads and the extensions list — a change
-              applies at once.
-            </InfoHint>
-          </span>
-          <span className={`adult-setting__state${allowed ? ' adult-setting__state--on' : ''}`}>
-            {allowed ? 'Shown' : 'Hidden'}
-          </span>
+          <h3>Adult Content &amp; Visual Privacy</h3>
+          <InfoHint label="About adult content & visual privacy">
+            Controls 18+/NSFW content permissions, visual blurring of posters and artwork, and
+            startup confirmation. Sensitive artwork resets to Blurred on every restart.
+          </InfoHint>
+          <div className="adult-setting__badges">
+            <span className={`adult-setting__state${allowed ? ' adult-setting__state--on' : ''}`}>
+              {allowed ? (blurred ? 'Enabled · Blurred' : 'Enabled · Visible') : 'Disabled'}
+            </span>
+            <span className="adult-setting__state">
+              {doNotAskAgain ? 'Prompt Off' : 'Ask on Launch'}
+            </span>
+          </div>
         </div>
-        <span
-          className={`adult-setting__collapse-icon${
-            collapsed ? ' adult-setting__collapse-icon--collapsed' : ''
-          }`}
-          aria-hidden="true"
-        >
-          <ChevronDown size={14} />
-        </span>
       </header>
 
-      {!collapsed && (
-        <>
-          <div className="adult-setting__modes" role="radiogroup" aria-label="Adult content">
-        {MODES.map((entry) => (
-          <button
-            key={entry.value}
-            role="radio"
-            aria-checked={mode === entry.value}
-            className={`adult-setting__mode${mode === entry.value ? ' adult-setting__mode--on' : ''}`}
-            onClick={() => choose(entry.value)}
-            disabled={busy}
-          >
-            <strong>{entry.label}</strong>
-            <em>{entry.detail}</em>
-          </button>
-        ))}
+      <div className="adult-setting__rows">
+        <div className="adult-setting__row">
+          <div className="adult-setting__row-info">
+            <strong>Availability</strong>
+            <p>
+              Permit 18+/NSFW titles, catalogues, and extensions. Sensitive artwork starts blurred.
+            </p>
+          </div>
+          <div className="adult-setting__row-control">
+            <Switch
+              checked={allowed}
+              disabled={busy}
+              label="Adult content availability"
+              stateLabel={allowed ? 'Enabled' : 'Disabled'}
+              onChange={(next) => {
+                if (next) setConfirmingEnable(true);
+                else void handleSetAvailability(false);
+              }}
+            />
+          </div>
+        </div>
+
+        {confirmingEnable && !allowed && (
+          <div className="adult-setting__confirm">
+            <span className="adult-setting__confirm-text">
+              Enable adult content for this session? Posters and artwork will remain blurred until unblurred.
+            </span>
+            <div className="adult-setting__confirm-actions">
+              <Button size="compact" onClick={() => setConfirmingEnable(false)} disabled={busy}>
+                Cancel
+              </Button>
+              <Button
+                size="compact"
+                variant="prominent"
+                onClick={() => void handleSetAvailability(true)}
+                disabled={busy}
+              >
+                Enable
+              </Button>
+            </div>
+          </div>
+        )}
+
+        <div className="adult-setting__row">
+          <div className="adult-setting__row-info">
+            <strong>Visual Protection</strong>
+            <p>
+              {allowed
+                ? 'Blur sensitive posters, banners, and backdrops. Resets to Blurred on launch.'
+                : 'Always active while adult content is disabled.'}
+            </p>
+          </div>
+          <div className="adult-setting__row-control">
+            <Switch
+              checked={blurred}
+              disabled={busy || !allowed}
+              label="Visual protection"
+              stateLabel={blurred ? 'Blurred' : 'Unblurred'}
+              onChange={(next) => void run(() => setAdultVisualBlurred(next))}
+            />
+          </div>
+        </div>
+
+        <div className="adult-setting__row">
+          <div className="adult-setting__row-info">
+            <strong>Startup Prompt</strong>
+            <p>Ask to confirm adult content access each time the application launches.</p>
+          </div>
+          <div className="adult-setting__row-control">
+            <div className="adult-setting__seg" role="group" aria-label="Startup prompt">
+              <button
+                type="button"
+                className={`adult-setting__seg-btn${!doNotAskAgain ? ' adult-setting__seg-btn--active' : ''}`}
+                aria-pressed={!doNotAskAgain}
+                onClick={() => void run(() => setAdultDoNotAskAgain(false))}
+                disabled={busy}
+              >
+                <Bell size={13} />
+                Ask
+              </button>
+              <button
+                type="button"
+                className={`adult-setting__seg-btn${doNotAskAgain ? ' adult-setting__seg-btn--active' : ''}`}
+                aria-pressed={doNotAskAgain}
+                onClick={() => void run(() => setAdultDoNotAskAgain(true))}
+                disabled={busy}
+              >
+                <BellOff size={13} />
+                Don't Ask
+              </button>
+            </div>
+          </div>
+        </div>
       </div>
-
-      {confirming && (
-        <div className="adult-setting__confirm">
-          <span>
-            {confirming === 'on'
-              ? 'Show adult providers in search and the extensions list?'
-              : 'Keep adult providers installed, hidden until you ask for them each time?'}
-          </span>
-          <button className="btn btn-primary" onClick={() => apply(confirming)} disabled={busy}>
-            Yes, I am over 18
-          </button>
-          <button className="btn btn-secondary" onClick={() => setConfirming(null)} disabled={busy}>
-            Cancel
-          </button>
-        </div>
-      )}
-
-      {/*
-        The reveal, which exists only under `ask`.
-
-        Kept beside the setting rather than offered from the search panel: the
-        thing being decided is the same one the radio above decides, and a
-        second entry point in a different screen is how a viewer ends up unsure
-        which of the two is in force.
-      */}
-      {mode === 'ask' && !confirming && (
-        <div className="adult-setting__session">
-          {allowed ? (
-            <>
-              <span>Adult providers are showing until you close the app.</span>
-              <button className="btn btn-secondary btn-sm" onClick={() => reveal(false)} disabled={busy}>
-                <EyeOff size={13} /> Hide them again
-              </button>
-            </>
-          ) : (
-            <>
-              <span>Adult providers are hidden. This launch, and every launch.</span>
-              <button className="btn btn-secondary btn-sm" onClick={() => reveal(true)} disabled={busy}>
-                <Eye size={13} /> Show for now
-              </button>
-            </>
-          )}
-        </div>
-      )}
-        </>
-      )}
     </section>
   );
 };
