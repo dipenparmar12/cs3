@@ -103,6 +103,8 @@ Done in this pass:
 After: `<button style={{…}}>` 39 → 21; `ext-btn` 39 → 0; `settings__switch` 11 → 0;
 hand-built `position: fixed` overlays 6 → 4; dialog shells outside `ui/Dialog` 8 → 4.
 
+Done 2026-10-19: `Navbar` Clear/Search → `Button` (placeholder and incognito tooltip shortened); `ContentHoverCard`, `MediaComponentsCard`, `HistoryView` inspector delete → `Button`; `LibraryBucketSelector`'s compact dropdown redrawn on the `.ui-menu__*` classes (`menuitemradio`, `--on`) and its trigger's selected state is `.bucket-trigger--on`; `DetailHero`'s More menu → `Menu`. `Menu` gained `header`, item `leading`/`trailing` and `separatorBefore` (the profile menu uses all four). The sidebar's "V8 Sandbox Active" chip is developer-mode only (`.sidebar__status`): true, but nothing a viewer can act on. `<button style={{…}}>` outside the player: 15 → 4 (two of them data colours). The compact bucket dropdown is reachable only through the hover card, which is switched off (`ENABLE_HOVER_CARD_PREVIEW`), so it is typechecked, not seen running.
+
 Still to migrate — each is a bounded follow-up, listed so nobody re-audits:
 
 | Where | What | Why it was left |
@@ -110,8 +112,8 @@ Still to migrate — each is a bounded follow-up, listed so nobody re-audits:
 | `VideoPlayer`, `MiniPlayerBar`, `PlayerDownloadPanel`, `SubtitlePanel` | player overlay buttons | The player is a deliberate "glass over video" variant; it needs a `player` tone on `Button` designed against video, not a mechanical swap. |
 | `SourcePicker`, `BinarySetupModal`, `RegionOnboarding`, `TrailerPopup` | dialog shells | Large custom layouts (and a focus trap in `BinarySetupModal`); move the shell to `Dialog` one at a time, with a look at each. |
 | `ProviderInspector`, `HistoryView` inspector drawer | `position: fixed` side panels | A drawer is a different pattern from a dialog; add `ui/Drawer` first. |
-| `LibraryBucketSelector`, `ContentHoverCard`, `Navbar`, `HomeView`, `SearchView`, `MediaComponentsCard`, `SubtitleSettings` | 1–2 inline-styled buttons each | Small; take them with the next change to each file. |
-| `CopyErrorButton`, `PlayerCopyMenu`, `SourceProfileBar`, `CataloguePicker`, `Sidebar`, `DetailHero`, `LibraryBucketSelector` | own `role="menu"` implementations | Move to `Menu` (or `FacetMenu` where they select a value). |
+| `HomeView` (one `marginLeft`), `ProviderInspector` (developer tool) | 1–2 inline-styled buttons each | Small; take them with the next change to each file. `SubtitleSettings` swatches and `StreamingServicePicker` tiles keep an inline *data* colour on purpose. |
+| `CopyErrorButton`, `PlayerCopyMenu`, `SourceProfileBar`, `CataloguePicker`, `Sidebar`, `LibraryBucketSelector` (detail variant) | own `role="menu"` implementations | Move to `Menu` (or `FacetMenu` where they select a value). |
 | 37 native checkboxes outside Settings switches | `<input type="checkbox">` | Move to `Checkbox` where a label sits beside it. |
 | `sources.css` bespoke `*__btn` classes | 55 | Delete as their call sites move to `Button`. |
 

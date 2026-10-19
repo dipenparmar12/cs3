@@ -2,6 +2,7 @@ import React, { useEffect, useState } from 'react';
 import { Play, Star, Calendar, Info, Loader2 } from 'lucide-react';
 import type { LoadResponse, SearchResponse } from '../types/api';
 import { LibraryBucketSelector } from './LibraryBucketSelector';
+import { Button } from './ui';
 import { isAdultMedia } from '../utils/adultContent';
 import { isAdultItemBlurred, useAdultState } from '../utils/useAdultMode';
 
@@ -115,32 +116,31 @@ export const ContentHoverCard: React.FC<ContentHoverCardProps> = ({
         )}
 
         <div className="hover-preview-popup__actions">
-          <button
-            type="button"
-            className="btn btn-primary"
-            style={{ padding: '0.35rem 0.75rem', fontSize: '0.78rem', gap: '0.35rem' }}
+          <Button
+            size="compact"
+            variant="prominent"
+            icon={Play}
             onClick={() => {
               onClose();
               if (onPlayDirectly) onPlayDirectly(item);
               else onSelectMedia(item);
             }}
           >
-            <Play size={14} fill="#fff" /> Play
-          </button>
+            Play
+          </Button>
 
           <LibraryBucketSelector item={item} size="sm" />
 
-          <button
-            type="button"
-            className="btn btn-secondary"
-            style={{ padding: '0.35rem 0.65rem', fontSize: '0.78rem', gap: '0.3rem' }}
+          <Button
+            size="compact"
+            icon={Info}
             onClick={() => {
               onClose();
               onSelectMedia(item);
             }}
           >
-            <Info size={14} /> Details
-          </button>
+            Details
+          </Button>
         </div>
       </div>
     </div>

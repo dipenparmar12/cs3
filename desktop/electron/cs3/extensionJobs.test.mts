@@ -295,3 +295,51 @@ test('a bulk uninstall keeps going past one failure, and says which failed', asy
   assert.deepEqual(states, { 'ext:a': 'done', 'ext:b': 'failed', 'ext:c': 'done' });
   assert.equal(queue.snapshot().failed, 1);
 });
+
+test('whenSettled reports exactly the jobs it was given, once each has finished', async () => {
+  const gate = gatedRunner();
+  const queue = new ExtensionJobQueue({ run: gate.run, concurrency: 1 });
+  const ours = queue.enqueue([install('a'), install('b')]).ids;
+  // Something else the viewer queued meanwhile is not part of the report.
+  queue.enqueue([install('c')]);
+
+  let report: Array<{ target: string; state: string }> | null = null;
+  void queue.whenSettled(ours).then((jobs) => {
+    report = jobs.map((job) => ({ target: job.target, state: job.state }));
+  });
+
+  await gate.finish('ext:a');
+  assert.equal(report, null, 'still waiting on b');
+  await gate.finish('ext:b', { ok: false, message: 'broken' });
+  assert.deepEqual(report, [
+    { target: 'ext:a', state: 'done' },
+    { target: 'ext:b', state: 'failed' },
+  ]);
+});
+
+test('whenSettled counts a cancelled job as finished, and joined requests are one job', async () => {
+  const gate = gatedRunner();
+  const queue = new ExtensionJobQueue({ run: gate.run, concurrency: 1 });
+  const first = queue.enqueue([install('a'), install('b')]).ids;
+  // A second press on a row already queued joins its job rather than adding one.
+  const again = queue.enqueue([install('b')]).ids;
+  assert.equal(again[0], first[1]);
+
+  const settled = queue.whenSettled(first);
+  queue.cancel(first[1]);
+  await gate.finish('ext:a');
+  const jobs = await settled;
+  assert.deepEqual(
+    jobs.map((job) => job.state),
+    ['done', 'cancelled']
+  );
+});
+
+test('whenSettled on work already finished answers at once', async () => {
+  const gate = gatedRunner();
+  const queue = new ExtensionJobQueue({ run: gate.run, concurrency: 1 });
+  const ids = queue.enqueue([install('a')]).ids;
+  await gate.finish('ext:a');
+  const jobs = await queue.whenSettled(ids);
+  assert.equal(jobs[0].state, 'done');
+});

@@ -174,6 +174,12 @@ export class ExtensionJobQueue {
   private retained = new Map<string, ExtensionJobRequest>();
   private sequence = 0;
   private idleWaiters: Array<() => void> = [];
+  /** Callers waiting on particular jobs, with the final records collected so far. */
+  private settleWaiters: Array<{
+    ids: string[];
+    records: Map<string, ExtensionJob>;
+    resolve: (jobs: ExtensionJob[]) => void;
+  }> = [];
 
   constructor(options: ExtensionJobQueueOptions) {
     this.run = options.run;
@@ -243,6 +249,7 @@ export class ExtensionJobQueue {
       job.state = 'cancelled';
       job.finishedAt = this.now();
       this.requests.delete(id);
+      this.noteFinished(job);
       this.trim();
       this.changed();
       this.settleIfIdle();
@@ -258,6 +265,7 @@ export class ExtensionJobQueue {
       job.state = 'cancelled';
       job.finishedAt = this.now();
       this.requests.delete(job.id);
+      this.noteFinished(job);
       touched = true;
     }
     if (touched) {
@@ -316,6 +324,27 @@ export class ExtensionJobQueue {
     };
   }
 
+  /**
+   * Resolves once every one of these jobs has finished, with its final record.
+   *
+   * For a caller that queued work and must report on exactly that work — the
+   * automatic update pass, which says "updated 5, 2 failed" for its own jobs
+   * and not for whatever else the viewer queued meanwhile. Captured as each
+   * finishes, so trimming old records cannot lose one. An id the queue does not
+   * know is treated as finished and left out.
+   */
+  public whenSettled(ids: string[]): Promise<ExtensionJob[]> {
+    const records = new Map<string, ExtensionJob>();
+    const pending = ids.filter((id) => {
+      const job = this.jobs.find((entry) => entry.id === id);
+      if (job && isActive(job)) return true;
+      if (job) records.set(id, { ...job });
+      return false;
+    });
+    if (pending.length === 0) return Promise.resolve(ids.flatMap((id) => records.get(id) ?? []));
+    return new Promise((resolve) => this.settleWaiters.push({ ids, records, resolve }));
+  }
+
   /** Resolves once nothing is queued or running. For tests and shutdown. */
   public whenIdle(): Promise<void> {
     if (!this.jobs.some(isActive)) return Promise.resolve();
@@ -357,6 +386,7 @@ export class ExtensionJobQueue {
     job.finishedAt = this.now();
     this.requests.delete(job.id);
     this.retained.set(job.id, request);
+    this.noteFinished(job);
     this.trim();
     this.changed();
     this.pump();
@@ -375,6 +405,20 @@ export class ExtensionJobQueue {
     );
     this.jobs = this.jobs.filter((job) => !drop.has(job.id));
     for (const id of drop) this.retained.delete(id);
+  }
+
+  private noteFinished(job: ExtensionJob): void {
+    if (this.settleWaiters.length === 0) return;
+    this.settleWaiters = this.settleWaiters.filter((waiter) => {
+      if (waiter.ids.includes(job.id)) waiter.records.set(job.id, { ...job });
+      const done = waiter.ids.every((id) => {
+        if (waiter.records.has(id)) return true;
+        const known = this.jobs.find((entry) => entry.id === id);
+        return !known || !isActive(known);
+      });
+      if (done) waiter.resolve(waiter.ids.flatMap((id) => waiter.records.get(id) ?? []));
+      return !done;
+    });
   }
 
   private settleIfIdle(): void {

@@ -268,23 +268,17 @@ export const LibraryBucketSelector: React.FC<LibraryBucketSelectorProps> = ({
       ) : (
         <button
           type="button"
-          className={buttonClassName || `btn ${size === 'sm' ? 'btn-secondary' : 'btn-secondary'}`}
-          style={{
-            padding: size === 'sm' ? '0.25rem 0.5rem' : '0.45rem 0.85rem',
-            fontSize: size === 'sm' ? '0.75rem' : '0.85rem',
-            gap: '0.35rem',
-            alignItems: 'center',
-            borderColor: currentStatus ? 'var(--accent-primary)' : undefined,
-            backgroundColor: currentStatus ? 'rgba(59, 130, 246, 0.15)' : undefined,
-            color: currentStatus ? '#60a5fa' : undefined,
-          }}
+          className={
+            buttonClassName ||
+            `btn btn-secondary${size === 'sm' ? ' btn-sm' : ''}${currentStatus ? ' bucket-trigger--on' : ''}`
+          }
           onClick={(e) => {
             e.stopPropagation();
             setOpen((v) => !v);
           }}
           aria-label="Add to library bucket"
         >
-          <Bookmark size={size === 'sm' ? 14 : 16} style={{ color: currentStatus ? '#60a5fa' : undefined }} />
+          <Bookmark size={size === 'sm' ? 13 : 15} aria-hidden />
           {showLabel && (
             <span>{currentStatus ? BUCKET_LABELS[currentStatus] : 'Add to Library'}</span>
           )}
@@ -334,76 +328,40 @@ export const LibraryBucketSelector: React.FC<LibraryBucketSelectorProps> = ({
             )}
           </div>
         ) : (
-          <div
-            style={{
-              position: 'absolute',
-              top: 'calc(100% + 4px)',
-              left: 0,
-              zIndex: 99999,
-              minWidth: '160px',
-              backgroundColor: '#161b26',
-              border: '1px solid var(--border-color)',
-              borderRadius: 'var(--radius-md)',
-              boxShadow: '0 10px 30px rgba(0,0,0,0.7)',
-              padding: '0.35rem',
-              display: 'flex',
-              flexDirection: 'column',
-              gap: '0.2rem',
-            }}
-            onClick={(e) => e.stopPropagation()}
-          >
-            <div style={{ fontSize: '0.68rem', fontWeight: 700, color: 'var(--text-subtle)', padding: '0.2rem 0.4rem', textTransform: 'uppercase' }}>
-              Library Bucket
-            </div>
+          // The shared menu's look (`ui.css`), so this one popup no longer carries
+          // its own hand-typed colours and spacing.
+          <div className="ui-menu__list ui-menu__list--start" role="menu" onClick={(e) => e.stopPropagation()}>
+            <div className="ui-menu__header ui-menu__header--label">Library</div>
             {BUCKETS.map((b) => {
               const isSelected = currentStatus === b.status;
               return (
                 <button
                   key={b.status}
                   type="button"
+                  role="menuitemradio"
+                  aria-checked={isSelected}
+                  className={`ui-menu__item${isSelected ? ' ui-menu__item--on' : ''}`}
                   onClick={() => selectStatus(b.status)}
                   disabled={loading}
-                  style={{
-                    display: 'flex',
-                    alignItems: 'center',
-                    justifyContent: 'space-between',
-                    padding: '0.4rem 0.6rem',
-                    fontSize: '0.78rem',
-                    color: isSelected ? '#60a5fa' : '#e5e7eb',
-                    backgroundColor: isSelected ? 'rgba(59, 130, 246, 0.15)' : 'transparent',
-                    border: 'none',
-                    borderRadius: 'var(--radius-sm)',
-                    cursor: 'pointer',
-                    textAlign: 'left',
-                  }}
                 >
-                  <span>{b.label}</span>
-                  {isSelected && <Check size={14} style={{ color: '#60a5fa' }} />}
+                  <span className="ui-menu__text">{b.label}</span>
+                  {isSelected && <Check size={14} className="ui-menu__trailing" aria-hidden />}
                 </button>
               );
             })}
 
             {currentStatus && (
               <>
-                <div style={{ height: '1px', backgroundColor: 'var(--border-color)', margin: '0.2rem 0' }} />
+                <div role="separator" className="ui-menu__separator" />
                 <button
                   type="button"
+                  role="menuitem"
+                  className="ui-menu__item ui-menu__item--danger"
                   onClick={removeEntry}
                   disabled={loading}
-                  style={{
-                    display: 'flex',
-                    alignItems: 'center',
-                    gap: '0.4rem',
-                    padding: '0.4rem 0.6rem',
-                    fontSize: '0.75rem',
-                    color: '#ef4444',
-                    backgroundColor: 'transparent',
-                    border: 'none',
-                    borderRadius: 'var(--radius-sm)',
-                    cursor: 'pointer',
-                  }}
                 >
-                  <Trash2 size={13} /> Remove from library
+                  <Trash2 size={14} className="ui-menu__icon" aria-hidden />
+                  <span className="ui-menu__text">Remove from library</span>
                 </button>
               </>
             )}

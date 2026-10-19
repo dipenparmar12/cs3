@@ -21,7 +21,45 @@ import type {
 import { describeError } from '../utils/errors';
 import { useExtensionJobs } from './extensions/useExtensionJobs';
 import { ProgressBar } from './extensions/primitives';
-import { Button, Menu } from './ui';
+import { Button, Menu, Switch } from './ui';
+
+const DAY_MS = 24 * 60 * 60 * 1000;
+
+function sameDay(a: number, b: number): boolean {
+  return new Date(a).toDateString() === new Date(b).toDateString();
+}
+
+/** "Checked today at 10:42", "Checked yesterday at 21:05", "Checked 3 Oct" — a bare time said nothing about the day. */
+function describeLastCheck(at: number | undefined, now = Date.now()): string {
+  if (!at) return 'Not checked yet';
+  const time = new Date(at).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+  if (sameDay(at, now)) return `Checked today at ${time}`;
+  if (sameDay(at, now - DAY_MS)) return `Checked yesterday at ${time}`;
+  return `Checked ${new Date(at).toLocaleDateString([], { day: 'numeric', month: 'short' })}`;
+}
+
+/**
+ * The three ways updates can run, as one choice. "Auto-update" is the first;
+ * the middle one keeps the daily check but asks before installing.
+ */
+type UpdateMode = 'automatic' | 'notify' | 'manual';
+
+function modeOf(settings: UpdateSettings): UpdateMode {
+  if (settings.policy === 'manual') return 'manual';
+  return settings.autoInstall ? 'automatic' : 'notify';
+}
+
+const MODE_SETTINGS: Record<UpdateMode, Partial<UpdateSettings>> = {
+  automatic: { policy: 'daily', autoInstall: true },
+  notify: { policy: 'daily', autoInstall: false },
+  manual: { policy: 'manual', autoInstall: false },
+};
+
+const MODE_LABEL: Record<UpdateMode, string> = {
+  automatic: 'Install updates automatically',
+  notify: 'Check daily, ask before installing',
+  manual: 'Only when I check',
+};
 
 export interface StatusMessage {
   text: string;
@@ -55,20 +93,23 @@ export const ExtensionUpdates: React.FC<ExtensionUpdatesProps> = ({ onUpdated, o
       .catch(() => {});
   }, [api]);
 
+  /** Re-read after every check: the status line shows when it ran and what it did. */
+  const fetchSettings = useCallback(() => {
+    api
+      ?.getUpdateSettings()
+      .then((res) => setSettings(res ?? null))
+      .catch(() => {});
+  }, [api]);
+
   useEffect(() => {
     if (!api) return;
     api
       .getCachedExtensionUpdates()
       .then((res) => setUpdates(Array.isArray(res) ? res : []))
       .catch(() => setUpdates([]));
-
-    api
-      .getUpdateSettings()
-      .then((res) => setSettings(res ?? null))
-      .catch(() => {});
-
+    fetchSettings();
     fetchIgnored();
-  }, [api, fetchIgnored]);
+  }, [api, fetchIgnored, fetchSettings]);
 
   // Separate active (pending) updates from ignored updates
   const activeUpdates = useMemo(() => {
@@ -111,6 +152,7 @@ export const ExtensionUpdates: React.FC<ExtensionUpdatesProps> = ({ onUpdated, o
             setIgnoredUpdates(map);
           }
           setChecking(false);
+          fetchSettings();
           break;
         }
         case 'extension:ignoredUpdatesChanged': {
@@ -142,6 +184,7 @@ export const ExtensionUpdates: React.FC<ExtensionUpdatesProps> = ({ onUpdated, o
             .then((res) => setUpdates(Array.isArray(res) ? res : []))
             .catch(() => {});
           fetchIgnored();
+          fetchSettings();
           onUpdated?.();
           break;
         }
@@ -149,7 +192,7 @@ export const ExtensionUpdates: React.FC<ExtensionUpdatesProps> = ({ onUpdated, o
           break;
       }
     });
-  }, [api, onUpdated, fetchIgnored]);
+  }, [api, onUpdated, fetchIgnored, fetchSettings]);
 
   const check = useCallback(async () => {
     if (!api) return;
@@ -323,22 +366,15 @@ export const ExtensionUpdates: React.FC<ExtensionUpdatesProps> = ({ onUpdated, o
     [api]
   );
 
-  const lastCheckedStr = settings?.lastCheckedAt
-    ? ` · Last checked ${new Date(settings.lastCheckedAt).toLocaleTimeString()}`
-    : '';
-
   /*
    * An updater, not a dashboard: one line says whether anything is waiting and
    * offers the one action that matters. Checking and the schedule are quiet
    * controls beside it; a failure or an ignored update is a short group below,
    * and an extension's description lives in its tooltip rather than its row.
    */
-  const policyLabel: Record<UpdateSettings['policy'], string> = {
-    startup: 'Check every time the app opens',
-    daily: 'Check once a day',
-    manual: 'Check only when I ask',
-  };
+  const mode = settings ? modeOf(settings) : null;
   const busyUpdating = progress !== null || updating.length > 0;
+  const lastResult = settings?.lastResult;
 
   return (
     <div className="ext-updates">
@@ -356,8 +392,13 @@ export const ExtensionUpdates: React.FC<ExtensionUpdatesProps> = ({ onUpdated, o
           </strong>
           <span className="ext-updates__meta">
             {[
-              settings ? (settings.autoInstall ? 'Installs automatically' : 'Installs when you choose') : null,
-              lastCheckedStr.replace(/^ · /, '') || null,
+              settings ? describeLastCheck(settings.lastCheckedAt) : null,
+              busyUpdating
+                ? null
+                : lastResult && lastResult.updateCount > 0
+                  ? `last run: ${lastResult.installed} updated${lastResult.failed > 0 ? `, ${lastResult.failed} failed` : ''}`
+                  : null,
+              mode === 'notify' ? 'asks before installing' : mode === 'manual' ? 'checks only when you ask' : null,
             ]
               .filter(Boolean)
               .join(' · ')}
@@ -375,25 +416,28 @@ export const ExtensionUpdates: React.FC<ExtensionUpdatesProps> = ({ onUpdated, o
           >
             {checking ? 'Checking…' : 'Check now'}
           </Button>
-          {settings && (
-            <Menu
-              label="Update settings"
-              trigger={(props) => (
-                <Button {...props} size="compact" variant="ambient" iconOnly icon={Settings2} aria-label="Update settings" />
-              )}
-              items={[
-                {
-                  label: 'Install updates automatically',
-                  icon: settings.autoInstall ? Check : undefined,
-                  onSelect: () => void changeSettings({ autoInstall: !settings.autoInstall }),
-                },
-                ...(['startup', 'daily', 'manual'] as const).map((policy) => ({
-                  label: policyLabel[policy],
-                  icon: settings.policy === policy ? Check : undefined,
-                  onSelect: () => void changeSettings({ policy }),
-                })),
-              ]}
-            />
+          {settings && mode && (
+            <>
+              <span className="ext-updates__auto" title="Checks once a day and installs updates in the background">
+                <Switch
+                  checked={mode === 'automatic'}
+                  onChange={(on) => void changeSettings(MODE_SETTINGS[on ? 'automatic' : 'manual'])}
+                  label="Automatic updates"
+                  stateLabel="Auto-update"
+                />
+              </span>
+              <Menu
+                label="Update settings"
+                trigger={(props) => (
+                  <Button {...props} size="compact" variant="ambient" iconOnly icon={Settings2} aria-label="Update settings" />
+                )}
+                items={(['automatic', 'notify', 'manual'] as const).map((choice) => ({
+                  label: MODE_LABEL[choice],
+                  icon: mode === choice ? Check : undefined,
+                  onSelect: () => void changeSettings(MODE_SETTINGS[choice]),
+                }))}
+              />
+            </>
           )}
           {activeUpdates.length > 0 && (
             <Button

@@ -34,7 +34,9 @@ import React, { useEffect, useMemo, useState } from 'react';
 import { AlertTriangle, Check, ChevronDown, ChevronRight, ChevronUp, Loader2, Plus, Search, Trash2, X } from 'lucide-react';
 import { Badge, ExternalLink, ProgressBar } from './primitives';
 import { matchesQuery, type FilterState } from './useExtensionFilters';
-import type { ProviderTreeRepository } from '../../types/plugin';
+import type { ProviderTreeRepository, SitePlugin } from '../../types/plugin';
+import { planCatalogInstall, pluginMatches, type CatalogInstallPlan } from './catalogInstall';
+import { CatalogInstallBar } from './CatalogInstallBar';
 import type { OfficialRepository } from './useExtensionCatalog';
 import type { ExtensionJob, RepositoryJobsSummary } from './useExtensionJobs';
 import { Button, SearchInput } from '../ui';
@@ -75,6 +77,16 @@ interface RepositoryCatalogProps {
   onAdd(url: string, name?: string): void;
   /** Downloads and installs its extensions. The expensive one. */
   onInstallAll(url: string, name?: string): void;
+  /**
+   * The plugin lists already stored for catalogue repositories, keyed by
+   * `rawRepoUrl` — what lets a search reach extensions nobody has installed.
+   */
+  listings?: ReadonlyMap<string, SitePlugin[] | null>;
+  /** `ext:<name>` targets with a queued or running job. */
+  activeTargets?: ReadonlySet<string>;
+  /** Installs everything a search matched (`catalogInstall.ts`). */
+  onInstallMatching?(plan: CatalogInstallPlan): void;
+  onRetryJobs?(ids: string[]): void;
 }
 
 const working = (job: ExtensionJob | null) =>
@@ -175,6 +187,10 @@ export const RepositoryCatalog: React.FC<RepositoryCatalogProps> = ({
   onRemove,
   onAdd,
   onInstallAll,
+  listings,
+  activeTargets,
+  onInstallMatching,
+  onRetryJobs,
 }) => {
   const [catalogueOpen, setCatalogueOpen] = useState(true);
   const [drawerQuery, setDrawerQuery] = useState('');
@@ -235,6 +251,30 @@ export const RepositoryCatalog: React.FC<RepositoryCatalogProps> = ({
     [installed, official, filters.query, filters.status]
   );
 
+  /** Extensions in a repository's stored list that the search names. */
+  const listingMatches = (repository: OfficialRepository): string[] => {
+    if (!filters.query) return [];
+    const plugins = listings?.get(repository.rawRepoUrl);
+    return plugins ? plugins.filter((plugin) => pluginMatches(plugin, filters.query)).map((plugin) => plugin.name) : [];
+  };
+  /**
+   * Whether the search names the repository itself — its name, shortcode or
+   * language — so "Install all" may take everything it lists. A description
+   * that merely mentions the word ("…movies, TV series, and anime") shows the
+   * card but offers only the extensions that match.
+   */
+  const namesRepository = (repository: OfficialRepository) =>
+    matchesQuery(filters.query, repository.name, repository.language, repository.shortcode, repository.id);
+  const ownTextMatches = (repository: OfficialRepository) =>
+    matchesQuery(
+      filters.query,
+      repository.name,
+      repository.description,
+      repository.language,
+      repository.shortcode,
+      repository.id
+    );
+
   const visible = useMemo(
     () =>
       official.filter((repository) => {
@@ -256,21 +296,40 @@ export const RepositoryCatalog: React.FC<RepositoryCatalogProps> = ({
         // Own text first, then the extensions and providers underneath it.
         // A repository whose *contents* match is exactly as relevant as one
         // whose description does, and far more often what was being looked for.
-        if (
-          matchesQuery(
-            filters.query,
-            repository.name,
-            repository.description,
-            repository.language,
-            repository.shortcode,
-            repository.id
-          )
-        ) {
-          return true;
-        }
-        return deepMatchFor(repository, tree, filters.query) !== null;
+        if (ownTextMatches(repository)) return true;
+        return deepMatchFor(repository, tree, filters.query) !== null || listingMatches(repository).length > 0;
       }),
-    [official, filters, adultAllowed, installed, tree]
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [official, filters, adultAllowed, installed, tree, listings]
+  );
+
+  /**
+   * "Install all" for what the search and filters selected — only while they
+   * narrow something, never for the whole catalogue at once.
+   */
+  const narrowed = filters.query !== '' || filters.categories.size > 0 || filters.languages.size > 0;
+  const installedNames = useMemo(
+    () => new Set(tree.flatMap((repository) => repository.extensions.map((extension) => extension.internalName))),
+    [tree]
+  );
+  const plan = useMemo(
+    () =>
+      narrowed && onInstallMatching
+        ? planCatalogInstall({
+            repositories: visible.map((repository) => ({
+              url: repository.rawRepoUrl,
+              name: repository.name,
+              matchedItself: namesRepository(repository),
+              plugins: listings?.get(repository.rawRepoUrl) ?? null,
+            })),
+            query: filters.query,
+            installed: installedNames,
+            active: activeTargets ?? new Set(),
+            adultAllowed,
+          })
+        : null,
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [narrowed, visible, listings, filters.query, installedNames, activeTargets, adultAllowed, onInstallMatching]
   );
 
   /** The repository whose details are open, catalogued or added by the viewer. */
@@ -302,6 +361,15 @@ export const RepositoryCatalog: React.FC<RepositoryCatalogProps> = ({
         Catalogue <span>{visible.length === official.length ? official.length : `${visible.length} of ${official.length}`}</span>
       </button>
 
+      {catalogueOpen && plan && onInstallMatching ? (
+        <CatalogInstallBar
+          plan={plan}
+          jobFor={jobFor}
+          onInstall={onInstallMatching}
+          onRetry={(ids) => onRetryJobs?.(ids)}
+        />
+      ) : null}
+
       {catalogueOpen && (
       <ul className="ext-cards">
         {visible.map((repository) => {
@@ -310,7 +378,15 @@ export const RepositoryCatalog: React.FC<RepositoryCatalogProps> = ({
           const installJob = jobFor(`repo:${repository.rawRepoUrl}`);
           const failedJob = [installJob, addJob].find((job) => job?.state === 'failed') ?? null;
           const open = expandedUrl === repository.rawRepoUrl;
-          const deep = deepMatchFor(repository, tree, filters.query);
+          const installedDeep = deepMatchFor(repository, tree, filters.query);
+          const listed = ownTextMatches(repository) ? [] : listingMatches(repository);
+          const deep =
+            installedDeep || listed.length > 0
+              ? {
+                  providers: installedDeep?.providers ?? [],
+                  extensions: [...new Set([...(installedDeep?.extensions ?? []), ...listed])],
+                }
+              : null;
 
           const repoJobs = jobsForRepository ? jobsForRepository(repository) : null;
           const isRepoWorking = working(installJob) || working(addJob);

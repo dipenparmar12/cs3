@@ -1827,15 +1827,15 @@ export const HistoryView: React.FC<HistoryViewProps> = ({ onSelectMedia, onPlayD
                 backgroundColor: 'rgba(0,0,0,0.25)',
               }}
             >
-              <button
-                type="button"
-                className="btn btn-ghost btn-sm"
-                style={{ color: '#fb7185' }}
+              <Button
+                size="compact"
+                variant="ambient"
+                icon={Trash2}
+                className="btn--danger-text"
                 onClick={() => handleDeleteItem(inspectingItem.id)}
               >
-                <Trash2 size={14} />
-                <span>Delete Record</span>
-              </button>
+                Delete record
+              </Button>
 
               <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
                 <button

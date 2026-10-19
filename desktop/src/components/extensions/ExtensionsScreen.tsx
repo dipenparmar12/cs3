@@ -57,6 +57,8 @@ import './extensions.css';
 import { describeError } from '../../utils/errors';
 import { AdultContentSetting } from '../AdultContentSetting';
 import { useAdultState } from '../../utils/useAdultMode';
+import { useCatalogListings } from './useCatalogListings';
+import type { CatalogInstallPlan } from './catalogInstall';
 
 /**
  * Three tabs:
@@ -64,7 +66,8 @@ import { useAdultState } from '../../utils/useAdultMode';
  * - **Browse** — official & community repository catalog
  * - **Built-in Sources** — native scrapers, Stremio addons, & self-hosted media servers
  */
-type Tab = 'sources' | 'repositories' | 'builtin' | 'updates';
+export type ExtensionsTab = 'sources' | 'repositories' | 'builtin' | 'updates';
+type Tab = ExtensionsTab;
 
 const TABS: Array<{ id: Tab; label: string; hint: string }> = [
   { id: 'sources', label: 'Installed', hint: 'What you have, and what will be searched' },
@@ -73,7 +76,10 @@ const TABS: Array<{ id: Tab; label: string; hint: string }> = [
   { id: 'updates', label: 'Updates', hint: 'Available updates, changelogs & maintenance' },
 ];
 
-export const ExtensionsScreen: React.FC = () => {
+export const ExtensionsScreen: React.FC<{
+  /** The tab to open on — the update notice opens Updates. */
+  initialTab?: ExtensionsTab;
+}> = ({ initialTab }) => {
   const { state, busy, refresh, actions, browseRepository, peekRepository } = useExtensionCatalog();
   const browseToken = useRef(0);
   const adult = useAdultState();
@@ -82,7 +88,7 @@ export const ExtensionsScreen: React.FC = () => {
   const jobs = useExtensionJobs();
   // The tree is re-read, never predicted, once background work lands.
   useOnJobsSettled(jobs.snapshot, () => void refresh());
-  const [tab, setTab] = useState<Tab>('sources');
+  const [tab, setTab] = useState<Tab>(initialTab ?? 'sources');
   /**
    * Extensions (`ext:`) and providers (`prov:`), kept across filter changes;
    * an action only ever reaches the part on screen (see `bulkSelection.ts`).
@@ -145,6 +151,40 @@ export const ExtensionsScreen: React.FC = () => {
     plugins,
     state.official,
     installedNames
+  );
+
+  /**
+   * The stored plugin lists, read once a Browse search or filter narrows
+   * something — so the search reaches extensions nobody has installed, and
+   * "Install all" can act on them (`catalogInstall.ts`).
+   */
+  const browseNarrowed =
+    filters.state.query !== '' || filters.state.categories.size > 0 || filters.state.languages.size > 0;
+  const catalogListings = useCatalogListings(state.official, tab === 'repositories' && browseNarrowed);
+  const activeTargets = useMemo(
+    () =>
+      new Set(
+        jobs.snapshot.jobs
+          .filter((job) => job.state === 'queued' || job.state === 'running')
+          .map((job) => job.target)
+      ),
+    [jobs.snapshot]
+  );
+  const installMatching = useCallback(
+    (plan: CatalogInstallPlan) =>
+      void jobs.enqueue([
+        ...plan.items.map((item) => ({
+          kind: 'install' as const,
+          plugin: item.plugin,
+          repositoryUrl: item.repositoryUrl,
+        })),
+        ...plan.unread.map((repository) => ({
+          kind: 'installRepository' as const,
+          url: repository.url,
+          name: repository.name,
+        })),
+      ]),
+    [jobs]
   );
 
   const counts = useMemo(() => {
@@ -533,6 +573,10 @@ export const ExtensionsScreen: React.FC = () => {
 
       {tab === 'repositories' ? (
         <RepositoryCatalog
+          listings={catalogListings}
+          activeTargets={activeTargets}
+          onInstallMatching={installMatching}
+          onRetryJobs={(ids) => ids.forEach((id) => void jobs.retry(id))}
           official={state.official}
           installed={state.installedRepositories}
           adultAllowed={adult.allowed}

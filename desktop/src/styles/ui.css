@@ -409,6 +409,11 @@ select.ui-select:disabled { opacity: var(--control-disabled-opacity); cursor: no
 .ui-menu__leading { flex: 0 0 auto; display: inline-flex; }
 .ui-menu__item:has(.ui-menu__leading) { align-items: center; }
 .ui-menu__trailing { flex: 0 0 auto; display: inline-flex; align-self: center; color: var(--text-subtle); }
+.ui-menu__item--on { color: var(--accent-light); background: var(--control-selected-bg); }
+.ui-menu__item--on .ui-menu__trailing { color: inherit; }
+.ui-menu__header--label { padding: 0.25rem 0.6rem; font-size: 0.68rem; font-weight: 700; letter-spacing: 0.04em; text-transform: uppercase; color: var(--text-subtle); }
+/* A library selector for a title already in the library reads as chosen. */
+.bucket-trigger--on { border-color: var(--accent-primary); background: var(--control-selected-bg); color: var(--accent-light); }
 
 /* Library card controls on the shared tokens. */
 .library-card__status { flex: 1; min-width: 0; }
@@ -589,3 +594,14 @@ select.ui-select:disabled { opacity: var(--control-disabled-opacity); cursor: no
   outline-offset: 2px;
   border-radius: var(--radius-md);
 }
+
+/* Developer status line at the foot of the sidebar. */
+.sidebar__status {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  padding: 0.5rem 0.65rem;
+  font-size: 0.72rem;
+  color: var(--text-subtle);
+}
+.sidebar__status svg { color: var(--status-success); }

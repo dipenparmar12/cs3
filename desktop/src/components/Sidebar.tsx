@@ -16,6 +16,7 @@ import {
   Trash2,
 } from 'lucide-react';
 import { useExtensionJobs } from './extensions/useExtensionJobs';
+import { useIsDeveloper } from '../utils/ExperienceModeContext';
 import { StreamingServicePicker } from './StreamingServicePicker';
 
 /**
@@ -118,6 +119,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
   ottPlatforms = [],
   onOttPlatformsChanged,
 }) => {
+  const isDeveloper = useIsDeveloper();
   /**
    * Services with nothing installed are collapsed behind a disclosure once some
    * services are available. On launch or when none are ready yet, all default
@@ -771,21 +773,16 @@ export const Sidebar: React.FC<SidebarProps> = ({
         />
       )}
 
-      {/* Status Footer */}
-      <div style={{
-        padding: '0.75rem',
-        borderRadius: 'var(--radius-md)',
-        background: 'var(--bg-card)',
-        border: '1px solid var(--border-color)',
-        display: 'flex',
-        alignItems: 'center',
-        gap: '0.5rem',
-        fontSize: '0.72rem',
-        color: 'var(--text-muted)'
-      }}>
-        <ShieldCheck size={16} style={{ color: 'var(--status-success)' }} />
-        <span>V8 Sandbox Active</span>
-      </div>
+      {/*
+        The renderer runs sandboxed (audit SEC-01). True, and meaningless to a
+        viewer, who can do nothing with it — so it is a developer's status line.
+      */}
+      {isDeveloper && (
+        <div className="sidebar__status" title="The window runs with Chromium's sandbox and context isolation">
+          <ShieldCheck size={14} aria-hidden />
+          <span>Sandboxed renderer</span>
+        </div>
+      )}
     </aside>
   );
 };

@@ -3,6 +3,7 @@ import type { DatastoreManager } from '../datastore.ts';
 import type { PluginManager } from '../pluginManager.ts';
 import { describeError } from '../../src/utils/errors.ts';
 import { scopedLogger } from '../logging/logger.ts';
+import { automaticCheckDelay } from './updateSchedule.ts';
 
 /**
  * The update path, in the per-launch transcript.
@@ -133,6 +134,11 @@ export interface UpdateSettings {
   /** Download and install automatically, versus only notifying. */
   autoInstall: boolean;
   lastCheckedAt: number;
+  /**
+   * When the *automatic* check last ran — its own timestamp, so a check the
+   * viewer asked for in the morning does not use up the day's automatic one.
+   */
+  lastAutoCheckAt?: number;
   lastResult?: { updateCount: number; installed: number; failed: number };
   /**
    * Which of the two choices a person actually made.
@@ -149,7 +155,6 @@ export interface UpdateSettings {
 const SETTINGS_KEY = 'extension_update_settings';
 const CACHED_UPDATES_KEY = 'extension_available_updates';
 const IGNORED_UPDATES_KEY = 'extension_ignored_updates';
-const DAY_MS = 24 * 60 * 60 * 1000;
 
 /**
  * Android's defaults, verified against the upstream source rather than
@@ -164,11 +169,16 @@ const DAY_MS = 24 * 60 * 60 * 1000;
  * someone to open the extensions screen and press Update is an extension that
  * does not work in the meantime. A bad update is still undone — every install
  * is loaded before it is accepted and rolled back if it will not load.
+ *
+ * One difference, deliberate: Android checks on every launch, and a desktop app
+ * restarted five times in an evening fetched every repository five times. The
+ * automatic check runs at most once per calendar day (`updateSchedule.ts`); a
+ * check the viewer asks for runs whenever they ask.
  */
 const DEFAULT_POLICY: UpdatePolicy = 'startup';
 const DEFAULT_AUTO_INSTALL = true;
 
-/** How long after launch the startup/daily check runs, so it never competes with first paint. */
+/** How long after launch (or midnight) the daily check runs, so it never competes with first paint. */
 const STARTUP_DELAY_MS = 30_000;
 
 /**
@@ -211,12 +221,24 @@ export class ExtensionUpdater {
   private timer: NodeJS.Timeout | null = null;
   private inFlight: Promise<UpdateCheckResult> | null = null;
   private notify: ((event: string, payload: unknown) => void) | null = null;
-  /** Whether this launch has had its `startup` check yet. */
-  private launchCheckDone = false;
+  /**
+   * How an automatic pass installs what it found.
+   *
+   * `main.ts` points this at the extension job queue, so an automatic update
+   * is the same job a press of Update makes: one per extension, three at once,
+   * shown in the tray, joined rather than duplicated if the viewer presses
+   * Update on the same row, and retryable on its own. Without it (the tests)
+   * the pass installs in sequence itself.
+   */
+  private installer: ((updates: AvailableUpdate[]) => Promise<UpdateOutcome[]>) | null = null;
 
   constructor(datastore: DatastoreManager, plugins: PluginManager) {
     this.datastore = datastore;
     this.plugins = plugins;
+  }
+
+  public setInstaller(installer: (updates: AvailableUpdate[]) => Promise<UpdateOutcome[]>): void {
+    this.installer = installer;
   }
 
   /** Renderer notification sink, so the UI can show progress without polling. */
@@ -249,6 +271,7 @@ export class ExtensionUpdater {
           ? stored.autoInstall
           : DEFAULT_AUTO_INSTALL,
       lastCheckedAt: stored?.lastCheckedAt ?? 0,
+      lastAutoCheckAt: stored?.lastAutoCheckAt ?? 0,
       lastResult: stored?.lastResult,
       chosen,
     };
@@ -279,7 +302,7 @@ export class ExtensionUpdater {
   }
 
   /** Bookkeeping — when a check ran, what an update pass did. Never re-arms. */
-  private record(patch: Pick<Partial<UpdateSettings>, 'lastCheckedAt' | 'lastResult'>): void {
+  private record(patch: Pick<Partial<UpdateSettings>, 'lastCheckedAt' | 'lastAutoCheckAt' | 'lastResult'>): void {
     const stored = this.datastore.getObject<Partial<UpdateSettings>>(SETTINGS_KEY, {});
     this.datastore.setObject(SETTINGS_KEY, { ...stored, ...patch });
   }
@@ -350,20 +373,16 @@ export class ExtensionUpdater {
       this.timer = null;
     }
 
+    // Once per calendar day: soon after launch if today's has not run, else
+    // just after midnight for an app left open (`updateSchedule.ts`).
     const settings = this.getSettings();
-    if (settings.policy === 'manual') return;
-
-    // Daily: catch up immediately if a day has already elapsed while the app was
-    // closed, otherwise wait out the remainder. A desktop app is not running at
-    // a fixed hour, so "daily" has to mean "at most 24h since the last check".
-    //
-    // `startup` is Android's behaviour — every launch — and then daily, because
-    // a desktop app is left open for days where a phone app is relaunched.
-    const elapsed = Date.now() - settings.lastCheckedAt;
-    const delay =
-      (settings.policy === 'startup' && !this.launchCheckDone) || elapsed >= DAY_MS
-        ? STARTUP_DELAY_MS
-        : Math.max(STARTUP_DELAY_MS, DAY_MS - elapsed);
+    const delay = automaticCheckDelay({
+      policy: settings.policy,
+      lastAutoCheckAt: settings.lastAutoCheckAt ?? 0,
+      now: Date.now(),
+      settleMs: STARTUP_DELAY_MS,
+    });
+    if (delay === null) return;
     this.timer = setTimeout(() => this.runScheduledCheck(), delay);
     this.timer.unref?.();
   }
@@ -374,7 +393,8 @@ export class ExtensionUpdater {
   }
 
   private async runScheduledCheck(): Promise<void> {
-    this.launchCheckDone = true;
+    // Recorded first, so a pass that fails half-way is still today's one pass.
+    this.record({ lastAutoCheckAt: Date.now() });
     try {
       const result = await this.checkForUpdates();
       const settings = this.getSettings();
@@ -386,10 +406,19 @@ export class ExtensionUpdater {
         autoInstall: settings.autoInstall,
       });
 
-      if (settings.autoInstall && result.updates.length > 0) {
-        const outcomes = await this.updateAll(result.updates.map((u) => u.internalName));
+      // An ignored update stays ignored: the viewer, or three failures, said so.
+      const ignored = this.getIgnoredUpdates();
+      const wanted = result.updates.filter((u) => !u.ignored && !ignored[u.internalName]);
+      if (settings.autoInstall && wanted.length > 0) {
+        const outcomes = this.installer
+          ? await this.installer(wanted)
+          : await this.updateAll(wanted.map((u) => u.internalName));
+        const installed = outcomes.filter((o) => o.ok).length;
+        this.record({
+          lastResult: { updateCount: wanted.length, installed, failed: outcomes.length - installed },
+        });
         this.emit('extension:autoUpdateCompleted', { result, outcomes });
-      } else if (result.updates.length > 0) {
+      } else if (wanted.length > 0) {
         this.emit('extension:updatesAvailable', result);
       }
     } catch (error) {

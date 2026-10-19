@@ -15,6 +15,7 @@ import { SearchSuggestions } from './SearchSuggestions';
 import type { SavedSearchSummary } from '../../electron/savedSearches';
 import { mergeHistoryAndSaved } from '../utils/searchHistoryMerge';
 import { ProfileMenu } from './profiles/ProfileMenu';
+import { Button } from './ui';
 
 interface NavbarProps {
   onSearch: (query: string, options?: SearchOptions) => void;
@@ -434,11 +435,8 @@ export const Navbar: React.FC<NavbarProps> = ({
           ref={inputRef}
           type="text"
           className="search-input"
-          placeholder={
-            incognito
-              ? "Incognito: searches aren't saved. Search movies, anime, TV shows…"
-              : 'Search movies, anime, TV shows across providers or paste URL...'
-          }
+          placeholder={incognito ? "Search — incognito, searches aren't saved" : 'Search titles, or paste a link'}
+          aria-label="Search movies, shows and anime"
           value={query}
           onChange={(e) => setQuery(e.target.value)}
           onKeyDown={handleKeyDown}
@@ -482,24 +480,16 @@ export const Navbar: React.FC<NavbarProps> = ({
         )}
 
         {hasSearchResults && onClearResults && !isSearching && (
-          <button
-            type="button"
+          <Button
+            size="compact"
+            variant="ambient"
+            icon={Trash2}
             onClick={onClearResults}
-            className="btn btn-secondary search-bar__clear-results-btn"
-            style={{
-              padding: '0.35rem 0.65rem',
-              fontSize: '0.8rem',
-              display: 'flex',
-              alignItems: 'center',
-              gap: '0.35rem',
-              color: 'var(--text-muted)',
-            }}
-            title="Clear current search results"
-            aria-label="Clear current search results"
+            className="search-bar__clear-results-btn"
+            title="Clear these results"
           >
-            <Trash2 size={13} />
-            <span>Clear</span>
-          </button>
+            Clear
+          </Button>
         )}
 
         {isSearching ? (
@@ -514,17 +504,9 @@ export const Navbar: React.FC<NavbarProps> = ({
             <span>Stop</span>
           </button>
         ) : (
-          <button
-            type="button"
-            onClick={() => runSearch(query)}
-            className="btn btn-primary"
-            style={{ padding: '0.35rem 0.85rem', fontSize: '0.8rem', display: 'flex', alignItems: 'center', gap: '0.4rem' }}
-            title="Search"
-            aria-label="Search"
-          >
-            <Search size={14} />
-            <span>Search</span>
-          </button>
+          <Button size="compact" variant="prominent" icon={Search} onClick={() => runSearch(query)}>
+            Search
+          </Button>
         )}
 
         <SearchSuggestions
@@ -597,9 +579,10 @@ export const Navbar: React.FC<NavbarProps> = ({
           aria-pressed={incognito}
           title={
             incognito
-              ? "Incognito: activity isn't being saved. Bookmarks and downloads you choose are still kept. (Ctrl+Shift+N to leave)"
-              : 'Incognito (Ctrl+Shift+N): stop saving history, progress and searches for this session'
+              ? 'Incognito is on — history, progress and searches aren’t saved (Ctrl+Shift+N)'
+              : 'Incognito (Ctrl+Shift+N)'
           }
+          aria-label={incognito ? 'Leave incognito' : 'Go incognito'}
         >
           <EyeOff size={16} />
           {incognito && <span>Incognito</span>}

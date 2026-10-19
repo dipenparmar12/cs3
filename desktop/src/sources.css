@@ -1132,6 +1132,29 @@
   font-size: 0.85rem;
   z-index: 950;
 }
+/* Bottom right, so it never sits on top of an action's own toast. */
+.ext-update-notice {
+  left: auto;
+  right: 1.5rem;
+  transform: none;
+  display: flex;
+  align-items: center;
+  gap: 0.55rem;
+  max-width: min(420px, calc(100vw - 3rem));
+  padding: 0.5rem 0.5rem 0.5rem 0.85rem;
+}
+.ext-update-notice--ok svg:first-child { color: var(--status-success); }
+.ext-update-notice--attention svg:first-child { color: var(--status-warning); }
+.ext-update-notice__close {
+  display: inline-flex;
+  padding: 0.25rem;
+  border: 0;
+  border-radius: 6px;
+  background: none;
+  color: var(--text-subtle);
+  cursor: pointer;
+}
+.ext-update-notice__close:hover { color: var(--text-main); background: var(--control-ambient-hover); }
 
 /* --- player --- */
 
