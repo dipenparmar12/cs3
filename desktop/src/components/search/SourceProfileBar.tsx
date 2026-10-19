@@ -7,10 +7,10 @@ import {
   Copy,
   Globe,
   Languages,
+  MoreVertical,
   Pencil,
   Plus,
   ShieldAlert,
-  SlidersHorizontal,
   Sparkles,
   Trash2,
 } from 'lucide-react';
@@ -31,6 +31,8 @@ export interface ProfileSummary {
   name: string;
   providers: string[];
   indexers: string[];
+  updatedAt?: number;
+  createdAt?: number;
 }
 
 export interface SourceProfileBarProps {
@@ -65,10 +67,12 @@ function renderBuiltInIcon(icon?: BuiltInProfileDef['icon']) {
 }
 
 /**
- * Source profiles bar for search scope dialog.
- * Supports built-in source profiles (All, English, Hindi, Anime, Drama, NSFW),
- * custom user-defined profiles, unsaved draft indicators, inline creation, and
- * deletion confirmation.
+ * Search profiles management and switcher bar.
+ * Follows progressive disclosure:
+ * 1. All sources (pinned first)
+ * 2. Your profiles (user-created, ordered by most recently modified)
+ * 3. Presets (built-in profiles like Anime, Drama)
+ * 4. Custom selection (draft state, shown only when unsaved changes exist)
  */
 export const SourceProfileBar: React.FC<SourceProfileBarProps> = ({
   profiles,
@@ -91,7 +95,10 @@ export const SourceProfileBar: React.FC<SourceProfileBarProps> = ({
   const dropdownRef = useRef<HTMLDivElement | null>(null);
 
   useDismissable(menuFor !== null, menuWrapper, () => setMenuFor(null));
-  useDismissable(dropdownOpen, dropdownRef, () => setDropdownOpen(false));
+  useDismissable(dropdownOpen, dropdownRef, () => {
+    setDropdownOpen(false);
+    setMenuFor(null);
+  });
 
   const submitName = () => {
     const name = draftName.trim();
@@ -119,7 +126,7 @@ export const SourceProfileBar: React.FC<SourceProfileBarProps> = ({
               setDraftName('');
             }
           }}
-          placeholder={naming === 'new' ? 'Name this set of sources…' : 'New name…'}
+          placeholder={naming === 'new' ? 'Name this profile…' : 'New name…'}
           aria-label={naming === 'new' ? 'Name for the new profile' : 'New name for this profile'}
         />
         <button
@@ -142,7 +149,7 @@ export const SourceProfileBar: React.FC<SourceProfileBarProps> = ({
     );
   }
 
-  /** In-place delete confirmation for consequential custom profile removal. */
+  /** In-place delete confirmation for custom profile removal. */
   if (deleteConfirm !== null) {
     const profileToDelete = profiles.find((p) => p.id === deleteConfirm);
     return (
@@ -158,7 +165,7 @@ export const SourceProfileBar: React.FC<SourceProfileBarProps> = ({
             setDeleteConfirm(null);
           }}
         >
-          <Trash2 size={13} /> Delete profile
+          <Trash2 size={13} /> Delete
         </button>
         <button
           className="btn btn-ghost btn-sm"
@@ -183,41 +190,50 @@ export const SourceProfileBar: React.FC<SourceProfileBarProps> = ({
           },
         ];
 
+  // User-created profiles ordered by most recently modified
+  const sortedCustomProfiles = [...profiles].sort((a, b) => {
+    const timeA = a.updatedAt ?? a.createdAt ?? 0;
+    const timeB = b.updatedAt ?? b.createdAt ?? 0;
+    if (timeB !== timeA) return timeB - timeA;
+    return a.name.localeCompare(b.name);
+  });
+
+  const allBuiltIn = defaultBuiltIns.find((b) => b.id === 'all');
+  const otherPresets = defaultBuiltIns.filter((b) => b.id !== 'all');
+
   // Resolve current active profile info
   const activeCustom = profiles.find((p) => p.id === activeId);
   const activeBuiltIn = defaultBuiltIns.find((b) => b.id === activeId);
   const isDraftActive = activeId === '';
 
   let activeTitle = 'All sources';
-  let activeDescription = 'Search every enabled extension and torrent source';
-  let activeCount = defaultBuiltIns.find((b) => b.id === 'all')?.count ?? 0;
+  let activeCount = allBuiltIn?.count ?? 0;
   let activeIcon: BuiltInProfileDef['icon'] = 'globe';
 
   if (isDraftActive) {
-    activeTitle = 'Current selection';
-    activeDescription = 'Unsaved custom source selection';
+    activeTitle = 'Custom selection';
     activeCount = draftCount;
   } else if (activeCustom) {
     activeTitle = activeCustom.name;
-    activeDescription = 'Custom saved search profile';
     activeCount = activeCustom.providers.length + activeCustom.indexers.length;
   } else if (activeBuiltIn) {
     activeTitle = activeBuiltIn.name;
-    activeDescription = activeBuiltIn.description;
     activeCount = activeBuiltIn.count;
     activeIcon = activeBuiltIn.icon;
   }
 
   return (
     <div className="profile-bar-v2" ref={menuWrapper}>
-      {/* Profile selector hero */}
+      {/* Profile hero card */}
       <div className="profile-hero" ref={dropdownRef}>
         <div className="profile-hero__main">
-          <div className="profile-hero__badge">
-            <span className="profile-hero__tag">Active Profile</span>
+          <div className="profile-hero__label-row">
+            <span className="profile-hero__tag">
+              {isDraftActive ? 'Custom selection' : 'Active profile'}
+            </span>
             {hasDraft && !isDraftActive && (
-              <span className="profile-hero__draft-indicator" title="You have an unsaved selection draft">
-                • Unsaved changes
+              <span className="profile-hero__draft-indicator" title="Working selection has unsaved changes">
+                • Unsaved
               </span>
             )}
           </div>
@@ -227,10 +243,11 @@ export const SourceProfileBar: React.FC<SourceProfileBarProps> = ({
               <span>{activeTitle}</span>
             </h3>
             <span className="profile-hero__count">
-              {activeCount} {activeCount === 1 ? 'source' : 'sources'} enabled
+              {activeId === 'all' && activeCount > 0
+                ? `${activeCount} available`
+                : `${activeCount} ${activeCount === 1 ? 'source' : 'sources'}`}
             </span>
           </div>
-          <p className="profile-hero__desc">{activeDescription}</p>
         </div>
 
         <div className="profile-hero__actions">
@@ -241,23 +258,8 @@ export const SourceProfileBar: React.FC<SourceProfileBarProps> = ({
             aria-expanded={dropdownOpen}
             aria-haspopup="true"
           >
-            <SlidersHorizontal size={13} />
-            <span>Change profile</span>
+            <span>Change</span>
             <ChevronDown size={13} className={dropdownOpen ? 'rotate-180' : ''} />
-          </button>
-
-          <button
-            type="button"
-            className="btn btn-ghost btn-sm profile-hero__create-btn"
-            onClick={() => {
-              setNaming('new');
-              setDraftName('');
-              setDropdownOpen(false);
-            }}
-            title="Create a new profile from current source selection"
-          >
-            <Plus size={13} />
-            <span>Create profile</span>
           </button>
         </div>
 
@@ -265,7 +267,7 @@ export const SourceProfileBar: React.FC<SourceProfileBarProps> = ({
         {dropdownOpen && (
           <div className="profile-dropdown" role="menu">
             <div className="profile-dropdown__header">
-              <span>Switch or manage search profiles</span>
+              <span className="profile-dropdown__title">Search profiles</span>
               <button
                 type="button"
                 className="profile-dropdown__new-btn"
@@ -280,71 +282,35 @@ export const SourceProfileBar: React.FC<SourceProfileBarProps> = ({
             </div>
 
             <div className="profile-dropdown__list">
-              {/* Built-in preset profiles */}
-              <div className="profile-dropdown__section-title">Built-in Presets</div>
-              {defaultBuiltIns.map((builtin) => {
-                const active = activeId === builtin.id;
-                return (
-                  <div
-                    key={builtin.id}
-                    role="menuitem"
-                    className={`profile-dropdown__item${active ? ' profile-dropdown__item--active' : ''}${
-                      builtin.disabled ? ' profile-dropdown__item--disabled' : ''
-                    }`}
-                    onClick={() => {
-                      if (!builtin.disabled) {
-                        onActivate(builtin.id);
-                        setDropdownOpen(false);
-                      }
-                    }}
-                  >
-                    <div className="profile-dropdown__item-info">
-                      <span className="profile-dropdown__item-name">
-                        {renderBuiltInIcon(builtin.icon)}
-                        {builtin.name}
-                      </span>
-                      <span className="profile-dropdown__item-desc">{builtin.description}</span>
-                    </div>
-                    {builtin.count > 0 && (
-                      <span className="profile-dropdown__item-count">{builtin.count}</span>
-                    )}
-                    {active && <Check size={14} className="profile-dropdown__item-check" />}
+              {/* 1. All sources: Pinned at top */}
+              {allBuiltIn && (
+                <div
+                  role="menuitem"
+                  className={`profile-dropdown__item${activeId === 'all' ? ' profile-dropdown__item--active' : ''}`}
+                  onClick={() => {
+                    onActivate('all');
+                    setDropdownOpen(false);
+                  }}
+                  title={allBuiltIn.description}
+                >
+                  <div className="profile-dropdown__item-info">
+                    <span className="profile-dropdown__item-name">
+                      {renderBuiltInIcon(allBuiltIn.icon)}
+                      {allBuiltIn.name}
+                    </span>
                   </div>
-                );
-              })}
-
-              {/* Unsaved draft selection */}
-              {hasDraft && (
-                <>
-                  <div className="profile-dropdown__section-title">Draft</div>
-                  <div
-                    role="menuitem"
-                    className={`profile-dropdown__item${isDraftActive ? ' profile-dropdown__item--active' : ''}`}
-                    onClick={() => {
-                      onActivate('');
-                      setDropdownOpen(false);
-                    }}
-                  >
-                    <div className="profile-dropdown__item-info">
-                      <span className="profile-dropdown__item-name">
-                        <span className="profile-pill__draft-dot" aria-hidden />
-                        Current selection
-                      </span>
-                      <span className="profile-dropdown__item-desc">
-                        Working selection not yet saved as a named profile
-                      </span>
-                    </div>
-                    <span className="profile-dropdown__item-count">{draftCount}</span>
-                    {isDraftActive && <Check size={14} className="profile-dropdown__item-check" />}
-                  </div>
-                </>
+                  <span className="profile-dropdown__item-count">
+                    {allBuiltIn.count > 0 ? `${allBuiltIn.count} available` : 'All'}
+                  </span>
+                  {activeId === 'all' && <Check size={14} className="profile-dropdown__item-check" />}
+                </div>
               )}
 
-              {/* Custom user profiles */}
-              {profiles.length > 0 && (
+              {/* 2. Your profiles: User-created, ordered by most recently modified */}
+              {sortedCustomProfiles.length > 0 && (
                 <>
-                  <div className="profile-dropdown__section-title">Custom Profiles</div>
-                  {profiles.map((profile) => {
+                  <div className="profile-dropdown__section-title">Your profiles</div>
+                  {sortedCustomProfiles.map((profile) => {
                     const count = profile.providers.length + profile.indexers.length;
                     const active = profile.id === activeId;
                     return (
@@ -356,55 +322,133 @@ export const SourceProfileBar: React.FC<SourceProfileBarProps> = ({
                           onActivate(profile.id);
                           setDropdownOpen(false);
                         }}
+                        title={`${profile.name} · ${count} sources saved`}
                       >
                         <div className="profile-dropdown__item-info">
                           <span className="profile-dropdown__item-name">{profile.name}</span>
-                          <span className="profile-dropdown__item-desc">
-                            {count} sources saved
-                          </span>
                         </div>
-                        <span className="profile-dropdown__item-count">{count}</span>
+                        <span className="profile-dropdown__item-count">{count} sources</span>
                         {active && <Check size={14} className="profile-dropdown__item-check" />}
 
-                        <div className="profile-dropdown__item-actions" onClick={(e) => e.stopPropagation()}>
+                        <div
+                          className="profile-dropdown__menu-wrapper"
+                          onClick={(e) => e.stopPropagation()}
+                        >
                           <button
                             type="button"
-                            className="profile-dropdown__action-btn"
-                            title="Rename"
-                            onClick={() => {
-                              setNaming(profile.id);
-                              setDraftName(profile.name);
-                              setDropdownOpen(false);
-                            }}
+                            className="profile-dropdown__dots-btn"
+                            title="Profile options"
+                            aria-label={`Options for ${profile.name}`}
+                            onClick={() => setMenuFor(menuFor === profile.id ? null : profile.id)}
                           >
-                            <Pencil size={12} />
+                            <MoreVertical size={13} />
                           </button>
-                          <button
-                            type="button"
-                            className="profile-dropdown__action-btn"
-                            title="Duplicate"
-                            onClick={() => {
-                              onDuplicate(profile.id);
-                              setDropdownOpen(false);
-                            }}
-                          >
-                            <Copy size={12} />
-                          </button>
-                          <button
-                            type="button"
-                            className="profile-dropdown__action-btn profile-dropdown__action-btn--danger"
-                            title="Delete"
-                            onClick={() => {
-                              setDeleteConfirm(profile.id);
-                              setDropdownOpen(false);
-                            }}
-                          >
-                            <Trash2 size={12} />
-                          </button>
+                          {menuFor === profile.id && (
+                            <div className="profile-context-menu" role="menu">
+                              <button
+                                type="button"
+                                className="profile-context-menu__item"
+                                onClick={() => {
+                                  setMenuFor(null);
+                                  setNaming(profile.id);
+                                  setDraftName(profile.name);
+                                  setDropdownOpen(false);
+                                }}
+                              >
+                                <Pencil size={12} /> Rename
+                              </button>
+                              <button
+                                type="button"
+                                className="profile-context-menu__item"
+                                onClick={() => {
+                                  setMenuFor(null);
+                                  onDuplicate(profile.id);
+                                  setDropdownOpen(false);
+                                }}
+                              >
+                                <Copy size={12} /> Duplicate
+                              </button>
+                              <button
+                                type="button"
+                                className="profile-context-menu__item profile-context-menu__item--danger"
+                                onClick={() => {
+                                  setMenuFor(null);
+                                  setDeleteConfirm(profile.id);
+                                  setDropdownOpen(false);
+                                }}
+                              >
+                                <Trash2 size={12} /> Delete
+                              </button>
+                            </div>
+                          )}
                         </div>
                       </div>
                     );
                   })}
+                </>
+              )}
+
+              {/* 3. Presets: Built-in profiles always below user profiles */}
+              {otherPresets.length > 0 && (
+                <>
+                  <div className="profile-dropdown__section-title">Presets</div>
+                  {otherPresets.map((builtin) => {
+                    const active = activeId === builtin.id;
+                    return (
+                      <div
+                        key={builtin.id}
+                        role="menuitem"
+                        className={`profile-dropdown__item${active ? ' profile-dropdown__item--active' : ''}${
+                          builtin.disabled ? ' profile-dropdown__item--disabled' : ''
+                        }`}
+                        onClick={() => {
+                          if (!builtin.disabled) {
+                            onActivate(builtin.id);
+                            setDropdownOpen(false);
+                          }
+                        }}
+                        title={builtin.disabled ? builtin.disabledReason : builtin.description}
+                      >
+                        <div className="profile-dropdown__item-info">
+                          <span className="profile-dropdown__item-name">
+                            {renderBuiltInIcon(builtin.icon)}
+                            {builtin.name}
+                          </span>
+                        </div>
+                        {builtin.count > 0 && (
+                          <span className="profile-dropdown__item-count">{builtin.count} sources</span>
+                        )}
+                        {active && <Check size={14} className="profile-dropdown__item-check" />}
+                      </div>
+                    );
+                  })}
+                </>
+              )}
+
+              {/* 4. Current selection: Shown only when unsaved changes exist */}
+              {hasDraft && (
+                <>
+                  <div className="profile-dropdown__section-title">Custom selection</div>
+                  <div
+                    role="menuitem"
+                    className={`profile-dropdown__item${isDraftActive ? ' profile-dropdown__item--active' : ''}`}
+                    onClick={() => {
+                      onActivate('');
+                      setDropdownOpen(false);
+                    }}
+                    title="Working selection with unsaved changes"
+                  >
+                    <div className="profile-dropdown__item-info">
+                      <span className="profile-dropdown__item-name">
+                        <span className="profile-pill__draft-dot" aria-hidden />
+                        Custom selection
+                      </span>
+                    </div>
+                    <span className="profile-dropdown__item-count profile-dropdown__item-count--draft">
+                      {draftCount} sources · Unsaved
+                    </span>
+                    {isDraftActive && <Check size={14} className="profile-dropdown__item-check" />}
+                  </div>
                 </>
               )}
             </div>

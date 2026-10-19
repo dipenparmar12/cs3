@@ -18,7 +18,6 @@ import {
   Disc,
   FileVideo,
   Film,
-  Globe,
   Layers,
   Loader2,
   Minus,
@@ -28,7 +27,6 @@ import {
   RotateCcw,
   Search,
   ShieldAlert,
-  SlidersHorizontal,
   Smile,
   Sparkles,
   Tv,
@@ -674,16 +672,28 @@ export const SourceScopeDialog: React.FC<SourceScopeDialogProps> = ({
   const rowDomId = (row: Row) => `scope-row-${row.key.replace(/[^a-zA-Z0-9_-]/g, '_')}`;
   const activeRow = rows[clampedActive];
 
-  const summary = useMemo(() => {
-    if (totalChosen === 0) {
-      return 'Searching every enabled provider, catalogue and torrent source.';
-    }
-    if (totalChosen === 1) return 'Searching one source. Catalogue metadata is not consulted.';
-    return `Searching ${totalChosen} sources. Catalogue metadata is not consulted.`;
-  }, [totalChosen]);
-
   const [viewMode, setViewMode] = useState<'guided' | 'explorer'>('guided');
   const [explorerTab, setExplorerTab] = useState<'all' | 'selected' | 'excluded' | 'attention'>('all');
+  const [showAllLanguages, setShowAllLanguages] = useState(false);
+  const [showAllTypes, setShowAllTypes] = useState(false);
+
+  const displayedLanguages = useMemo(() => {
+    if (showAllLanguages || available.languages.length <= 8) return available.languages;
+    const top = available.languages.slice(0, 8);
+    const extraSelected = available.languages.filter(
+      (lang, idx) => idx >= 8 && facets.languages.has(lang)
+    );
+    return [...top, ...extraSelected];
+  }, [available.languages, showAllLanguages, facets.languages]);
+
+  const displayedTypes = useMemo(() => {
+    if (showAllTypes || available.types.length <= 6) return available.types;
+    const top = available.types.slice(0, 6);
+    const extraSelected = available.types.filter(
+      (type, idx) => idx >= 6 && facets.types.has(type)
+    );
+    return [...top, ...extraSelected];
+  }, [available.types, showAllTypes, facets.types]);
 
   // Filter rows based on explorerTab when in explorer mode
   const displayedRows = useMemo(() => {
@@ -761,8 +771,8 @@ export const SourceScopeDialog: React.FC<SourceScopeDialogProps> = ({
                 type="button"
                 className="scope-modal__back-btn"
                 onClick={() => setViewMode('guided')}
-                title="Back to guided source setup"
-                aria-label="Back to guided setup"
+                title="Back to search profiles and filters"
+                aria-label="Back to search profiles"
               >
                 <ArrowLeft size={16} />
               </button>
@@ -773,33 +783,13 @@ export const SourceScopeDialog: React.FC<SourceScopeDialogProps> = ({
               </h2>
               <p className="scope-modal__subtitle">
                 {totalChosen === 0
-                  ? `All ${totalAvailable} sources enabled`
-                  : `${totalChosen} of ${totalAvailable} sources selected`}
+                  ? `All ${totalAvailable} sources selected`
+                  : `${totalChosen} sources selected`}
               </p>
             </div>
           </div>
 
           <div className="scope-modal__head-actions">
-            {viewMode === 'guided' ? (
-              <button
-                type="button"
-                className="btn btn-secondary btn-sm scope-modal__nav-btn"
-                onClick={() => setViewMode('explorer')}
-                title="Open detailed provider explorer and repository tree"
-              >
-                <SlidersHorizontal size={13} />
-                <span>Customize sources</span>
-              </button>
-            ) : (
-              <button
-                type="button"
-                className="btn btn-ghost btn-sm scope-modal__nav-btn"
-                onClick={() => setViewMode('guided')}
-                title="Return to profile and quick setup"
-              >
-                <span>Quick setup</span>
-              </button>
-            )}
             <button
               className="scope-modal__close"
               onClick={onClose}
@@ -813,26 +803,20 @@ export const SourceScopeDialog: React.FC<SourceScopeDialogProps> = ({
 
         {viewMode === 'guided' ? (
           /* ========================================================================= */
-          /* Level 1: Guided Quick Setup View (Intent-Driven, Zero Overwhelm)          */
+          /* Level 1: Quick Setup View (Intent-Driven, 4 Elements Only)                */
           /* ========================================================================= */
           <div className="scope-guided">
             {profileBar}
 
             <div className="scope-guided__body">
-              {/* Region and Language Section */}
+              {/* Languages */}
               <div className="scope-guided__section">
                 <div className="scope-guided__section-header">
-                  <Globe size={15} className="scope-guided__icon" />
-                  <div>
-                    <h4 className="scope-guided__section-title">Languages & Regions</h4>
-                    <p className="scope-guided__section-desc">
-                      Filter sources by preferred languages. Unselected languages remain untouched unless you customize them.
-                    </p>
-                  </div>
+                  <h4 className="scope-guided__section-title">Languages</h4>
                 </div>
 
                 <div className="scope-guided__chips-grid">
-                  {available.languages.map((lang) => {
+                  {displayedLanguages.map((lang) => {
                     const code = lang.toUpperCase();
                     const flag = getLanguageFlag(lang);
                     const fullName = getLanguageName(lang);
@@ -845,30 +829,34 @@ export const SourceScopeDialog: React.FC<SourceScopeDialogProps> = ({
                         onClick={() => onToggleFacet('languages', lang)}
                         title={fullName ? `${fullName} (${code})` : code}
                       >
-                        <FlagIcon flag={flag} size={15} fallback={code.slice(0, 2)} />
+                        <FlagIcon flag={flag} size={14} fallback={code.slice(0, 2)} />
                         <span className="scope-guided__chip-label">{fullName || code}</span>
-                        <span className="scope-guided__chip-code">{code}</span>
                       </button>
                     );
                   })}
+                  {available.languages.length > 8 && (
+                    <button
+                      type="button"
+                      className="scope-guided__chip scope-guided__chip--expand"
+                      onClick={() => setShowAllLanguages((prev) => !prev)}
+                    >
+                      <span>
+                        {showAllLanguages ? 'Fewer' : `+ Add (${available.languages.length - 8})`}
+                      </span>
+                    </button>
+                  )}
                 </div>
               </div>
 
-              {/* Content Type Section */}
+              {/* Content */}
               {available.types.length > 0 && (
                 <div className="scope-guided__section">
                   <div className="scope-guided__section-header">
-                    <Layers size={15} className="scope-guided__icon" />
-                    <div>
-                      <h4 className="scope-guided__section-title">Content Types</h4>
-                      <p className="scope-guided__section-desc">
-                        Narrow by content categories. Selecting types will only search sources that offer them.
-                      </p>
-                    </div>
+                    <h4 className="scope-guided__section-title">Content</h4>
                   </div>
 
                   <div className="scope-guided__chips-grid">
-                    {available.types.map((type) => {
+                    {displayedTypes.map((type) => {
                       const active = facets.types.has(type);
                       return (
                         <button
@@ -883,34 +871,35 @@ export const SourceScopeDialog: React.FC<SourceScopeDialogProps> = ({
                         </button>
                       );
                     })}
+                    {available.types.length > 6 && (
+                      <button
+                        type="button"
+                        className="scope-guided__chip scope-guided__chip--expand"
+                        onClick={() => setShowAllTypes((prev) => !prev)}
+                      >
+                        <span>
+                          {showAllTypes ? 'Fewer' : `+ More (${available.types.length - 6})`}
+                        </span>
+                      </button>
+                    )}
                   </div>
                 </div>
               )}
 
-              {/* Sources Included Summary & Explorer Card */}
-              <div className="scope-guided__summary-card">
-                <div className="scope-guided__summary-info">
-                  <div className="scope-guided__summary-title">
-                    <Check size={16} className="scope-guided__check-icon" />
-                    <span>
-                      {totalChosen === 0
-                        ? `All ${totalAvailable} sources ready for search`
-                        : `${totalChosen} selected across ${totalAvailable} available`}
-                    </span>
-                  </div>
-                  <p className="scope-guided__summary-sub">
-                    Recommended sources are prioritized using live provider health & performance data.
-                  </p>
+              {/* Customize sources */}
+              <button
+                type="button"
+                className="scope-guided__customize-action"
+                onClick={() => setViewMode('explorer')}
+              >
+                <div className="scope-guided__customize-info">
+                  <span className="scope-guided__customize-title">Customize sources</span>
+                  <span className="scope-guided__customize-sub">
+                    Individual providers and advanced controls
+                  </span>
                 </div>
-                <button
-                  type="button"
-                  className="btn btn-secondary btn-sm scope-guided__customize-btn"
-                  onClick={() => setViewMode('explorer')}
-                >
-                  <SlidersHorizontal size={13} />
-                  <span>Customize & explore sources</span>
-                </button>
-              </div>
+                <ChevronRight size={18} className="scope-guided__customize-arrow" />
+              </button>
             </div>
           </div>
         ) : (
@@ -950,7 +939,7 @@ export const SourceScopeDialog: React.FC<SourceScopeDialogProps> = ({
 
               {available.types.length > 0 && (
                 <FacetGroup
-                  label="Content type"
+                  label="Content"
                   onSelectAll={
                     onSelectAllFacetGroup ? () => onSelectAllFacetGroup('types') : undefined
                   }
@@ -972,7 +961,7 @@ export const SourceScopeDialog: React.FC<SourceScopeDialogProps> = ({
 
               {available.languages.length > 1 && (
                 <FacetGroup
-                  label="Language"
+                  label="Languages and regions"
                   onSelectAll={
                     onSelectAllFacetGroup ? () => onSelectAllFacetGroup('languages') : undefined
                   }
@@ -1006,7 +995,7 @@ export const SourceScopeDialog: React.FC<SourceScopeDialogProps> = ({
             </aside>
 
             <section className="scope-modal__main" aria-label="Sources">
-              {/* Explorer Tabs: All Sources, Selected, Excluded, Needs Attention */}
+              {/* Explorer Tabs: All sources, Included sources, Not included, Unavailable or issues */}
               <div className="scope-explorer-tabs" role="tablist">
                 <button
                   type="button"
@@ -1024,7 +1013,7 @@ export const SourceScopeDialog: React.FC<SourceScopeDialogProps> = ({
                   onClick={() => setExplorerTab('selected')}
                   aria-selected={explorerTab === 'selected'}
                 >
-                  Selected ({totalChosen})
+                  Included sources ({totalChosen})
                 </button>
                 <button
                   type="button"
@@ -1033,7 +1022,7 @@ export const SourceScopeDialog: React.FC<SourceScopeDialogProps> = ({
                   onClick={() => setExplorerTab('excluded')}
                   aria-selected={explorerTab === 'excluded'}
                 >
-                  Excluded ({Math.max(0, totalAvailable - totalChosen)})
+                  Not included ({Math.max(0, totalAvailable - totalChosen)})
                 </button>
                 <button
                   type="button"
@@ -1043,7 +1032,7 @@ export const SourceScopeDialog: React.FC<SourceScopeDialogProps> = ({
                   aria-selected={explorerTab === 'attention'}
                   title="Sources reporting poor or unreliable performance"
                 >
-                  Needs attention
+                  Unavailable or issues
                 </button>
               </div>
 
@@ -1096,9 +1085,9 @@ export const SourceScopeDialog: React.FC<SourceScopeDialogProps> = ({
                   {query.trim()
                     ? `Nothing matches “${query.trim()}”.`
                     : explorerTab === 'selected'
-                      ? 'No sources are currently selected.'
+                      ? 'No sources are currently included.'
                       : explorerTab === 'attention'
-                        ? 'No sources currently report health issues or need attention.'
+                        ? 'No sources currently report errors or poor health.'
                         : facetsActive
                           ? 'No source matches these filters.'
                           : progress?.running
@@ -1194,11 +1183,14 @@ export const SourceScopeDialog: React.FC<SourceScopeDialogProps> = ({
 
         <footer className="scope-modal__foot">
           <p id="scope-modal-summary" className="scope-modal__summary">
-            {summary}
+            {totalChosen === 0
+              ? `All ${totalAvailable} sources selected`
+              : `${totalChosen} sources selected`}
           </p>
           <div className="scope-modal__actions">
-            {onInvert && (
+            {viewMode === 'explorer' && onInvert && (
               <button
+                type="button"
                 className="btn btn-ghost"
                 onClick={onInvert}
                 disabled={!canInvert}
@@ -1213,10 +1205,17 @@ export const SourceScopeDialog: React.FC<SourceScopeDialogProps> = ({
                 Invert
               </button>
             )}
-            <button className="btn btn-ghost" onClick={onReset} disabled={totalChosen === 0}>
-              Reset
-            </button>
-            <button className="btn btn-primary" onClick={onClose}>
+            {viewMode === 'explorer' && (
+              <button
+                type="button"
+                className="btn btn-ghost"
+                onClick={onReset}
+                disabled={totalChosen === 0}
+              >
+                Reset
+              </button>
+            )}
+            <button type="button" className="btn btn-primary" onClick={onClose}>
               Done
             </button>
           </div>
