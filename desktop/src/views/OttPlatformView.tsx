@@ -11,6 +11,8 @@ import { EmptyState } from '../components/EmptyState';
 import { FixProvidersModal } from '../components/FixProvidersModal';
 import { useFlash } from '../utils/useFlash';
 import { acknowledgeAdult, isAdultAcknowledged } from '../utils/adultNotice';
+import { filterAdultItems } from '../utils/adultContent';
+import { revealAdultForSession, useAdultMode } from '../utils/useAdultMode';
 
 /**
  * One OTT platform, as a destination.
@@ -174,8 +176,9 @@ export const OttPlatformView: React.FC<OttPlatformViewProps> = ({
    * page fetches nothing — not the catalogue, not the listings — so declining
    * contacts no adult site at all.
    */
+  const adult = useAdultMode();
   const [adultAccepted, setAdultAccepted] = useState(isAdultAcknowledged);
-  const ageCheckPending = Boolean(platform.adult) && !adultAccepted;
+  const ageCheckPending = Boolean(platform.adult) && (!adult.allowed || (!adultAccepted && !adult.allowed));
   const [catalogs, setCatalogs] = useState<Array<ProviderCatalog & { fetchedAt?: number }>>([]);
   /** Providers that matched the platform but publish nothing to browse. */
   const [unbrowsable, setUnbrowsable] = useState<Array<{ provider: string; reason: string }>>([]);
@@ -581,30 +584,43 @@ export const OttPlatformView: React.FC<OttPlatformViewProps> = ({
   const revealAdult = () => {
     acknowledgeAdult();
     setAdultAccepted(true);
+    void revealAdultForSession();
   };
 
-  const renderRow = (section: CatalogueRow, labelProvider: boolean) =>
-    section.sensitive && !adultAccepted ? (
+  const renderRow = (section: CatalogueRow, labelProvider: boolean) => {
+    if (section.sensitive && !adult.allowed && !adultAccepted) {
       /*
-       * An 18+ row inside a general catalogue (adult content is on, but not yet
+       * An 18+ row inside a general catalogue (adult content is off or not yet
        * confirmed this launch). Covered and *not fetched* — no posters load
        * behind a blur — until the viewer confirms, which reveals every such
        * row for the rest of the launch.
        */
-      <section className="home-row" key={section.key}>
-        <header>
-          <h3>
-            {section.name} <span className="adult-badge" title="Adult content (18+)">18+</span>
-          </h3>
-        </header>
-        <div className="ott-view__sensitive-cover">
-          <p>Adult content. Hidden until you confirm your age — asked once per launch.</p>
-          <button type="button" className="btn btn-sm btn-secondary" onClick={revealAdult}>
-            I am 18 or older — show 18+ rows
-          </button>
-        </div>
-      </section>
-    ) : (
+      return (
+        <section className="home-row" key={section.key}>
+          <header>
+            <h3>
+              {section.name} <span className="adult-badge" title="Adult content (18+)">18+</span>
+            </h3>
+          </header>
+          <div className="ott-view__sensitive-cover">
+            <p>Adult content. Hidden until you enable adult content for this session.</p>
+            <button type="button" className="btn btn-sm btn-secondary" onClick={revealAdult}>
+              Enable adult content for this session
+            </button>
+          </div>
+        </section>
+      );
+    }
+
+    const rowItems = filterAdultItems(
+      section.sensitive
+        ? section.items.map((item) => (item.adult ? item : { ...item, adult: true }))
+        : section.items,
+      adult.allowed,
+      adult.adultProviders
+    );
+
+    return (
     <section className="home-row" key={section.key}>
       <header>
         <h3>
@@ -619,14 +635,14 @@ export const OttPlatformView: React.FC<OttPlatformViewProps> = ({
         </h3>
         {section.loading && <Loader2 size={12} className="spin" />}
         {section.error && <span className="ott-view__row-error">{section.error}</span>}
-        {section.items.length > 0 && (
+        {rowItems.length > 0 && (
           <button type="button" className="home-row__more" onClick={() => showAll(section)}>
             Show all <ChevronRight size={14} aria-hidden />
           </button>
         )}
       </header>
       <div className="home-rail">
-        {section.items.map((item, index) => (
+        {rowItems.map((item, index) => (
           <PosterCard
             key={`${item.url}-${index}`}
             item={item}
@@ -635,7 +651,7 @@ export const OttPlatformView: React.FC<OttPlatformViewProps> = ({
             interaction={interactionFor(item)}
           />
         ))}
-        {section.items.length > 0 && (
+        {rowItems.length > 0 && (
           <button
             type="button"
             className="home-rail__all"
@@ -648,13 +664,13 @@ export const OttPlatformView: React.FC<OttPlatformViewProps> = ({
         )}
         {/* Placeholders while the row's first page is on its way, so a row
             that is loading never reads as an empty one. */}
-        {section.items.length === 0 &&
+        {rowItems.length === 0 &&
           !section.error &&
           (!section.fetched || section.loading) &&
           Array.from({ length: 6 }, (_, index) => (
             <div key={index} className="ott-view__placeholder" aria-hidden />
           ))}
-        {section.items.length === 0 && section.fetched && !section.loading && !section.error && (
+        {rowItems.length === 0 && section.fetched && !section.loading && !section.error && (
           <p className="ott-view__row-empty">Nothing in this row right now.</p>
         )}
         {section.error && (
@@ -666,6 +682,7 @@ export const OttPlatformView: React.FC<OttPlatformViewProps> = ({
       {!section.fetched && <RowTrigger onVisible={() => fetchRow(section)} />}
     </section>
   );
+  };
 
   if (ageCheckPending) {
     return (
@@ -689,12 +706,9 @@ export const OttPlatformView: React.FC<OttPlatformViewProps> = ({
             <button
               type="button"
               className="btn btn-primary"
-              onClick={() => {
-                acknowledgeAdult();
-                setAdultAccepted(true);
-              }}
+              onClick={revealAdult}
             >
-              I am 18 or older — show it
+              Enable adult content for this session
             </button>
           </div>
         </div>

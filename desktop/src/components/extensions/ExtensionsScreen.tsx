@@ -363,11 +363,16 @@ export const ExtensionsScreen: React.FC = () => {
         <Button
           size="compact"
           variant="ambient"
-          icon={adult.mode === 'off' ? EyeOff : Eye}
+          icon={!adult.allowed ? EyeOff : Eye}
           onClick={() => setAdultOpen(true)}
-          title="Adult content: which providers are offered"
+          title="Adult content availability, visual privacy, and startup prompt settings"
         >
-          Adult: {adult.mode === 'off' ? 'Off' : adult.mode === 'ask' ? (adult.allowed ? 'Shown' : 'Ask') : 'On'}
+          Adult:{' '}
+          {adult.allowed
+            ? adult.blurred
+              ? 'Enabled · Blurred'
+              : 'Enabled · Unblurred'
+            : 'Disabled'}
         </Button>
         <Button
           size="compact"

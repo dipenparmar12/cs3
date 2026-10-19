@@ -7,6 +7,8 @@ import { spawnSync } from 'child_process';
 import { FastChunkDownloader, type DownloadProgress as FastProgress } from '../fastDownloader';
 import { describeError } from '../../src/utils/errors.ts';
 import { REQUIRED_JAVA_VERSION, describeRuntimeGaps } from './runtimeAdvice.ts';
+import { locateJavaHome, portableJavaSource } from '../platform/javaSources.ts';
+import { windowsTar } from '../platform/binarySources.ts';
 
 export interface SystemRuntimeStatus {
   ready: boolean;
@@ -218,34 +220,6 @@ export interface RuntimeProgress {
   error?: string;
 }
 
-
-/**
- * Fallback openJDK 21 binary mirrors for auto-provisioning
- * on machines that lack Java 21 and prebuilt resources.
- * Prioritizes high-speed CDNs (AWS CloudFront Amazon Corretto & Adoptium Mirrors).
- */
-const PORTABLE_JAVA_MIRRORS: Record<string, string[]> = {
-  win32_x64: [
-    // 1. Amazon Corretto 21 JRE via AWS CloudFront CDN (High throughput, compact ~40MB)
-    'https://corretto.aws/downloads/latest/amazon-corretto-21-x64-windows-jre.zip',
-    // 2. Adoptium Temurin 21 HotSpot
-    'https://github.com/adoptium/temurin21-binaries/releases/download/jdk-21.0.2%2B13/OpenJDK21U-jre_x64_windows_hotspot_21.0.2_13.zip',
-    // 3. Global CDN Proxy
-    'https://ghproxy.net/https://github.com/adoptium/temurin21-binaries/releases/download/jdk-21.0.2%2B13/OpenJDK21U-jre_x64_windows_hotspot_21.0.2_13.zip',
-  ],
-  darwin_x64: [
-    'https://corretto.aws/downloads/latest/amazon-corretto-21-x64-macos-jre.tar.gz',
-    'https://github.com/adoptium/temurin21-binaries/releases/download/jdk-21.0.2%2B13/OpenJDK21U-jre_x64_mac_hotspot_21.0.2_13.tar.gz',
-  ],
-  darwin_arm64: [
-    'https://corretto.aws/downloads/latest/amazon-corretto-21-aarch64-macos-jre.tar.gz',
-    'https://github.com/adoptium/temurin21-binaries/releases/download/jdk-21.0.2%2B13/OpenJDK21U-jre_aarch64_mac_hotspot_21.0.2_13.tar.gz',
-  ],
-  linux_x64: [
-    'https://corretto.aws/downloads/latest/amazon-corretto-21-x64-linux-jre.tar.gz',
-    'https://github.com/adoptium/temurin21-binaries/releases/download/jdk-21.0.2%2B13/OpenJDK21U-jre_x64_linux_hotspot_21.0.2_13.tar.gz',
-  ],
-};
 
 export class RuntimeProvisioner {
   /**
@@ -898,21 +872,32 @@ export class RuntimeProvisioner {
     return this.inFlightRepair;
   }
 
+  /**
+   * Fetches a Java 21 runtime for this platform into `<baseDir>/java`.
+   *
+   * Unpacked beside the target first and moved into place only once a Java
+   * home has been found in it, so a failed or partial extraction never leaves a
+   * half-populated `java/` for `findJavaBinary` to probe. See
+   * `platform/javaSources.ts` for what this used to get wrong off Windows.
+   */
   private async downloadPortableJava(): Promise<void> {
-    const key = `${process.platform}_${process.arch}`;
-    const mirrors = PORTABLE_JAVA_MIRRORS[key] || PORTABLE_JAVA_MIRRORS['win32_x64'];
-    if (!mirrors || mirrors.length === 0) {
-      throw new Error(`No portable Java download configured for platform ${key}`);
+    const source = portableJavaSource(process.platform, process.arch);
+    if (!source) {
+      throw new Error(
+        `No Java 21 download is published for ${process.platform}-${process.arch}. ` +
+          'Install a Java 21 runtime and set JAVA_HOME, or reinstall the app, which bundles one.'
+      );
     }
 
-    const zipPath = path.join(this.baseDir, `java_temp_${Date.now()}.zip`);
+    const stamp = Date.now();
+    const archivePath = path.join(this.baseDir, `java_temp_${stamp}.${source.archive}`);
+    const unpackDir = path.join(this.baseDir, `java_unpack_${stamp}`);
     const javaTargetDir = path.join(this.baseDir, 'java');
-    fs.mkdirSync(javaTargetDir, { recursive: true });
 
     try {
       await FastChunkDownloader.download({
-        mirrors,
-        targetPath: zipPath,
+        mirrors: source.mirrors,
+        targetPath: archivePath,
         maxConnections: 8,
         onProgress: (_p: FastProgress, statusText: string) => {
           const mappedPct = Math.min(88, Math.floor(60 + _p.percent * 0.28));
@@ -930,60 +915,63 @@ export class RuntimeProvisioner {
         message: 'Extracting Java 21 execution engine...',
       });
 
-      // Extract portable Java archive into target directory
-      this.extractArchive(zipPath, javaTargetDir);
+      fs.mkdirSync(unpackDir, { recursive: true });
+      this.extractArchive(archivePath, unpackDir);
 
-      // If zip extracted into a subfolder (e.g., amazon-corretto-21... or jdk-21...), elevate contents
-      try {
-        const subdirs = fs.readdirSync(javaTargetDir);
-        if (subdirs.length === 1) {
-          const subPath = path.join(javaTargetDir, subdirs[0]);
-          if (fs.statSync(subPath).isDirectory() && fs.existsSync(path.join(subPath, 'bin'))) {
-            this.copyRecursiveSync(subPath, javaTargetDir);
-            fs.rmSync(subPath, { recursive: true, force: true });
-          }
-        }
-      } catch {
-        // Ignore subfolder restructuring errors
-      }
+      const home = locateJavaHome(unpackDir);
+      if (!home) throw new Error('The Java download unpacked, but no bin/java was found inside it.');
+      // A rename, not a copy: a JDK carries symlinks (macOS) and executable
+      // bits a byte copy would have to recreate one by one.
+      fs.rmSync(javaTargetDir, { recursive: true, force: true });
+      fs.renameSync(home, javaTargetDir);
     } finally {
-      // Clean up temporary zip
-      try {
-        if (fs.existsSync(zipPath)) fs.unlinkSync(zipPath);
-      } catch {
-        // Ignore cleanup error
+      for (const leftover of [archivePath, unpackDir]) {
+        try {
+          fs.rmSync(leftover, { recursive: true, force: true });
+        } catch {
+          // A file still held is removed by the next attempt.
+        }
       }
     }
   }
 
+  /** Unpacks a zip or tarball, and says so when it could not. */
   private extractArchive(archivePath: string, targetDir: string): void {
-    if (process.platform === 'win32') {
-      // Windows 10/11 native tar command is 50x faster and safer than PowerShell Expand-Archive
-      const tarResult = spawnSync('tar.exe', ['-xf', archivePath, '-C', targetDir], {
-        windowsHide: true,
-        timeout: 60_000,
-      });
+    const outcome = (result: ReturnType<typeof spawnSync>) =>
+      result.status === 0 ? null : result.error?.message || result.stderr?.toString().trim() || `exit ${result.status}`;
 
-      if (tarResult.status !== 0) {
-        // Fallback to PowerShell Expand-Archive if tar fails
-        const powershellCmd = `Expand-Archive -LiteralPath '${archivePath.replace(/'/g, "''")}' -DestinationPath '${targetDir.replace(/'/g, "''")}' -Force`;
-        const psResult = spawnSync('powershell', ['-NoProfile', '-Command', powershellCmd], {
-          windowsHide: true,
-          timeout: 120_000,
-        });
-        if (psResult.status !== 0) {
-          throw new Error(
-            `Failed to extract Java archive: ${psResult.stderr?.toString() || 'unknown extraction error'}`
-          );
-        }
-      }
-    } else {
-      if (archivePath.endsWith('.tar.gz')) {
-        spawnSync('tar', ['-xzf', archivePath, '-C', targetDir], { timeout: 60_000 });
-      } else {
-        spawnSync('unzip', ['-o', archivePath, '-d', targetDir], { timeout: 60_000 });
-      }
+    if (process.platform === 'win32') {
+      // Windows' own libarchive tar reads zip; a GNU tar earlier on PATH does not.
+      const tar = windowsTar();
+      const viaTar = tar
+        ? outcome(spawnSync(tar, ['-xf', archivePath, '-C', targetDir], { windowsHide: true, timeout: 60_000 }))
+        : 'no System32 tar.exe';
+      if (viaTar === null) return;
+      // Paths reach PowerShell through its environment, never parsed as script.
+      const viaPowerShell = outcome(
+        spawnSync(
+          'powershell',
+          [
+            '-NoProfile',
+            '-NonInteractive',
+            '-Command',
+            'Expand-Archive -LiteralPath $env:CS3_ARCHIVE -DestinationPath $env:CS3_DESTINATION -Force',
+          ],
+          {
+            windowsHide: true,
+            timeout: 120_000,
+            env: { ...process.env, CS3_ARCHIVE: archivePath, CS3_DESTINATION: targetDir },
+          }
+        )
+      );
+      if (viaPowerShell === null) return;
+      throw new Error(`Failed to extract the Java archive: ${viaPowerShell} (tar: ${viaTar})`);
     }
+
+    const failure = archivePath.endsWith('.tar.gz')
+      ? outcome(spawnSync('tar', ['-xzf', archivePath, '-C', targetDir], { timeout: 60_000 }))
+      : outcome(spawnSync('unzip', ['-o', '-q', archivePath, '-d', targetDir], { timeout: 60_000 }));
+    if (failure !== null) throw new Error(`Failed to extract the Java archive: ${failure}`);
   }
 
   /**
@@ -1100,19 +1088,5 @@ export class RuntimeProvisioner {
       console.warn('[RuntimeProvisioner] Could not clear the translation cache:', err);
     }
     return removed;
-  }
-
-  private copyRecursiveSync(src: string, dest: string): void {
-    if (!fs.existsSync(src)) return;
-    const stats = fs.statSync(src);
-
-    if (stats.isDirectory()) {
-      fs.mkdirSync(dest, { recursive: true });
-      for (const child of fs.readdirSync(src)) {
-        this.copyRecursiveSync(path.join(src, child), path.join(dest, child));
-      }
-    } else {
-      fs.copyFileSync(src, dest);
-    }
   }
 }

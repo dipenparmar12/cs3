@@ -4,7 +4,7 @@
  *   node --experimental-strip-types electron/platform/binarySources.test.mts
  */
 import assert from 'node:assert/strict';
-import { aria2Mirrors, extraSearchDirs, installHint, ytDlpAsset, ytDlpMirrors } from './binarySources.ts';
+import { aria2Mirrors, extraSearchDirs, installHint, windowsTar, ytDlpAsset, ytDlpMirrors } from './binarySources.ts';
 
 const tests: Array<[string, () => void]> = [];
 const test = (name: string, fn: () => void) => tests.push([name, fn]);
@@ -41,6 +41,24 @@ test('Homebrew and common Linux locations are searched', () => {
   assert.ok(extraSearchDirs('darwin', '/Users/a').includes('/opt/homebrew/bin'));
   assert.ok(extraSearchDirs('linux', '/home/a').includes('/usr/bin'));
   assert.deepEqual(extraSearchDirs('win32', 'C:/Users/a'), []);
+});
+
+test('the mpv.app bundle a Mac user is told to install is searched inside the bundle', () => {
+  const dirs = extraSearchDirs('darwin', '/Users/a');
+  assert.ok(dirs.includes('/Applications/mpv.app/Contents/MacOS'));
+  assert.ok(dirs.includes('/Users/a/Applications/mpv.app/Contents/MacOS'));
+  assert.ok(!extraSearchDirs('linux', '/home/a').some((d) => d.includes('.app')));
+});
+
+test("Windows' own tar is named by path, never left to PATH", () => {
+  const seen: string[] = [];
+  const exists = (file: string) => (seen.push(file), true);
+  assert.equal(windowsTar({ SystemRoot: 'D:\\Win' }, 'win32', exists), 'D:\\Win\\System32\\tar.exe');
+  assert.equal(windowsTar({}, 'win32', exists), 'C:\\Windows\\System32\\tar.exe');
+  assert.equal(windowsTar({ SystemRoot: 'C:\\Windows' }, 'win32', () => false), null);
+  assert.equal(windowsTar({ SystemRoot: 'C:\\Windows' }, 'linux', exists), null);
+  assert.equal(windowsTar({ SystemRoot: 'C:\\Windows' }, 'darwin', exists), null);
+  assert.equal(seen.length, 2, 'off Windows nothing is even looked up');
 });
 
 test('install hints name the right package manager and package', () => {

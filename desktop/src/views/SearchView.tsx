@@ -17,6 +17,8 @@ import { useReveal } from '../utils/ExperienceModeContext';
 import { plainMessage } from '../utils/experienceMode';
 import { type SearchUiState } from './searchUiState';
 import { Button, Menu } from '../components/ui';
+import { filterAdultItems, isSensitiveTitle } from '../utils/adultContent';
+import { useAdultMode } from '../utils/useAdultMode';
 
 interface SearchViewProps {
   query: string;
@@ -261,6 +263,7 @@ const SearchFailure: React.FC<{ message: string }> = ({ message }) => {
  */
 const SearchIdle: React.FC<{ onSearch?: (query: string) => void }> = ({ onSearch }) => {
   const [recent, setRecent] = useState<SearchHistoryEntry[]>([]);
+  const adult = useAdultMode();
   useEffect(() => {
     let live = true;
     void window.cloudstream?.getSearchHistory?.().then((entries) => {
@@ -270,6 +273,11 @@ const SearchIdle: React.FC<{ onSearch?: (query: string) => void }> = ({ onSearch
       live = false;
     };
   }, []);
+
+  const visibleRecent = useMemo(
+    () => (adult.allowed ? recent : recent.filter((entry) => !isSensitiveTitle(entry.query))),
+    [recent, adult.allowed]
+  );
 
   return (
     <div className="search-idle">
@@ -282,11 +290,11 @@ const SearchIdle: React.FC<{ onSearch?: (query: string) => void }> = ({ onSearch
           onClick: () => window.dispatchEvent(new CustomEvent('cs3:focus-navbar-search')),
         }}
       />
-      {onSearch && recent.length > 0 && (
+      {onSearch && visibleRecent.length > 0 && (
         <section className="search-idle__recent" aria-label="Recent searches">
           <h3>Recent searches</h3>
           <ul>
-            {recent.map((entry) => (
+            {visibleRecent.map((entry) => (
               <li key={entry.query}>
                 <button
                   type="button"
@@ -323,6 +331,7 @@ export const SearchView: React.FC<SearchViewProps> = ({
   onSearch,
 }) => {
   const { sourceFilter, typeTab, openGroups } = ui;
+  const adult = useAdultMode();
   /** The provider names the fix modal is open for, or null when it is closed. */
   const [fixing, setFixing] = useState<string[] | null>(null);
   const missingCount =
@@ -351,7 +360,11 @@ export const SearchView: React.FC<SearchViewProps> = ({
    * `Avengers End Game 720p Hindi` cannot be grouped as one title until they
    * are both called *Avengers: Endgame*.
    */
-  const results = useTitleEnrichment(search?.results ?? []);
+  const rawResults = useTitleEnrichment(search?.results ?? []);
+  const results = useMemo(
+    () => filterAdultItems(rawResults, adult.allowed, adult.adultProviders),
+    [rawResults, adult.allowed, adult.adultProviders]
+  );
 
   /**
    * Tabs that would actually leave something, with counts.

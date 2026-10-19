@@ -1,6 +1,15 @@
 import React, { useEffect, useState, useCallback, useRef } from 'react';
 import { ExternalLink, RefreshCw } from 'lucide-react';
 import type { CanonicalMediaIdentity, MediaRating } from '../../types/ratings.ts';
+import {
+  emptyRatingsView,
+  latestOnly,
+  ratingsRequestKey,
+  ratingsRowState,
+  ratingsWorkKey,
+  settleRatings,
+  type RatingsView,
+} from './ratingsRow.ts';
 
 interface MediaRatingsProps {
   identity: CanonicalMediaIdentity;
@@ -19,53 +28,64 @@ function formatVotes(count?: number): string {
   return `${count.toLocaleString()} votes`;
 }
 
+/**
+ * IMDb, Rotten Tomatoes, Metacritic and TMDB, as one row of chips.
+ *
+ * One request per title, not per render. The hero rebuilds `identity` every
+ * time anything on it changes — a source count ticking, a catalogue answering —
+ * and keying the request on the object made every one of those refetch and
+ * flip back to loading: for a title with no ratings, the row appeared as a
+ * skeleton and collapsed again on each render. The request is keyed on the
+ * work (title, year, type) and the ids that refine it, and:
+ *
+ * - a refinement (an IMDb id arriving later) asks again but keeps what is shown
+ *   until the answer lands, and an empty answer never blanks a filled row;
+ * - an answer for an identity that has since changed is dropped;
+ * - while the first answer is outstanding the row holds its own height, so the
+ *   chips replace the placeholder in place; settled with nothing, it is gone.
+ */
 export const MediaRatings: React.FC<MediaRatingsProps> = ({ identity }) => {
-  const [ratings, setRatings] = useState<MediaRating[]>([]);
-  const [loading, setLoading] = useState(true);
+  const workKey = ratingsWorkKey(identity);
+  const requestKey = ratingsRequestKey(identity);
+  const identityRef = useRef(identity);
+  identityRef.current = identity;
+  const [view, setView] = useState<RatingsView>(() => emptyRatingsView(workKey));
   const [refreshing, setRefreshing] = useState(false);
-  const isMounted = useRef(true);
+  const tickets = useRef(latestOnly());
+
+  const load = useCallback(
+    async (forceRefresh: boolean) => {
+      const api = window.cloudstream;
+      if (!api?.getMediaRatings) {
+        setView((current) => settleRatings(current, workKey, null));
+        return;
+      }
+      const ticket = tickets.current.issue();
+      if (forceRefresh) setRefreshing(true);
+      let found: MediaRating[] | null = null;
+      try {
+        const res = await (forceRefresh ? api.refreshMediaRatings : api.getMediaRatings)(identityRef.current);
+        if (res.ok && Array.isArray(res.ratings)) found = res.ratings;
+      } catch {
+        // Failure isolation: whatever was shown stays.
+      }
+      if (!tickets.current.isCurrent(ticket)) return;
+      setRefreshing(false);
+      setView((current) => settleRatings(current, workKey, found));
+    },
+    [workKey]
+  );
 
   useEffect(() => {
-    isMounted.current = true;
-    return () => {
-      isMounted.current = false;
-    };
-  }, []);
-
-  const loadRatings = useCallback(async (forceRefresh = false) => {
-    if (!window.cloudstream?.getMediaRatings) return;
-    if (forceRefresh) {
-      setRefreshing(true);
-    } else {
-      setLoading(true);
-    }
-
-    try {
-      const fn = forceRefresh
-        ? window.cloudstream.refreshMediaRatings
-        : window.cloudstream.getMediaRatings;
-      const res = await fn(identity);
-      if (isMounted.current && res.ok && Array.isArray(res.ratings)) {
-        setRatings(res.ratings);
-      }
-    } catch {
-      // Failure isolation: preserve whatever was previously loaded
-    } finally {
-      if (isMounted.current) {
-        setLoading(false);
-        setRefreshing(false);
-      }
-    }
-  }, [identity]);
-
-  useEffect(() => {
-    void loadRatings(false);
-  }, [loadRatings]);
+    void load(false);
+    // `requestKey` is what changes the answer; `load` itself only changes with the work.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [requestKey]);
 
   const handleRefresh = (e: React.MouseEvent) => {
     e.stopPropagation();
     if (refreshing) return;
-    void loadRatings(true);
+    void load(true);
   };
 
   const openUrl = (e: React.MouseEvent, url?: string) => {
@@ -74,33 +94,19 @@ export const MediaRatings: React.FC<MediaRatingsProps> = ({ identity }) => {
     window.open(url, '_blank', 'noopener,noreferrer');
   };
 
-  // If initial load completed and 0 ratings found across all sources, keep area minimal
-  if (!loading && ratings.length === 0) {
-    return null;
-  }
+  const row = ratingsRowState(view, workKey);
+  if (row === 'hidden') return null;
+  const ratings = row === 'chips' ? view.ratings : [];
 
   return (
-    <div className="media-ratings" aria-label="Media Ratings from IMDb, Rotten Tomatoes, Metacritic, and TMDB">
-      <div className="media-ratings__header">
-        <span className="media-ratings__title">Ratings</span>
-        <button
-          type="button"
-          className={`media-ratings__refresh${refreshing ? ' media-ratings__refresh--spinning' : ''}`}
-          onClick={handleRefresh}
-          title="Refresh ratings from public sources"
-          aria-label="Refresh ratings"
-        >
-          <RefreshCw size={12} />
-        </button>
-      </div>
-
+    <div className="media-ratings" aria-label="Ratings" aria-busy={row === 'placeholder' || undefined}>
       <div className="media-ratings__chips">
-        {loading && ratings.length === 0 ? (
-          <div className="media-ratings__loading-skeleton">
-            <span className="media-ratings__chip media-ratings__chip--skeleton" />
-            <span className="media-ratings__chip media-ratings__chip--skeleton" />
-            <span className="media-ratings__chip media-ratings__chip--skeleton" />
-          </div>
+        {row === 'placeholder' ? (
+          <>
+            <span className="media-ratings__chip media-ratings__chip--skeleton" aria-hidden />
+            <span className="media-ratings__chip media-ratings__chip--skeleton" aria-hidden />
+            <span className="media-ratings__chip media-ratings__chip--skeleton" aria-hidden />
+          </>
         ) : (
           ratings.map((r) => {
             if (r.source === 'imdb') {
@@ -225,6 +231,17 @@ export const MediaRatings: React.FC<MediaRatingsProps> = ({ identity }) => {
 
             return null;
           })
+        )}
+        {ratings.length > 0 && (
+          <button
+            type="button"
+            className={`media-ratings__refresh${refreshing ? ' media-ratings__refresh--spinning' : ''}`}
+            onClick={handleRefresh}
+            title="Refresh ratings"
+            aria-label="Refresh ratings"
+          >
+            <RefreshCw size={12} />
+          </button>
         )}
       </div>
     </div>

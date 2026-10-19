@@ -86,7 +86,7 @@ export interface BackupSectionDeps {
   enqueueExtensionJobs(requests: ExtensionJobRequest[]): void;
   isAdultAllowed(): boolean;
   indexers: { getConfigs(): IndexerConfig[]; saveConfigs(configs: IndexerConfig[]): void };
-  adult: { adultMode(): 'off' | 'ask' | 'on'; setAdultMode(mode: 'off' | 'ask' | 'on'): unknown };
+  adult: { notifyAdultChange(): void };
 }
 
 export interface KnownPluginRow {
@@ -647,9 +647,9 @@ function datastoreSection(deps: BackupSectionDeps, categoryId: string): BackupSe
     afterRestore:
       category.id === 'contentFilters'
         ? () => {
-            // Through the owner, so every surface showing the adult setting
-            // hears about it; a bare datastore write would tell nobody.
-            deps.adult.setAdultMode(deps.adult.adultMode());
+            // The restored keys are already the truth; the owner only has to
+            // tell every surface showing the adult setting that they changed.
+            deps.adult.notifyAdultChange();
           }
         : undefined,
   };

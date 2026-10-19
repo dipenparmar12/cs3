@@ -293,8 +293,15 @@ export class NativeProviderRegistry {
     return out;
   }
 
+  private adultGate: (() => boolean) | null = null;
+
+  public setAdultGate(gate: () => boolean): void {
+    this.adultGate = gate;
+  }
+
   /** Read per call, never cached — the setting can change while the app runs. */
   private adultAllowed(): boolean {
+    if (this.adultGate) return this.adultGate();
     return this.datastore.getBool(ADULT_KEY, false);
   }
 

@@ -13,6 +13,8 @@ import type { SavedSearchSummary } from '../../../electron/savedSearches';
 import { EmptyState } from '../EmptyState';
 import { ScreenSearchNoMatches } from '../ScreenSearch';
 import { matchesScreenQuery } from '../../utils/screenSearch';
+import { useAdultMode } from '../../utils/useAdultMode';
+import { isSensitiveTitle } from '../../utils/adultContent';
 
 interface Props {
   onOpen: (id: string) => void;
@@ -35,20 +37,27 @@ function savedOn(timestamp: number): string {
 
 export const SavedSearchesList: React.FC<Props> = ({ onOpen, onCount, query = '', onMatches, onClearQuery }) => {
   const [searches, setSearches] = useState<SavedSearchSummary[] | null>(null);
+  const adult = useAdultMode();
+  const visibleSearches = useMemo(
+    () => (adult.allowed ? searches : searches?.filter((s) => !isSensitiveTitle(s.query)) ?? null),
+    [searches, adult.allowed]
+  );
   const shown = useMemo(
-    () => searches?.filter((search) => matchesScreenQuery(query, [search.query])) ?? [],
-    [searches, query]
+    () => visibleSearches?.filter((search) => matchesScreenQuery(query, [search.query])) ?? [],
+    [visibleSearches, query]
   );
 
   useEffect(() => {
-    if (searches !== null) onMatches?.(shown.length);
-  }, [searches, shown.length, onMatches]);
+    if (visibleSearches !== null) {
+      onCount?.(visibleSearches.length);
+      onMatches?.(shown.length);
+    }
+  }, [visibleSearches, shown.length, onCount, onMatches]);
 
   const load = useCallback(async () => {
     const list = (await window.cloudstream?.listSavedSearches?.()) ?? [];
     setSearches(list);
-    onCount?.(list.length);
-  }, [onCount]);
+  }, []);
 
   useEffect(() => {
     void load();
@@ -57,12 +66,11 @@ export const SavedSearchesList: React.FC<Props> = ({ onOpen, onCount, query = ''
   const remove = async (id: string) => {
     const list = (await window.cloudstream?.removeSavedSearch?.(id)) ?? [];
     setSearches(list);
-    onCount?.(list.length);
   };
 
-  if (searches === null) return null;
+  if (visibleSearches === null) return null;
 
-  if (searches.length === 0) {
+  if (visibleSearches.length === 0) {
     return (
       <EmptyState
         icon={Bookmark}
@@ -78,7 +86,9 @@ export const SavedSearchesList: React.FC<Props> = ({ onOpen, onCount, query = ''
 
   return (
     <ul className="saved-searches">
-      {shown.map((search) => (
+      {shown.map((search) => {
+        const sensitive = isSensitiveTitle(search.query);
+        return (
         <li key={search.id} className="saved-searches__row">
           <button type="button" className="saved-searches__open" onClick={() => onOpen(search.id)}>
             <span className="saved-searches__posters" aria-hidden>
@@ -89,6 +99,7 @@ export const SavedSearchesList: React.FC<Props> = ({ onOpen, onCount, query = ''
                     src={poster}
                     alt=""
                     loading="lazy"
+                    className={sensitive && adult.blurred ? 'cs-poster--blurred' : undefined}
                     // Scraped artwork expires and 403s; a gap reads better than a broken-image icon.
                     onError={(event) => (event.currentTarget.style.visibility = 'hidden')}
                   />
@@ -122,7 +133,8 @@ export const SavedSearchesList: React.FC<Props> = ({ onOpen, onCount, query = ''
             <Trash2 size={14} />
           </button>
         </li>
-      ))}
+        );
+      })}
     </ul>
   );
 };

@@ -10,6 +10,11 @@
  */
 import assert from 'node:assert/strict';
 import {
+  evaluateAdultSessionState,
+  filterAdultItems,
+  isAdultGenreOrTag,
+  isAdultMedia,
+  isSensitiveDescription,
   isSensitiveRow,
   isSensitiveRowLabel,
   isSensitiveTitle,
@@ -118,6 +123,131 @@ test('a page fetched for an 18+ row is wholly sensitive', () => {
   assert.equal(screenLists(lists, 'mixed', true, true).lists[0].sensitive, true);
 });
 
+test('adult genre, tag, description, and media classification across sources', () => {
+  assert.equal(isAdultGenreOrTag('NSFW'), true);
+  assert.equal(isAdultGenreOrTag('Hentai'), true);
+  assert.equal(isAdultGenreOrTag('Erotica'), true);
+  assert.equal(isAdultGenreOrTag('Action'), false);
+  assert.equal(isAdultGenreOrTag('Drama'), false);
+
+  assert.equal(isSensitiveDescription('An explicit XXX pornographic film.'), true);
+  assert.equal(isSensitiveDescription('A thriller about a detective solving a murder.'), false);
+
+  // Ordinary films whose synopses name the subject. With adult content off these
+  // must stay visible, so a plot is trusted only for an explicit mark (18+, XXX, NSFW).
+  assert.equal(
+    isAdultMedia({ name: 'Boogie Nights', plot: 'A young man is drawn into the pornography industry of 1970s Los Angeles.' }),
+    false
+  );
+  assert.equal(
+    isAdultMedia({ name: 'Basic Instinct', description: 'A detective investigates a murder linked to an erotic thriller novelist.' }),
+    false
+  );
+
+  const adultProviders = new Set(['KanAV', 'TaiAV']);
+  assert.equal(isAdultMedia({ name: 'Ordinary Title', apiName: 'KanAV' }, adultProviders), true);
+  assert.equal(isAdultMedia({ name: 'Ordinary Title', adult: true }), true);
+  assert.equal(isAdultMedia({ name: 'Ordinary Title', type: 'NSFW' }), true);
+  assert.equal(isAdultMedia({ name: 'Ordinary Title', tags: ['Sci-Fi', 'Hentai'] }), true);
+  assert.equal(isAdultMedia({ name: 'Dune: Part Two', apiName: 'Cinemeta', genres: ['Sci-Fi', 'Adventure'] }, adultProviders), false);
+
+  const sample = [
+    { name: 'Dune: Part Two', apiName: 'Cinemeta' },
+    { name: '18+ Isla 2026', apiName: '9kMovies' },
+    { name: 'Sample Clip', apiName: 'KanAV' },
+  ];
+  assert.deepEqual(
+    filterAdultItems(sample, false, adultProviders).map((i) => i.name),
+    ['Dune: Part Two']
+  );
+  assert.equal(filterAdultItems(sample, true, adultProviders).length, 3);
+});
+
+test('PRD Update: saved preference enabled, startup prompt not suppressed asks Blur vs Unblur', () => {
+  // On launch: prompt is pending for visual presentation choice, adult content remains available per saved setting, visual blur starts active.
+  const onLaunch = evaluateAdultSessionState({
+    savedEnabled: true,
+    doNotAskAgain: false,
+    sessionDecision: 'pending',
+    sessionBlurred: true,
+  });
+  assert.equal(onLaunch.promptPending, true);
+  assert.equal(onLaunch.allowed, true);
+  assert.equal(onLaunch.blurred, true);
+  assert.equal(onLaunch.mode, 'ask');
+
+  // User chooses Unblur for the session: allowed remains true, visual assets are unblurred.
+  const afterUnblur = evaluateAdultSessionState({
+    savedEnabled: true,
+    doNotAskAgain: false,
+    sessionDecision: 'enabled',
+    sessionBlurred: false,
+  });
+  assert.equal(afterUnblur.promptPending, false);
+  assert.equal(afterUnblur.allowed, true);
+  assert.equal(afterUnblur.blurred, false);
+
+  // User chooses Keep Blurred for the session: allowed remains true, visual assets remain blurred.
+  const afterKeepBlurred = evaluateAdultSessionState({
+    savedEnabled: true,
+    doNotAskAgain: false,
+    sessionDecision: 'disabled',
+    sessionBlurred: true,
+  });
+  assert.equal(afterKeepBlurred.promptPending, false);
+  assert.equal(afterKeepBlurred.allowed, true);
+  assert.equal(afterKeepBlurred.blurred, true);
+});
+
+test('PRD Update: saved preference enabled, startup prompt suppressed (Do Not Ask Again)', () => {
+  // On launch: prompt does not appear, adult content is permitted, and visual assets start blurred.
+  const onLaunch = evaluateAdultSessionState({
+    savedEnabled: true,
+    doNotAskAgain: true,
+    sessionDecision: 'pending',
+    sessionBlurred: true,
+  });
+  assert.equal(onLaunch.promptPending, false);
+  assert.equal(onLaunch.allowed, true);
+  assert.equal(onLaunch.blurred, true);
+  assert.equal(onLaunch.mode, 'on');
+
+  // User clicks Unblur in top navbar during session: blurred becomes false, persistent prefs unchanged.
+  const unblurredInSession = evaluateAdultSessionState({
+    savedEnabled: true,
+    doNotAskAgain: true,
+    sessionDecision: 'pending',
+    sessionBlurred: false,
+  });
+  assert.equal(unblurredInSession.allowed, true);
+  assert.equal(unblurredInSession.blurred, false);
+  assert.equal(unblurredInSession.savedEnabled, true);
+  assert.equal(unblurredInSession.doNotAskAgain, true);
+});
+
+test('PRD Update: saved preference disabled (NSFW off) never shows visual blur startup prompt', () => {
+  // When adult content is disabled, do not show visual blur prompt on startup.
+  const scenarioDisabled = evaluateAdultSessionState({
+    savedEnabled: false,
+    doNotAskAgain: false,
+    sessionDecision: 'pending',
+    sessionBlurred: true,
+  });
+  assert.equal(scenarioDisabled.promptPending, false);
+  assert.equal(scenarioDisabled.allowed, false);
+  assert.equal(scenarioDisabled.blurred, true);
+
+  const scenarioSuppressed = evaluateAdultSessionState({
+    savedEnabled: false,
+    doNotAskAgain: true,
+    sessionDecision: 'pending',
+    sessionBlurred: true,
+  });
+  assert.equal(scenarioSuppressed.promptPending, false);
+  assert.equal(scenarioSuppressed.allowed, false);
+  assert.equal(scenarioSuppressed.mode, 'off');
+});
+
 let failed = 0;
 for (const [name, fn] of tests) {
   try {
@@ -131,3 +261,4 @@ for (const [name, fn] of tests) {
 }
 console.log(failed === 0 ? `\n${tests.length} passed` : `\n${failed} of ${tests.length} FAILED`);
 process.exit(failed === 0 ? 0 : 1);
+

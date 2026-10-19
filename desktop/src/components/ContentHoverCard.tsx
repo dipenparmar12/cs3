@@ -2,6 +2,8 @@ import React, { useEffect, useState } from 'react';
 import { Play, Star, Calendar, Info, Loader2 } from 'lucide-react';
 import type { LoadResponse, SearchResponse } from '../types/api';
 import { LibraryBucketSelector } from './LibraryBucketSelector';
+import { isAdultMedia } from '../utils/adultContent';
+import { isAdultItemBlurred, useAdultState } from '../utils/useAdultMode';
 
 interface ContentHoverCardProps {
   item: SearchResponse;
@@ -20,10 +22,15 @@ export const ContentHoverCard: React.FC<ContentHoverCardProps> = ({
 }) => {
   const [details, setDetails] = useState<LoadResponse | null>(null);
   const [loading, setLoading] = useState(false);
+  const adult = useAdultState();
 
   const itemUrl = item?.url;
+  const isAdult =
+    isAdultMedia(item, adult.adultProviders) || isAdultMedia(details, adult.adultProviders);
+  const isBlurred = isAdult && isAdultItemBlurred(adult, itemUrl || item?.name);
 
   useEffect(() => {
+    if (isAdult && !adult.allowed) return;
     let active = true;
     const fetchDetails = async () => {
       if (!window.cloudstream || !itemUrl) return;
@@ -42,7 +49,9 @@ export const ContentHoverCard: React.FC<ContentHoverCardProps> = ({
     return () => {
       active = false;
     };
-  }, [itemUrl]);
+  }, [itemUrl, isAdult, adult.allowed]);
+
+  if (isAdult && !adult.allowed) return null;
 
   const poster = details?.posterUrl || item?.posterUrl;
   const title = details?.name || item?.name || 'Untitled';
@@ -59,7 +68,7 @@ export const ContentHoverCard: React.FC<ContentHoverCardProps> = ({
       onClick={(e) => e.stopPropagation()}
     >
       <div
-        className="hover-preview-popup__banner"
+        className={`hover-preview-popup__banner${isBlurred ? ' cs-poster--blurred' : ''}`}
         style={{ backgroundImage: poster ? `url(${poster})` : undefined }}
       >
         <div className="hover-preview-popup__banner-gradient" />

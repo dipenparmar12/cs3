@@ -29,6 +29,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { runDoctor } from './doctor.mjs';
+import { bundledTools } from './package-layout.mjs';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const root = path.resolve(here, '..', '..');
@@ -80,6 +81,21 @@ const DEFAULT_TARGETS = { win: ['nsis', 'portable', 'zip'], mac: ['dmg', 'zip'],
 const TARGETS = flagValue('--target', 'both');
 const ARCH = flagValue('--arch', process.arch);
 const VERSION = flagValue('--version', null);
+
+/*
+ * One machine, one architecture. jlink links a JRE for the JDK running it and
+ * the media runtime is verified by running it, so an arm64 package built on an
+ * x64 machine would ship an x64 JRE and ffmpeg — complete-looking, and dead on
+ * arrival. The release workflow has a runner per architecture for this reason.
+ */
+if (ARCH !== process.arch && !(SKIP_JVM && SKIP_MEDIA)) {
+  console.error(
+    `\nBuild failed: this machine is ${process.arch}; an ${ARCH} package needs an ${ARCH} machine ` +
+      '(the JRE and the media tools are built for the machine that packages them).\n' +
+      'Pass --skip-jvm --skip-media to package the app shell alone.'
+  );
+  process.exit(1);
+}
 
 let step = 0;
 const started = Date.now();
@@ -436,12 +452,25 @@ if (SKIP_MEDIA) {
    * script's own archive cache means even that rarely touches the network.
    */
   const stampFile = path.join(mediaDir, '.staged');
+  const tools = bundledTools(process.platform, ARCH);
+  const expectedMedia = [
+    ...(tools.ffmpeg ? ['ffmpeg', 'ffprobe'] : []),
+    ...(tools.mpv ? ['mpv'] : []),
+  ].map((name) => path.join(mediaDir, isWindows ? `${name}.exe` : name));
+  // A staging for another platform or architecture is never "up to date",
+  // however new it is.
+  const stagedFor = (() => {
+    try {
+      return JSON.parse(fs.readFileSync(stampFile, 'utf8')).platform;
+    } catch {
+      return null;
+    }
+  })();
   if (
+    stagedFor === `${process.platform}-${ARCH}` &&
     upToDate(
       'desktop/media-runtime',
-      (isWindows ? ['ffmpeg', 'ffprobe', 'mpv'] : ['ffmpeg', 'ffprobe']).map((name) =>
-        path.join(mediaDir, isWindows ? `${name}.exe` : name),
-      ),
+      expectedMedia,
       [path.join(root, 'tools', 'package', 'build-media-runtime.mjs')],
       stampFile,
     )
@@ -450,7 +479,7 @@ if (SKIP_MEDIA) {
   } else {
     node(
       path.join(root, 'tools', 'package', 'build-media-runtime.mjs'),
-      ALLOW_MISSING_MEDIA ? ['--allow-missing'] : ['--verify'],
+      [...(ALLOW_MISSING_MEDIA ? ['--allow-missing'] : ['--verify']), '--arch', ARCH],
       {
         hint:
           'The ffmpeg and mpv mirrors are frequently unreachable. If desktop/media-runtime\n' +
@@ -556,6 +585,22 @@ const signingArgs = azureSigning
       `-c.win.azureSignOptions.publisherName=${env.AZURE_PUBLISHER_NAME}`,
     ]
   : [];
+/**
+ * Linux artifact names, with the architecture spelled the way every other
+ * release file spells it.
+ *
+ * electron-builder's `${arch}` is per format on Linux: `x86_64` in an
+ * AppImage name, `amd64` in a deb's (builder-util `getArtifactArchName`) —
+ * so the x64 release read `CS3-1.2.3-linux-x86_64.AppImage` beside
+ * `CS3-1.2.3-linux-amd64.deb` and `CS3-1.2.3-linux-x64.tar.gz`. The deb's
+ * *control* architecture is still `amd64`, which is what dpkg reads; only the
+ * file name is ours.
+ */
+const linuxNameArgs =
+  OS === 'linux'
+    ? ['linux', 'appImage', 'deb'].map((key) => `-c.${key}.artifactName=CS3-\${version}-linux-${ARCH}.\${ext}`)
+    : [];
+
 info(
   azureSigning
     ? `signing: Microsoft Artifact Signing (${env.AZURE_PUBLISHER_NAME})`
@@ -573,6 +618,7 @@ run(
     'never',
     ...(QUICK ? ['-c.compression=store'] : []),
     ...signingArgs,
+    ...linuxNameArgs,
     // The release names every artifact after the tag, not after whatever
     // package.json says on the commit it was cut from.
     ...(VERSION ? [`-c.extraMetadata.version=${VERSION}`] : []),

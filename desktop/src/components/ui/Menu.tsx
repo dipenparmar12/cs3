@@ -16,6 +16,12 @@ export interface MenuItem {
   label: React.ReactNode;
   description?: React.ReactNode;
   icon?: LucideIcon;
+  /** Drawn where the icon goes, for something that is not a glyph (an avatar). */
+  leading?: React.ReactNode;
+  /** A quiet mark after the label (a lock). */
+  trailing?: React.ReactNode;
+  /** Starts a new group: a rule is drawn above the item. */
+  separatorBefore?: boolean;
   onSelect: () => void;
   disabled?: boolean;
   tone?: 'default' | 'danger';
@@ -36,8 +42,10 @@ export const Menu: React.FC<{
   /** Which edge of the trigger the menu lines up with. */
   align?: 'start' | 'end';
   label: string;
+  /** Non-interactive content above the items — who or what the menu is about. */
+  header?: React.ReactNode;
   className?: string;
-}> = ({ trigger, items, align = 'end', label, className }) => {
+}> = ({ trigger, items, align = 'end', label, header, className }) => {
   const [open, setOpen] = useState(false);
   const wrapper = useRef<HTMLDivElement | null>(null);
   const triggerRef = useRef<HTMLButtonElement | null>(null);
@@ -111,27 +119,37 @@ export const Menu: React.FC<{
           aria-label={label}
           onKeyDown={onListKey}
         >
+          {header ? <div className="ui-menu__header">{header}</div> : null}
           {items.map((item, index) => {
             const Icon = item.icon;
             return (
-              <button
-                key={index}
-                type="button"
-                role="menuitem"
-                tabIndex={-1}
-                disabled={item.disabled}
-                className={`ui-menu__item${item.tone === 'danger' ? ' ui-menu__item--danger' : ''}`}
-                onClick={() => {
-                  close(true);
-                  item.onSelect();
-                }}
-              >
-                {Icon ? <Icon size={14} aria-hidden className="ui-menu__icon" /> : null}
-                <span className="ui-menu__text">
-                  <span>{item.label}</span>
-                  {item.description ? <span className="ui-menu__description">{item.description}</span> : null}
-                </span>
-              </button>
+              <React.Fragment key={index}>
+                {item.separatorBefore ? <div role="separator" className="ui-menu__separator" /> : null}
+                <button
+                  type="button"
+                  role="menuitem"
+                  tabIndex={-1}
+                  disabled={item.disabled}
+                  className={`ui-menu__item${item.tone === 'danger' ? ' ui-menu__item--danger' : ''}`}
+                  onClick={() => {
+                    close(true);
+                    item.onSelect();
+                  }}
+                >
+                  {item.leading ? (
+                    <span className="ui-menu__leading" aria-hidden>
+                      {item.leading}
+                    </span>
+                  ) : Icon ? (
+                    <Icon size={14} aria-hidden className="ui-menu__icon" />
+                  ) : null}
+                  <span className="ui-menu__text">
+                    <span>{item.label}</span>
+                    {item.description ? <span className="ui-menu__description">{item.description}</span> : null}
+                  </span>
+                  {item.trailing ? <span className="ui-menu__trailing">{item.trailing}</span> : null}
+                </button>
+              </React.Fragment>
             );
           })}
         </div>

@@ -61,6 +61,8 @@ export interface SearchResponse {
   url: string;
   apiName: string;
   type?: TvType;
+  /** True when the item or its originating provider/row is classified as adult/NSFW. */
+  adult?: boolean;
   posterUrl?: string;
   posterHeaders?: Record<string, string>;
   year?: number;
@@ -104,6 +106,7 @@ export interface SearchSuggestion {
   alternateTitles?: string[];
   year?: number;
   type?: TvType;
+  adult?: boolean;
   posterUrl?: string;
   plot?: string;
   genres: string[];
@@ -204,6 +207,7 @@ export interface LoadResponse {
   url: string;
   apiName: string;
   type: TvType;
+  adult?: boolean;
   posterUrl?: string;
   year?: number;
   plot?: string;

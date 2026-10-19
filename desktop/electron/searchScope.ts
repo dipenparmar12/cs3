@@ -1,4 +1,4 @@
-import type { DatastoreManager } from './datastore';
+import type { Datastore } from './datastore';
 
 /**
  * Which sources this app is currently allowed to ask.
@@ -69,9 +69,9 @@ export const GLOBAL_SCOPE_REPORT: SearchScopeReport = {
 const EMPTY: SearchScope = { providers: [], indexers: [] };
 
 export class SearchScopeStore {
-  private datastore: DatastoreManager;
+  private datastore: Datastore;
 
-  constructor(datastore: DatastoreManager) {
+  constructor(datastore: Datastore) {
     this.datastore = datastore;
   }
 

@@ -38,6 +38,7 @@ const endServiceGraph = startup.span('constructServices');
 
 import { app, BrowserWindow, ipcMain, dialog, Menu, net, screen, session, shell } from 'electron';
 import { byteStringHeaders, isElectronHeaderByteStringError } from './util/headerBytes.ts';
+import { SMOKE_LAUNCH_KEY, prepareSmokeTest, runSmokeTest, smokeTestRequested } from './smokeTest.ts';
 import { appMayUse } from './security/permissions.ts';
 import { BackupService } from './cs3/backupService.ts';
 import { runReset, summarise, type ResetAreaDefinition } from './cs3/userDataReset.ts';
@@ -186,6 +187,11 @@ import {
   type SubtitleBackground,
   type SubtitleWeight,
 } from '../src/utils/subtitleStyle.ts';
+import { activeProfileId, DEFAULT_PROFILE_ID, runAsProfile } from './profiles/profileContext.ts';
+import { PREFERENCE_KEYS } from './profiles/profileKeys.ts';
+import { perProfile } from './profiles/perProfile.ts';
+import { UserProfileService } from './profiles/userProfiles.ts';
+import type { ProfileAvatarId, ProfileDraft } from '../src/types/profiles';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -204,6 +210,8 @@ export const APP_TITLE = IS_DEV ? 'CloudStream 3 Desktop [Dev]' : 'CloudStream 3
  */
 app.name = APP_NAME;
 app.setAppUserModelId(APP_ID);
+// A release smoke run gets a throwaway profile before anything reads userData.
+prepareSmokeTest(app);
 
 let mainWindow: BrowserWindow | null = null;
 
@@ -245,6 +253,66 @@ for (const name of CACHE_FILES) storage.migrateIntoCache(path.join(storage.dataD
 migratePath(path.join(storage.dataDir, 'torrent-state'), path.join(storage.cacheRoot, 'torrent-state'));
 
 const datastore = new DatastoreManager();
+
+/**
+ * Viewer profiles. Initialised before anything reads a per-person key, so the
+ * first read of the launch already answers for the profile being opened — and
+ * for nobody, if that profile is locked and waiting for its PIN.
+ */
+const userProfiles = new UserProfileService({
+  storage: datastore,
+  beforeSwitch: async () => {
+    // What the previous profile was watching stops with it; its last progress
+    // write already arrived (the window tears down before asking to switch).
+    await mpvEngine.stop().catch(() => undefined);
+    for (const store of [savedSearchProfiles]) store.each((entry) => entry.flush());
+    await datastore.flush();
+  },
+  flush: () => datastore.flush(),
+  onDuplicated: (from, to) => datastore.copyProfileKeys(from, to, PREFERENCE_KEYS),
+  onDeleted: (profileId) => {
+    datastore.removeProfileKeys(profileId);
+    for (const store of [libraryProfiles, historyProfiles, bookmarkProfiles, savedSearchProfiles]) {
+      store.forget(profileId);
+    }
+    try {
+      fs.rmSync(profileDataDir(profileId), { recursive: true, force: true });
+    } catch {
+      // Left behind it is a few kilobytes of saved searches nothing can reach.
+    }
+  },
+});
+userProfiles.initialise();
+userProfiles.onChange((state) =>
+  BrowserWindow.getAllWindows().forEach((w) => w.webContents.send('userProfiles:changed', state))
+);
+
+/**
+ * Where a profile's own files live. The default profile keeps the folder it
+ * always used, so an existing install's saved searches are already its own.
+ */
+function profileDataDir(profileId: string): string {
+  return profileId === DEFAULT_PROFILE_ID
+    ? app.getPath('userData')
+    : path.join(app.getPath('userData'), 'profiles', profileId);
+}
+
+/**
+ * Every IPC handler runs as the profile that was active when it was called.
+ *
+ * The one place that makes "work started for a profile keeps writing to that
+ * profile" true everywhere: `AsyncLocalStorage` carries the answer through
+ * every await, timer and callback the handler starts, so a discovery or a
+ * playback session begun before a switch cannot land in the profile switched
+ * to. Patched once, here, before any handler is registered — 340 call sites
+ * should not each have to remember it.
+ */
+{
+  const register = ipcMain.handle.bind(ipcMain);
+  ipcMain.handle = (channel, listener) =>
+    register(channel, (event, ...args) => runAsProfile(activeProfileId(), () => listener(event, ...args)));
+}
+
 // Constructed before every store that records activity, so the first write any
 // of them makes already sees the right answer (PRD-52).
 const privacyMode = new PrivacyMode(datastore);
@@ -469,9 +537,19 @@ const ottService = new OttService(pluginManager, datastore, catalogueCache);
 /** Metadata catalogues for the platforms no installed provider can describe. */
 const ottCatalog = new OttCatalogService();
 const batchDownloader = new BatchDownloader(contentService, downloadService);
-const libraryStore = new LibraryStore(datastore);
-const historyStore = new HistoryStore(datastore);
-const bookmarks = new BookmarkStore(datastore);
+/**
+ * The stores that hold a viewer's data in memory, one instance per profile.
+ *
+ * Each name below is the current profile's instance (`profiles/perProfile.ts`),
+ * so every handler and service that already held one keeps working unchanged.
+ */
+const libraryProfiles = perProfile((id) => new LibraryStore(datastore.forProfile(id)));
+const historyProfiles = perProfile((id) => new HistoryStore(datastore.forProfile(id)));
+const bookmarkProfiles = perProfile((id) => new BookmarkStore(datastore.forProfile(id)));
+const savedSearchProfiles = perProfile((id) => new SavedSearchStore(profileDataDir(id)));
+const libraryStore = libraryProfiles.current;
+const historyStore = historyProfiles.current;
+const bookmarks = bookmarkProfiles.current;
 /**
  * The last-known-good copy of every detail page that has been opened.
  *
@@ -482,7 +560,7 @@ const bookmarks = new BookmarkStore(datastore);
  * `cs3/pageSnapshot.ts` for what a snapshot is and is not.
  */
 const pageSnapshots = new PageSnapshotStore(app.getPath('userData'));
-const savedSearches = new SavedSearchStore(app.getPath('userData'));
+const savedSearches = savedSearchProfiles.current;
 contentService.setSnapshotStore(pageSnapshots);
 relatedMediaService.setDirectory(storage.cacheDir());
 mediaRatingService.setDirectory(storage.cacheDir());
@@ -556,6 +634,7 @@ function captureLibrarySources(
     .finally(() => libraryCapturing.delete(mediaUrl));
 }
 const bootstrap = new BootstrapService(datastore, pluginManager);
+contentService.getNativeProviders().setAdultGate(() => bootstrap.isAdultAllowed());
 
 /**
  * Install, update and add-repository presses, run behind the screen.
@@ -776,6 +855,12 @@ const mpvEngine = new MpvEngine({
   // A key pressed in mpv's window asking for something only the app has — the
   // subtitle search. The app window comes forward so the panel is seen.
   onAction: (action) => {
+    // The panic key: mpv has already paused and hidden itself. Blur the rest of
+    // the app without moving any window — it is a privacy action, not navigation.
+    if (action === 'protect') {
+      bootstrap.setAdultVisualBlurred(true);
+      return;
+    }
     if (!mainWindow || mainWindow.isDestroyed()) return;
     if (mainWindow.isMinimized()) mainWindow.restore();
     mainWindow.show();
@@ -1782,6 +1867,31 @@ app.whenReady().then(async () => {
 
   startup.stage('createWindow', () => createWindow());
 
+  if (smokeTestRequested) {
+    // The release pipeline's self-check (`smokeTest.ts`); inert otherwise.
+    void runSmokeTest({
+      app,
+      window: () => mainWindow,
+      testBinary: (name) => binaryDownloader.testBinary(name),
+      isBundled: (name) => binaryDownloader.isBundled(name),
+      sidecarStatus: () => pluginManager.getSidecar().status(),
+      javaPath: () => pluginManager.getSidecar().getProvisioner().getStatus(true).javaPath,
+      readLaunchCount: () => datastore.getInt(SMOKE_LAUNCH_KEY, 0),
+      writeLaunchCount: (count) => {
+        datastore.setInt(SMOKE_LAUNCH_KEY, count);
+        datastore.flushSync();
+      },
+      startTorrentEngine: () => torrentEngine.warmUp(),
+      reachRepository: async () => {
+        const repositories = bootstrap.visibleRepositories();
+        const repository = repositories.find((r) => r.bundled) ?? repositories[0];
+        if (!repository) throw new Error('no repository is listed');
+        const listing = await pluginManager.fetchRepository(repository.url, { remember: false });
+        return `${listing.name}: ${listing.plugins.length} extensions`;
+      },
+    });
+  }
+
   downloadService.setProgressCallback((tasks: DownloadTask[]) => {
     if (mainWindow && !mainWindow.isDestroyed()) {
       mainWindow.webContents.send('download:progress', tasks);
@@ -2066,7 +2176,7 @@ async function shutdownServices(): Promise<void> {
   // likely to be reopened in the first few of the next.
   pageSnapshots.flush();
   // A search saved a moment before quitting is one the viewer expects to find.
-  savedSearches.flush();
+  savedSearchProfiles.each((store) => store.flush());
   // The ledger's write is debounced, and the failures worth keeping cluster at
   // shutdown — a session that ended badly is the one whose last seconds matter.
   issueLog.flush();
@@ -5311,20 +5421,48 @@ ipcMain.handle('search:setConcurrency', async (_, value: number) => ({
 
 /** One push for every change to the adult gate, whoever made it. */
 bootstrap.onAdultChange(() => {
-  const state = { mode: bootstrap.adultMode(), allowed: bootstrap.isAdultAllowed() };
+  const state = bootstrap.adultState();
   BrowserWindow.getAllWindows().forEach((w) => w.webContents.send('adult:changed', state));
 });
-
-ipcMain.handle('extension:getAdultAllowed', async () => bootstrap.isAdultAllowed());
 
 /**
  * Turning adult content off must take effect at once, not at next launch: the
  * provider registry is re-read so anything already loaded stops being offered.
+ * Also supports updating session visual protection (`blurred`) or startup prompt
+ * suppression (`doNotAskAgain`) independently without mutating other preferences.
  */
-ipcMain.handle('extension:setAdultAllowed', async (_, enabled: boolean) => {
-  const value = bootstrap.setAdultAllowed(Boolean(enabled));
-  return { ok: true, enabled: value, providers: await pluginManager.listEnabledProviders() };
-});
+ipcMain.handle(
+  'extension:setAdultAllowed',
+  async (
+    _,
+    enabledOrOptions:
+      | boolean
+      | { enabled?: boolean; doNotAskAgain?: boolean; blurred?: boolean },
+    options?: { doNotAskAgain?: boolean; blurred?: boolean }
+  ) => {
+    if (typeof enabledOrOptions === 'object' && enabledOrOptions !== null) {
+      if (enabledOrOptions.enabled !== undefined) {
+        bootstrap.setAdultAllowed(Boolean(enabledOrOptions.enabled), enabledOrOptions);
+      } else {
+        if (enabledOrOptions.doNotAskAgain !== undefined) {
+          bootstrap.setDoNotAskAgain(Boolean(enabledOrOptions.doNotAskAgain));
+        }
+        if (enabledOrOptions.blurred !== undefined) {
+          bootstrap.setAdultVisualBlurred(Boolean(enabledOrOptions.blurred));
+        }
+      }
+    } else {
+      bootstrap.setAdultAllowed(Boolean(enabledOrOptions), options);
+    }
+    const state = bootstrap.adultState();
+    return {
+      ok: true,
+      enabled: state.allowed,
+      ...state,
+      providers: await pluginManager.listEnabledProviders(),
+    };
+  }
+);
 
 /**
  * PRD-54: the viewer's content regions. `regions:set` answers at once with
@@ -5343,58 +5481,62 @@ ipcMain.handle('regions:set', async (_, selection: string[], options?: { crossRe
 });
 
 /**
- * The three-state gate.
- *
- * `allowed` and `mode` are both reported because they answer different
- * questions: the mode is the setting, `allowed` is whether adult providers are
- * being offered *right now*, and under `ask` those differ until someone asks.
+ * Full adult content availability, visual privacy, and startup prompt state.
  */
 ipcMain.handle('extension:getAdultMode', async () => ({
   ok: true,
-  mode: bootstrap.adultMode(),
-  allowed: bootstrap.isAdultAllowed(),
+  ...bootstrap.adultState(),
 }));
 
-ipcMain.handle('extension:setAdultMode', async (_, mode: 'off' | 'ask' | 'on') => {
-  if (mode !== 'off' && mode !== 'ask' && mode !== 'on') {
-    return { ...fail(new Error(`Unknown adult content mode: ${mode}`)), mode: bootstrap.adultMode() };
+ipcMain.handle(
+  'extension:setAdultMode',
+  async (
+    _,
+    mode: 'off' | 'ask' | 'on',
+    options?: { blurred?: boolean; doNotAskAgain?: boolean }
+  ) => {
+    if (mode !== 'off' && mode !== 'ask' && mode !== 'on') {
+      return {
+        ...fail(new Error(`Unknown adult content mode: ${mode}`)),
+        ...bootstrap.adultState(),
+      };
+    }
+    bootstrap.setAdultMode(mode, options);
+    return {
+      ok: true,
+      ...bootstrap.adultState(),
+      providers: await pluginManager.listEnabledProviders(),
+    };
   }
-  const value = bootstrap.setAdultMode(mode);
-  return {
-    ok: true,
-    mode: value,
-    allowed: bootstrap.isAdultAllowed(),
-    providers: await pluginManager.listEnabledProviders(),
-  };
-});
+);
 
 /**
- * Reveals adult providers for the rest of this run of the app.
- *
- * Refused unless the setting is `ask` — `BootstrapService.unlockAdultForSession`
- * enforces that, and it matters because this channel is reachable from the
- * renderer: revealing must never be a way to change the setting, which is where
- * the consent step lives.
+ * Permits adult content for the current session (e.g. from the startup confirmation prompt).
+ * Visual protection remains active (`blurred: true`) until the user explicitly chooses Unblur.
  */
-ipcMain.handle('extension:unlockAdultForSession', async () => {
-  const allowed = bootstrap.unlockAdultForSession();
-  return {
-    ok: true,
-    mode: bootstrap.adultMode(),
-    allowed,
-    providers: await pluginManager.listEnabledProviders(),
-  };
-});
+ipcMain.handle(
+  'extension:unlockAdultForSession',
+  async (_, options?: { doNotAskAgain?: boolean; blurred?: boolean }) => {
+    bootstrap.unlockAdultForSession(options);
+    return {
+      ok: true,
+      ...bootstrap.adultState(),
+      providers: await pluginManager.listEnabledProviders(),
+    };
+  }
+);
 
-ipcMain.handle('extension:lockAdultForSession', async () => {
-  bootstrap.lockAdultForSession();
-  return {
-    ok: true,
-    mode: bootstrap.adultMode(),
-    allowed: bootstrap.isAdultAllowed(),
-    providers: await pluginManager.listEnabledProviders(),
-  };
-});
+ipcMain.handle(
+  'extension:lockAdultForSession',
+  async (_, options?: { doNotAskAgain?: boolean; blurred?: boolean }) => {
+    bootstrap.lockAdultForSession(options);
+    return {
+      ok: true,
+      ...bootstrap.adultState(),
+      providers: await pluginManager.listEnabledProviders(),
+    };
+  }
+);
 
 /** What a repository offered last time, instantly. Fetches nothing. */
 ipcMain.handle('extension:peekRepository', async (_, repoUrl: string) => {
@@ -5973,6 +6115,53 @@ ipcMain.handle('profiles:delete', async (_, id: string) => {
   contentService.getProfiles().remove(String(id ?? ''));
   return profileSnapshot();
 });
+
+// --- viewer profiles ------------------------------------------------------
+//
+// Not `profiles:*`, which is named search set-ups. Every answer carries the
+// whole state; a secret travels in only, never out.
+
+const text = (value: unknown): string | undefined => (typeof value === 'string' ? value : undefined);
+
+ipcMain.handle('userProfiles:get', async () => userProfiles.state());
+
+ipcMain.handle('userProfiles:verify', async (_, id: string, secret: string) =>
+  userProfiles.verify(String(id ?? ''), String(secret ?? ''))
+);
+
+ipcMain.handle('userProfiles:activate', async (_, id: string, secret?: string) =>
+  userProfiles.activate(String(id ?? ''), text(secret))
+);
+
+ipcMain.handle('userProfiles:create', async (_, draft: ProfileDraft) =>
+  userProfiles.create({
+    name: String(draft?.name ?? ''),
+    avatar: draft?.avatar,
+    secret: text(draft?.secret),
+  })
+);
+
+ipcMain.handle(
+  'userProfiles:update',
+  async (_, id: string, patch: { name?: string; avatar?: ProfileAvatarId }, secret?: string) =>
+    userProfiles.update(String(id ?? ''), { name: text(patch?.name), avatar: patch?.avatar }, text(secret))
+);
+
+ipcMain.handle('userProfiles:setLock', async (_, id: string, secret: string, currentSecret?: string) =>
+  userProfiles.setLock(String(id ?? ''), String(secret ?? ''), text(currentSecret))
+);
+
+ipcMain.handle('userProfiles:removeLock', async (_, id: string, currentSecret: string) =>
+  userProfiles.removeLock(String(id ?? ''), String(currentSecret ?? ''))
+);
+
+ipcMain.handle('userProfiles:duplicate', async (_, id: string, secret?: string) =>
+  userProfiles.duplicate(String(id ?? ''), text(secret))
+);
+
+ipcMain.handle('userProfiles:delete', async (_, id: string, secret?: string) =>
+  userProfiles.remove(String(id ?? ''), text(secret))
+);
 
 // --- network / DNS --------------------------------------------------------
 

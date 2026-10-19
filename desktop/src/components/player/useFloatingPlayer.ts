@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
+import { playUnlessBlocked } from './playbackPrivacy';
 
 /**
  * The three ways a film can keep playing while the user does something else,
@@ -61,6 +62,12 @@ export interface FloatingPlayerOptions {
   alwaysOnTop: boolean;
   /** The native engine is holding the stream, so the element has nothing to detach. */
   isNativeEngine: boolean;
+  /**
+   * Privacy has the video paused and hidden. Nothing here may undo that: the
+   * media keys cannot play it, Picture-in-Picture (raw frames, no CSS) cannot
+   * open, and the native video track is not brought back by a window change.
+   */
+  playBlocked?: boolean;
   /** For the Media Session record the OS and the PiP window read. */
   metadata: { title: string; subtitle?: string; artwork?: string };
   /** Transport, so the PiP window's own buttons and the media keys reach us. */
@@ -142,9 +149,17 @@ export function useFloatingPlayer(options: FloatingPlayerOptions): FloatingPlaye
     };
   }, [video]);
 
+  // Read through a ref: the handlers below are installed once per metadata change.
+  const blockedRef = useRef(false);
+  blockedRef.current = Boolean(options.playBlocked);
+
   const enterPip = useCallback(async () => {
     const element = video.current;
     if (!element) return;
+    if (blockedRef.current) {
+      setError('Picture-in-Picture is unavailable while the video is protected.');
+      return;
+    }
     try {
       if (document.pictureInPictureElement === element) return;
       await element.requestPictureInPicture();
@@ -232,7 +247,8 @@ export function useFloatingPlayer(options: FloatingPlayerOptions): FloatingPlaye
     }
 
     const audioOnly = backgroundPlayback === 'audio-only' && isFloating && mode === 'background';
-    void window.cloudstream?.setMpvVideoEnabled?.(!audioOnly);
+    // Never brings a protected video back: this runs on every window change.
+    if (!blockedRef.current) void window.cloudstream?.setMpvVideoEnabled?.(!audioOnly);
     // `options.controls` is rebuilt every render by its callers; depending on it
     // would run this on every frame of a seek.
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -258,7 +274,7 @@ export function useFloatingPlayer(options: FloatingPlayerOptions): FloatingPlaye
     }
 
     const handlers: Array<[MediaSessionAction, MediaSessionActionHandler | null]> = [
-      ['play', () => options.controls.play()],
+      ['play', playUnlessBlocked(() => blockedRef.current, () => options.controls.play())],
       ['pause', () => options.controls.pause()],
       ['seekbackward', () => options.controls.seekBy(-10)],
       ['seekforward', () => options.controls.seekBy(10)],

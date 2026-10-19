@@ -243,7 +243,7 @@ function cacheEntry(url, archiveName) {
  * reached. Ten minutes is generous for these sizes and finite, which is the
  * property that matters.
  */
-async function download(mirrors, target, archiveName) {
+async function download(mirrors, target, archiveName, legacyName = null) {
   /**
    * Every mirror is checked against the cache **before** any of them is
    * fetched.
@@ -255,8 +255,12 @@ async function download(mirrors, target, archiveName) {
    * the entire time. A cache hit is not a mirror preference — it is the answer.
    */
   if (!REFRESH) {
-    for (const url of mirrors) {
-      const cached = cacheEntry(url, archiveName);
+    // An exact URL names one platform's build, so an entry cached before
+    // names carried the platform (`legacyName`) is still the right file.
+    const exact = mirrors.flatMap((url) =>
+      [archiveName, legacyName].filter(Boolean).map((name) => ({ url, cached: cacheEntry(url, name) }))
+    );
+    for (const { url, cached } of exact) {
       if (!fs.existsSync(cached) || fs.statSync(cached).size === 0) continue;
       fs.mkdirSync(path.dirname(target), { recursive: true });
       fs.copyFileSync(cached, target);
@@ -394,7 +398,7 @@ async function download(mirrors, target, archiveName) {
  * mirrors. Pinned URLs go stale — the fallback exists so a build still works
  * when the API is rate-limited or unreachable, not as the normal path.
  */
-async function resolveMirrors(component) {
+async function resolveMirrors(component, cacheName) {
   if (!component.release) return component.mirrors;
   // If we already have a valid cached archive for this component, reuse it rather than
   // querying GitHub API for continuously rolling git tags.
@@ -403,7 +407,7 @@ async function resolveMirrors(component) {
       .readdirSync(CACHE_DIR)
       .some(
         (file) =>
-          file.endsWith(`-${component.archive}`) &&
+          file.endsWith(`-${cacheName}`) &&
           fs.statSync(path.join(CACHE_DIR, file)).size > 1024 * 1024
       );
     if (hasCached) {
@@ -445,7 +449,7 @@ async function resolveMirrors(component) {
  */
 function bsdTar() {
   if (process.platform !== 'win32') return 'tar';
-  const system32 = path.join(process.env.SystemRoot ?? 'C:\Windows', 'System32', 'tar.exe');
+  const system32 = path.join(process.env.SystemRoot ?? 'C:\\Windows', 'System32', 'tar.exe');
   return fs.existsSync(system32) ? system32 : 'tar';
 }
 
@@ -498,8 +502,16 @@ async function stage(name, component) {
   fs.mkdirSync(scratch, { recursive: true });
 
   const archive = path.join(scratch, component.archive);
-  const mirrors = await resolveMirrors(component);
-  if (!(await download(mirrors, archive, component.archive))) {
+  /*
+   * Cached under a name that carries the platform. The "any cached archive for
+   * this component" fallbacks in `download` match on the name alone, and with
+   * a bare `ffmpeg.tar.xz` a Linux arm64 build on a machine that had built x64
+   * picked up the x86-64 ffmpeg — and the evermeet (macOS) and gyan (Windows)
+   * zips were both `ffmpeg.zip`.
+   */
+  const cacheName = `${key}-${component.archive}`;
+  const mirrors = await resolveMirrors(component, cacheName);
+  if (!(await download(mirrors, archive, cacheName, component.archive))) {
     return { name, staged: [], failed: `every mirror for ${name} was unreachable` };
   }
 
@@ -557,6 +569,25 @@ function verify(entries) {
 // --- main ------------------------------------------------------------------
 
 console.log(`\nStaging the media runtime for ${key} into desktop/media-runtime/\n`);
+/*
+ * One platform per directory, and the directory is shipped whole: anything a
+ * previous run staged for another platform or architecture would go into this
+ * package beside the right binaries (a Windows `ffmpeg.exe` in a Linux build,
+ * an x86-64 `ffmpeg` in an arm64 one). The stamp is removed up front so a run
+ * that fails part-way is never mistaken for a complete one.
+ */
+const previous = (() => {
+  try {
+    return JSON.parse(fs.readFileSync(path.join(OUT_DIR, '.staged'), 'utf8')).platform ?? null;
+  } catch {
+    return null;
+  }
+})();
+if (previous !== key && fs.existsSync(OUT_DIR) && fs.readdirSync(OUT_DIR).length > 0) {
+  log(`clearing media-runtime/ (last staged for ${previous ?? 'an unknown platform'})`);
+  fs.rmSync(OUT_DIR, { recursive: true, force: true });
+}
+fs.rmSync(path.join(OUT_DIR, '.staged'), { force: true });
 fs.mkdirSync(OUT_DIR, { recursive: true });
 fs.mkdirSync(WORK_DIR, { recursive: true });
 

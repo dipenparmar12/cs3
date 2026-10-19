@@ -18,6 +18,8 @@ import { LibraryBucketSelector } from './LibraryBucketSelector';
 import { resultSources } from '../utils/resultSources';
 import type { VariantInfo } from '../utils/variantGroups';
 import { VariantChip } from './search/VariantChip';
+import { isAdultMedia } from '../utils/adultContent';
+import { isAdultItemBlurred, useAdultState } from '../utils/useAdultMode';
 
 interface PosterCardProps {
   item: SearchResponse;
@@ -91,9 +93,12 @@ export const PosterCard: React.FC<PosterCardProps> = ({
   const [hoverCardOpen, setHoverCardOpen] = useState(false);
   const [alignRight, setAlignRight] = useState(false);
   const hoverTimer = useRef<number | null>(null);
+  const adult = useAdultState();
+  const isAdult = isAdultMedia(item, adult.adultProviders);
+  const isRedacted = isAdult && !adult.allowed;
 
   const handleMouseEnter = () => {
-    if (!ENABLE_HOVER_CARD_PREVIEW) return;
+    if (!ENABLE_HOVER_CARD_PREVIEW || isRedacted) return;
     if (hoverTimer.current) window.clearTimeout(hoverTimer.current);
     hoverTimer.current = window.setTimeout(() => {
       if (cardRef.current) {
@@ -120,12 +125,14 @@ export const PosterCard: React.FC<PosterCardProps> = ({
 
   const handleCardClick = (e: React.MouseEvent) => {
     releaseCardFocus(e);
+    if (isRedacted) return;
     onSelectMedia(item);
   };
 
   const handlePlayClick = (e: React.MouseEvent) => {
     e.stopPropagation();
     releaseCardFocus(e);
+    if (isRedacted) return;
     if (onPlayDirectly) onPlayDirectly(item);
     else onSelectMedia(item);
   };
@@ -138,11 +145,12 @@ export const PosterCard: React.FC<PosterCardProps> = ({
   const hasName = Boolean(item?.name?.trim());
   const sources = item ? resultSources(item) : [];
   const grouped = (variants?.length ?? 0) > 1;
-  const titleText = hasName
+  const rawTitle = hasName
     ? (grouped && displayName ? displayName : (item?.name ?? ''))
     : item?.apiName
       ? `a title from ${item.apiName}`
       : 'this title';
+  const titleText = isRedacted ? 'Sensitive content hidden' : rawTitle;
 
   /**
    * The old `outcome` prop folded in, so one code path draws both.
@@ -189,13 +197,25 @@ export const PosterCard: React.FC<PosterCardProps> = ({
         tabIndex={0}
         aria-label={`Open ${titleText}`}
       >
-        <Poster src={item?.posterUrl} title={titleText} />
+        <Poster
+          src={item?.posterUrl}
+          title={titleText}
+          sensitive={isAdult}
+          itemKey={item?.url || item?.name}
+          showRevealControl={isAdult}
+        />
         {item?.isExactMatch ? (
           <span className="poster-badge poster-badge--match">
             <Target size={11} aria-hidden /> Best match
           </span>
         ) : (
-          <span className="poster-badge">{item?.type || 'Movie'}</span>
+          <span className="poster-badge">
+            {isAdult
+              ? isAdultItemBlurred(adult, item?.url || item?.name)
+                ? '18+'
+                : item?.type || 'Movie'
+              : item?.type || 'Movie'}
+          </span>
         )}
 
         {/*

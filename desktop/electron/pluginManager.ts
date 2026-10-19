@@ -92,7 +92,13 @@ import {
   type RecoveryPlan,
 } from './cs3/providerRecovery.js';
 import { describeError } from '../src/utils/errors.ts';
-import { isSensitiveTitle, providerAdultKind, type AdultKind } from '../src/utils/adultContent.ts';
+import {
+  isSensitiveRow,
+  isSensitiveRowLabel,
+  isSensitiveTitle,
+  providerAdultKind,
+  type AdultKind,
+} from '../src/utils/adultContent.ts';
 
 export interface RepositoryFetchResult {
   repositoryUrl: string;
@@ -676,7 +682,7 @@ const SETTINGS_KEY_SEARCH_CONCURRENCY = 'cs3_provider_search_concurrency';
 function mapProviderResults(
   providerName: string,
   raw: unknown,
-  options: { allowUnnamed?: boolean } = {}
+  options: { allowUnnamed?: boolean; isAdultProvider?: boolean; isAdultRow?: boolean } = {}
 ): SearchResponse[] {
   if (!Array.isArray(raw)) return [];
 
@@ -684,11 +690,19 @@ function mapProviderResults(
   for (const item of raw as Array<Record<string, unknown>>) {
     if (!item?.url) continue;
     if (!item.name && !options.allowUnnamed) continue;
+    const name = item.name ? String(item.name) : '';
+    const rawType = item.type ? String(item.type) : undefined;
+    const isAdult =
+      Boolean(options.isAdultProvider) ||
+      Boolean(options.isAdultRow) ||
+      rawType?.toUpperCase() === 'NSFW' ||
+      isSensitiveTitle(name);
     out.push({
-      name: item.name ? String(item.name) : '',
+      name,
       url: buildExtensionUrl(providerName, String(item.url)),
       apiName: providerName,
-      type: item.type as SearchResponse['type'],
+      type: rawType as SearchResponse['type'],
+      ...(isAdult ? { adult: true } : {}),
       posterUrl: item.posterUrl ? String(item.posterUrl) : undefined,
       posterHeaders: item.posterHeaders as Record<string, string> | undefined,
       quality: item.quality ? String(item.quality) : undefined,
@@ -3377,6 +3391,18 @@ export class PluginManager {
     return this.enabledProviderNames();
   }
 
+  private adultGate: (() => boolean) | null = null;
+
+  public setAdultGate(gate: () => boolean): void {
+    this.adultGate = gate;
+  }
+
+  public listAdultOnlyProviderNames(): string[] {
+    return [...this.providers.values()]
+      .filter((provider) => isAdultOnlyProvider(provider))
+      .map((provider) => provider.name);
+  }
+
   /**
    * Adult content is opt-in, and the gate lives here on purpose.
    *
@@ -3388,6 +3414,7 @@ export class PluginManager {
    * whether or not that repository was flagged.
    */
   private adultAllowed(): boolean {
+    if (this.adultGate) return this.adultGate();
     return this.datastore.getBool(SETTINGS_KEY_ADULT_ENABLED, false);
   }
 
@@ -3403,13 +3430,20 @@ export class PluginManager {
   }
 
   /**
-   * A mixed provider's explicit 18+ titles, removed while adult content is off.
-   * Adult-only providers never get this far (the gate drops them whole), and a
-   * provider declaring no NSFW at all is left alone.
+   * Explicit 18+ titles, removed while adult content is off.
    */
-  private withoutAdultTitles<T extends { name: string }>(provider: string, items: T[]): T[] {
-    if (this.adultAllowed() || this.providerAdultKind(provider) !== 'mixed') return items;
-    return items.filter((item) => !isSensitiveTitle(item.name));
+  private withoutAdultTitles<T extends { name: string; type?: string; adult?: boolean }>(
+    provider: string,
+    items: T[]
+  ): T[] {
+    if (this.adultAllowed()) return items;
+    if (this.providerAdultKind(provider) === 'adult') return [];
+    return items.filter(
+      (item) =>
+        !item.adult &&
+        String(item.type ?? '').toUpperCase() !== 'NSFW' &&
+        !isSensitiveTitle(item.name)
+    );
   }
 
   /**
@@ -3726,7 +3760,12 @@ export class PluginManager {
       return { provider: name, results: [], latencyMs, error };
     }
 
-    const results = this.withoutAdultTitles(name, mapProviderResults(name, parsed.results));
+    const results = this.withoutAdultTitles(
+      name,
+      mapProviderResults(name, parsed.results, {
+        isAdultProvider: this.providerAdultKind(name) === 'adult',
+      })
+    );
     // Recorded at `info`: knowing a provider answered — and how fast — is what
     // makes a later failure by the same provider diagnosable rather than just
     // annoying.
@@ -3906,15 +3945,22 @@ export class PluginManager {
      */
     const items: SearchResponse[] = [];
     const lists: ProviderCatalogPage['lists'] = [];
+    const isAdultProvider = this.providerAdultKind(providerName) === 'adult';
+    const sectionIsAdult = isSensitiveRow({ name: section.name, data: section.data });
     if (Array.isArray(parsed.sections)) {
       for (const raw of parsed.sections as Array<Record<string, unknown>>) {
         // Unnamed items are kept: a home-page row is often posters only —
         // NetMirror sends 340 items, every one with an empty `name` — and
         // Android draws them as poster cards. The title comes with `load()`.
-        const listItems = mapProviderResults(providerName, raw?.items, { allowUnnamed: true });
+        const subRowName = typeof raw?.name === 'string' ? raw.name : '';
+        const listItems = mapProviderResults(providerName, raw?.items, {
+          allowUnnamed: true,
+          isAdultProvider,
+          isAdultRow: sectionIsAdult || isSensitiveRowLabel(subRowName),
+        });
         items.push(...listItems);
         lists.push({
-          name: typeof raw?.name === 'string' ? raw.name : '',
+          name: subRowName,
           horizontalImages: raw?.horizontalImages === true,
           items: listItems,
         });
@@ -4100,11 +4146,20 @@ export class PluginManager {
         }))
       : undefined;
 
+    const isAdultProvider = this.providerAdultKind(ref.provider) === 'adult';
+    const detailName = String(detail.name ?? '');
+    const detailType = detail.type as LoadResponse['type'];
+    const isAdultDetail =
+      isAdultProvider ||
+      String(detailType ?? '').toUpperCase() === 'NSFW' ||
+      isSensitiveTitle(detailName);
+
     return {
-      name: String(detail.name ?? ''),
+      name: detailName,
       url,
       apiName: detail.apiName ? String(detail.apiName) : ref.provider,
-      type: detail.type as LoadResponse['type'],
+      type: detailType,
+      ...(isAdultDetail ? { adult: true } : {}),
       posterUrl: detail.posterUrl ? String(detail.posterUrl) : undefined,
       year: typeof detail.year === 'number' ? detail.year : undefined,
       plot: detail.plot ? String(detail.plot) : undefined,
@@ -4126,7 +4181,7 @@ export class PluginManager {
        */
       recommendations: this.withoutAdultTitles(
         ref.provider,
-        mapProviderResults(ref.provider, detail.recommendations)
+        mapProviderResults(ref.provider, detail.recommendations, { isAdultProvider })
       ),
       // A film has no episode list; its `dataUrl` is the playable handle and is
       // re-addressed the same way an episode's is.

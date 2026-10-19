@@ -1,5 +1,5 @@
 import { randomUUID } from 'crypto';
-import type { DatastoreManager } from '../datastore';
+import type { Datastore } from '../datastore';
 import type {
   HistoryEvent,
   HistoryFilter,
@@ -45,10 +45,10 @@ export function historyEventMatches(item: HistoryEvent, query: string): boolean 
 }
 
 export class HistoryStore {
-  private datastore: DatastoreManager;
+  private datastore: Datastore;
   private events: HistoryEvent[] = [];
 
-  constructor(datastore: DatastoreManager) {
+  constructor(datastore: Datastore) {
     this.datastore = datastore;
     this.restore();
   }
