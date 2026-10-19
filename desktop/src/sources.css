@@ -4898,6 +4898,20 @@
   border-color: var(--accent, #e50914);
   color: #fff;
 }
+.scope-modal__chip-code {
+  font-weight: 600;
+  font-size: 0.69rem;
+  letter-spacing: 0.02em;
+}
+.scope-modal__chip-name {
+  font-size: 0.68rem;
+  opacity: 0.75;
+  margin-left: 0.15rem;
+  max-width: 8rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 .scope-modal__clear {
   display: inline-flex;
   align-items: center;
@@ -5010,6 +5024,11 @@
 .scope-modal__chosen-title {
   font-weight: 500;
   color: var(--text-muted);
+}
+.scope-modal__chosen-breakdown {
+  font-size: 0.7rem;
+  color: var(--text-subtle, rgba(255, 255, 255, 0.45));
+  font-weight: 400;
 }
 .scope-modal__chosen-actions {
   display: flex;
@@ -5312,6 +5331,165 @@
   display: flex;
   gap: 0.45rem;
   flex: 0 0 auto;
+}
+
+/* Transient feedback notice banner inside the sources dialog */
+.scope-modal__feedback-toast {
+  position: absolute;
+  bottom: 4.5rem;
+  right: 1.5rem;
+  z-index: 50;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.5rem 0.85rem;
+  background: var(--bg-card, #1c1d22);
+  border: 1px solid var(--border-color, rgba(255, 255, 255, 0.15));
+  border-left: 3px solid var(--accent-primary, #3b82f6);
+  border-radius: 6px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.45);
+  color: var(--text-main, #fff);
+  font-size: 0.82rem;
+  animation: scope-toast-in 0.18s ease-out;
+}
+@keyframes scope-toast-in {
+  from { opacity: 0; transform: translateY(6px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+.scope-modal__feedback-icon {
+  color: var(--accent-primary, #3b82f6);
+  flex-shrink: 0;
+}
+.scope-modal__feedback-close {
+  background: transparent;
+  border: none;
+  color: var(--text-muted);
+  cursor: pointer;
+  padding: 0;
+  display: flex;
+  margin-left: 0.25rem;
+}
+.scope-modal__feedback-close:hover {
+  color: var(--text-main);
+}
+
+/* Modal confirmation dialog for consequential bulk selection changes */
+.scope-confirm-backdrop {
+  position: absolute;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.65);
+  backdrop-filter: blur(2px);
+  z-index: 100;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 1.5rem;
+  animation: scope-fade-in 0.15s ease-out;
+}
+@keyframes scope-fade-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+.scope-confirm-dialog {
+  background: var(--bg-card, #1c1d22);
+  border: 1px solid var(--border-color, rgba(255, 255, 255, 0.14));
+  border-radius: 10px;
+  max-width: 440px;
+  width: 100%;
+  box-shadow: 0 16px 40px rgba(0, 0, 0, 0.6);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+.scope-confirm-dialog__head {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  padding: 1.1rem 1.25rem 0.6rem;
+}
+.scope-confirm-dialog__head h3 {
+  margin: 0;
+  font-size: 1rem;
+  font-weight: 600;
+  color: var(--text-main, #fff);
+}
+.scope-confirm-dialog__warn-icon {
+  color: var(--status-warning, #f59e0b);
+  flex-shrink: 0;
+}
+.scope-confirm-dialog__body {
+  padding: 0 1.25rem 1rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.85rem;
+}
+.scope-confirm-dialog__desc {
+  margin: 0;
+  font-size: 0.84rem;
+  color: var(--text-muted, rgba(255, 255, 255, 0.7));
+  line-height: 1.45;
+}
+.scope-confirm-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 0.5rem;
+  margin-top: 0.2rem;
+}
+.scope-confirm-card {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 0.6rem 0.4rem;
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  text-align: center;
+}
+.scope-confirm-card__count {
+  font-size: 1.15rem;
+  font-weight: 700;
+  line-height: 1.1;
+  font-variant-numeric: tabular-nums;
+}
+.scope-confirm-card__label {
+  font-size: 0.68rem;
+  color: var(--text-muted);
+  margin-top: 0.2rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  font-weight: 500;
+}
+.scope-confirm-card__sub {
+  font-size: 0.62rem;
+  color: var(--text-subtle);
+  margin-top: 0.2rem;
+  white-space: nowrap;
+}
+.scope-confirm-card--removed .scope-confirm-card__count {
+  color: #f87171;
+}
+.scope-confirm-card--removed {
+  background: rgba(239, 68, 68, 0.08);
+  border-color: rgba(239, 68, 68, 0.2);
+}
+.scope-confirm-card--added .scope-confirm-card__count {
+  color: #34d399;
+}
+.scope-confirm-card--added {
+  background: rgba(16, 185, 129, 0.08);
+  border-color: rgba(16, 185, 129, 0.2);
+}
+.scope-confirm-card--unchanged .scope-confirm-card__count {
+  color: var(--text-main);
+}
+.scope-confirm-dialog__foot {
+  display: flex;
+  justify-content: flex-end;
+  gap: 0.5rem;
+  padding: 0.75rem 1.25rem;
+  background: rgba(0, 0, 0, 0.2);
+  border-top: 1px solid var(--border-color, rgba(255, 255, 255, 0.08));
 }
 
 /* Narrow windows: the rail sits above the list rather than squeezing it. */
@@ -9046,8 +9224,39 @@ video::cue {
 
 /* Wraps rather than scrolls: a horizontal scroller hides the pill on the end,
    and the pill on the end is the one just created. */
-.profile-bar__pills { display: flex; flex-wrap: wrap; gap: .35rem; flex: 1; min-width: 0; }
-.profile-bar__save { flex-shrink: 0; display: inline-flex; align-items: center; gap: .3rem; }
+.profile-bar__pills { display: flex; flex-wrap: wrap; align-items: center; gap: .35rem; flex: 1; min-width: 0; }
+.profile-bar__group { display: inline-flex; align-items: center; flex-wrap: wrap; gap: .35rem; }
+.profile-bar__group--builtin {
+  padding-right: .45rem;
+  border-right: 1px solid var(--border-color);
+}
+.profile-bar__group--custom {
+  padding-left: .15rem;
+}
+.profile-bar__create-btn {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: .3rem;
+  white-space: nowrap;
+  margin-left: auto;
+}
+.profile-bar--delete-confirm {
+  align-items: center;
+  background: rgba(239, 68, 68, 0.1);
+  border-bottom: 1px solid rgba(239, 68, 68, 0.3);
+  gap: .6rem;
+}
+.profile-bar__warning-icon {
+  color: #f87171;
+  flex-shrink: 0;
+}
+.profile-bar__confirm-text {
+  font-size: .82rem;
+  color: var(--text-main);
+  flex: 1;
+  min-width: 0;
+}
 
 .profile-pill-group { position: relative; display: inline-flex; }
 
@@ -9061,6 +9270,25 @@ video::cue {
   font-size: .8rem;
   cursor: pointer;
   white-space: nowrap;
+}
+.profile-pill--builtin { font-size: .78rem; }
+.profile-pill--disabled {
+  opacity: .45;
+  cursor: not-allowed;
+}
+.profile-pill--disabled:hover {
+  border-color: var(--border-color);
+}
+.profile-pill--draft {
+  border-style: dashed;
+  border-color: rgba(245, 158, 11, .5);
+}
+.profile-pill__draft-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: #f59e0b;
+  display: inline-block;
 }
 .profile-pill:hover { border-color: rgba(255, 255, 255, .28); }
 .profile-pill--on {

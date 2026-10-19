@@ -1189,11 +1189,16 @@ export const App: React.FC = () => {
     return true;
   }, [search]);
 
-  /** Re-runs the current query under a scope the user just changed. */
+  /**
+   * Scope changed by the user in the search sources dialog.
+   *
+   * PRD 2.4: Separated from search execution. Changing or confirming the
+   * source selection commits the scope without automatically re-triggering search.
+   * The updated selection is used when the user next explicitly submits a query.
+   */
   const handleScopeChange = useCallback(() => {
-    const previous = lastQuery.current;
-    if (previous?.query) void handleSearch(previous.query, previous.options);
-  }, [handleSearch]);
+    // Intentionally no-op on auto-search. The committed scope is used on next explicit search.
+  }, []);
 
   /**
    * Re-run the last query with no scope at all.

@@ -7,9 +7,13 @@ import React, {
   useState,
 } from 'react';
 import {
+  AlertTriangle,
+  BookOpen,
   Check,
   ChevronDown,
   ChevronRight,
+  Clapperboard,
+  Film,
   Globe,
   Loader2,
   Minus,
@@ -17,9 +21,15 @@ import {
   Radio,
   RotateCcw,
   Search,
+  ShieldAlert,
+  Smile,
+  Sparkles,
+  Tv,
   X,
 } from 'lucide-react';
 import type { ProviderLoadProgress } from '../../../electron/pluginManager';
+import { FlagIcon } from '../FlagIcon';
+import { getLanguageFlag, getLanguageName } from '../../utils/languageFlag';
 import { isWorthShowing, type ProviderHealth } from './providerHealth';
 import {
   prettyType,
@@ -29,9 +39,29 @@ import {
   type Facets,
   type FacetSelection,
   type Row,
+  type SelectionImpact,
 } from './sourceScopeModel';
 
 export type { CheckState, ChosenSource, Facets, FacetSelection, Row };
+
+export interface PendingImpactConfirmation {
+  actionName: string;
+  actionDescription: string;
+  impact: SelectionImpact;
+}
+
+function getContentTypeIcon(type: string): React.ReactNode {
+  const norm = type.toLowerCase();
+  if (norm.includes('movie') || norm.includes('film')) return <Film size={12} />;
+  if (norm.includes('tv') || norm.includes('series')) return <Tv size={12} />;
+  if (norm.includes('anime')) return <Sparkles size={12} />;
+  if (norm.includes('drama') || norm.includes('asian')) return <Clapperboard size={12} />;
+  if (norm.includes('cartoon') || norm.includes('animation')) return <Smile size={12} />;
+  if (norm.includes('book') || norm.includes('manga') || norm.includes('comic'))
+    return <BookOpen size={12} />;
+  if (norm.includes('nsfw') || norm.includes('adult')) return <ShieldAlert size={12} />;
+  return <Film size={12} />;
+}
 
 const Box: React.FC<{ state: CheckState }> = ({ state }) => (
   <span className={`scope__box scope__box--${state}`} aria-hidden>
@@ -303,6 +333,9 @@ const ChosenSourcesBar: React.FC<ChosenSourcesBarProps> = ({ chosen, onDeselect,
 
   if (chosen.length === 0) return null;
 
+  const extCount = chosen.filter((c) => !c.isIndexer).length;
+  const torrentCount = chosen.filter((c) => c.isIndexer).length;
+
   const hasOverflow = chosen.length > CHIP_COLLAPSE_THRESHOLD;
   const visible = expanded || !hasOverflow ? chosen : chosen.slice(0, CHIP_COLLAPSE_THRESHOLD);
 
@@ -311,6 +344,12 @@ const ChosenSourcesBar: React.FC<ChosenSourcesBarProps> = ({ chosen, onDeselect,
       <div className="scope-modal__chosen-header">
         <span className="scope-modal__chosen-title">
           Selected sources ({chosen.length})
+          <span className="scope-modal__chosen-breakdown">
+            {' · '}
+            {extCount > 0 && `${extCount} ext${extCount === 1 ? '' : 's'}`}
+            {extCount > 0 && torrentCount > 0 && ' · '}
+            {torrentCount > 0 && `${torrentCount} torrent${torrentCount === 1 ? '' : 's'}`}
+          </span>
         </span>
         <div className="scope-modal__chosen-actions">
           {hasOverflow && (
@@ -414,6 +453,12 @@ export interface SourceScopeDialogProps {
   onClose: () => void;
   profileBar?: React.ReactNode;
   healthFor?: (provider: string) => ProviderHealth | undefined;
+
+  pendingImpact?: PendingImpactConfirmation | null;
+  onConfirmImpact?: () => void;
+  onCancelImpact?: () => void;
+  feedbackToast?: string | null;
+  onDismissFeedback?: () => void;
 }
 
 export const SourceScopeDialog: React.FC<SourceScopeDialogProps> = ({
@@ -459,6 +504,11 @@ export const SourceScopeDialog: React.FC<SourceScopeDialogProps> = ({
   onClose,
   profileBar,
   healthFor,
+  pendingImpact,
+  onConfirmImpact,
+  onCancelImpact,
+  feedbackToast,
+  onDismissFeedback,
 }) => {
   const dialog = useRef<HTMLDivElement | null>(null);
   const scroller = useRef<HTMLDivElement | null>(null);
@@ -722,8 +772,10 @@ export const SourceScopeDialog: React.FC<SourceScopeDialogProps> = ({
                     key={type}
                     on={facets.types.has(type)}
                     onClick={() => onToggleFacet('types', type)}
+                    title={prettyType(type)}
                   >
-                    {prettyType(type)}
+                    {getContentTypeIcon(type)}
+                    <span>{prettyType(type)}</span>
                   </FacetChip>
                 ))}
               </FacetGroup>
@@ -737,15 +789,24 @@ export const SourceScopeDialog: React.FC<SourceScopeDialogProps> = ({
                 }
                 onClear={onClearFacetGroup ? () => onClearFacetGroup('languages') : undefined}
               >
-                {available.languages.map((lang) => (
-                  <FacetChip
-                    key={lang}
-                    on={facets.languages.has(lang)}
-                    onClick={() => onToggleFacet('languages', lang)}
-                  >
-                    {lang.toUpperCase()}
-                  </FacetChip>
-                ))}
+                {available.languages.map((lang) => {
+                  const code = lang.toUpperCase();
+                  const flag = getLanguageFlag(lang);
+                  const fullName = getLanguageName(lang);
+                  const title = fullName ? `${fullName} (${code})` : code;
+                  return (
+                    <FacetChip
+                      key={lang}
+                      on={facets.languages.has(lang)}
+                      onClick={() => onToggleFacet('languages', lang)}
+                      title={title}
+                    >
+                      <FlagIcon flag={flag} size={13} fallback={code.slice(0, 2)} />
+                      <span className="scope-modal__chip-code">{code}</span>
+                      {fullName && <span className="scope-modal__chip-name">{fullName}</span>}
+                    </FacetChip>
+                  );
+                })}
               </FacetGroup>
             )}
 
@@ -936,6 +997,96 @@ export const SourceScopeDialog: React.FC<SourceScopeDialogProps> = ({
             </button>
           </div>
         </footer>
+
+        {feedbackToast && (
+          <div className="scope-modal__feedback-toast" role="status" aria-live="polite">
+            <Check size={14} className="scope-modal__feedback-icon" />
+            <span>{feedbackToast}</span>
+            {onDismissFeedback && (
+              <button
+                type="button"
+                className="scope-modal__feedback-close"
+                onClick={onDismissFeedback}
+                aria-label="Dismiss notice"
+              >
+                <X size={12} />
+              </button>
+            )}
+          </div>
+        )}
+
+        {pendingImpact && (
+          <div className="scope-confirm-backdrop" role="presentation">
+            <div
+              className="scope-confirm-dialog"
+              role="alertdialog"
+              aria-modal="true"
+              aria-labelledby="scope-confirm-title"
+              aria-describedby="scope-confirm-desc"
+            >
+              <div className="scope-confirm-dialog__head">
+                <AlertTriangle size={18} className="scope-confirm-dialog__warn-icon" />
+                <h3 id="scope-confirm-title">{pendingImpact.actionName}?</h3>
+              </div>
+              <div className="scope-confirm-dialog__body">
+                <p id="scope-confirm-desc" className="scope-confirm-dialog__desc">
+                  {pendingImpact.actionDescription}
+                </p>
+
+                <div className="scope-confirm-grid">
+                  <div className="scope-confirm-card scope-confirm-card--removed">
+                    <span className="scope-confirm-card__count">
+                      -{pendingImpact.impact.totalRemoved}
+                    </span>
+                    <span className="scope-confirm-card__label">Removed</span>
+                    {pendingImpact.impact.totalRemoved > 0 && (
+                      <span className="scope-confirm-card__sub">
+                        {pendingImpact.impact.removedProviders.length} ext ·{' '}
+                        {pendingImpact.impact.removedIndexers.length} torrent
+                      </span>
+                    )}
+                  </div>
+
+                  <div className="scope-confirm-card scope-confirm-card--added">
+                    <span className="scope-confirm-card__count">
+                      +{pendingImpact.impact.totalAdded}
+                    </span>
+                    <span className="scope-confirm-card__label">Added</span>
+                    {pendingImpact.impact.totalAdded > 0 && (
+                      <span className="scope-confirm-card__sub">
+                        {pendingImpact.impact.addedProviders.length} ext ·{' '}
+                        {pendingImpact.impact.addedIndexers.length} torrent
+                      </span>
+                    )}
+                  </div>
+
+                  <div className="scope-confirm-card scope-confirm-card--unchanged">
+                    <span className="scope-confirm-card__count">
+                      {pendingImpact.impact.totalUnchanged}
+                    </span>
+                    <span className="scope-confirm-card__label">Unchanged</span>
+                  </div>
+                </div>
+              </div>
+              <div className="scope-confirm-dialog__foot">
+                <button
+                  type="button"
+                  className="btn btn-ghost"
+                  onClick={onCancelImpact}
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  className="btn btn-primary"
+                  onClick={onConfirmImpact}
+                >
+                  Confirm changes
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
       </div>
     </div>
   );

@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import {
   areAllFilteredSelected,
+  calculateSelectionImpact,
   excludeSection,
   getFilteredMembers,
   includeSection,
@@ -141,4 +142,40 @@ test('includeSection and excludeSection cleanly bulk-toggle row members', () => 
   const excluded = excludeSection(row, included.providers, included.indexers);
   assert.deepEqual([...excluded.providers], ['P3']);
   assert.deepEqual([...excluded.indexers], ['I1']);
+});
+
+test('calculateSelectionImpact accurately determines delta and consequential threshold', () => {
+  const current = {
+    providers: new Set(['P1', 'P2', 'P3', 'P4']),
+    indexers: new Set(['I1']),
+  };
+  const target = {
+    providers: new Set(['P1', 'P2', 'P5']),
+    indexers: new Set(['I1', 'I2']),
+  };
+
+  const impact = calculateSelectionImpact(current, target);
+  assert.deepEqual(impact.removedProviders.sort(), ['P3', 'P4']);
+  assert.deepEqual(impact.addedProviders, ['P5']);
+  assert.deepEqual(impact.removedIndexers, []);
+  assert.deepEqual(impact.addedIndexers, ['I2']);
+  assert.equal(impact.totalRemoved, 2);
+  assert.equal(impact.totalAdded, 2);
+  assert.equal(impact.totalUnchanged, 3); // P1, P2, I1
+  assert.equal(impact.newTotal, 5);
+  assert.equal(impact.isConsequential, false); // 2 removed < 3, 2 added < 10
+
+  // Consequential removal (e.g. clear all)
+  const clearImpact = calculateSelectionImpact(current, { providers: new Set(), indexers: new Set() });
+  assert.equal(clearImpact.totalRemoved, 5);
+  assert.equal(clearImpact.isConsequential, true);
+
+  // Routine 1-item checkbox toggle
+  const routineImpact = calculateSelectionImpact(
+    current,
+    { providers: new Set([...current.providers, 'P5']), indexers: current.indexers }
+  );
+  assert.equal(routineImpact.totalAdded, 1);
+  assert.equal(routineImpact.totalRemoved, 0);
+  assert.equal(routineImpact.isConsequential, false);
 });

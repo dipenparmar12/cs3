@@ -1,6 +1,28 @@
 import React, { useRef, useState } from 'react';
-import { Check, Copy, Globe, Pencil, Plus, Trash2 } from 'lucide-react';
+import {
+  AlertTriangle,
+  Check,
+  Clapperboard,
+  Copy,
+  Globe,
+  Languages,
+  Pencil,
+  Plus,
+  ShieldAlert,
+  Sparkles,
+  Trash2,
+} from 'lucide-react';
 import { useDismissable } from '../../utils/useDismissable';
+
+export interface BuiltInProfileDef {
+  id: string;
+  name: string;
+  description: string;
+  icon?: 'globe' | 'languages' | 'sparkles' | 'clapperboard' | 'shield';
+  count: number;
+  disabled?: boolean;
+  disabledReason?: string;
+}
 
 export interface ProfileSummary {
   id: string;
@@ -9,24 +31,9 @@ export interface ProfileSummary {
   indexers: string[];
 }
 
-/**
- * Switching between saved selections, and the reason there are any.
- *
- * "All sources" used to be wired to an erasure. Someone who picked eleven Hindi
- * providers out of two hundred, searched, then pressed it to check one thing
- * had thrown that minute away with no undo and no record of what was lost. It
- * is a pill here, and switching to it puts the selection down rather than
- * deleting it — the state machine in `electron/cs3/sourceProfiles.ts` has a
- * test named after exactly that round trip.
- *
- * Everything else follows from having somewhere to put a selection that is not
- * the bin: name one, keep several, copy one to vary it. A profile is one click
- * to switch, which is the whole feature — the management lives behind the pill
- * it belongs to rather than in a settings screen, because a profile is only
- * ever edited in the moment you notice it is wrong.
- */
-export const SourceProfileBar: React.FC<{
+export interface SourceProfileBarProps {
   profiles: ProfileSummary[];
+  builtInProfiles?: BuiltInProfileDef[];
   activeId: string;
   /** True when the unnamed selection holds something worth keeping. */
   hasDraft: boolean;
@@ -36,8 +43,34 @@ export const SourceProfileBar: React.FC<{
   onRename: (id: string, name: string) => void;
   onDuplicate: (id: string) => void;
   onDelete: (id: string) => void;
-}> = ({
+}
+
+function renderBuiltInIcon(icon?: BuiltInProfileDef['icon']) {
+  switch (icon) {
+    case 'globe':
+      return <Globe size={13} />;
+    case 'languages':
+      return <Languages size={13} />;
+    case 'sparkles':
+      return <Sparkles size={13} />;
+    case 'clapperboard':
+      return <Clapperboard size={13} />;
+    case 'shield':
+      return <ShieldAlert size={13} />;
+    default:
+      return <Globe size={13} />;
+  }
+}
+
+/**
+ * Source profiles bar for search scope dialog.
+ * Supports built-in source profiles (All, English, Hindi, Anime, Drama, NSFW),
+ * custom user-defined profiles, unsaved draft indicators, inline creation, and
+ * deletion confirmation.
+ */
+export const SourceProfileBar: React.FC<SourceProfileBarProps> = ({
   profiles,
+  builtInProfiles = [],
   activeId,
   hasDraft,
   draftCount,
@@ -50,6 +83,7 @@ export const SourceProfileBar: React.FC<{
   const [naming, setNaming] = useState<'new' | string | null>(null);
   const [draftName, setDraftName] = useState('');
   const [menuFor, setMenuFor] = useState<string | null>(null);
+  const [deleteConfirm, setDeleteConfirm] = useState<string | null>(null);
   const menuWrapper = useRef<HTMLDivElement | null>(null);
 
   useDismissable(menuFor !== null, menuWrapper, () => setMenuFor(null));
@@ -64,14 +98,7 @@ export const SourceProfileBar: React.FC<{
     setDraftName('');
   };
 
-  /**
-   * The name box replaces the bar rather than opening a dialog.
-   *
-   * A modal over a modal is the shape that makes Escape ambiguous, and this
-   * dialog already binds Escape in the capture phase so that closing a menu
-   * does not close the film behind it. One text field in place costs nothing
-   * and cannot stack.
-   */
+  /** In-place naming field replaces the bar so no stacked modals occur. */
   if (naming !== null) {
     return (
       <div className="profile-bar profile-bar--naming">
@@ -82,7 +109,6 @@ export const SourceProfileBar: React.FC<{
           onKeyDown={(event) => {
             if (event.key === 'Enter') submitName();
             if (event.key === 'Escape') {
-              // Consumed here so the dialog behind does not also close.
               event.stopPropagation();
               setNaming(null);
               setDraftName('');
@@ -91,7 +117,11 @@ export const SourceProfileBar: React.FC<{
           placeholder={naming === 'new' ? 'Name this set of sources…' : 'New name…'}
           aria-label={naming === 'new' ? 'Name for the new profile' : 'New name for this profile'}
         />
-        <button className="btn btn-primary btn-sm" onClick={submitName} disabled={!draftName.trim()}>
+        <button
+          className="btn btn-primary btn-sm"
+          onClick={submitName}
+          disabled={!draftName.trim()}
+        >
           <Check size={13} /> Save
         </button>
         <button
@@ -107,123 +137,176 @@ export const SourceProfileBar: React.FC<{
     );
   }
 
+  /** In-place delete confirmation for consequential custom profile removal. */
+  if (deleteConfirm !== null) {
+    const profileToDelete = profiles.find((p) => p.id === deleteConfirm);
+    return (
+      <div className="profile-bar profile-bar--delete-confirm" role="alertdialog">
+        <AlertTriangle size={14} className="profile-bar__warning-icon" />
+        <span className="profile-bar__confirm-text">
+          Delete profile <strong>“{profileToDelete?.name ?? 'selected'}”</strong>?
+        </span>
+        <button
+          className="btn btn-danger btn-sm"
+          onClick={() => {
+            onDelete(deleteConfirm);
+            setDeleteConfirm(null);
+          }}
+        >
+          <Trash2 size={13} /> Delete profile
+        </button>
+        <button
+          className="btn btn-ghost btn-sm"
+          onClick={() => setDeleteConfirm(null)}
+        >
+          Cancel
+        </button>
+      </div>
+    );
+  }
+
+  const defaultBuiltIns: BuiltInProfileDef[] =
+    builtInProfiles.length > 0
+      ? builtInProfiles
+      : [
+          {
+            id: 'all',
+            name: 'All sources',
+            description: 'Search everything you have installed',
+            icon: 'globe',
+            count: 0,
+          },
+        ];
+
   return (
     <div className="profile-bar" ref={menuWrapper}>
-      <div className="profile-bar__pills" role="group" aria-label="Saved source sets">
-        <button
-          className={`profile-pill${activeId === 'all' ? ' profile-pill--on' : ''}`}
-          onClick={() => onActivate('all')}
-          aria-pressed={activeId === 'all'}
-          title="Search everything you have installed"
-        >
-          <Globe size={13} />
-          All sources
-        </button>
+      <div className="profile-bar__pills" role="group" aria-label="Source profiles">
+        {/* Built-in predefined profiles */}
+        <div className="profile-bar__group profile-bar__group--builtin" role="group" aria-label="Built-in profiles">
+          {defaultBuiltIns.map((builtin) => {
+            const active = activeId === builtin.id;
+            return (
+              <button
+                key={builtin.id}
+                type="button"
+                className={`profile-pill profile-pill--builtin${active ? ' profile-pill--on' : ''}${
+                  builtin.disabled ? ' profile-pill--disabled' : ''
+                }`}
+                onClick={() => {
+                  if (!builtin.disabled) onActivate(builtin.id);
+                }}
+                disabled={builtin.disabled}
+                aria-pressed={active}
+                title={builtin.disabledReason ?? builtin.description}
+              >
+                {renderBuiltInIcon(builtin.icon)}
+                <span>{builtin.name}</span>
+                {builtin.count > 0 && (
+                  <span className="profile-pill__count">{builtin.count}</span>
+                )}
+              </button>
+            );
+          })}
+        </div>
 
-        {/*
-          The unnamed selection, shown only when it holds something.
-
-          Without a pill it has nowhere to be: switching to All sources would
-          keep it safely in the store and give the user no way back to it, which
-          is a quieter version of the bug this replaces.
-        */}
+        {/* Unsaved draft selection pill */}
         {hasDraft && (
           <button
-            className={`profile-pill${activeId === '' ? ' profile-pill--on' : ''}`}
+            type="button"
+            className={`profile-pill profile-pill--draft${activeId === '' ? ' profile-pill--on' : ''}`}
             onClick={() => onActivate('')}
             aria-pressed={activeId === ''}
-            title="The selection you have not named yet"
+            title="The working source selection you have not saved as a profile"
           >
-            Current selection
+            <span className="profile-pill__draft-dot" aria-hidden />
+            <span>Current selection</span>
             <span className="profile-pill__count">{draftCount}</span>
           </button>
         )}
 
-        {profiles.map((profile) => {
-          const count = profile.providers.length + profile.indexers.length;
-          const active = profile.id === activeId;
-          return (
-            <div key={profile.id} className="profile-pill-group">
-              <button
-                className={`profile-pill${active ? ' profile-pill--on' : ''}`}
-                onClick={() => onActivate(profile.id)}
-                aria-pressed={active}
-                title={`Search ${count} source${count === 1 ? '' : 's'}`}
-              >
-                {profile.name}
-                <span className="profile-pill__count">{count}</span>
-              </button>
-              <button
-                className="profile-pill__more"
-                onClick={() => setMenuFor(menuFor === profile.id ? null : profile.id)}
-                aria-label={`Manage ${profile.name}`}
-                aria-expanded={menuFor === profile.id}
-              >
-                ⋯
-              </button>
+        {/* Custom user profiles */}
+        {profiles.length > 0 && (
+          <div className="profile-bar__group profile-bar__group--custom" role="group" aria-label="Custom profiles">
+            {profiles.map((profile) => {
+              const count = profile.providers.length + profile.indexers.length;
+              const active = profile.id === activeId;
+              return (
+                <div key={profile.id} className="profile-pill-group">
+                  <button
+                    type="button"
+                    className={`profile-pill${active ? ' profile-pill--on' : ''}`}
+                    onClick={() => onActivate(profile.id)}
+                    aria-pressed={active}
+                    title={`Search ${count} source${count === 1 ? '' : 's'}`}
+                  >
+                    <span>{profile.name}</span>
+                    <span className="profile-pill__count">{count}</span>
+                  </button>
+                  <button
+                    type="button"
+                    className="profile-pill__more"
+                    onClick={() => setMenuFor(menuFor === profile.id ? null : profile.id)}
+                    aria-label={`Manage ${profile.name}`}
+                    aria-expanded={menuFor === profile.id}
+                  >
+                    ⋯
+                  </button>
 
-              {menuFor === profile.id && (
-                <div className="profile-menu" role="menu">
-                  <button
-                    role="menuitem"
-                    onClick={() => {
-                      setNaming(profile.id);
-                      setDraftName(profile.name);
-                      setMenuFor(null);
-                    }}
-                  >
-                    <Pencil size={13} /> Rename
-                  </button>
-                  <button
-                    role="menuitem"
-                    onClick={() => {
-                      onDuplicate(profile.id);
-                      setMenuFor(null);
-                    }}
-                  >
-                    <Copy size={13} /> Duplicate
-                  </button>
-                  {/*
-                    No confirmation. A profile is a shortcut to a selection, not
-                    the selection itself — deleting one loses no sources, no
-                    downloads and no history, and a prompt in front of a
-                    reversible thirty-second action is noise. Compare the delete
-                    prompt on downloads, which guards a file.
-                  */}
-                  <button
-                    role="menuitem"
-                    className="profile-menu__danger"
-                    onClick={() => {
-                      onDelete(profile.id);
-                      setMenuFor(null);
-                    }}
-                  >
-                    <Trash2 size={13} /> Delete
-                  </button>
+                  {menuFor === profile.id && (
+                    <div className="profile-menu" role="menu">
+                      <button
+                        type="button"
+                        role="menuitem"
+                        onClick={() => {
+                          setNaming(profile.id);
+                          setDraftName(profile.name);
+                          setMenuFor(null);
+                        }}
+                      >
+                        <Pencil size={13} /> Rename
+                      </button>
+                      <button
+                        type="button"
+                        role="menuitem"
+                        onClick={() => {
+                          onDuplicate(profile.id);
+                          setMenuFor(null);
+                        }}
+                      >
+                        <Copy size={13} /> Duplicate
+                      </button>
+                      <button
+                        type="button"
+                        role="menuitem"
+                        className="profile-menu__danger"
+                        onClick={() => {
+                          setMenuFor(null);
+                          setDeleteConfirm(profile.id);
+                        }}
+                      >
+                        <Trash2 size={13} /> Delete
+                      </button>
+                    </div>
+                  )}
                 </div>
-              )}
-            </div>
-          );
-        })}
+              );
+            })}
+          </div>
+        )}
       </div>
 
-      {/*
-        Offered only when there is something to save.
-
-        "Save as profile" over an empty selection creates a profile that
-        searches everything, which is what the All sources pill already is.
-      */}
-      {hasDraft && activeId === '' && (
-        <button
-          className="btn btn-ghost btn-sm profile-bar__save"
-          onClick={() => {
-            setNaming('new');
-            setDraftName('');
-          }}
-        >
-          <Plus size={13} /> Save these {draftCount}
-        </button>
-      )}
+      {/* Prominent + Create profile action */}
+      <button
+        type="button"
+        className="btn btn-secondary btn-sm profile-bar__create-btn"
+        onClick={() => {
+          setNaming('new');
+          setDraftName('');
+        }}
+        title="Create a new profile from current source selection"
+      >
+        <Plus size={13} /> Create profile
+      </button>
     </div>
   );
 };
