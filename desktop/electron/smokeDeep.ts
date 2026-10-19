@@ -247,7 +247,6 @@ export function deepSteps(win: BrowserWindow, launch: number, target: DeepTarget
   let episode: { url: string; season?: number; episode?: number } | null = null;
   let sources: TorrentResult[] = [];
   let played: TorrentResult | null = null;
-  let playedNatively = false;
 
   return [
     {
@@ -300,7 +299,6 @@ export function deepSteps(win: BrowserWindow, launch: number, target: DeepTarget
           const outcome = await playOne(win, source);
           if (outcome.ok) {
             played = source;
-            playedNatively = outcome.strategy === 'NATIVE_MPV';
             return outcome;
           }
           tried.push(outcome.detail);
@@ -309,15 +307,13 @@ export function deepSteps(win: BrowserWindow, launch: number, target: DeepTarget
       },
     },
     {
-      // The other engine, when the first link went to mpv: what "Play in this
-      // window" does — ffmpeg converts, the app's own <video> plays. ffmpeg's
-      // live remux/transcode is the OS-sensitive half of the media pipeline.
+      // Whatever played first, the same link once more as "Play in this
+      // window" sends it: ffmpeg converts, the app's own <video> plays. A live
+      // ffmpeg conversion is the OS-sensitive half of the media pipeline, and
+      // a link that plays directly or in mpv never reaches it.
       id: 'play-in-app',
       timeoutMs: 180_000,
-      run: async () => {
-        if (!playedNatively) return { ok: true, detail: 'the first link already played in the app' };
-        return playOne(win, played!, { inApp: true });
-      },
+      run: () => playOne(win, played!, { inApp: true }),
     },
     {
       id: 'download',
