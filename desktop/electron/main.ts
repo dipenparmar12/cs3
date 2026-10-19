@@ -187,6 +187,11 @@ import {
   type SubtitleBackground,
   type SubtitleWeight,
 } from '../src/utils/subtitleStyle.ts';
+import { activeProfileId, DEFAULT_PROFILE_ID, runAsProfile } from './profiles/profileContext.ts';
+import { PREFERENCE_KEYS } from './profiles/profileKeys.ts';
+import { perProfile } from './profiles/perProfile.ts';
+import { UserProfileService } from './profiles/userProfiles.ts';
+import type { ProfileAvatarId, ProfileDraft } from '../src/types/profiles';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -248,6 +253,66 @@ for (const name of CACHE_FILES) storage.migrateIntoCache(path.join(storage.dataD
 migratePath(path.join(storage.dataDir, 'torrent-state'), path.join(storage.cacheRoot, 'torrent-state'));
 
 const datastore = new DatastoreManager();
+
+/**
+ * Viewer profiles. Initialised before anything reads a per-person key, so the
+ * first read of the launch already answers for the profile being opened — and
+ * for nobody, if that profile is locked and waiting for its PIN.
+ */
+const userProfiles = new UserProfileService({
+  storage: datastore,
+  beforeSwitch: async () => {
+    // What the previous profile was watching stops with it; its last progress
+    // write already arrived (the window tears down before asking to switch).
+    await mpvEngine.stop().catch(() => undefined);
+    for (const store of [savedSearchProfiles]) store.each((entry) => entry.flush());
+    await datastore.flush();
+  },
+  flush: () => datastore.flush(),
+  onDuplicated: (from, to) => datastore.copyProfileKeys(from, to, PREFERENCE_KEYS),
+  onDeleted: (profileId) => {
+    datastore.removeProfileKeys(profileId);
+    for (const store of [libraryProfiles, historyProfiles, bookmarkProfiles, savedSearchProfiles]) {
+      store.forget(profileId);
+    }
+    try {
+      fs.rmSync(profileDataDir(profileId), { recursive: true, force: true });
+    } catch {
+      // Left behind it is a few kilobytes of saved searches nothing can reach.
+    }
+  },
+});
+userProfiles.initialise();
+userProfiles.onChange((state) =>
+  BrowserWindow.getAllWindows().forEach((w) => w.webContents.send('userProfiles:changed', state))
+);
+
+/**
+ * Where a profile's own files live. The default profile keeps the folder it
+ * always used, so an existing install's saved searches are already its own.
+ */
+function profileDataDir(profileId: string): string {
+  return profileId === DEFAULT_PROFILE_ID
+    ? app.getPath('userData')
+    : path.join(app.getPath('userData'), 'profiles', profileId);
+}
+
+/**
+ * Every IPC handler runs as the profile that was active when it was called.
+ *
+ * The one place that makes "work started for a profile keeps writing to that
+ * profile" true everywhere: `AsyncLocalStorage` carries the answer through
+ * every await, timer and callback the handler starts, so a discovery or a
+ * playback session begun before a switch cannot land in the profile switched
+ * to. Patched once, here, before any handler is registered — 340 call sites
+ * should not each have to remember it.
+ */
+{
+  const register = ipcMain.handle.bind(ipcMain);
+  ipcMain.handle = (channel, listener) =>
+    register(channel, (event, ...args) => runAsProfile(activeProfileId(), () => listener(event, ...args)));
+}
+
 // Constructed before every store that records activity, so the first write any
 // of them makes already sees the right answer (PRD-52).
 const privacyMode = new PrivacyMode(datastore);
@@ -472,9 +537,19 @@ const ottService = new OttService(pluginManager, datastore, catalogueCache);
 /** Metadata catalogues for the platforms no installed provider can describe. */
 const ottCatalog = new OttCatalogService();
 const batchDownloader = new BatchDownloader(contentService, downloadService);
-const libraryStore = new LibraryStore(datastore);
-const historyStore = new HistoryStore(datastore);
-const bookmarks = new BookmarkStore(datastore);
+/**
+ * The stores that hold a viewer's data in memory, one instance per profile.
+ *
+ * Each name below is the current profile's instance (`profiles/perProfile.ts`),
+ * so every handler and service that already held one keeps working unchanged.
+ */
+const libraryProfiles = perProfile((id) => new LibraryStore(datastore.forProfile(id)));
+const historyProfiles = perProfile((id) => new HistoryStore(datastore.forProfile(id)));
+const bookmarkProfiles = perProfile((id) => new BookmarkStore(datastore.forProfile(id)));
+const savedSearchProfiles = perProfile((id) => new SavedSearchStore(profileDataDir(id)));
+const libraryStore = libraryProfiles.current;
+const historyStore = historyProfiles.current;
+const bookmarks = bookmarkProfiles.current;
 /**
  * The last-known-good copy of every detail page that has been opened.
  *
@@ -485,7 +560,7 @@ const bookmarks = new BookmarkStore(datastore);
  * `cs3/pageSnapshot.ts` for what a snapshot is and is not.
  */
 const pageSnapshots = new PageSnapshotStore(app.getPath('userData'));
-const savedSearches = new SavedSearchStore(app.getPath('userData'));
+const savedSearches = savedSearchProfiles.current;
 contentService.setSnapshotStore(pageSnapshots);
 relatedMediaService.setDirectory(storage.cacheDir());
 mediaRatingService.setDirectory(storage.cacheDir());
@@ -2101,7 +2176,7 @@ async function shutdownServices(): Promise<void> {
   // likely to be reopened in the first few of the next.
   pageSnapshots.flush();
   // A search saved a moment before quitting is one the viewer expects to find.
-  savedSearches.flush();
+  savedSearchProfiles.each((store) => store.flush());
   // The ledger's write is debounced, and the failures worth keeping cluster at
   // shutdown — a session that ended badly is the one whose last seconds matter.
   issueLog.flush();
@@ -6040,6 +6115,53 @@ ipcMain.handle('profiles:delete', async (_, id: string) => {
   contentService.getProfiles().remove(String(id ?? ''));
   return profileSnapshot();
 });
+
+// --- viewer profiles ------------------------------------------------------
+//
+// Not `profiles:*`, which is named search set-ups. Every answer carries the
+// whole state; a secret travels in only, never out.
+
+const text = (value: unknown): string | undefined => (typeof value === 'string' ? value : undefined);
+
+ipcMain.handle('userProfiles:get', async () => userProfiles.state());
+
+ipcMain.handle('userProfiles:verify', async (_, id: string, secret: string) =>
+  userProfiles.verify(String(id ?? ''), String(secret ?? ''))
+);
+
+ipcMain.handle('userProfiles:activate', async (_, id: string, secret?: string) =>
+  userProfiles.activate(String(id ?? ''), text(secret))
+);
+
+ipcMain.handle('userProfiles:create', async (_, draft: ProfileDraft) =>
+  userProfiles.create({
+    name: String(draft?.name ?? ''),
+    avatar: draft?.avatar,
+    secret: text(draft?.secret),
+  })
+);
+
+ipcMain.handle(
+  'userProfiles:update',
+  async (_, id: string, patch: { name?: string; avatar?: ProfileAvatarId }, secret?: string) =>
+    userProfiles.update(String(id ?? ''), { name: text(patch?.name), avatar: patch?.avatar }, text(secret))
+);
+
+ipcMain.handle('userProfiles:setLock', async (_, id: string, secret: string, currentSecret?: string) =>
+  userProfiles.setLock(String(id ?? ''), String(secret ?? ''), text(currentSecret))
+);
+
+ipcMain.handle('userProfiles:removeLock', async (_, id: string, currentSecret: string) =>
+  userProfiles.removeLock(String(id ?? ''), String(currentSecret ?? ''))
+);
+
+ipcMain.handle('userProfiles:duplicate', async (_, id: string, secret?: string) =>
+  userProfiles.duplicate(String(id ?? ''), text(secret))
+);
+
+ipcMain.handle('userProfiles:delete', async (_, id: string, secret?: string) =>
+  userProfiles.remove(String(id ?? ''), text(secret))
+);
 
 // --- network / DNS --------------------------------------------------------
 

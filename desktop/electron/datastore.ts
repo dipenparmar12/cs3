@@ -6,6 +6,8 @@ import {
   rowsFromBuckets,
   type DatastoreRow,
 } from './cs3/backup/datastoreCategories.ts';
+import { currentProfileId, DEFAULT_PROFILE_ID } from './profiles/profileContext.ts';
+import { profileKeyPrefix, storedKey, visibleEntries } from './profiles/profileKeys.ts';
 
 export interface DatastoreBucket {
   _Bool?: Record<string, boolean>;
@@ -22,6 +24,21 @@ export interface DatastoreBackup {
   version?: number;
   exportTimestamp?: number;
 }
+
+/** The key-value accessors, as a store sees them — the manager itself or a {@link DatastoreManager.forProfile} view. */
+export type Datastore = Pick<
+  DatastoreManager,
+  | 'getString'
+  | 'setString'
+  | 'getBool'
+  | 'setBool'
+  | 'getBoolean'
+  | 'setBoolean'
+  | 'getInt'
+  | 'setInt'
+  | 'getObject'
+  | 'setObject'
+>;
 
 export interface ImportBackupResult {
   success: boolean;
@@ -59,7 +76,10 @@ export class DatastoreManager {
     /download_directory/i,
     // Paths on this machine awaiting deletion; on another machine they name
     // nothing, or something that is not ours to delete.
-    /displaced_archives/i
+    /displaced_archives/i,
+    // The profile list carries lock hashes, and a backup carries one profile
+    // (`visible`), so the list of the others means nothing where it lands.
+    /user_profile/i
   ];
 
   constructor() {
@@ -220,31 +240,26 @@ export class DatastoreManager {
   }
 
   // --- Key Value Getter/Setters ---
+  //
+  // Every accessor takes the key's plain name and answers for the current
+  // viewer profile (`profiles/profileContext.ts`): a per-person key resolves to
+  // that profile's copy, an installation key to the shared one. Callers never
+  // see the difference, which is why no store had to learn profiles exist.
 
   public setString(key: string, value: string, isSetting = false): void {
-    const target = isSetting ? this.data.settings : this.data.datastore;
-    if (!target._String) target._String = {};
-    target._String[key] = value;
-    this.save();
+    this.putString(currentProfileId(), key, value, isSetting);
   }
 
   public getString(key: string, defaultValue = '', isSetting = false): string {
-    const target = isSetting ? this.data.settings : this.data.datastore;
-    if (target._String && target._String[key] !== undefined) return target._String[key];
-    if (target._Bool && target._Bool[key] !== undefined) return String(target._Bool[key]);
-    return defaultValue;
+    return this.readString(currentProfileId(), key, defaultValue, isSetting);
   }
 
   public setBool(key: string, value: boolean, isSetting = false): void {
-    const target = isSetting ? this.data.settings : this.data.datastore;
-    if (!target._Bool) target._Bool = {};
-    target._Bool[key] = value;
-    this.save();
+    this.putBool(currentProfileId(), key, value, isSetting);
   }
 
   public getBool(key: string, defaultValue = false, isSetting = false): boolean {
-    const target = isSetting ? this.data.settings : this.data.datastore;
-    return target._Bool?.[key] ?? defaultValue;
+    return this.readBool(currentProfileId(), key, defaultValue, isSetting);
   }
 
   public setBoolean(key: string, value: boolean, isSetting = false): void {
@@ -256,15 +271,11 @@ export class DatastoreManager {
   }
 
   public setInt(key: string, value: number, isSetting = false): void {
-    const target = isSetting ? this.data.settings : this.data.datastore;
-    if (!target._Int) target._Int = {};
-    target._Int[key] = Math.floor(value);
-    this.save();
+    this.putInt(currentProfileId(), key, value, isSetting);
   }
 
   public getInt(key: string, defaultValue = 0, isSetting = false): number {
-    const target = isSetting ? this.data.settings : this.data.datastore;
-    return target._Int?.[key] ?? defaultValue;
+    return this.readInt(currentProfileId(), key, defaultValue, isSetting);
   }
 
   public setObject<T>(key: string, value: T, isSetting = false): void {
@@ -272,13 +283,146 @@ export class DatastoreManager {
   }
 
   public getObject<T>(key: string, defaultValue: T | null = null, isSetting = false): T | null {
-    const raw = this.getString(key, '', isSetting);
+    return this.readObject(currentProfileId(), key, defaultValue, isSetting);
+  }
+
+  /**
+   * The same accessors, always answering for one profile.
+   *
+   * For a store that holds a profile's state in memory: built once per profile
+   * (`profiles/perProfile.ts`), it must keep reading and writing that profile
+   * even when a write lands after the window has switched to another — the
+   * current-profile answer could otherwise change between its read and its
+   * write.
+   */
+  public forProfile(profileId: string): Datastore {
+    return {
+      getString: (key, defaultValue = '', isSetting = false) => this.readString(profileId, key, defaultValue, isSetting),
+      setString: (key, value, isSetting = false) => this.putString(profileId, key, value, isSetting),
+      getBool: (key, defaultValue = false, isSetting = false) => this.readBool(profileId, key, defaultValue, isSetting),
+      setBool: (key, value, isSetting = false) => this.putBool(profileId, key, value, isSetting),
+      getBoolean: (key, defaultValue = false, isSetting = false) => this.readBool(profileId, key, defaultValue, isSetting),
+      setBoolean: (key, value, isSetting = false) => this.putBool(profileId, key, value, isSetting),
+      getInt: (key, defaultValue = 0, isSetting = false) => this.readInt(profileId, key, defaultValue, isSetting),
+      setInt: (key, value, isSetting = false) => this.putInt(profileId, key, value, isSetting),
+      getObject: <T>(key: string, defaultValue: T | null = null, isSetting = false) =>
+        this.readObject<T>(profileId, key, defaultValue, isSetting),
+      setObject: <T>(key: string, value: T, isSetting = false) =>
+        this.putString(profileId, key, JSON.stringify(value), isSetting),
+    };
+  }
+
+  /** Copies one profile's values for `keys` onto another, replacing what it had. */
+  public copyProfileKeys(from: string, to: string, keys: Iterable<string>): void {
+    for (const key of keys) {
+      const source = storedKey(key, from);
+      const target = storedKey(key, to);
+      if (source === null || target === null) continue;
+      for (const bucket of [this.data.datastore, this.data.settings]) {
+        for (const type of DATASTORE_VALUE_TYPES) {
+          const values = bucket[type] as Record<string, unknown> | undefined;
+          if (values?.[source] !== undefined) values[target] = values[source];
+        }
+      }
+    }
+    this.save();
+  }
+
+  /** Removes every value a (non-default) profile stored. */
+  public removeProfileKeys(profileId: string): number {
+    if (profileId === DEFAULT_PROFILE_ID) return 0;
+    const prefix = profileKeyPrefix(profileId);
+    let removed = 0;
+    for (const bucket of [this.data.datastore, this.data.settings]) {
+      for (const type of DATASTORE_VALUE_TYPES) {
+        const values = bucket[type] as Record<string, unknown> | undefined;
+        if (!values) continue;
+        for (const stored of Object.keys(values)) {
+          if (!stored.startsWith(prefix)) continue;
+          delete values[stored];
+          removed++;
+        }
+      }
+    }
+    if (removed > 0) this.save();
+    return removed;
+  }
+
+  private bucket(isSetting: boolean): DatastoreBucket {
+    return isSetting ? this.data.settings : this.data.datastore;
+  }
+
+  private putString(profileId: string, key: string, value: string, isSetting: boolean): void {
+    const stored = storedKey(key, profileId);
+    if (stored === null) return;
+    const target = this.bucket(isSetting);
+    if (!target._String) target._String = {};
+    target._String[stored] = value;
+    this.save();
+  }
+
+  private readString(profileId: string, key: string, defaultValue: string, isSetting: boolean): string {
+    const stored = storedKey(key, profileId);
+    if (stored === null) return defaultValue;
+    const target = this.bucket(isSetting);
+    if (target._String && target._String[stored] !== undefined) return target._String[stored];
+    if (target._Bool && target._Bool[stored] !== undefined) return String(target._Bool[stored]);
+    return defaultValue;
+  }
+
+  private putBool(profileId: string, key: string, value: boolean, isSetting: boolean): void {
+    const stored = storedKey(key, profileId);
+    if (stored === null) return;
+    const target = this.bucket(isSetting);
+    if (!target._Bool) target._Bool = {};
+    target._Bool[stored] = value;
+    this.save();
+  }
+
+  private readBool(profileId: string, key: string, defaultValue: boolean, isSetting: boolean): boolean {
+    const stored = storedKey(key, profileId);
+    if (stored === null) return defaultValue;
+    return this.bucket(isSetting)._Bool?.[stored] ?? defaultValue;
+  }
+
+  private putInt(profileId: string, key: string, value: number, isSetting: boolean): void {
+    const stored = storedKey(key, profileId);
+    if (stored === null) return;
+    const target = this.bucket(isSetting);
+    if (!target._Int) target._Int = {};
+    target._Int[stored] = Math.floor(value);
+    this.save();
+  }
+
+  private readInt(profileId: string, key: string, defaultValue: number, isSetting: boolean): number {
+    const stored = storedKey(key, profileId);
+    if (stored === null) return defaultValue;
+    return this.bucket(isSetting)._Int?.[stored] ?? defaultValue;
+  }
+
+  private readObject<T>(profileId: string, key: string, defaultValue: T | null, isSetting: boolean): T | null {
+    const raw = this.readString(profileId, key, '', isSetting);
     if (!raw) return defaultValue;
     try {
       return JSON.parse(raw) as T;
     } catch {
       return defaultValue;
     }
+  }
+
+  /**
+   * What the current profile can see, under plain names: the installation's
+   * keys plus its own copy of the per-person ones. Backups, exports and the
+   * settings rows are built from this, so a backup carries the profile it was
+   * taken in and never another profile's history.
+   */
+  private visible(bucket: DatastoreBucket): DatastoreBucket {
+    const profileId = currentProfileId();
+    return Object.fromEntries(
+      Object.entries(bucket)
+        .filter(([, entries]) => entries)
+        .map(([type, entries]) => [type, visibleEntries(entries as Record<string, unknown>, profileId)])
+    ) as DatastoreBucket;
   }
 
   // --- Robust Key-Grammar Android Backup Import & Export ---
@@ -308,8 +452,10 @@ export class DatastoreManager {
             const tObj = target[t] as Record<string, any>;
 
             for (const [key, val] of Object.entries(sObj)) {
-              if (this.isKeyTransferable(key)) {
-                tObj[key] = val;
+              // A phone's library lands in the profile the import was run in.
+              const stored = storedKey(key, currentProfileId());
+              if (stored !== null && this.isKeyTransferable(key)) {
+                tObj[stored] = val;
                 importedKeysCount++;
               } else {
                 report.push(`Skipped non-transferable key [${bucketName}.${t}]: ${key}`);
@@ -343,8 +489,22 @@ export class DatastoreManager {
   }
 
   public exportBackup(): string {
-    this.data.exportTimestamp = Date.now();
-    return JSON.stringify(this.data, null, 2);
+    // The import on the other end drops these keys anyway; writing them down
+    // only put a token or a lock hash in someone's Downloads folder.
+    const transferable = (bucket: DatastoreBucket): DatastoreBucket =>
+      Object.fromEntries(
+        Object.entries(bucket).map(([type, entries]) => [
+          type,
+          Object.fromEntries(Object.entries(entries ?? {}).filter(([key]) => this.isKeyTransferable(key))),
+        ])
+      );
+    const exported: DatastoreBackup = {
+      datastore: transferable(this.visible(this.data.datastore)),
+      settings: transferable(this.visible(this.data.settings)),
+      version: this.data.version,
+      exportTimestamp: Date.now(),
+    };
+    return JSON.stringify(exported, null, 2);
   }
 
   /**
@@ -375,7 +535,10 @@ export class DatastoreManager {
       }
       return out;
     };
-    return { ...strip(this.data.datastore), settings: strip(this.data.settings) };
+    return {
+      ...strip(this.visible(this.data.datastore)),
+      settings: strip(this.visible(this.data.settings)),
+    };
   }
 
   /**
@@ -383,9 +546,10 @@ export class DatastoreManager {
    * categories. Same filter as {@link snapshot}: a token never leaves.
    */
   public rows(): DatastoreRow[] {
-    return rowsFromBuckets({ datastore: this.data.datastore, settings: this.data.settings }).filter(
-      (row) => this.isKeyTransferable(row.key)
-    );
+    return rowsFromBuckets({
+      datastore: this.visible(this.data.datastore),
+      settings: this.visible(this.data.settings),
+    }).filter((row) => this.isKeyTransferable(row.key));
   }
 
   /**
@@ -398,16 +562,21 @@ export class DatastoreManager {
   public writeRows(put: DatastoreRow[], remove: Array<Pick<DatastoreRow, 'bucket' | 'key'>>): void {
     const bucketOf = (name: DatastoreRow['bucket']): DatastoreBucket =>
       name === 'settings' ? this.data.settings : this.data.datastore;
-    const clear = (bucket: DatastoreBucket, key: string) => {
-      for (const type of DATASTORE_VALUE_TYPES) delete bucket[type]?.[key];
+    const profileId = currentProfileId();
+    const clear = (bucket: DatastoreBucket, stored: string) => {
+      for (const type of DATASTORE_VALUE_TYPES) delete bucket[type]?.[stored];
     };
-    for (const row of remove) clear(bucketOf(row.bucket), row.key);
+    for (const row of remove) {
+      const stored = storedKey(row.key, profileId);
+      if (stored !== null) clear(bucketOf(row.bucket), stored);
+    }
     for (const row of put) {
-      if (!this.isKeyTransferable(row.key)) continue;
+      const stored = storedKey(row.key, profileId);
+      if (stored === null || !this.isKeyTransferable(row.key)) continue;
       const bucket = bucketOf(row.bucket);
-      clear(bucket, row.key);
+      clear(bucket, stored);
       const values = (bucket[row.type] ??= {}) as Record<string, unknown>;
-      values[row.key] = row.value;
+      values[stored] = row.value;
     }
     this.save();
     this.flushSync();
@@ -424,6 +593,7 @@ export class DatastoreManager {
   public restore(snapshot: (DatastoreBucket & { settings?: DatastoreBucket }) | null): number {
     if (!snapshot || typeof snapshot !== 'object') return 0;
     let restored = 0;
+    const profileId = currentProfileId();
 
     const merge = (target: DatastoreBucket, source: DatastoreBucket | undefined) => {
       if (!source) return;
@@ -432,8 +602,9 @@ export class DatastoreManager {
         const bucket = (target as Record<string, Record<string, unknown>>);
         bucket[name] ??= {};
         for (const [key, value] of Object.entries(entries as Record<string, unknown>)) {
-          if (!this.isKeyTransferable(key)) continue;
-          bucket[name][key] = value;
+          const stored = storedKey(key, profileId);
+          if (stored === null || !this.isKeyTransferable(key)) continue;
+          bucket[name][stored] = value;
           restored++;
         }
       }

@@ -11,6 +11,12 @@ import type {
 } from '../src/types/api';
 import type { OttPlatformView } from './cs3/ottPlatforms';
 import type { ProfileState, SourceProfile } from './cs3/sourceProfiles.ts';
+import type {
+  ProfileActionResult,
+  ProfileAvatarId,
+  ProfileDraft,
+  UserProfilesState,
+} from '../src/types/profiles';
 
 /**
  * The whole profile picture, answered by every profile call.
@@ -659,6 +665,26 @@ export interface CloudStreamElectronAPI {
   renameSourceProfile: (id: string, name: string) => Promise<SourceProfileSnapshot>;
   duplicateSourceProfile: (id: string) => Promise<SourceProfileSnapshot>;
   deleteSourceProfile: (id: string) => Promise<SourceProfileSnapshot>;
+  /**
+   * Viewer profiles: separate libraries, histories and preferences. Optional —
+   * every installation has the default profile and opens straight into it.
+   * Every answer carries the whole state. A secret (PIN or password) is sent
+   * in to unlock or change a locked profile and never comes back out.
+   */
+  getUserProfiles: () => Promise<UserProfilesState>;
+  verifyUserProfile: (id: string, secret: string) => Promise<ProfileActionResult>;
+  activateUserProfile: (id: string, secret?: string) => Promise<ProfileActionResult>;
+  createUserProfile: (draft: ProfileDraft) => Promise<ProfileActionResult>;
+  updateUserProfile: (
+    id: string,
+    patch: { name?: string; avatar?: ProfileAvatarId },
+    secret?: string
+  ) => Promise<ProfileActionResult>;
+  setUserProfileLock: (id: string, secret: string, currentSecret?: string) => Promise<ProfileActionResult>;
+  removeUserProfileLock: (id: string, currentSecret: string) => Promise<ProfileActionResult>;
+  duplicateUserProfile: (id: string, secret?: string) => Promise<ProfileActionResult>;
+  deleteUserProfile: (id: string, secret?: string) => Promise<ProfileActionResult>;
+  onUserProfilesChanged: (callback: (state: UserProfilesState) => void) => () => void;
   /** Fires as each installed extension is loaded, so lists can fill in. */
   onProviderLoadProgress: (
     callback: (progress: ProviderLoadProgress) => void
@@ -2349,6 +2375,17 @@ const api: CloudStreamElectronAPI = {
   renameSourceProfile: (id, name) => ipcRenderer.invoke('profiles:rename', id, name),
   duplicateSourceProfile: (id) => ipcRenderer.invoke('profiles:duplicate', id),
   deleteSourceProfile: (id) => ipcRenderer.invoke('profiles:delete', id),
+  getUserProfiles: () => ipcRenderer.invoke('userProfiles:get'),
+  verifyUserProfile: (id, secret) => ipcRenderer.invoke('userProfiles:verify', id, secret),
+  activateUserProfile: (id, secret) => ipcRenderer.invoke('userProfiles:activate', id, secret),
+  createUserProfile: (draft) => ipcRenderer.invoke('userProfiles:create', draft),
+  updateUserProfile: (id, patch, secret) => ipcRenderer.invoke('userProfiles:update', id, patch, secret),
+  setUserProfileLock: (id, secret, currentSecret) =>
+    ipcRenderer.invoke('userProfiles:setLock', id, secret, currentSecret),
+  removeUserProfileLock: (id, currentSecret) => ipcRenderer.invoke('userProfiles:removeLock', id, currentSecret),
+  duplicateUserProfile: (id, secret) => ipcRenderer.invoke('userProfiles:duplicate', id, secret),
+  deleteUserProfile: (id, secret) => ipcRenderer.invoke('userProfiles:delete', id, secret),
+  onUserProfilesChanged: (callback) => subscribe('userProfiles:changed', callback),
   getDeleteDownloadPreference: () => ipcRenderer.invoke('download:getDeletePreference'),
   setDeleteDownloadPreference: (preference) =>
     ipcRenderer.invoke('download:setDeletePreference', preference),

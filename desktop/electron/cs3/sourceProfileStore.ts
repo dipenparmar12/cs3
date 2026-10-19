@@ -1,4 +1,4 @@
-import type { DatastoreManager } from '../datastore';
+import type { Datastore } from '../datastore';
 import type { SearchScopeStore } from '../searchScope';
 import {
   ALL_SOURCES_ID,
@@ -38,11 +38,11 @@ const SETTINGS_KEY = 'cs3_source_profiles';
  * this, and `search:setScope` routes here.
  */
 export class SourceProfileStore {
-  private datastore: DatastoreManager;
+  private datastore: Datastore;
   private scope: SearchScopeStore;
   private state: ProfileState;
 
-  constructor(datastore: DatastoreManager, scope: SearchScopeStore) {
+  constructor(datastore: Datastore, scope: SearchScopeStore) {
     this.datastore = datastore;
     this.scope = scope;
     this.state = hydrate(this.datastore.getObject<unknown>(SETTINGS_KEY, INITIAL_STATE));

@@ -25,6 +25,7 @@ import type { TorrentResult } from '../src/types/torrent';
 import type { HistoryStore } from './cs3/historyStore';
 import type { HistoryAction, HistoryStatus } from '../src/types/history';
 import { isPrivateSession } from './cs3/privacyMode.ts';
+import { currentProfileId, DEFAULT_PROFILE_ID, runAsProfile } from './profiles/profileContext.ts';
 import { scopedLogger } from './logging/logger.ts';
 import { describeError } from '../src/utils/errors.ts';
 import { companionPath, languageTag, vttToSrt } from './subtitles/companion.ts';
@@ -100,7 +101,10 @@ export class DownloadService {
   ): void {
     if (!this.historyStore || task.isPrivate || isPrivateSession()) return;
     try {
-      this.historyStore.record(historyEventForTask(task, action, status, failureReason));
+      const store = this.historyStore;
+      runAsProfile(task.profileId ?? DEFAULT_PROFILE_ID, () =>
+        store.record(historyEventForTask(task, action, status, failureReason))
+      );
     } catch (e) {
       console.warn('[downloadService] Failed to record history event:', e);
     }
@@ -385,6 +389,7 @@ export class DownloadService {
     if (isPrivateSession()) {
       task.isPrivate = true;
     }
+    task.profileId = task.profileId ?? currentProfileId();
     task.state = DownloadState.Queued;
     task.createdTime = task.createdTime || Date.now();
     task.errorMessage = undefined;
