@@ -570,7 +570,15 @@ if (VERSION) info(`version ${VERSION}`);
  * The report says which applied, so an unsigned build is never mistaken for one.
  */
 const env = process.env;
-const azure = ['AZURE_SIGNING_ENDPOINT', 'AZURE_SIGNING_ACCOUNT', 'AZURE_CERT_PROFILE', 'AZURE_PUBLISHER_NAME'];
+// GitHub Actions passes an unset secret as an empty string, not as absent.
+// electron-builder treats `CSC_LINK=''` as a path (the working directory) and
+// fails with "<dir> not a file" before it packages anything — measured on the
+// first macos-arm64 run, which cancelled the other four builds. An empty value
+// means "not configured", so it is removed for this process and its children.
+for (const name of Object.keys(env)) {
+  if (/^(CSC_|WIN_CSC_|APPLE_|AZURE_)/.test(name) && env[name] === '') delete env[name];
+}
+const azure =['AZURE_SIGNING_ENDPOINT', 'AZURE_SIGNING_ACCOUNT', 'AZURE_CERT_PROFILE', 'AZURE_PUBLISHER_NAME'];
 const azureSigning = OS === 'win' && azure.every((name) => env[name]);
 const certSigning = Boolean(env.CSC_LINK || (OS === 'win' && env.WIN_CSC_LINK) || env.CSC_NAME);
 const notarising = OS === 'mac' && Boolean(
