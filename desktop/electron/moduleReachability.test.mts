@@ -113,7 +113,7 @@ function referencesByModule(): Map<string, Reference[]> {
 
   for (const file of sourceFiles()) {
     const text = fs.readFileSync(file, 'utf8');
-    const pattern = /import\s+(type\s+)?[^'"]*?from\s*['"]([^'"]+)['"]/g;
+    const pattern = /(?:import\s+(type\s+)?[^'"]*?from\s*|import\s*\(\s*)['"]([^'"]+)['"]/g;
     let match: RegExpExecArray | null;
     while ((match = pattern.exec(text))) {
       const specifier = match[2];
