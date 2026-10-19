@@ -25,13 +25,15 @@ import {
   writeHiddenRows,
 } from '../utils/homeRows';
 import type { HomeCategoryState } from './homeCategoryState';
+import { profileStorage } from '../utils/profileStorage';
 
 /** Anime is a row like any other now; this id is also how the old switch is read. */
 const ANIME_ROW = 'trending-anime';
 
-function storage(): Storage | null {
+/** The home layout is a person's, so it is read through the active profile. */
+function storage(): typeof profileStorage | null {
   try {
-    return window.localStorage;
+    return window.localStorage ? profileStorage : null;
   } catch {
     return null;
   }

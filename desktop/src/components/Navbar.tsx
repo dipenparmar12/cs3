@@ -14,6 +14,7 @@ import type {
 import { SearchSuggestions } from './SearchSuggestions';
 import type { SavedSearchSummary } from '../../electron/savedSearches';
 import { mergeHistoryAndSaved } from '../utils/searchHistoryMerge';
+import { ProfileMenu } from './profiles/ProfileMenu';
 
 interface NavbarProps {
   onSearch: (query: string, options?: SearchOptions) => void;
@@ -604,6 +605,7 @@ export const Navbar: React.FC<NavbarProps> = ({
           {incognito && <span>Incognito</span>}
         </button>
 
+        <ProfileMenu />
       </div>
     </header>
   );

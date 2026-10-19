@@ -27,7 +27,8 @@ import { PosterCard } from '../components/PosterCard';
 import { Poster } from '../components/Poster';
 import { CopyErrorButton } from '../components/CopyErrorButton';
 import { ProviderRecoveryPanel } from '../components/ProviderRecoveryPanel';
-import { DetailHero, type DetailHeroProvenance } from '../components/detail/DetailHero';
+import { DetailHero, DetailHeroSkeleton, type DetailHeroProvenance } from '../components/detail/DetailHero';
+import { acceptExtendedPush, clearsExtended } from '../utils/extendedRecord';
 import {
   TitleCast,
   TitleAbout,
@@ -529,6 +530,28 @@ export const DetailView: React.FC<DetailViewProps> = ({
       }
 
       /**
+       * The catalogue record already on disk, asked for now rather than after
+       * the page draws.
+       *
+       * The extended-metadata effect below only starts once `detail` exists, so
+       * a cached cast list, backdrop and trailers arrived a frame after the
+       * page — and every section below the masthead rearranged itself the
+       * moment it appeared. Asked in parallel with the page and applied in the
+       * same render, a revisit draws once.
+       */
+      const earlyExtended = Promise.resolve(window.cloudstream.peekExtendedMetadata?.(mediaItem.url)).catch(
+        () => null
+      );
+      const withEarlyExtended = async (url: string) => {
+        const peeked = await earlyExtended;
+        if (cancelled || !peeked?.metadata || url !== mediaItem.url) return;
+        extendedForRef.current = url;
+        detailUrlRef.current = url;
+        setExtended(peeked.metadata);
+        setMetadataPending(Boolean(peeked.stale));
+      };
+
+      /**
        * The stored copy, first and without waiting for anyone.
        *
        * Started before the provider is asked and awaited immediately, because
@@ -547,8 +570,11 @@ export const DetailView: React.FC<DetailViewProps> = ({
       )?.snapshot ?? null;
       if (cancelled) return;
       if (stored) {
+        const fromSnapshot = detailFromSnapshot(stored, mediaItem.url);
+        await withEarlyExtended(fromSnapshot.url);
+        if (cancelled) return;
         setSnapshot(stored);
-        setDetail(detailFromSnapshot(stored, mediaItem.url));
+        setDetail(fromSnapshot);
         setServedFromSnapshot('loading');
         // The page is on screen; the load below is now a refresh, not a wait.
         setIsLoading(false);
@@ -598,6 +624,10 @@ export const DetailView: React.FC<DetailViewProps> = ({
 
         if (response.ok && response.detail) {
           const data = mergeDetail(response.detail as DetailData, stored);
+          // Only the first draw needs it; a live answer replacing the saved
+          // copy is a refinement, and the effect below refreshes the record.
+          if (!stored) await withEarlyExtended(data.url);
+          if (cancelled) return;
           setDetail(data);
           if (recoveredNames.has(route)) {
             void window.cloudstream?.recordDiagnostic?.({
@@ -894,6 +924,11 @@ export const DetailView: React.FC<DetailViewProps> = ({
     return mergeVideos([extended?.videos, providerVideos, discoveredVideos]);
   }, [extended?.videos, providerVideos, discoveredVideos]);
   allVideosRef.current = allVideos;
+  const providerVideosRef = useRef(providerVideos);
+  providerVideosRef.current = providerVideos;
+  const providerVideosKey = providerVideos.map((video) => video.id).join('|');
+  /** The page `extended` belongs to, so a refinement of it is told apart from navigation. */
+  const extendedForRef = useRef<string | null>(null);
 
   /**
    * Cast, crew, ratings and production notes, fetched after the page is drawn.
@@ -912,6 +947,7 @@ export const DetailView: React.FC<DetailViewProps> = ({
     const url = detail?.url;
     detailUrlRef.current = url ?? null;
     if (!url) {
+      extendedForRef.current = null;
       setExtended(null);
       // Cleared here too, or navigating away from a title mid-lookup leaves a
       // spinner running against a request nobody is waiting on — which is the
@@ -922,20 +958,34 @@ export const DetailView: React.FC<DetailViewProps> = ({
 
     let cancelled = false;
 
-    // Cleared on navigation, or the previous title's cast rail stays on screen
-    // under the new title's name for as long as the fetch takes — which is the
-    // kind of wrongness a viewer reads as the app having mixed up two films.
-    setExtended(null);
     /**
-     * Set before the first request, not after the first reply.
+     * Cleared when the page is a different one — and only then.
      *
-     * This is the half `ExtendedMetadata.partial` cannot cover. For a page
-     * whose provider published no IMDb id the lookup begins by resolving one
-     * from the title, and until that returns there is no record at all — so a
-     * flag read off the record would leave the longest part of the wait
-     * looking exactly like a title nothing has an entry for.
+     * On navigation, or the previous title's cast rail stays on screen under
+     * the new title's name for as long as the fetch takes — which is the kind
+     * of wrongness a viewer reads as the app having mixed up two films. But
+     * this effect also re-runs when the *same* page is refined: the live load
+     * replacing the saved copy, a background refresh, an IMDb id arriving.
+     * Clearing then blanked the backdrop, the cast, the genres and the other
+     * descriptions and drew them again a moment later — the page flickering
+     * every time the provider answered. A refinement asks again and lets the
+     * answer replace what is shown; the record is never emptied in between.
      */
-    setMetadataPending(true);
+    const cleared = clearsExtended(extendedForRef.current, url);
+    extendedForRef.current = url;
+    if (cleared) {
+      setExtended(null);
+      /**
+       * Set before the first request, not after the first reply.
+       *
+       * This is the half `ExtendedMetadata.partial` cannot cover. For a page
+       * whose provider published no IMDb id the lookup begins by resolving one
+       * from the title, and until that returns there is no record at all — so
+       * a flag read off the record would leave the longest part of the wait
+       * looking exactly like a title nothing has an entry for.
+       */
+      setMetadataPending(true);
+    }
 
     void (async () => {
       const cached = await window.cloudstream?.peekExtendedMetadata?.(url);
@@ -955,7 +1005,7 @@ export const DetailView: React.FC<DetailViewProps> = ({
         type: detail?.type,
         title: detail?.name,
         year: detail?.year,
-        providerVideos: providerVideos.length > 0 ? providerVideos : undefined,
+        providerVideos: providerVideosRef.current.length > 0 ? providerVideosRef.current : undefined,
       });
       if (cancelled) return;
       // Cleared whatever came back, including nothing. The alternative is a
@@ -969,7 +1019,10 @@ export const DetailView: React.FC<DetailViewProps> = ({
     return () => {
       cancelled = true;
     };
-  }, [detail?.url, detail?.imdbId, detail?.type, detail?.name, detail?.year, providerVideos]);
+    // The trailer list by its contents: `providerVideos` is rebuilt as a new
+    // array on every detail update, and keyed on the array this effect re-ran —
+    // and re-asked four catalogues — each time a background refresh landed.
+  }, [detail?.url, detail?.imdbId, detail?.type, detail?.name, detail?.year, providerVideosKey]);
 
   /**
    * Fuller records arriving as each catalogue answers.
@@ -986,14 +1039,7 @@ export const DetailView: React.FC<DetailViewProps> = ({
       if (metadata.url === detailUrlRef.current && !metadata.partial) {
         setMetadataPending(false);
       }
-      setExtended((current) => {
-        if (metadata.url !== detailUrlRef.current) return current;
-        // A partial snapshot must never replace a complete one: the sources
-        // settle in whatever order the network allows, and a late `partial`
-        // emission would blank fields the final record had already filled.
-        if (current && !current.partial && metadata.partial) return current;
-        return metadata;
-      });
+      setExtended((current) => acceptExtendedPush(current, metadata, detailUrlRef.current));
     });
     return () => dispose?.();
   }, []);
@@ -1921,14 +1967,26 @@ export const DetailView: React.FC<DetailViewProps> = ({
   }
 
   if (isLoading) {
+    // The page's own frame with what the card already knew, not a spinner in
+    // its place: the answer lands where it will stay instead of replacing it.
     return (
-      <div className="detail-view detail-view--state">
-        <Loader2 className="spin" size={32} />
-        <p>
-          {recovering
-            ? `That source isn't answering — finding “${recovering}” on another one…`
-            : `Loading ${mediaItem.name}…`}
-        </p>
+      <div className="detail-view">
+        <div className="detail-view__topbar">
+          <button className="detail-view__back" onClick={onBack} title="Back (Alt+←)">
+            <ArrowLeft size={16} /> Back
+          </button>
+        </div>
+        <DetailHeroSkeleton
+          title={mediaItem.name}
+          posterUrl={mediaItem.posterUrl}
+          year={mediaItem.year}
+          type={mediaItem.type}
+          sensitive={isAdult}
+          itemKey={mediaItem.url}
+          status={
+            recovering ? `That source isn't answering — finding “${recovering}” on another one…` : undefined
+          }
+        />
       </div>
     );
   }
@@ -2027,62 +2085,27 @@ export const DetailView: React.FC<DetailViewProps> = ({
           <ArrowLeft size={16} /> Back
         </button>
         <DetailSectionNav />
+        {/*
+          The page is the saved copy, and that is said out loud.
+
+          Two states, deliberately distinguished. While the provider is still
+          being asked this is a quiet line: the content is real, it is simply
+          not yet confirmed, and an alarming banner for a state that resolves in
+          two seconds would train people to ignore the one that matters. It sits
+          in the top bar because a line inserted above the masthead and removed
+          two seconds later moved the whole page twice. Once every route has
+          failed it becomes the warning below the masthead — with the reason,
+          the age of the copy, and a retry — because the difference between
+          "showing you what we saved" and "this title is broken" is the entire
+          difference between a recoverable page and a dead one.
+        */}
+        {servedFromSnapshot === 'loading' && (
+          <div className="detail-saved detail-saved--quiet" role="status">
+            <Loader2 size={13} className="spin" />
+            <span>Showing your saved copy while {mediaItem.apiName || 'the source'} answers…</span>
+          </div>
+        )}
       </div>
-
-      {/*
-        The page is the saved copy, and that is said out loud.
-
-        Two states, deliberately distinguished. While the provider is still
-        being asked this is a quiet line: the content is real, it is simply not
-        yet confirmed, and an alarming banner for a state that resolves in two
-        seconds would train people to ignore the one that matters. Once every
-        route has failed it becomes the warning — with the reason, the age of
-        the copy, and a retry — because the difference between "showing you what
-        we saved" and "this title is broken" is the entire difference between a
-        recoverable page and a dead one.
-      */}
-      {servedFromSnapshot && (
-        <div
-          className={`detail-saved${
-            servedFromSnapshot === 'loading' ? ' detail-saved--quiet' : ''
-          }`}
-          role={servedFromSnapshot === 'loading' ? 'status' : 'alert'}
-        >
-          {servedFromSnapshot === 'loading' ? (
-            <>
-              <Loader2 size={13} className="spin" />
-              <span>Showing your saved copy while {mediaItem.apiName || 'the source'} answers…</span>
-            </>
-          ) : (
-            <>
-              <AlertTriangle size={14} />
-              <div className="detail-saved__body">
-                <strong>Showing your saved copy of this page.</strong>
-                <span className="detail-saved__why">
-                  {savedCopyAge(snapshot)} · {servedFromSnapshot}
-                </span>
-              </div>
-              <button
-                className="detail-saved__retry"
-                onClick={() => {
-                  setIsLoading(true);
-                  setReloadToken((token) => token + 1);
-                }}
-              >
-                Try again
-              </button>
-              {onSearch && (
-                <button
-                  className="detail-saved__retry"
-                  onClick={() => onSearch(mediaItem.originalTitle || mediaItem.name)}
-                >
-                  Find it again
-                </button>
-              )}
-            </>
-          )}
-        </div>
-      )}
 
       <DetailHero
         shareControl={
@@ -2116,9 +2139,8 @@ export const DetailView: React.FC<DetailViewProps> = ({
           what the page is about for dubbed cuts, regional releases and
           re-edits. So enrichment fills gaps and never overwrites.
         */
-        originalTitle={
-          mediaItem.originalTitle || (detail as any)?.originalTitle || extended?.originalTitle
-        }
+        originalTitle={mediaItem.originalTitle || (detail as any)?.originalTitle}
+        lateOriginalTitle={extended?.originalTitle}
         year={detail.year}
         type={detail.type}
         posterUrl={detail.posterUrl || extended?.posterUrl}
@@ -2204,6 +2226,35 @@ export const DetailView: React.FC<DetailViewProps> = ({
           />
         }
       />
+
+      {servedFromSnapshot && servedFromSnapshot !== 'loading' && (
+        <div className="detail-saved" role="alert">
+          <AlertTriangle size={14} />
+          <div className="detail-saved__body">
+            <strong>Showing your saved copy of this page.</strong>
+            <span className="detail-saved__why">
+              {savedCopyAge(snapshot)} · {servedFromSnapshot}
+            </span>
+          </div>
+          <button
+            className="detail-saved__retry"
+            onClick={() => {
+              setIsLoading(true);
+              setReloadToken((token) => token + 1);
+            }}
+          >
+            Try again
+          </button>
+          {onSearch && (
+            <button
+              className="detail-saved__retry"
+              onClick={() => onSearch(mediaItem.originalTitle || mediaItem.name)}
+            >
+              Find it again
+            </button>
+          )}
+        </div>
+      )}
 
       {isSeries && (
         <DetailSection

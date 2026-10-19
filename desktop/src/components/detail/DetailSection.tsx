@@ -1,5 +1,6 @@
 import React, { useCallback, useState } from 'react';
 import { ChevronDown, Maximize2 } from 'lucide-react';
+import { profileStorage, storageProfileId } from '../../utils/profileStorage';
 
 /**
  * One section of the detail page below the hero: a heading that collapses it,
@@ -21,7 +22,7 @@ const STORAGE_KEY = 'cs3.detailSections.collapsed';
 
 function readCollapsed(): Record<string, boolean> {
   try {
-    const raw = localStorage.getItem(STORAGE_KEY);
+    const raw = profileStorage.getItem(STORAGE_KEY);
     return raw ? (JSON.parse(raw) as Record<string, boolean>) : {};
   } catch {
     return {};
@@ -30,12 +31,20 @@ function readCollapsed(): Record<string, boolean> {
 
 /** Shared by every section on screen, so "collapse all" and each header agree. */
 const listeners = new Set<() => void>();
-let collapsedState = readCollapsed();
+let collapsedCache: { profileId: string; state: Record<string, boolean> } | null = null;
+
+/** The folded sections of the profile in use — re-read after a switch, never the previous one's. */
+function collapsedState(): Record<string, boolean> {
+  if (collapsedCache?.profileId !== storageProfileId()) {
+    collapsedCache = { profileId: storageProfileId(), state: readCollapsed() };
+  }
+  return collapsedCache.state;
+}
 
 function writeCollapsed(next: Record<string, boolean>) {
-  collapsedState = next;
+  collapsedCache = { profileId: storageProfileId(), state: next };
   try {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(next));
+    profileStorage.setItem(STORAGE_KEY, JSON.stringify(next));
   } catch {}
   for (const listener of listeners) listener();
 }
@@ -49,14 +58,14 @@ export function useSectionCollapsed(id: string, defaultCollapsed = false): [bool
       listeners.delete(listener);
     };
   }, []);
-  const collapsed = collapsedState[id] ?? defaultCollapsed;
-  const set = useCallback((next: boolean) => writeCollapsed({ ...collapsedState, [id]: next }), [id]);
+  const collapsed = collapsedState()[id] ?? defaultCollapsed;
+  const set = useCallback((next: boolean) => writeCollapsed({ ...collapsedState(), [id]: next }), [id]);
   return [collapsed, set];
 }
 
 /** Folds or unfolds every section id given, at once. */
 export function setSectionsCollapsed(ids: string[], collapsed: boolean): void {
-  const next = { ...collapsedState };
+  const next = { ...collapsedState() };
   for (const id of ids) next[id] = collapsed;
   writeCollapsed(next);
 }
