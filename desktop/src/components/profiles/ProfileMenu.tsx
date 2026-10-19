@@ -23,8 +23,15 @@ export const ProfileMenu: React.FC = () => {
   const items: MenuItem[] = [
     ...others.map((profile, index) => ({
       label: profile.name,
+      description: 'Switch to this profile',
       leading: <ProfileAvatar avatar={profile.avatar} size="xs" />,
-      trailing: profile.locked ? <Lock size={12} aria-label="Locked" /> : undefined,
+      trailing: profile.locked ? (
+        <span className="viewer-menu__locked-badge" title="Locked">
+          <Lock size={12} aria-label="Locked" />
+        </span>
+      ) : (
+        <span className="viewer-menu__switch-action">Switch</span>
+      ),
       separatorBefore: index === 0,
       onSelect: () => {
         if (profile.locked) setDialog({ kind: 'unlock', profileId: profile.id, then: 'switch' });
@@ -32,16 +39,22 @@ export const ProfileMenu: React.FC = () => {
       },
     })),
     ...(others.length > 0
-      ? [{ label: 'Manage profiles', icon: Users, separatorBefore: true, onSelect: () => setDialog({ kind: 'list' }) }]
+      ? [{ label: 'Manage profiles', description: 'Switch, lock or edit profiles', icon: Users, separatorBefore: true, onSelect: () => setDialog({ kind: 'list' }) }]
       : []),
     {
       label: 'Add profile',
+      description: state.profiles.length < MAX_PROFILES ? 'Create profile for another viewer' : undefined,
       icon: UserPlus,
       separatorBefore: others.length === 0,
       disabled: state.profiles.length >= MAX_PROFILES,
       onSelect: () => setDialog({ kind: 'editor', profileId: null }),
     },
-    { label: 'Profile settings', icon: UserCog, onSelect: () => setDialog({ kind: 'editor', profileId: active.id }) },
+    {
+      label: 'Profile settings',
+      description: 'Avatar, name and PIN',
+      icon: UserCog,
+      onSelect: () => setDialog({ kind: 'editor', profileId: active.id }),
+    },
   ];
 
   return (
@@ -53,14 +66,18 @@ export const ProfileMenu: React.FC = () => {
         header={
           <div className="viewer-menu__header">
             <ProfileAvatar avatar={active.avatar} size="md" />
-            <span className="viewer-menu__who">
+            <div className="viewer-menu__who">
+              <span className="viewer-menu__active-badge">
+                <span className="viewer-menu__active-dot" aria-hidden />
+                Current profile
+              </span>
               <strong>{active.name}</strong>
               {active.locked ? (
                 <span className="viewer-menu__locked">
-                  <Lock size={11} aria-hidden /> Locked
+                  <Lock size={11} aria-hidden /> PIN Locked
                 </span>
               ) : null}
-            </span>
+            </div>
           </div>
         }
         trigger={(props) => (
@@ -69,10 +86,13 @@ export const ProfileMenu: React.FC = () => {
             type="button"
             className="viewer-menu__trigger"
             aria-label={`Profile: ${active.name}`}
-            title={`Active profile: ${active.name}`}
+            title={`Active profile: ${active.name} — Click to switch or manage profiles`}
           >
             <ProfileAvatar avatar={active.avatar} size="xs" />
-            <span className="viewer-menu__name">{active.name}</span>
+            <div className="viewer-menu__pill-info">
+              <span className="viewer-menu__pill-tag">Profile</span>
+              <span className="viewer-menu__name">{active.name}</span>
+            </div>
             {active.locked ? <Lock size={11} className="viewer-menu__lock-icon" aria-hidden /> : null}
             <ChevronDown size={13} className="viewer-menu__chevron" aria-hidden />
           </button>
