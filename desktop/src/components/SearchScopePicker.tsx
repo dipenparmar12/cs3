@@ -257,6 +257,31 @@ export const SearchScopePicker: React.FC<SearchScopePickerProps> = ({
     setPendingImpact(null);
   }, []);
 
+  const inferFacetsForProviders = useCallback(
+    (providerNames: string[] | Set<string>) => {
+      const names = new Set(providerNames);
+      const languages = new Set<string>();
+      const types = new Set<string>();
+
+      for (const repo of repositories) {
+        for (const ext of repo.extensions) {
+          for (const p of ext.providers) {
+            if (names.has(p.name)) {
+              const lang = p.lang ?? ext.language;
+              if (lang) languages.add(lang);
+              for (const t of p.supportedTypes ?? []) {
+                types.add(t);
+              }
+            }
+          }
+        }
+      }
+
+      return { languages, types };
+    },
+    [repositories]
+  );
+
   /**
    * Applies a profile answer to everything on screen.
    *
@@ -265,26 +290,41 @@ export const SearchScopePicker: React.FC<SearchScopePickerProps> = ({
    * result — so the tree is redrawn from that answer rather than from what the
    * click was expected to do.
    */
-  const applyProfiles = useCallback((snapshot: {
-    ok?: boolean;
-    profiles?: ProfileSummary[];
-    activeId?: string;
-    draft?: { providers?: string[]; indexers?: string[] };
-  } | undefined) => {
-    if (!snapshot?.ok) return;
-    setProfiles(snapshot.profiles ?? []);
-    setActiveProfile(snapshot.activeId ?? 'all');
-    const draft = snapshot.draft ?? {};
-    setDraftCount((draft.providers?.length ?? 0) + (draft.indexers?.length ?? 0));
+  const applyProfiles = useCallback(
+    (snapshot: {
+      ok?: boolean;
+      profiles?: ProfileSummary[];
+      activeId?: string;
+      draft?: { providers?: string[]; indexers?: string[] };
+    } | undefined) => {
+      if (!snapshot?.ok) return;
+      setProfiles(snapshot.profiles ?? []);
+      setActiveProfile(snapshot.activeId ?? 'all');
+      const draft = snapshot.draft ?? {};
+      setDraftCount((draft.providers?.length ?? 0) + (draft.indexers?.length ?? 0));
 
-    const active = (snapshot.profiles ?? []).find((p) => p.id === snapshot.activeId);
-    const scoped =
-      snapshot.activeId === 'all'
-        ? { providers: [] as string[], indexers: [] as string[] }
-        : active ?? { providers: draft.providers ?? [], indexers: draft.indexers ?? [] };
-    setProviders(new Set(scoped.providers));
-    setChosenIndexers(new Set(scoped.indexers));
-  }, []);
+      const active = (snapshot.profiles ?? []).find((p) => p.id === snapshot.activeId);
+      const scoped =
+        snapshot.activeId === 'all'
+          ? { providers: [] as string[], indexers: [] as string[] }
+          : active ?? { providers: draft.providers ?? [], indexers: draft.indexers ?? [] };
+      setProviders(new Set(scoped.providers));
+      setChosenIndexers(new Set(scoped.indexers));
+
+      // Clear leftover selections when All sources is active, or reflect active profile's facets
+      if (snapshot.activeId === 'all') {
+        setFacets(EMPTY_SELECTION);
+      } else if (scoped.providers.length > 0) {
+        const inferred = inferFacetsForProviders(scoped.providers);
+        setFacets({
+          kinds: new Set(),
+          languages: inferred.languages,
+          types: inferred.types,
+        });
+      }
+    },
+    [inferFacetsForProviders]
+  );
 
   useEffect(() => {
     void window.cloudstream?.listSourceProfiles?.().then(applyProfiles);
@@ -560,10 +600,41 @@ export const SearchScopePicker: React.FC<SearchScopePickerProps> = ({
         const bucket = next[group] as Set<string>;
         if (bucket.has(value)) bucket.delete(value);
         else bucket.add(value);
+
+        // When toggling language or content in quick setup, also update the participating providers
+        if (group === 'languages' || group === 'types') {
+          if (next.languages.size === 0 && next.types.size === 0) {
+            persist(new Set(), new Set());
+            setActiveProfile('all');
+          } else {
+            const matchingProviders = new Set<string>();
+            for (const repo of repositories) {
+              for (const ext of repo.extensions) {
+                for (const p of ext.providers) {
+                  if (!isSelectable(p)) continue;
+                  const lang = p.lang ?? ext.language;
+                  const types = p.supportedTypes ?? [];
+
+                  const matchesLang =
+                    next.languages.size === 0 || (lang !== undefined && next.languages.has(lang));
+                  const matchesType =
+                    next.types.size === 0 || types.some((t) => next.types.has(t));
+
+                  if (matchesLang && matchesType) {
+                    matchingProviders.add(p.name);
+                  }
+                }
+              }
+            }
+            persist(matchingProviders, chosenIndexers);
+            setActiveProfile('');
+          }
+        }
+
         return next;
       });
     },
-    []
+    [repositories, chosenIndexers, persist]
   );
 
   /**
@@ -970,7 +1041,10 @@ export const SearchScopePicker: React.FC<SearchScopePickerProps> = ({
       `This will add all ${totalAvailable} available sources to your current selection.`,
       allProviders,
       allIndexers,
-      () => persist(allProviders, allIndexers),
+      () => {
+        setFacets(EMPTY_SELECTION);
+        persist(allProviders, allIndexers);
+      },
       `All ${totalAvailable} sources selected.`
     );
   }, [universe, totalAvailable, applyWithImpactCheck, persist]);
@@ -981,7 +1055,10 @@ export const SearchScopePicker: React.FC<SearchScopePickerProps> = ({
       `This will remove your current selection (${totalChosen} sources) and search all installed sources.`,
       new Set(),
       new Set(),
-      () => void window.cloudstream?.activateSourceProfile?.('all').then(applyProfiles),
+      () => {
+        setFacets(EMPTY_SELECTION);
+        void window.cloudstream?.activateSourceProfile?.('all').then(applyProfiles);
+      },
       'Selection reset to All Sources.'
     );
   }, [totalChosen, applyWithImpactCheck, applyProfiles]);
@@ -999,10 +1076,14 @@ export const SearchScopePicker: React.FC<SearchScopePickerProps> = ({
             `This will discard your current unsaved selection (${draftCount} sources) and search all installed sources.`,
             new Set(),
             new Set(),
-            () => void window.cloudstream?.activateSourceProfile?.('all').then(applyProfiles),
+            () => {
+              setFacets(EMPTY_SELECTION);
+              void window.cloudstream?.activateSourceProfile?.('all').then(applyProfiles);
+            },
             'Selection reset to All Sources.'
           );
         } else {
+          setFacets(EMPTY_SELECTION);
           void window.cloudstream?.activateSourceProfile?.('all').then(applyProfiles);
           triggerFeedback('Reset to All Sources.');
         }
@@ -1018,6 +1099,7 @@ export const SearchScopePicker: React.FC<SearchScopePickerProps> = ({
         const target = resolveBuiltInSelection(id);
         const builtinDef = builtInProfiles.find((b) => b.id === id);
         const name = builtinDef?.name ?? 'Built-in profile';
+        const inferred = inferFacetsForProviders(target.providers);
 
         if (hasUnsavedDraft) {
           applyWithImpactCheck(
@@ -1028,12 +1110,22 @@ export const SearchScopePicker: React.FC<SearchScopePickerProps> = ({
             () => {
               persist(target.providers, target.indexers);
               setActiveProfile(id);
+              setFacets({
+                kinds: new Set(),
+                languages: inferred.languages,
+                types: inferred.types,
+              });
             },
             `Switched to profile “${name}”.`
           );
         } else {
           persist(target.providers, target.indexers);
           setActiveProfile(id);
+          setFacets({
+            kinds: new Set(),
+            languages: inferred.languages,
+            types: inferred.types,
+          });
           triggerFeedback(`Switched to profile “${name}”.`);
         }
         return;
@@ -1042,6 +1134,7 @@ export const SearchScopePicker: React.FC<SearchScopePickerProps> = ({
       const custom = profiles.find((p) => p.id === id);
       const targetProv = new Set(custom?.providers ?? []);
       const targetIdx = new Set(custom?.indexers ?? []);
+      const inferred = inferFacetsForProviders(custom?.providers ?? []);
 
       if (hasUnsavedDraft) {
         applyWithImpactCheck(
@@ -1049,10 +1142,22 @@ export const SearchScopePicker: React.FC<SearchScopePickerProps> = ({
           `This will replace your current unsaved selection with “${custom?.name}”.`,
           targetProv,
           targetIdx,
-          () => void window.cloudstream?.activateSourceProfile?.(id).then(applyProfiles),
+          () => {
+            setFacets({
+              kinds: new Set(),
+              languages: inferred.languages,
+              types: inferred.types,
+            });
+            void window.cloudstream?.activateSourceProfile?.(id).then(applyProfiles);
+          },
           `Switched to profile “${custom?.name}”.`
         );
       } else {
+        setFacets({
+          kinds: new Set(),
+          languages: inferred.languages,
+          types: inferred.types,
+        });
         void window.cloudstream?.activateSourceProfile?.(id).then(applyProfiles);
         triggerFeedback(`Switched to profile “${custom?.name}”.`);
       }
@@ -1065,6 +1170,7 @@ export const SearchScopePicker: React.FC<SearchScopePickerProps> = ({
       triggerFeedback,
       resolveBuiltInSelection,
       builtInProfiles,
+      inferFacetsForProviders,
       persist,
       profiles,
     ]
