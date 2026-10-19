@@ -4,6 +4,7 @@
   "private": true,
   "version": "1.0.0",
   "description": "CloudStream 3 Cross-Platform Desktop Application",
+  "homepage": "https://github.com/dipenparmar12/cs3",
   "main": "dist-electron/main.js",
   "type": "module",
   "scripts": {
