@@ -434,7 +434,7 @@ export const SearchScopePicker: React.FC<SearchScopePickerProps> = ({
       }
     }
 
-    return [
+    const list: BuiltInProfileDef[] = [
       {
         id: 'all',
         name: 'All sources',
@@ -470,20 +470,19 @@ export const SearchScopePicker: React.FC<SearchScopePickerProps> = ({
         icon: 'clapperboard',
         count: dramaCount,
       },
-      {
+    ];
+
+    if (adult.allowed) {
+      list.push({
         id: 'builtin:nsfw',
         name: 'NSFW (18+)',
-        description: adult.allowed
-          ? 'Focus on adult and 18+ content providers.'
-          : 'Adult content is locked / turned off in settings.',
+        description: 'Focus on adult and 18+ content providers.',
         icon: 'shield',
         count: nsfwCount,
-        disabled: !adult.allowed,
-        disabledReason: adult.allowed
-          ? undefined
-          : 'Adult content is disabled or locked in settings.',
-      },
-    ];
+      });
+    }
+
+    return list;
   }, [repositories, universe, adult]);
 
   /**
@@ -501,6 +500,7 @@ export const SearchScopePicker: React.FC<SearchScopePickerProps> = ({
         for (const provider of ext.providers) {
           if (!isSelectable(provider)) continue;
           for (const type of provider.supportedTypes ?? []) {
+            if (type.toLowerCase() === 'nsfw' && !adult.allowed) continue;
             types.set(type, (types.get(type) ?? 0) + 1);
           }
           const lang = provider.lang ?? ext.language;
@@ -514,7 +514,7 @@ export const SearchScopePicker: React.FC<SearchScopePickerProps> = ({
       types: [...types.entries()].sort(byCount).map(([value]) => value),
       languages: [...languages.entries()].sort(byCount).map(([value]) => value),
     };
-  }, [repositories]);
+  }, [repositories, adult.allowed]);
 
   const facetsActive =
     facets.types.size > 0 || facets.languages.size > 0 || facets.kinds.size > 0;
@@ -579,13 +579,15 @@ export const SearchScopePicker: React.FC<SearchScopePickerProps> = ({
     // is in force: hiding a match inside a collapsed group would read as "no
     // results" for something that is right there.
     const isOpen = (key: string) => searching || !collapsed.has(key);
-    const out: Row[] = [];
+    const activeRepos: { repoRow: Row; children: Row[] }[] = [];
+    const unselectableRepos: { repoRow: Row; children: Row[] }[] = [];
 
     for (const repo of repositories) {
       const repoKey = `repo:${repo.id ?? repo.url ?? repo.name}`;
       const repoMatches = repo.name.toLowerCase().includes(needle);
       const repoMembers: string[] = [];
-      const children: Row[] = [];
+      const selectableChildren: Row[] = [];
+      const unselectableChildren: Row[] = [];
 
       for (const ext of repo.extensions) {
         const extKey = `${repoKey}/ext:${ext.id ?? ext.internalName}`;
@@ -596,12 +598,9 @@ export const SearchScopePicker: React.FC<SearchScopePickerProps> = ({
         repoMembers.push(...active.map((provider) => provider.name));
 
         if (active.length === 0) {
-          // A facet that filtered everything out of this extension is not the
-          // same as an extension that registered nothing, and saying "no
-          // providers registered" for the first would be a lie about the data.
           if (facetsActive) continue;
           if (searching && !extMatches) continue;
-          children.push({
+          unselectableChildren.push({
             key: extKey,
             kind: 'ext',
             depth: 1,
@@ -609,7 +608,7 @@ export const SearchScopePicker: React.FC<SearchScopePickerProps> = ({
             members: [],
             isIndexer: false,
           });
-          children.push({
+          unselectableChildren.push({
             key: `${extKey}/note`,
             kind: 'note',
             depth: 2,
@@ -629,7 +628,7 @@ export const SearchScopePicker: React.FC<SearchScopePickerProps> = ({
         if (active.length === 1 && normalise(active[0].name) === normalise(ext.name)) {
           if (searching && !extMatches && !active[0].name.toLowerCase().includes(needle)) continue;
           repoMembers.push(active[0].name);
-          children.push({
+          selectableChildren.push({
             key: extKey,
             kind: 'leaf',
             depth: 1,
@@ -644,7 +643,7 @@ export const SearchScopePicker: React.FC<SearchScopePickerProps> = ({
         const extMatchingMembers = matching.map((provider) => provider.name);
         repoMembers.push(...extMatchingMembers);
 
-        children.push({
+        selectableChildren.push({
           key: extKey,
           kind: 'ext',
           depth: 1,
@@ -656,7 +655,7 @@ export const SearchScopePicker: React.FC<SearchScopePickerProps> = ({
 
         if (isOpen(extKey)) {
           for (const provider of matching) {
-            children.push({
+            selectableChildren.push({
               key: `${extKey}/p:${provider.id ?? provider.name}`,
               kind: 'leaf',
               depth: 2,
@@ -669,9 +668,10 @@ export const SearchScopePicker: React.FC<SearchScopePickerProps> = ({
         }
       }
 
-      if (children.length === 0) continue;
+      const allChildren = [...selectableChildren, ...unselectableChildren];
+      if (allChildren.length === 0) continue;
 
-      out.push({
+      const repoRow: Row = {
         key: repoKey,
         kind: 'repo',
         depth: 0,
@@ -681,10 +681,24 @@ export const SearchScopePicker: React.FC<SearchScopePickerProps> = ({
         title: repo.url || 'Sideloaded extension',
         isIndexer: false,
         icon: 'package',
-      });
-      if (isOpen(repoKey)) out.push(...children);
+      };
+
+      if (repoMembers.length > 0) {
+        activeRepos.push({ repoRow, children: allChildren });
+      } else {
+        unselectableRepos.push({ repoRow, children: allChildren });
+      }
     }
 
+    const out: Row[] = [];
+
+    // 1. Active, selectable repositories first
+    for (const { repoRow, children } of activeRepos) {
+      out.push(repoRow);
+      if (isOpen(repoRow.key)) out.push(...children);
+    }
+
+    // 2. Torrent sources group
     const matchingIndexers = !indexersVisible
       ? []
       : searching
@@ -719,6 +733,27 @@ export const SearchScopePicker: React.FC<SearchScopePickerProps> = ({
             isIndexer: true,
           });
         }
+      }
+    }
+
+    // 3. Unselectable/disabled repositories moved to the bottom with clear partition
+    if (unselectableRepos.length > 0 && !searching) {
+      out.push({
+        key: 'divider:unselectable',
+        kind: 'note',
+        depth: 0,
+        label: '— Unavailable or empty sources —',
+        members: [],
+        isIndexer: false,
+      });
+      for (const { repoRow, children } of unselectableRepos) {
+        out.push(repoRow);
+        if (isOpen(repoRow.key)) out.push(...children);
+      }
+    } else if (unselectableRepos.length > 0 && searching) {
+      for (const { repoRow, children } of unselectableRepos) {
+        out.push(repoRow);
+        if (isOpen(repoRow.key)) out.push(...children);
       }
     }
 
@@ -953,45 +988,86 @@ export const SearchScopePicker: React.FC<SearchScopePickerProps> = ({
 
   const handleActivateProfile = useCallback(
     (id: string) => {
+      // Switching profiles should be smooth and direct. Only warn/confirm if the user
+      // has an active unsaved draft selection (activeProfile === '') that would be discarded.
+      const hasUnsavedDraft = draftCount > 0 && activeProfile === '';
+
       if (id === 'all') {
-        handleReset();
+        if (hasUnsavedDraft) {
+          applyWithImpactCheck(
+            'Reset to All Sources',
+            `This will discard your current unsaved selection (${draftCount} sources) and search all installed sources.`,
+            new Set(),
+            new Set(),
+            () => void window.cloudstream?.activateSourceProfile?.('all').then(applyProfiles),
+            'Selection reset to All Sources.'
+          );
+        } else {
+          void window.cloudstream?.activateSourceProfile?.('all').then(applyProfiles);
+          triggerFeedback('Reset to All Sources.');
+        }
         return;
       }
+
       if (id === '') {
         void window.cloudstream?.activateSourceProfile?.('').then(applyProfiles);
         return;
       }
+
       if (id.startsWith('builtin:')) {
         const target = resolveBuiltInSelection(id);
         const builtinDef = builtInProfiles.find((b) => b.id === id);
         const name = builtinDef?.name ?? 'Built-in profile';
-        applyWithImpactCheck(
-          `Switch to profile “${name}”`,
-          `This will change your current selection to match ${name} (${target.providers.size} sources).`,
-          target.providers,
-          target.indexers,
-          () => {
-            persist(target.providers, target.indexers);
-            setActiveProfile(id);
-          },
-          `Switched to profile “${name}” (${target.providers.size} sources selected).`
-        );
+
+        if (hasUnsavedDraft) {
+          applyWithImpactCheck(
+            `Switch to profile “${name}”`,
+            `This will replace your current unsaved selection with ${name} (${target.providers.size} sources).`,
+            target.providers,
+            target.indexers,
+            () => {
+              persist(target.providers, target.indexers);
+              setActiveProfile(id);
+            },
+            `Switched to profile “${name}”.`
+          );
+        } else {
+          persist(target.providers, target.indexers);
+          setActiveProfile(id);
+          triggerFeedback(`Switched to profile “${name}”.`);
+        }
         return;
       }
+
       const custom = profiles.find((p) => p.id === id);
       const targetProv = new Set(custom?.providers ?? []);
       const targetIdx = new Set(custom?.indexers ?? []);
-      const count = targetProv.size + targetIdx.size;
-      applyWithImpactCheck(
-        `Switch to profile “${custom?.name ?? 'profile'}”`,
-        `This will apply the saved source selection for “${custom?.name}” (${count} sources).`,
-        targetProv,
-        targetIdx,
-        () => void window.cloudstream?.activateSourceProfile?.(id).then(applyProfiles),
-        `Switched to profile “${custom?.name}”.`
-      );
+
+      if (hasUnsavedDraft) {
+        applyWithImpactCheck(
+          `Switch to profile “${custom?.name ?? 'profile'}”`,
+          `This will replace your current unsaved selection with “${custom?.name}”.`,
+          targetProv,
+          targetIdx,
+          () => void window.cloudstream?.activateSourceProfile?.(id).then(applyProfiles),
+          `Switched to profile “${custom?.name}”.`
+        );
+      } else {
+        void window.cloudstream?.activateSourceProfile?.(id).then(applyProfiles);
+        triggerFeedback(`Switched to profile “${custom?.name}”.`);
+      }
     },
-    [handleReset, resolveBuiltInSelection, builtInProfiles, applyWithImpactCheck, persist, profiles, applyProfiles]
+    [
+      draftCount,
+      activeProfile,
+      applyWithImpactCheck,
+      applyProfiles,
+      triggerFeedback,
+      resolveBuiltInSelection,
+      builtInProfiles,
+      persist,
+      profiles,
+    ]
   );
 
   const label =

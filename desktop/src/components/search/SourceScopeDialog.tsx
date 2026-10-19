@@ -13,10 +13,15 @@ import {
   ChevronDown,
   ChevronRight,
   Clapperboard,
+  Compass,
+  Disc,
+  FileVideo,
   Film,
   Globe,
+  Layers,
   Loader2,
   Minus,
+  Music,
   Package,
   Radio,
   RotateCcw,
@@ -25,6 +30,7 @@ import {
   Smile,
   Sparkles,
   Tv,
+  Video,
   X,
 } from 'lucide-react';
 import type { ProviderLoadProgress } from '../../../electron/pluginManager';
@@ -52,15 +58,22 @@ export interface PendingImpactConfirmation {
 
 function getContentTypeIcon(type: string): React.ReactNode {
   const norm = type.toLowerCase();
+  if (norm.includes('animemovie') || (norm.includes('anime') && norm.includes('movie')))
+    return <FileVideo size={12} />;
+  if (norm.includes('ova')) return <Disc size={12} />;
+  if (norm.includes('anime')) return <Sparkles size={12} />;
   if (norm.includes('movie') || norm.includes('film')) return <Film size={12} />;
   if (norm.includes('tv') || norm.includes('series')) return <Tv size={12} />;
-  if (norm.includes('anime')) return <Sparkles size={12} />;
   if (norm.includes('drama') || norm.includes('asian')) return <Clapperboard size={12} />;
   if (norm.includes('cartoon') || norm.includes('animation')) return <Smile size={12} />;
-  if (norm.includes('book') || norm.includes('manga') || norm.includes('comic'))
+  if (norm.includes('documentary')) return <Compass size={12} />;
+  if (norm.includes('live')) return <Video size={12} />;
+  if (norm.includes('music')) return <Music size={12} />;
+  if (norm.includes('torrent')) return <Radio size={12} />;
+  if (norm.includes('book') || norm.includes('manga') || norm.includes('comic') || norm.includes('novel'))
     return <BookOpen size={12} />;
   if (norm.includes('nsfw') || norm.includes('adult')) return <ShieldAlert size={12} />;
-  return <Film size={12} />;
+  return <Layers size={12} />;
 }
 
 const Box: React.FC<{ state: CheckState }> = ({ state }) => (
@@ -803,7 +816,6 @@ export const SourceScopeDialog: React.FC<SourceScopeDialogProps> = ({
                     >
                       <FlagIcon flag={flag} size={13} fallback={code.slice(0, 2)} />
                       <span className="scope-modal__chip-code">{code}</span>
-                      {fullName && <span className="scope-modal__chip-name">{fullName}</span>}
                     </FacetChip>
                   );
                 })}
@@ -894,44 +906,66 @@ export const SourceScopeDialog: React.FC<SourceScopeDialogProps> = ({
               <>
                 <div className="scope-modal__tree-bar">
                   <span>{rows.length} {rows.length === 1 ? 'item' : 'items'}</span>
-                  {(onExpandAll || onCollapseAll || (hasIndexers && onToggleAllTorrents)) && (
-                    <div className="scope-modal__tree-controls">
-                      {hasIndexers && onToggleAllTorrents && (
-                        <button
-                          type="button"
-                          className="scope-modal__tree-control-btn"
-                          onClick={onToggleAllTorrents}
-                          title={
-                            chosenTorrentCount > 0
-                              ? 'Unselect all torrent sources'
-                              : 'Select all torrent sources'
+                  <div className="scope-modal__tree-controls">
+                    <button
+                      type="button"
+                      className="scope-modal__tree-control-btn"
+                      onClick={handleSelectAllAction}
+                      disabled={isFiltered ? (filteredCount ?? 0) === 0 : totalAvailable === 0}
+                      title={
+                        isFiltered
+                          ? allFilteredSelected
+                            ? 'Deselect all sources matching current filter'
+                            : 'Select all sources matching current filter'
+                          : 'Tick every source as it is right now, rather than following what is installed'
+                      }
+                    >
+                      {selectAllButtonText}
+                    </button>
+                    {hasIndexers && onToggleAllTorrents && (
+                      <button
+                        type="button"
+                        className="scope-modal__tree-control-btn"
+                        onClick={onToggleAllTorrents}
+                        title={
+                          (chosenTorrentCount ?? 0) > 0
+                            ? 'Unselect all torrent sources'
+                            : 'Select all torrent sources'
+                        }
+                      >
+                        {(chosenTorrentCount ?? 0) > 0 ? 'Exclude torrents' : 'Include torrents'}
+                      </button>
+                    )}
+                    {(onExpandAll || onCollapseAll) && (
+                      <button
+                        type="button"
+                        className="scope-modal__tree-control-btn"
+                        onClick={() => {
+                          const allExpanded = rows
+                            .filter((r) => r.kind === 'repo' || r.kind === 'ext')
+                            .every((r) => r.expanded);
+                          if (allExpanded) {
+                            onCollapseAll?.();
+                          } else {
+                            onExpandAll?.();
                           }
-                        >
-                          {chosenTorrentCount > 0 ? 'Exclude torrents' : 'Include torrents'}
-                        </button>
-                      )}
-                      {onExpandAll && (
-                        <button
-                          type="button"
-                          className="scope-modal__tree-control-btn"
-                          onClick={onExpandAll}
-                          title="Expand all sections"
-                        >
-                          Expand all
-                        </button>
-                      )}
-                      {onCollapseAll && (
-                        <button
-                          type="button"
-                          className="scope-modal__tree-control-btn"
-                          onClick={onCollapseAll}
-                          title="Collapse all sections"
-                        >
-                          Collapse all
-                        </button>
-                      )}
-                    </div>
-                  )}
+                        }}
+                        title={
+                          rows
+                            .filter((r) => r.kind === 'repo' || r.kind === 'ext')
+                            .every((r) => r.expanded)
+                            ? 'Collapse all sections'
+                            : 'Expand all sections'
+                        }
+                      >
+                        {rows
+                          .filter((r) => r.kind === 'repo' || r.kind === 'ext')
+                          .every((r) => r.expanded)
+                          ? 'Collapse all'
+                          : 'Expand all'}
+                      </button>
+                    )}
+                  </div>
                 </div>
 
                 <SourceVirtualTree
@@ -959,20 +993,6 @@ export const SourceScopeDialog: React.FC<SourceScopeDialogProps> = ({
             {summary}
           </p>
           <div className="scope-modal__actions">
-            <button
-              className="btn btn-ghost"
-              onClick={handleSelectAllAction}
-              disabled={isFiltered ? (filteredCount ?? 0) === 0 : totalAvailable === 0}
-              title={
-                isFiltered
-                  ? allFilteredSelected
-                    ? 'Deselect all sources matching current filter'
-                    : 'Select all sources matching current filter'
-                  : 'Tick every source as it is right now, rather than following what is installed'
-              }
-            >
-              {selectAllButtonText}
-            </button>
             {onInvert && (
               <button
                 className="btn btn-ghost"
