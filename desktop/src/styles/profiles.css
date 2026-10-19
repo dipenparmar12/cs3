@@ -1,0 +1,144 @@
+/* Viewer profiles: the avatar, the top-right menu, the profiles dialog and the
+   full-window screens shown while switching or waiting for a PIN. */
+
+.profile-avatar {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 28%;
+  color: #fff;
+  background: linear-gradient(145deg, hsl(var(--avatar-hue) 70% 52%), hsl(var(--avatar-hue) 62% 36%));
+}
+
+/* --- menu ------------------------------------------------------------------ */
+
+.viewer-menu__trigger {
+  display: inline-flex;
+  padding: 2px;
+  border: 1px solid transparent;
+  border-radius: var(--control-radius);
+  background: transparent;
+  cursor: pointer;
+}
+.viewer-menu__trigger:hover { border-color: var(--control-border-hover); }
+.viewer-menu__trigger:focus-visible { outline: none; box-shadow: var(--control-focus-ring); }
+.viewer-menu__trigger[aria-expanded='true'] { border-color: var(--accent-light); }
+
+.viewer-menu__header { display: flex; align-items: center; gap: 0.6rem; }
+.viewer-menu__who { display: flex; flex-direction: column; gap: 0.1rem; min-width: 0; }
+.viewer-menu__who strong {
+  font-size: 0.85rem;
+  color: var(--text-main);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.viewer-menu__locked,
+.profiles-dialog__locked {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  font-size: 0.72rem;
+  color: var(--text-subtle);
+}
+
+/* --- dialog ---------------------------------------------------------------- */
+
+.profiles-dialog__list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 0.25rem; }
+.profiles-dialog__row {
+  display: flex;
+  align-items: center;
+  gap: 0.7rem;
+  padding: 0.45rem 0.5rem;
+  border-radius: var(--control-radius);
+}
+.profiles-dialog__row:hover { background: var(--control-ambient-hover); }
+.profiles-dialog__identity { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 0.1rem; }
+.profiles-dialog__name {
+  font-size: 0.88rem;
+  font-weight: 600;
+  color: var(--text-main);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.profiles-dialog__meta { display: flex; align-items: center; gap: 0.5rem; font-size: 0.72rem; color: var(--text-subtle); min-height: 1em; }
+.profiles-dialog__actions { display: flex; align-items: center; gap: 0.2rem; }
+/* Edit, duplicate and delete are quiet until the row is pointed at. */
+.profiles-dialog__actions .btn-ghost { opacity: 0; }
+.profiles-dialog__row:hover .profiles-dialog__actions .btn-ghost,
+.profiles-dialog__row:focus-within .profiles-dialog__actions .btn-ghost { opacity: 1; }
+@media (hover: none) { .profiles-dialog__actions .btn-ghost { opacity: 1; } }
+
+.profiles-dialog__editor,
+.profiles-dialog__unlock { display: flex; flex-direction: column; gap: 0.9rem; }
+.profiles-dialog__unlock { align-items: center; }
+.profiles-dialog__unlock .ui-field { width: 100%; }
+
+.profiles-dialog__avatars { display: grid; grid-template-columns: repeat(8, minmax(0, 1fr)); gap: 0.35rem; }
+.profiles-dialog__avatar-choice {
+  display: inline-flex;
+  justify-content: center;
+  padding: 3px;
+  border: 2px solid transparent;
+  border-radius: 12px;
+  background: transparent;
+  cursor: pointer;
+  opacity: 0.7;
+}
+.profiles-dialog__avatar-choice:hover { opacity: 1; }
+.profiles-dialog__avatar-choice:focus-visible { outline: none; box-shadow: var(--control-focus-ring); }
+.profiles-dialog__avatar-choice--on { opacity: 1; border-color: var(--accent-light); }
+
+.profiles-dialog__lock { display: flex; flex-direction: column; gap: 0.7rem; }
+.profiles-dialog__lock-row { display: flex; align-items: center; justify-content: space-between; gap: 0.5rem; }
+.profiles-dialog__lock-actions { display: flex; gap: 0.25rem; }
+.profiles-dialog__secret { display: grid; grid-template-columns: 1fr 1fr; gap: 0.7rem; align-items: start; }
+/* Side by side, not stacked: the stacked-field spacing does not apply. */
+.profiles-dialog__secret .ui-field + .ui-field { margin-top: 0; }
+.profiles-dialog__error { margin: 0; font-size: 0.78rem; color: #f87171; }
+
+@media (max-width: 560px) {
+  .profiles-dialog__avatars { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+  .profiles-dialog__secret { grid-template-columns: 1fr; }
+}
+
+/* --- full-window screens ------------------------------------------------------ */
+
+.profile-screen {
+  position: fixed;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 2rem;
+  padding: 1rem;
+  background: var(--bg-dark);
+  color: var(--text-main);
+}
+.profile-screen__card { display: flex; flex-direction: column; align-items: center; gap: 0.9rem; width: min(320px, 100%); }
+.profile-screen__name { margin: 0; font-size: 1.25rem; font-weight: 600; }
+.profile-screen__form { display: flex; flex-direction: column; gap: 0.75rem; width: 100%; }
+.profile-screen__caption { margin: 0; font-size: 0.8rem; color: var(--text-muted); }
+.profile-screen__others { display: flex; flex-direction: column; align-items: center; gap: 0.6rem; }
+.profile-screen__choices { display: flex; flex-wrap: wrap; justify-content: center; gap: 0.5rem; }
+.profile-screen__choice {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.35rem;
+  width: 88px;
+  padding: 0.5rem 0.25rem;
+  border: 1px solid transparent;
+  border-radius: var(--control-radius);
+  background: transparent;
+  color: var(--text-muted);
+  font: inherit;
+  font-size: 0.78rem;
+  cursor: pointer;
+}
+.profile-screen__choice span { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.profile-screen__choice:hover:not(:disabled) { background: var(--control-ambient-hover); color: var(--text-main); }
+.profile-screen__choice:focus-visible { outline: none; box-shadow: var(--control-focus-ring); }
