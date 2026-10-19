@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Lock, UserCog, UserPlus, Users } from 'lucide-react';
+import { ChevronDown, Lock, UserCog, UserPlus, Users } from 'lucide-react';
 import { Menu, type MenuItem } from '../ui';
 import { ProfileAvatar } from './ProfileAvatar';
 import { ProfilesDialog, type ProfilesView } from './ProfilesDialog';
@@ -69,9 +69,12 @@ export const ProfileMenu: React.FC = () => {
             type="button"
             className="viewer-menu__trigger"
             aria-label={`Profile: ${active.name}`}
-            title={active.name}
+            title={`Active profile: ${active.name}`}
           >
-            <ProfileAvatar avatar={active.avatar} size="sm" />
+            <ProfileAvatar avatar={active.avatar} size="xs" />
+            <span className="viewer-menu__name">{active.name}</span>
+            {active.locked ? <Lock size={11} className="viewer-menu__lock-icon" aria-hidden /> : null}
+            <ChevronDown size={13} className="viewer-menu__chevron" aria-hidden />
           </button>
         )}
         items={items}

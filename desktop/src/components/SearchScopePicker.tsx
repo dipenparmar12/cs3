@@ -711,9 +711,14 @@ export const SearchScopePicker: React.FC<SearchScopePickerProps> = ({
             : `Searching only ${totalChosen} selected source(s)`
         }
       >
-        <Filter size={14} />
+        <Filter size={14} className="scope__icon" />
         <span className="scope__label">{label}</span>
-        <ChevronDown size={14} />
+        {totalChosen > 0 && (
+          <span className="scope__count-badge" aria-hidden>
+            {totalChosen}
+          </span>
+        )}
+        <ChevronDown size={14} className="scope__chevron" />
       </button>
 
       {open && (

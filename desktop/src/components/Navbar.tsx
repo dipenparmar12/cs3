@@ -1,9 +1,10 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Search, Loader2, Paperclip, Eye, EyeOff, X, Square, Trash2 } from 'lucide-react';
+import { Search, Loader2, Paperclip, Eye, EyeOff, X, Square, Trash2, VenetianMask, Code2 } from 'lucide-react';
 import { usePrivacy } from '../utils/usePrivacy';
 import { isAdultMedia, isSensitiveTitle } from '../utils/adultContent';
 import { EMERGENCY_BLUR_KEY_LABEL } from '../utils/emergencyBlur';
 import { setAdultVisualBlurred, useAdultMode } from '../utils/useAdultMode';
+import { useIsDeveloper } from '../utils/ExperienceModeContext';
 import { SearchScopePicker } from './SearchScopePicker';
 import type {
   ExactMedia,
@@ -93,10 +94,12 @@ export const Navbar: React.FC<NavbarProps> = ({
   onTorrentPickFailed,
   isSearching = false,
   onScopeChange,
+  onOpenInspector,
   externalQuery,
   onOpenSavedSearch,
   contentContext = true,
 }) => {
+  const isDeveloper = useIsDeveloper();
   const [query, setQuery] = useState('');
   const { active: incognito, setActive: setIncognito } = usePrivacy();
   const adult = useAdultMode();
@@ -550,7 +553,15 @@ export const Navbar: React.FC<NavbarProps> = ({
         />
       </div>
 
-      <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', position: 'relative' }}>
+      {/* Right-side navigation controls */}
+      <div className="navbar__actions">
+        {/* Source Scope Selector */}
+        <SearchScopePicker onScopeChange={onScopeChange} />
+
+        {/* Subtle divider between search-scoping and session/profile controls */}
+        <div className="navbar__divider" aria-hidden="true" />
+
+        {/* Contextual Adult Content Blur / Privacy toggle */}
         {showAdultBlurControl && (
           <button
             type="button"
@@ -561,8 +572,8 @@ export const Navbar: React.FC<NavbarProps> = ({
             aria-pressed={!adult.blurred}
             title={
               adult.blurred
-                ? 'Adult content posters are blurred for privacy. Click to unblur for this session.'
-                : `Adult content posters are visible for this session. Click to blur them, or press ${EMERGENCY_BLUR_KEY_LABEL} anywhere.`
+                ? `Adult content posters are blurred for privacy. Click to unblur for this session (or press ${EMERGENCY_BLUR_KEY_LABEL} anywhere).`
+                : `Adult content posters are visible for this session. Click to blur them immediately (or press ${EMERGENCY_BLUR_KEY_LABEL} anywhere).`
             }
           >
             {adult.blurred ? <Eye size={14} /> : <EyeOff size={14} />}
@@ -570,24 +581,38 @@ export const Navbar: React.FC<NavbarProps> = ({
           </button>
         )}
 
-        <SearchScopePicker onScopeChange={onScopeChange} />
-
+        {/* Incognito mode toggle */}
         <button
           type="button"
           onClick={() => setIncognito(!incognito)}
-          className={`btn btn-icon navbar__incognito${incognito ? ' navbar__incognito--on' : ' btn-secondary'}`}
+          className={`btn navbar__incognito${incognito ? ' navbar__incognito--on' : ' btn-secondary'}`}
           aria-pressed={incognito}
           title={
             incognito
-              ? 'Incognito is on — history, progress and searches aren’t saved (Ctrl+Shift+N)'
-              : 'Incognito (Ctrl+Shift+N)'
+              ? 'Incognito is active (Ctrl+Shift+N) — history, progress and searches aren’t saved. Click to exit'
+              : 'Incognito mode (Ctrl+Shift+N) — browse without saving history or searches'
           }
           aria-label={incognito ? 'Leave incognito' : 'Go incognito'}
         >
-          <EyeOff size={16} />
-          {incognito && <span>Incognito</span>}
+          <VenetianMask size={16} className="navbar__incognito-icon" />
+          {incognito && <span className="navbar__incognito-dot" aria-hidden />}
+          <span className="navbar__incognito-label">Incognito</span>
         </button>
 
+        {/* Developer UI Inspector trigger (developer mode only) */}
+        {isDeveloper && onOpenInspector && (
+          <button
+            type="button"
+            onClick={onOpenInspector}
+            className="btn btn-secondary navbar-control-btn navbar-inspector-btn"
+            title="Open Developer Inspector Drawer"
+            aria-label="Open Developer Inspector"
+          >
+            <Code2 size={15} />
+          </button>
+        )}
+
+        {/* Viewer Profile switcher & settings */}
         <ProfileMenu />
       </div>
     </header>

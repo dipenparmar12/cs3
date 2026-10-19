@@ -4667,21 +4667,77 @@
 }
 
 .scope__trigger {
-  padding: 0.4rem 0.85rem;
+  height: 34px;
+  min-height: 34px;
+  padding: 0 0.75rem;
   font-size: 0.8rem;
-  display: flex;
+  font-weight: 500;
+  display: inline-flex;
   align-items: center;
   gap: 0.5rem;
+  border-radius: var(--control-radius);
+  background: var(--control-bg);
+  border: 1px solid var(--control-border);
+  color: var(--control-text);
+  cursor: pointer;
+  transition: all 0.15s ease;
+  user-select: none;
+  white-space: nowrap;
+}
+.scope__trigger:hover {
+  background: var(--control-bg-hover);
+  border-color: var(--control-border-hover);
+  color: var(--text-main);
+}
+.scope__trigger:focus-visible {
+  outline: none;
+  box-shadow: var(--control-focus-ring);
 }
 .scope__trigger--active {
-  border-color: var(--accent-primary);
+  border-color: rgba(59, 130, 246, 0.45);
+  background: rgba(59, 130, 246, 0.12);
+  color: var(--accent-light);
+}
+.scope__trigger--active:hover {
+  border-color: var(--accent-light);
+  background: rgba(59, 130, 246, 0.18);
   color: #fff;
 }
+.scope__trigger .scope__icon {
+  flex-shrink: 0;
+  opacity: 0.75;
+}
+.scope__trigger--active .scope__icon {
+  opacity: 1;
+  color: var(--accent-light);
+}
 .scope__label {
-  max-width: 150px;
+  max-width: 140px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+.scope__count-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 18px;
+  height: 18px;
+  padding: 0 4px;
+  font-size: 0.7rem;
+  font-weight: 700;
+  border-radius: 999px;
+  background: var(--accent-primary);
+  color: #fff;
+  line-height: 1;
+}
+.scope__chevron {
+  flex-shrink: 0;
+  opacity: 0.55;
+  transition: transform 0.15s ease;
+}
+.scope__trigger[aria-expanded='true'] .scope__chevron {
+  transform: rotate(180deg);
 }
 
 /* --- The source-scope dialog ---------------------------------------------
@@ -9194,25 +9250,31 @@ video::cue {
 
 /* Contextual top navigation Unblur / Blur control (§129.5) */
 .navbar-adult-blur-btn {
+  height: 34px;
+  min-height: 34px;
   display: inline-flex;
   align-items: center;
-  gap: 0.35rem;
-  height: 28px;
-  padding: 0 0.65rem;
-  border-radius: var(--radius-full, 999px);
-  border: 1px solid var(--border-color);
-  background: rgba(255, 255, 255, 0.04);
+  gap: 0.45rem;
+  padding: 0 0.75rem;
+  border-radius: var(--control-radius);
+  border: 1px solid var(--control-border);
+  background: var(--control-bg);
   color: var(--text-muted);
-  font-size: 0.74rem;
+  font-size: 0.78rem;
   font-weight: 500;
   cursor: pointer;
   transition: all 0.15s ease;
   white-space: nowrap;
+  user-select: none;
 }
 .navbar-adult-blur-btn:hover {
-  background: rgba(255, 255, 255, 0.08);
-  border-color: rgba(255, 255, 255, 0.25);
-  color: #fff;
+  background: var(--control-bg-hover);
+  border-color: var(--control-border-hover);
+  color: var(--text-main);
+}
+.navbar-adult-blur-btn:focus-visible {
+  outline: none;
+  box-shadow: var(--control-focus-ring);
 }
 .navbar-adult-blur-btn--revealed {
   background: rgba(239, 68, 68, 0.12);
