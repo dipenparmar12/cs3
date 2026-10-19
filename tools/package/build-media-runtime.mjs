@@ -155,13 +155,13 @@ const SOURCES = {
     ffmpeg: {
       required: true,
       archive: 'ffmpeg.zip',
-      mirrors: ['https://evermeet.cx/ffmpeg/getrelease/ffmpeg/zip'],
+      mirrors: ['https://ffmpeg.martin-riedl.de/download/macos/amd64/1789931006_9.0.2/ffmpeg.zip'],
       members: { ffmpeg: (p) => /(^|\/)ffmpeg$/.test(p) },
     },
     ffprobe: {
       required: true,
       archive: 'ffprobe.zip',
-      mirrors: ['https://evermeet.cx/ffmpeg/getrelease/ffprobe/zip'],
+      mirrors: ['https://ffmpeg.martin-riedl.de/download/macos/amd64/1789931006_9.0.2/ffprobe.zip'],
       members: { ffprobe: (p) => /(^|\/)ffprobe$/.test(p) },
     },
     mpv: { required: false, reason: 'ship the mpv.app bundle from mpv.io, or `brew install mpv`' },

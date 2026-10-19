@@ -487,6 +487,9 @@ if (SKIP_MEDIA) {
       },
     );
   }
+  // Apple silicon uses system media tools, so staging intentionally produces no
+  // binaries. electron-builder still requires its extraResources source to exist.
+  fs.mkdirSync(mediaDir, { recursive: true });
 }
 
 // ── Typecheck ────────────────────────────────────────────────────────────────
