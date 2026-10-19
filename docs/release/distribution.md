@@ -96,7 +96,21 @@ Each launch writes a report; a failed **required** check fails the release.
 
 From outside, `smoke-package.mjs` adds: exit code 0 within the deadline, the JVM's pid gone within 10 s of exit (no orphaned sidecar), no `shutdown_timeout` in the profile's log, and the reported version equals the tag.
 
-Not covered by CI — no extension is installed in a smoke profile (that needs a region choice, a network download and a DEX translation), nothing is searched, played or downloaded, and a CI runner has no GPU. Those are §3.2.
+Not covered by CI — no extension is installed in a CI smoke profile, nothing is searched, played or downloaded, and a CI runner has no GPU. Those depend on third-party sites, so they are the opt-in deep mode below and §3.2, not a release gate.
+
+**Deep mode, on a real machine** — `node tools/package/smoke-package.mjs [--installed] --deep --version <v>`. Launch 1 additionally uses one community extension end to end, every step through `window.cloudstream` (the bridge the UI calls, so all four IPC layers are crossed — `desktop/electron/smokeDeep.ts`); launch 2 checks the extension survived the restart. Each step needs the one before, and the first failure ends the run with its reason.
+
+| Step | Proves |
+|---|---|
+| `ext-install` | The repository index fetched, the `.cs3` downloaded, SHA-256 checked, DEX-translated and loaded by the sidecar on this OS |
+| `ext-load` / `ext-kept` | The extension's providers are registered (launch 2: still registered, without reinstalling) |
+| `search` / `search-again` | A search scoped to that provider returns results (launch 2: the archive on disk still loads in a fresh JVM) |
+| `details`, `links` | `load()` and `loadLinks()` answer; direct links come back |
+| `play` | `media:prepare` classifies a link and it **plays** on the engine chosen: mpv reports ≥ 2 s of playback position, a `<video>` reaches `currentTime` ≥ 2 s, or an HLS manifest leads to segment bytes |
+| `play-in-app` | When `play` went to mpv: the player's own "Play in this window" request (`force` + `avoidNativeEngine`) — ffmpeg converts, the app's `<video>` plays; mpv as the answer fails |
+| `download` | `download:request` with a task built by the app's own `buildDownloadTask` reaches 2 MB, then is removed with its file |
+
+The target defaults to phisher98's `MovieBoxProvider` searching "Interstellar" (picked from this project's own provider analytics) and is set with `CS3_SMOKE_DEEP_REPO`, `CS3_SMOKE_DEEP_PLUGIN`, `CS3_SMOKE_DEEP_QUERY`. A deep failure says whether the provider or the package is at fault only together with its detail line: a provider that is down fails `search` or `links` on every OS alike.
 
 ### 3.2 Manual checklist on real hardware
 

@@ -17,8 +17,15 @@
  * overrun (`shutdown_timeout` in its log). Reaching a repository is reported
  * on every launch and fails the run only with `--require-network`.
  *
+ * `--deep` adds one community extension used end to end on launch 1 —
+ * install, load, search, details, links, playback, a 2 MB download — and on
+ * launch 2 checks it is still installed (`desktop/electron/smokeDeep.ts`;
+ * pick the target with CS3_SMOKE_DEEP_REPO/_PLUGIN/_QUERY). It depends on
+ * third-party sites, so it proves a build on a real machine rather than
+ * gating a release.
+ *
  *   node tools/package/smoke-package.mjs [--arch x64] [--installed] [--version 1.2.3]
- *                                        [--require-network] [--no-sandbox] [--keep] [--work dir] [--timeout 300]
+ *                                        [--deep] [--require-network] [--no-sandbox] [--keep] [--work dir] [--timeout 300]
  *
  * Linux without a display runs under `xvfb-run`. `--no-sandbox` is for CI
  * hosts whose kernel policy forbids Chromium's sandbox (the deb's postinst
@@ -44,7 +51,8 @@ const has = (name) => argv.includes(name);
 const platform = process.platform;
 const arch = flag(argv, '--arch', process.arch);
 const version = flag(argv, '--version');
-const LAUNCH_TIMEOUT_MS = Number(flag(argv, '--timeout', '300')) * 1000;
+const DEEP = has('--deep');
+const LAUNCH_TIMEOUT_MS = Number(flag(argv, '--timeout', DEEP ? '1500' : '300')) * 1000;
 // `--work` names a directory CI can upload when a launch fails; it must not
 // contain spaces on Windows (NSIS takes its install path unquoted).
 const workArg = flag(argv, '--work');
@@ -99,6 +107,7 @@ async function launch(subject, launchNumber, profile) {
     CS3_SMOKE_USER_DATA: profile,
     CS3_SMOKE_LAUNCH: String(launchNumber),
     CS3_SMOKE_NETWORK: has('--require-network') ? 'require' : 'report',
+    ...(DEEP ? { CS3_SMOKE_DEEP: '1' } : {}),
     ELECTRON_ENABLE_LOGGING: '1',
   };
   // A developer's ELECTRON_RUN_AS_NODE would turn the app into a bare Node.
