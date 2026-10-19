@@ -99,6 +99,8 @@ export interface SmokeDeps {
 }
 
 const DEADLINE_MS = 240_000;
+/** The deep steps' own timeouts, summed: install + load + search + details + links + play + download. */
+const DEEP_DEADLINE_MS = 1_200_000;
 
 async function timed(
   id: string,
@@ -159,6 +161,7 @@ export async function runSmokeTest(deps: SmokeDeps): Promise<void> {
   if (!REPORT_PATH) return;
   const { app } = deps;
   const launch = Number(process.env.CS3_SMOKE_LAUNCH) || 1;
+  const deep = process.env.CS3_SMOKE_DEEP === '1';
   const packaged = app.isPackaged;
   const startedAt = new Date().toISOString();
   const target = deps.target ?? { platform: process.platform, arch: process.arch };
@@ -248,18 +251,32 @@ export async function runSmokeTest(deps: SmokeDeps): Promise<void> {
         45_000
       )
     );
+
+    // An extension used end to end (`smokeDeep.ts`), only when asked for: it
+    // depends on third-party sites. Loaded here, not at the top, so an
+    // ordinary launch evaluates none of it. Each step needs the one before.
+    const win = deps.window();
+    if (deep && win && !win.isDestroyed()) {
+      const { deepSteps } = await import('./smokeDeep.ts');
+      for (const step of deepSteps(win, launch)) {
+        const check = await timed(step.id, true, step.run, step.timeoutMs);
+        checks.push(check);
+        if (!check.ok) break;
+      }
+    }
   })();
 
+  const deadlineMs = deep ? DEADLINE_MS + DEEP_DEADLINE_MS : DEADLINE_MS;
   let timer: NodeJS.Timeout | undefined;
   const finished = await Promise.race([
     all.then(() => true),
     new Promise<boolean>((resolve) => {
-      timer = setTimeout(() => resolve(false), DEADLINE_MS);
+      timer = setTimeout(() => resolve(false), deadlineMs);
     }),
   ]);
   clearTimeout(timer);
   if (!finished) {
-    checks.push({ id: 'deadline', required: true, ok: false, detail: `the checks took over ${DEADLINE_MS / 1000}s`, ms: DEADLINE_MS });
+    checks.push({ id: 'deadline', required: true, ok: false, detail: `the checks took over ${deadlineMs / 1000}s`, ms: deadlineMs });
   }
 
   const report: SmokeReport = {
