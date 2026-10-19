@@ -1071,4 +1071,49 @@ The feature is complete when:
 9. The interface exposes common profile actions without overwhelming the source-selection dialog.
 10. The existing source-scope, bulk-selection, backup/restore, and search tests continue to pass.
 
-**Core rule:** a profile is a named configuration over the existing strict search scope. It must simplify how users manage that configuration without introducing a second source of truth or changing what a selected source means.
+**Core rule:** a profile is a named configuration over the existing strict search scope. It must simplify how users manage that configuration without introducing a second source of truth or changing what a selected source means. With our design system and reusing design principles, profiles should feel like a natural extension of the existing search experience rather than a separate layer of complexity. here is our design should follow 
+UI/UX Refinement
+
+## UI/UX Refinement: Minimal, Clean, and Enterprise-Grade Experience
+
+Review and improve the overall UI/UX across the application to create a clean, modern, intuitive, and visually consistent experience inspired by well-designed applications such as VS Code and Chrome.
+
+The goal is to make the application **feature-complete without feeling feature-bloated**. Preserve all existing features, functionality, and capabilities while reducing unnecessary visual complexity, excessive information, oversized components, redundant controls, and competing visual elements.
+
+### Design Principles
+
+1. **Minimal and Clean Interface:** Reduce visual clutter, excessive spacing, oversized elements, unnecessary borders, prominent containers, and redundant controls. Maintain a balanced visual hierarchy with consistent sizing, spacing, typography, and styling across the application.
+
+2. **Progressive Disclosure:** Do not display all available information, instructions, settings, and controls at once. Show only what users need for the current context. Move secondary information, advanced options, detailed explanations, and less frequently used actions into tooltips, popovers, hover interactions, contextual menus, expandable sections, or other appropriate UI patterns.
+
+3. **Intuitive Interactions:** Improve the design and usability of interactive components, especially enable/disable controls, toggles, buttons, selectors, settings, and configuration panels. Their purpose and current state should be immediately understandable without requiring users to study the interface.
+
+4. **Concise and Clear Content:** Keep labels, descriptions, instructions, tooltips, and helper text short, simple, and easy to understand at a glance. Avoid lengthy explanations, verbose descriptions, redundant information, and unnecessary instructional text. Use plain, direct language that communicates the purpose of a feature without overwhelming the interface.
+
+5. **Subtle but Accessible Controls:** Keep frequently used actions easy to discover and access without making them visually dominant. Make secondary actions visually quieter while ensuring essential actions remain discoverable and accessible. Use contextual visibility where appropriate, without making important functionality difficult to find.
+
+6. **Consistent Component Design:** Review existing components and establish consistent interaction patterns, visual hierarchy, spacing, sizing, states, and styling. Similar components should behave and look consistent throughout the application rather than using different patterns for the same purpose.
+
+7. **Reduce Cognitive Load:** Users should be able to understand the interface and complete common tasks without needing to learn the application beforehand. Make functionality self-explanatory through clear labels, familiar interaction patterns, sensible defaults, and contextual guidance only when necessary.
+
+8. **Preserve Functionality:** Do not remove existing features, capabilities, actions, configuration options, or essential information simply to achieve a minimal appearance. Refine how they are presented, organized, and accessed instead. Avoid unnecessary changes to underlying business logic or behavior.
+
+### Implementation Guidelines
+
+Review the application as a whole, including individual screens, shared components, dialogs, forms, settings panels, toolbars, menus, and other interactive elements.
+
+Identify areas where the interface feels bloated, crowded, repetitive, visually dominant, or unnecessarily complicated. Prioritize improvements that meaningfully simplify the experience without compromising functionality, discoverability, accessibility, or usability.
+
+Prefer contextual help over permanently visible explanations. Use tooltips or popovers for supplementary information, concise descriptions for primary context, and expandable sections for advanced or optional details. Ensure that these patterns are accessible and work appropriately across supported interaction methods, including keyboard and touch where applicable.
+
+Avoid introducing unnecessary components, decorative elements, extra containers, excessive animations, or new layers of navigation merely to make the interface appear modern. Reuse and improve existing shared components wherever practical.
+
+Follow the application's established design system and technical conventions. Make reusable improvements at the component level when appropriate so that the same refinement is applied consistently across all relevant screens.
+
+### Expected Outcome
+
+The final interface should feel lightweight, polished, professional, and intuitive, with a clear visual hierarchy and minimal unnecessary information. Users should immediately understand what matters, find common actions easily, and access additional functionality when needed without being overwhelmed.
+
+**Success criterion:** Retain the full functionality of the application while making its interface significantly cleaner, more consistent, less visually dominant, and easier to use. Every visible element should serve a clear purpose, and every secondary detail should appear only when it adds value to the current interaction.
+
+
