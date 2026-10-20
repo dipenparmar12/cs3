@@ -26,7 +26,7 @@ Requirement: finish the PRDs that are partly built, decide the ones that are not
 | Search sources panel | 2026-10 panel UI/UX | Partial | Guided view and profile bar shipped; decisions below are open |
 | Provider test harness | 2026-10 providers-support-testing | Pending | Names eight files that do not exist: `attribution.ts`, `budget.ts`, `diff.ts`, `quirks.ts`, `schema.ts`, `sourceSniff.ts`, `stageResult.ts`, `test.mts` |
 | Unverified notes (five) | `unverified/` | Unverified | Not checked against the code. Errors backlog, session handoff, PRD-CloudStream meta, source-discovery priority, and PRD 40 (duplicates 37) |
-| High-performance search results | [2026-10 High-Performance Search Results](./2026-10-High-Performance%20Search%20Results%20and%20Large-Scale%20Rendering.md) | Partial | Merged from two PRDs on 2026-10-20. Research §3: no grid virtualization, every provider arrival re-merges and re-sends the full result set, index-based card keys. Next step: profile in Electron (R1) |
+| High-performance search results | [2026-10 High-Performance Search Results](./2026-10-High-Performance%20Search%20Results%20and%20Large-Scale%20Rendering.md) | In Progress | Phases 1–3 built: coalesced emissions in `searchSession.ts` (R4), stable card keys + memoization in `PosterCard.tsx` (R3, R6), responsive virtualized grid in `SearchView.tsx` (R2) bounding mounted cards to <50. |
 
 ## 3. Findings by severity
 

@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { useTitleInteractions } from '../components/useTitleInteractions';
 import { EmptyState } from '../components/EmptyState';
 import type { SearchHistoryEntry, SearchResponse } from '../types/api';
@@ -749,71 +749,6 @@ const ResultGrid: React.FC<{
   );
 };
 
-const Grid: React.FC<{
-  items: SearchResponse[];
-  onSelectMedia: (item: SearchResponse) => void;
-  onPlayDirectly?: (item: SearchResponse) => void;
-}> = ({ items, onSelectMedia, onPlayDirectly }) => {
-  const outcomes = useTitleOutcomes();
-  /**
-   * Card states for every row on screen.
-   *
-   * `outcomes` above is still read, because `partitionDeadRows` needs the raw
-   * verdict to decide what to *hide* — a different question from what to badge,
-   * and one that has to be answered before this list exists.
-   */
-  const { interactionFor } = useTitleInteractions(items);
-  /**
-   * Per mount, not persisted.
-   *
-   * "Show me the dead ones too" is a decision about this search, not a
-   * preference — and a stored one would leave someone permanently looking at
-   * rows they asked to see once, with nothing on screen saying why the page got
-   * longer.
-   */
-  const [showDead, setShowDead] = useState(false);
-  const { visible, hidden } = partitionDeadRows(items, outcomes, {
-    hideDeadRows: !showDead,
-  });
-  return (
-    <>
-      <div
-        style={{
-          display: 'grid',
-          gridTemplateColumns: 'repeat(auto-fill, minmax(180px, 1fr))',
-          gap: '1.25rem',
-        }}
-      >
-        {visible.map((item, index) => (
-          <PosterCard
-            key={`${item.url}-${index}`}
-            item={item}
-            onSelectMedia={onSelectMedia}
-            onPlayDirectly={onPlayDirectly}
-            interaction={interactionFor(item)}
-          />
-        ))}
-      </div>
-
-      {/*
-        Says what is being held back, and offers it.
-
-        A results page quietly shorter than the search found is
-        indistinguishable from a search that found less — which is the same
-        complaint this filter exists to answer, arriving from the other
-        direction. So the count is stated and the rows are one click away.
-      */}
-      {hidden.length > 0 && (
-        <button type="button" className="search-dead-rows" onClick={() => setShowDead(true)}>
-          {hidden.length} result{hidden.length === 1 ? '' : 's'} hidden — {' '}
-          {hidden.length === 1 ? 'it had' : 'they had'} no playable source last time. Show{' '}
-          {hidden.length === 1 ? 'it' : 'them'} anyway
-        </button>
-      )}
-    </>
-  );
-};
-
 /**
  * Last-time outcomes for every title, fetched once per mount.
  *
@@ -829,6 +764,170 @@ function useTitleOutcomes(): Record<string, { kind: 'played' | 'no-sources' | 'a
   }, []);
   return outcomes;
 }
+
+function cardKeyOf(item: SearchResponse, fallbackIndex: number): string {
+  if (item.apiName && item.url) return `${item.apiName}:${item.url}`;
+  if (item.url) return item.url;
+  return `item-${fallbackIndex}`;
+}
+
+const ROW_GAP = 20; // 1.25rem = 20px
+const MIN_CARD_WIDTH = 180;
+const ESTIMATED_ROW_HEIGHT = 340;
+const OVERSCAN_ROWS = 2;
+
+const Grid: React.FC<{
+  items: SearchResponse[];
+  onSelectMedia: (item: SearchResponse) => void;
+  onPlayDirectly?: (item: SearchResponse) => void;
+}> = ({ items, onSelectMedia, onPlayDirectly }) => {
+  const outcomes = useTitleOutcomes();
+  const { interactionFor } = useTitleInteractions(items);
+  const [showDead, setShowDead] = useState(false);
+  const { visible, hidden } = partitionDeadRows(items, outcomes, {
+    hideDeadRows: !showDead,
+  });
+
+  const gridRef = useRef<HTMLDivElement | null>(null);
+  const [columns, setColumns] = useState(4);
+  const [rowHeight, setRowHeight] = useState(ESTIMATED_ROW_HEIGHT);
+  const [scrollTop, setScrollTop] = useState(0);
+  const [viewportHeight, setViewportHeight] = useState(800);
+  const [focusedUrl, setFocusedUrl] = useState<string | null>(null);
+  const rafId = useRef<number | null>(null);
+
+  useLayoutEffect(() => {
+    const el = gridRef.current;
+    if (!el) return;
+
+    const measure = () => {
+      const width = el.clientWidth;
+      if (width > 0) {
+        const cols = Math.max(1, Math.floor((width + ROW_GAP) / (MIN_CARD_WIDTH + ROW_GAP)));
+        setColumns(cols);
+      }
+      const cardEl = el.querySelector<HTMLElement>('.poster-card');
+      if (cardEl && cardEl.offsetHeight > 0) {
+        setRowHeight(Math.round(cardEl.offsetHeight + ROW_GAP));
+      }
+    };
+
+    measure();
+    if (typeof ResizeObserver === 'undefined') return;
+    const observer = new ResizeObserver(measure);
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, [visible.length]);
+
+  useEffect(() => {
+    const el = gridRef.current;
+    if (!el) return;
+    const scroller = el.closest<HTMLElement>('.view-viewport') || window;
+
+    const updateScroll = () => {
+      if (rafId.current !== null) return;
+      rafId.current = requestAnimationFrame(() => {
+        rafId.current = null;
+        if (scroller instanceof HTMLElement) {
+          setScrollTop(scroller.scrollTop);
+          setViewportHeight(scroller.clientHeight || 800);
+        } else {
+          setScrollTop(window.scrollY);
+          setViewportHeight(window.innerHeight || 800);
+        }
+      });
+    };
+
+    updateScroll();
+    scroller.addEventListener('scroll', updateScroll, { passive: true });
+    window.addEventListener('resize', updateScroll, { passive: true });
+
+    return () => {
+      if (rafId.current !== null) {
+        cancelAnimationFrame(rafId.current);
+        rafId.current = null;
+      }
+      scroller.removeEventListener('scroll', updateScroll);
+      window.removeEventListener('resize', updateScroll);
+    };
+  }, []);
+
+  const totalRows = Math.ceil(visible.length / columns);
+  const shouldVirtualize = visible.length > columns * 3;
+
+  let startRow = 0;
+  let endRow = totalRows;
+
+  if (shouldVirtualize && gridRef.current) {
+    const el = gridRef.current;
+    const scroller = el.closest<HTMLElement>('.view-viewport');
+    let gridTop = el.offsetTop;
+    if (scroller) {
+      const scrollerRect = scroller.getBoundingClientRect();
+      const gridRect = el.getBoundingClientRect();
+      gridTop = gridRect.top - scrollerRect.top + scroller.scrollTop;
+    }
+    const relativeTop = Math.max(0, scrollTop - gridTop);
+    const relativeBottom = relativeTop + viewportHeight;
+
+    startRow = Math.max(0, Math.floor(relativeTop / rowHeight) - OVERSCAN_ROWS);
+    endRow = Math.min(totalRows, Math.ceil(relativeBottom / rowHeight) + OVERSCAN_ROWS);
+
+    if (focusedUrl) {
+      const focusedIdx = visible.findIndex((item) => item.url === focusedUrl);
+      if (focusedIdx >= 0) {
+        const focusedRow = Math.floor(focusedIdx / columns);
+        startRow = Math.min(startRow, focusedRow);
+        endRow = Math.max(endRow, focusedRow + 1);
+      }
+    }
+  }
+
+  const startIndex = shouldVirtualize ? startRow * columns : 0;
+  const endIndex = shouldVirtualize ? Math.min(visible.length, endRow * columns) : visible.length;
+  const windowedItems = shouldVirtualize ? visible.slice(startIndex, endIndex) : visible;
+  const paddingTop = shouldVirtualize ? startRow * rowHeight : 0;
+  const paddingBottom = shouldVirtualize ? Math.max(0, (totalRows - endRow) * rowHeight) : 0;
+
+  return (
+    <>
+      <div
+        ref={gridRef}
+        style={{
+          display: 'grid',
+          gridTemplateColumns: 'repeat(auto-fill, minmax(180px, 1fr))',
+          gap: '1.25rem',
+          paddingTop: paddingTop > 0 ? `${paddingTop}px` : undefined,
+          paddingBottom: paddingBottom > 0 ? `${paddingBottom}px` : undefined,
+          boxSizing: 'content-box',
+        }}
+        onFocusCapture={(e) => {
+          const card = (e.target as HTMLElement)?.closest<HTMLElement>('.poster-card');
+          if (card?.dataset.url) setFocusedUrl(card.dataset.url);
+        }}
+        onBlurCapture={() => setFocusedUrl(null)}
+      >
+        {windowedItems.map((item, localIdx) => (
+          <PosterCard
+            key={cardKeyOf(item, startIndex + localIdx)}
+            item={item}
+            onSelectMedia={onSelectMedia}
+            onPlayDirectly={onPlayDirectly}
+            interaction={interactionFor(item)}
+          />
+        ))}
+      </div>
+
+      {hidden.length > 0 && (
+        <button type="button" className="search-dead-rows" onClick={() => setShowDead(true)}>
+          {hidden.length} result{hidden.length === 1 ? '' : 's'} hidden —{' '}
+          {hidden.length === 1 ? 'it had' : 'they had'} no playable source last time. Show{' '}
+          {hidden.length === 1 ? 'it' : 'them'} anyway
+        </button>
+      )}
+    </>
+  );
+};
 
 /**
  * What each source actually contributed, once the search is over.

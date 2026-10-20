@@ -1,17 +1,17 @@
-import { TvType, type SearchOptions, type SearchResponse } from '../src/types/api';
+import { TvType, type SearchOptions, type SearchResponse } from '../src/types/api.ts';
 import type { CinemetaProvider } from './cinemeta';
 import type { MetadataProvider } from './metadataProvider';
 import type { PluginManager } from './pluginManager';
 import type { IndexerRegistry } from './torrent/indexerRegistry';
 import type { NativeProviderRegistry } from './cs3/nativeProviderRegistry.ts';
 import { looksLikeWebPage } from './ytdlpSources.ts';
-import { mergeSearchResults, restrictToExact } from './searchMerge';
+import { mergeSearchResults, restrictToExact } from './searchMerge.ts';
 import {
   GLOBAL_SCOPE_REPORT,
   SearchScopeStore,
   type ScopeResolution,
   type SearchScopeReport,
-} from './searchScope';
+} from './searchScope.ts';
 import { describeError } from '../src/utils/errors.ts';
 import { classifyFailure } from './cs3/failureTaxonomy.ts';
 
@@ -119,6 +119,13 @@ const INDEXER_TITLE_LIMIT = 40;
 /** Finished sessions kept around so a late `cancel` is a no-op, not an error. */
 const RETAINED_SESSIONS = 8;
 
+/**
+ * Maximum frequency of search update pushes to the renderer and subscribers.
+ * 150ms bounds updates to ~6.7 per second instead of hundreds per second
+ * during rapid provider completions, eliminating quadratic IPC and merge churn.
+ */
+const EMIT_COALESCE_MS = 150;
+
 export class SearchSession {
   public readonly id: string;
   public readonly query: string;
@@ -135,6 +142,8 @@ export class SearchSession {
   private finished = false;
   private cancelled = false;
   private emptyReason: string | undefined;
+  private emitTimer: NodeJS.Timeout | null = null;
+  private emittedResultCount = 0;
 
   constructor(id: string, query: string, options: SearchOptions, deps: SessionDependencies) {
     this.id = id;
@@ -165,7 +174,7 @@ export class SearchSession {
       // Sources still in flight stay `pending`: they were neither asked to stop
       // nor given a chance to answer, and calling that a failure would blame the
       // provider for the user's decision.
-      this.emit();
+      this.emit(true);
     }
     return this.snapshot();
   }
@@ -241,7 +250,7 @@ export class SearchSession {
 
       const plan = this.plan(providerScope, indexerScope, enabledProviders);
       for (const source of plan.sources) this.outcomes.set(source.id, source);
-      this.emit();
+      this.emit(true);
 
       if (this.controller.signal.aborted) return;
 
@@ -260,7 +269,7 @@ export class SearchSession {
         if (this.snapshotResults().length === 0) {
           this.emptyReason ??= this.explainEmpty();
         }
-        this.emit();
+        this.emit(true);
       }
     }
   }
@@ -523,8 +532,36 @@ export class SearchSession {
    * discovery replays later. Handing over the raw per-source rows instead would
    * record nothing, because a row only learns about its siblings in the merge.
    */
-  private emit(): void {
+  private emit(immediate = false): void {
+    if (this.finished || this.cancelled || immediate) {
+      if (this.emitTimer !== null) {
+        clearTimeout(this.emitTimer);
+        this.emitTimer = null;
+      }
+      this.emitSync();
+      return;
+    }
+
+    if (this.emittedResultCount === 0 && this.collected.length > 0) {
+      this.emittedResultCount = this.collected.length;
+      if (this.emitTimer !== null) {
+        clearTimeout(this.emitTimer);
+        this.emitTimer = null;
+      }
+      this.emitSync();
+      return;
+    }
+
+    if (this.emitTimer !== null) return;
+    this.emitTimer = setTimeout(() => {
+      this.emitTimer = null;
+      this.emitSync();
+    }, EMIT_COALESCE_MS);
+  }
+
+  private emitSync(): void {
     const snapshot = this.snapshot();
+    this.emittedResultCount = snapshot.results.length;
     this.deps.onResults(snapshot.results);
     this.deps.notify(snapshot);
   }

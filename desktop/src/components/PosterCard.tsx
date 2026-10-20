@@ -75,7 +75,7 @@ const BADGE_ICONS: Record<CardBadge, React.ReactNode> = {
 /** Feature flag to control hover preview popups on cards. Set to true to enable. */
 const ENABLE_HOVER_CARD_PREVIEW = false;
 
-export const PosterCard: React.FC<PosterCardProps> = ({
+export const PosterCard: React.FC<PosterCardProps> = React.memo(({
   item,
   onSelectMedia,
   onPlayDirectly,
@@ -174,6 +174,7 @@ export const PosterCard: React.FC<PosterCardProps> = ({
   return (
     <div
       ref={cardRef}
+      data-url={item?.url}
       className={`poster-card${
         state.visited ? ' poster-card--visited' : ''
       }${ENABLE_HOVER_CARD_PREVIEW && hoverCardOpen ? ' poster-card--active-hover' : ''}`}
@@ -330,4 +331,6 @@ export const PosterCard: React.FC<PosterCardProps> = ({
       )}
     </div>
   );
-};
+});
+
+PosterCard.displayName = 'PosterCard';
