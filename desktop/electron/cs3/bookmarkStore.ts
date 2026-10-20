@@ -2,6 +2,7 @@ import type { Datastore } from '../datastore';
 import type { SavedPlayback } from '../../src/types/library.ts';
 import type { TvType } from '../../src/types/api';
 import { prune } from '../util/prune.ts';
+import { bookmarkTitle } from '../../src/utils/bookmarkTitle.ts';
 import { isPrivateSession, allowsExplicitSaves } from './privacyMode.ts';
 
 /**
@@ -94,6 +95,11 @@ export interface Bookmark {
   openCount: number;
 }
 
+/** A row saved before the title rule (an empty `title`) is repaired as it is read. */
+function withTitle(bookmark: Bookmark): Bookmark {
+  return bookmark.title?.trim() ? bookmark : { ...bookmark, title: bookmarkTitle(bookmark) };
+}
+
 export class BookmarkStore {
   private datastore: Datastore;
   private bookmarks: Bookmark[] = [];
@@ -118,11 +124,12 @@ export class BookmarkStore {
     // Newest save first, which is what someone looking for "the thing I just
     // saved" expects. Ordering by last opened would bury it under old
     // favourites the moment they were reopened.
-    return [...this.bookmarks].sort((a, b) => b.savedAt - a.savedAt);
+    return [...this.bookmarks].sort((a, b) => b.savedAt - a.savedAt).map(withTitle);
   }
 
   public get(mediaUrl: string): Bookmark | null {
-    return this.bookmarks.find((entry) => entry.mediaUrl === mediaUrl) ?? null;
+    const found = this.bookmarks.find((entry) => entry.mediaUrl === mediaUrl);
+    return found ? withTitle(found) : null;
   }
 
   public isSaved(mediaUrl: string): boolean {
@@ -143,6 +150,7 @@ export class BookmarkStore {
       return (
         existing ?? {
           ...input,
+          title: bookmarkTitle(input),
           id: input.mediaUrl,
           savedAt: Date.now(),
           openCount: 0,
@@ -153,7 +161,7 @@ export class BookmarkStore {
       Object.assign(existing, {
         ...input,
         origin: { ...existing.origin, ...prune(input.origin) },
-        title: input.title || existing.title,
+        title: bookmarkTitle({ ...input, title: input.title?.trim() || existing.title }),
         posterUrl: input.posterUrl ?? existing.posterUrl,
         plot: input.plot ?? existing.plot,
         genres: input.genres ?? existing.genres,
@@ -164,6 +172,7 @@ export class BookmarkStore {
 
     const bookmark: Bookmark = {
       ...input,
+      title: bookmarkTitle(input),
       id: input.mediaUrl,
       savedAt: Date.now(),
       openCount: 0,

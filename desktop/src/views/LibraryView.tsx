@@ -784,6 +784,10 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
               <Button
                 variant="prominent"
                 icon={ExternalLink}
+                // An entry added before its page address was recorded has none;
+                // the button used to close the dialog and open nothing.
+                disabled={sourcesModalEntry.urls.length === 0}
+                title={sourcesModalEntry.urls.length === 0 ? 'No page address was saved for this title' : undefined}
                 onClick={() => {
                   openEntry(sourcesModalEntry);
                   setSourcesModalEntry(null);
