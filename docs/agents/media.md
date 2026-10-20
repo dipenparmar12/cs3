@@ -156,7 +156,7 @@ Known, not changed: `WebViewHost`'s `MAX_CONCURRENT` of 3 — three hidden Chrom
 
 | Module | State (2026-10-20) | Evidence |
 |---|---|---|
-| `media/sourceLease.ts` (`bun run test lease`) | **Wired.** `PlaybackEngine.prepare` builds a `SourceLease` for each prepare and passes it to `MediaProxy.wrapLease`; `MediaProxy` keeps leases in `this.leases` and refreshes expired signed URLs | `playbackEngine.ts` (`new SourceLease`, `wrapLease`); `mediaProxy.ts` (`leases`) |
+| `media/sourceLease.ts` (`bun run test lease`) | **Wired, inert.** `PlaybackEngine.prepare` builds a `SourceLease` for each prepare and passes it to `MediaProxy.wrapLease`; `MediaProxy` keeps leases in `this.leases` and would refresh expired signed URLs through `refreshSource()`, which needs a resolver that is **never supplied** (`new SourceLease({ initialSource })` only, `playbackEngine.ts:235`): it throws "not refreshable" and a 401/403 falls through unrefreshed (checked 2026-10-21) | `playbackEngine.ts` (`new SourceLease`, `wrapLease`); `mediaProxy.ts` (`leases`) |
 | `media/playbackTelemetry.ts` (`bun run test telemetry`) | **Not wired.** Only its `InspectionStrategyType` is imported (as a type). The recorder and `PlaybackTelemetryStore` have no caller, so no session emits a record. `media:getPlaybackDiagnostics` returns `PlaybackEngine`'s own ring buffer | Zero callers outside tests; allow-listed in `moduleReachability.test.mts` |
 
 Remaining 40.1 work: the §6 Definition of Done is not checked (the 2-hour playback with zero 403s is not measured), and telemetry needs wiring. `playbackTelemetry.ts` is allow-listed with its removal condition: remove the entry when a session emits exactly one record on terminal state.

@@ -1,3 +1,5 @@
+> **Superseded 2026-10-21** by [2026-10-Playback-Source-Resolution-Priority-Match-Verification-and-Viewer-Feedback-2.md](./2026-10-Playback-Source-Resolution-Priority-Match-Verification-and-Viewer-Feedback-2.md). That document covers everything below and adds sequential discovery, source refresh and recovery, per-card status, a data model, instrumentation and a test plan, and it was validated against the code. Kept for the evidence in section 2 and the original reasoning; do not implement from this file.
+
 > **Status 2026-10-21: Proposed. Nothing in §5–§8 is built.** Code references in §2 were read on 2026-10-21 and are the evidence for the problem statements. Register entry: [`ROADMAP.md`](./ROADMAP.md).
 
 # PRD: Playback Source Resolution — Foreground Priority, Content-Match Verification and Viewer Feedback Ranking

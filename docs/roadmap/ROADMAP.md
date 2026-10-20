@@ -13,7 +13,7 @@ Requirement: finish the PRDs that are partly built, decide the ones that are not
 | Item | Source | Status | Evidence |
 |---|---|---|---|
 | Playback telemetry | [40.1](./40.1-playback-reliability-observability-and-routing-baseline.md) §4.3 | Not wired | `media/playbackTelemetry.ts` has no caller outside tests. Allow-listed in `moduleReachability.test.mts` |
-| Lease refresh acceptance | 40.1 §6 DoD | Not measured | `sourceLease.ts` is wired (`playbackEngine.ts`, `mediaProxy.ts`); the 2-hour / zero-403 check has not run |
+| Lease refresh acceptance | 40.1 §6 DoD | Not measured | `sourceLease.ts` is wired (`playbackEngine.ts`, `mediaProxy.ts`) but has no resolver, so it never refreshes; the 2-hour / zero-403 check cannot pass until Part D of the Playback Source Resolution PRD supplies one |
 | Extension platform standard | [41](./41-desktop-extension-platform-and-community-standard.md) | Pending | Nothing built (§6–23) |
 | Native standards (superseded) | [39](./39-native-extension-and-playback-standards.md) | Superseded by 41 | Header says "Nothing built"; 41 replaces it |
 | Resume continuity | [42](./42-resume-continuity-and-seekable-sources.md) | Partial | `resumePoint.ts`, `playedSource.ts` built. The PRD names `seriesContext.ts`, which does not exist |
@@ -27,13 +27,13 @@ Requirement: finish the PRDs that are partly built, decide the ones that are not
 | Provider test harness | 2026-10 providers-support-testing | Pending | Names eight files that do not exist: `attribution.ts`, `budget.ts`, `diff.ts`, `quirks.ts`, `schema.ts`, `sourceSniff.ts`, `stageResult.ts`, `test.mts` |
 | Unverified notes (five) | `unverified/` | Unverified | Not checked against the code. Errors backlog, session handoff, PRD-CloudStream meta, source-discovery priority, and PRD 40 (duplicates 37) |
 | High-performance search results | [2026-10 High-Performance Search Results](./2026-10-High-Performance%20Search%20Results%20and%20Large-Scale%20Rendering.md) | In Progress | Phases 1–3 built (coalesced emissions, stable card keys + memoization, virtualized grid in `SearchView.tsx` via `searchVirtualGrid.ts`). Unit tests pass; not measured in the running app yet. |
-| Playback source resolution: priority, match verification, viewer feedback | [2026-10 Playback Source Resolution](./2026-10-Playback-Source-Resolution-Priority-Match-Verification-and-Viewer-Feedback.md) | Pending (proposed) | Verified in code 2026-10-21: standard-mode playback auto-starts widened results (`playbackSession.ts:741`); the widened provider search takes each provider first two hits with no identity check (`contentService.ts:1658`); ranking counts a wrong film that plays as a success; no priority between playback and background work. Phase 1 (stop auto-starting unverified results) fixes the reported bug without scheduler work |
+| Playback source resolution: priority, match verification, viewer feedback | [2026-10 Playback Source Resolution (canonical, v2)](./2026-10-Playback-Source-Resolution-Priority-Match-Verification-and-Viewer-Feedback-2.md) | Pending (proposed) | Verified in code 2026-10-21: standard-mode playback auto-starts widened results (`playbackSession.ts:741`); the widened provider search takes each provider first two hits with no identity check (`contentService.ts:1658`); ranking counts a wrong film that plays as a success; no priority between playback and background work. Phase 1 (stop auto-starting unverified results) fixes the reported bug without scheduler work. Validation also found: a one-at-a-time walk of this machine's 506 providers is about 1 h 56 min, so discovery must be ranked, batched and time-budgeted; and `SourceLease` is wired but inert (no resolver), so Part D is largely supplying one |
 
 ## 3. Findings by severity
 
 ### High
 
-**H0. Wrong content plays automatically in standard mode.** After a source fails, the session widens to every provider and starts what it finds; the widened search takes each provider first two hits without checking they are the requested work. See the Playback Source Resolution PRD, Phase 1. It needs no scheduler change to fix.
+**H0. Wrong content plays automatically in standard mode.** After a source fails, the session widens to every provider and starts what it finds; the widened search takes each provider first two hits without checking they are the requested work. See the Playback Source Resolution PRD (v2), Phase 1; its section 1.1 lists 19 claims checked against the code. It needs no scheduler change to fix.
 
 **H1. Search sources panel: two decisions block the next change.**
 - What: selecting a content type silently rewrites which providers are searched (`SearchScopePicker.tsx` `toggleFacet` → `persist`). The language chips do not change.
