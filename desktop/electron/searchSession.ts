@@ -143,7 +143,7 @@ export class SearchSession {
   private cancelled = false;
   private emptyReason: string | undefined;
   private emitTimer: NodeJS.Timeout | null = null;
-  private emittedResultCount = 0;
+  private emittedCollectedCount = 0;
 
   constructor(id: string, query: string, options: SearchOptions, deps: SessionDependencies) {
     this.id = id;
@@ -542,8 +542,7 @@ export class SearchSession {
       return;
     }
 
-    if (this.emittedResultCount === 0 && this.collected.length > 0) {
-      this.emittedResultCount = this.collected.length;
+    if (this.emittedCollectedCount === 0 && this.collected.length > 0) {
       if (this.emitTimer !== null) {
         clearTimeout(this.emitTimer);
         this.emitTimer = null;
@@ -561,7 +560,7 @@ export class SearchSession {
 
   private emitSync(): void {
     const snapshot = this.snapshot();
-    this.emittedResultCount = snapshot.results.length;
+    this.emittedCollectedCount = this.collected.length;
     this.deps.onResults(snapshot.results);
     this.deps.notify(snapshot);
   }
