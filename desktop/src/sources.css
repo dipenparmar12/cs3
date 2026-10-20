@@ -1132,6 +1132,29 @@
   font-size: 0.85rem;
   z-index: 950;
 }
+/* Bottom right, so it never sits on top of an action's own toast. */
+.ext-update-notice {
+  left: auto;
+  right: 1.5rem;
+  transform: none;
+  display: flex;
+  align-items: center;
+  gap: 0.55rem;
+  max-width: min(420px, calc(100vw - 3rem));
+  padding: 0.5rem 0.5rem 0.5rem 0.85rem;
+}
+.ext-update-notice--ok svg:first-child { color: var(--status-success); }
+.ext-update-notice--attention svg:first-child { color: var(--status-warning); }
+.ext-update-notice__close {
+  display: inline-flex;
+  padding: 0.25rem;
+  border: 0;
+  border-radius: 6px;
+  background: none;
+  color: var(--text-subtle);
+  cursor: pointer;
+}
+.ext-update-notice__close:hover { color: var(--text-main); background: var(--control-ambient-hover); }
 
 /* --- player --- */
 
@@ -4644,21 +4667,77 @@
 }
 
 .scope__trigger {
-  padding: 0.4rem 0.85rem;
+  height: 34px;
+  min-height: 34px;
+  padding: 0 0.75rem;
   font-size: 0.8rem;
-  display: flex;
+  font-weight: 500;
+  display: inline-flex;
   align-items: center;
   gap: 0.5rem;
+  border-radius: var(--control-radius);
+  background: var(--control-bg);
+  border: 1px solid var(--control-border);
+  color: var(--control-text);
+  cursor: pointer;
+  transition: all 0.15s ease;
+  user-select: none;
+  white-space: nowrap;
+}
+.scope__trigger:hover {
+  background: var(--control-bg-hover);
+  border-color: var(--control-border-hover);
+  color: var(--text-main);
+}
+.scope__trigger:focus-visible {
+  outline: none;
+  box-shadow: var(--control-focus-ring);
 }
 .scope__trigger--active {
-  border-color: var(--accent-primary);
+  border-color: rgba(59, 130, 246, 0.45);
+  background: rgba(59, 130, 246, 0.12);
+  color: var(--accent-light);
+}
+.scope__trigger--active:hover {
+  border-color: var(--accent-light);
+  background: rgba(59, 130, 246, 0.18);
   color: #fff;
 }
+.scope__trigger .scope__icon {
+  flex-shrink: 0;
+  opacity: 0.75;
+}
+.scope__trigger--active .scope__icon {
+  opacity: 1;
+  color: var(--accent-light);
+}
 .scope__label {
-  max-width: 150px;
+  max-width: 140px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+.scope__count-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 18px;
+  height: 18px;
+  padding: 0 4px;
+  font-size: 0.7rem;
+  font-weight: 700;
+  border-radius: 999px;
+  background: var(--accent-primary);
+  color: #fff;
+  line-height: 1;
+}
+.scope__chevron {
+  flex-shrink: 0;
+  opacity: 0.55;
+  transition: transform 0.15s ease;
+}
+.scope__trigger[aria-expanded='true'] .scope__chevron {
+  transform: rotate(180deg);
 }
 
 /* --- The source-scope dialog ---------------------------------------------
@@ -4694,11 +4773,34 @@
 
 .scope-modal__head {
   display: flex;
-  align-items: flex-start;
+  align-items: center;
   justify-content: space-between;
   gap: 1rem;
-  padding: 1rem 1.15rem 0.85rem;
+  padding: 0.85rem 1.15rem;
   border-bottom: 1px solid var(--border-color);
+  background: rgba(0, 0, 0, 0.2);
+}
+.scope-modal__head-left {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+}
+.scope-modal__back-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border-radius: var(--radius-sm, 6px);
+  border: 1px solid var(--border-color);
+  background: var(--bg-card-hover);
+  color: var(--text-main);
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+.scope-modal__back-btn:hover {
+  background: rgba(255, 255, 255, 0.12);
+  color: #fff;
 }
 .scope-modal__head h2 {
   margin: 0;
@@ -4707,10 +4809,22 @@
   color: #fff;
 }
 .scope-modal__subtitle {
-  margin: 0.15rem 0 0;
-  font-size: 0.76rem;
+  margin: 0.1rem 0 0;
+  font-size: 0.75rem;
   color: var(--text-subtle);
   font-variant-numeric: tabular-nums;
+}
+.scope-modal__head-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.65rem;
+}
+.scope-modal__nav-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  font-size: 0.78rem;
+  padding: 0.3rem 0.65rem;
 }
 .scope-modal__close {
   flex: 0 0 auto;
@@ -4818,6 +4932,20 @@
   background: var(--accent, #e50914);
   border-color: var(--accent, #e50914);
   color: #fff;
+}
+.scope-modal__chip-code {
+  font-weight: 600;
+  font-size: 0.69rem;
+  letter-spacing: 0.02em;
+}
+.scope-modal__chip-name {
+  font-size: 0.68rem;
+  opacity: 0.75;
+  margin-left: 0.15rem;
+  max-width: 8rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .scope-modal__clear {
   display: inline-flex;
@@ -4931,6 +5059,11 @@
 .scope-modal__chosen-title {
   font-weight: 500;
   color: var(--text-muted);
+}
+.scope-modal__chosen-breakdown {
+  font-size: 0.7rem;
+  color: var(--text-subtle, rgba(255, 255, 255, 0.45));
+  font-weight: 400;
 }
 .scope-modal__chosen-actions {
   display: flex;
@@ -5233,6 +5366,165 @@
   display: flex;
   gap: 0.45rem;
   flex: 0 0 auto;
+}
+
+/* Transient feedback notice banner inside the sources dialog */
+.scope-modal__feedback-toast {
+  position: absolute;
+  bottom: 4.5rem;
+  right: 1.5rem;
+  z-index: 50;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.5rem 0.85rem;
+  background: var(--bg-card, #1c1d22);
+  border: 1px solid var(--border-color, rgba(255, 255, 255, 0.15));
+  border-left: 3px solid var(--accent-primary, #3b82f6);
+  border-radius: 6px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.45);
+  color: var(--text-main, #fff);
+  font-size: 0.82rem;
+  animation: scope-toast-in 0.18s ease-out;
+}
+@keyframes scope-toast-in {
+  from { opacity: 0; transform: translateY(6px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+.scope-modal__feedback-icon {
+  color: var(--accent-primary, #3b82f6);
+  flex-shrink: 0;
+}
+.scope-modal__feedback-close {
+  background: transparent;
+  border: none;
+  color: var(--text-muted);
+  cursor: pointer;
+  padding: 0;
+  display: flex;
+  margin-left: 0.25rem;
+}
+.scope-modal__feedback-close:hover {
+  color: var(--text-main);
+}
+
+/* Modal confirmation dialog for consequential bulk selection changes */
+.scope-confirm-backdrop {
+  position: absolute;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.65);
+  backdrop-filter: blur(2px);
+  z-index: 100;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 1.5rem;
+  animation: scope-fade-in 0.15s ease-out;
+}
+@keyframes scope-fade-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+.scope-confirm-dialog {
+  background: var(--bg-card, #1c1d22);
+  border: 1px solid var(--border-color, rgba(255, 255, 255, 0.14));
+  border-radius: 10px;
+  max-width: 440px;
+  width: 100%;
+  box-shadow: 0 16px 40px rgba(0, 0, 0, 0.6);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+.scope-confirm-dialog__head {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  padding: 1.1rem 1.25rem 0.6rem;
+}
+.scope-confirm-dialog__head h3 {
+  margin: 0;
+  font-size: 1rem;
+  font-weight: 600;
+  color: var(--text-main, #fff);
+}
+.scope-confirm-dialog__warn-icon {
+  color: var(--status-warning, #f59e0b);
+  flex-shrink: 0;
+}
+.scope-confirm-dialog__body {
+  padding: 0 1.25rem 1rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.85rem;
+}
+.scope-confirm-dialog__desc {
+  margin: 0;
+  font-size: 0.84rem;
+  color: var(--text-muted, rgba(255, 255, 255, 0.7));
+  line-height: 1.45;
+}
+.scope-confirm-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 0.5rem;
+  margin-top: 0.2rem;
+}
+.scope-confirm-card {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 0.6rem 0.4rem;
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  text-align: center;
+}
+.scope-confirm-card__count {
+  font-size: 1.15rem;
+  font-weight: 700;
+  line-height: 1.1;
+  font-variant-numeric: tabular-nums;
+}
+.scope-confirm-card__label {
+  font-size: 0.68rem;
+  color: var(--text-muted);
+  margin-top: 0.2rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  font-weight: 500;
+}
+.scope-confirm-card__sub {
+  font-size: 0.62rem;
+  color: var(--text-subtle);
+  margin-top: 0.2rem;
+  white-space: nowrap;
+}
+.scope-confirm-card--removed .scope-confirm-card__count {
+  color: #f87171;
+}
+.scope-confirm-card--removed {
+  background: rgba(239, 68, 68, 0.08);
+  border-color: rgba(239, 68, 68, 0.2);
+}
+.scope-confirm-card--added .scope-confirm-card__count {
+  color: #34d399;
+}
+.scope-confirm-card--added {
+  background: rgba(16, 185, 129, 0.08);
+  border-color: rgba(16, 185, 129, 0.2);
+}
+.scope-confirm-card--unchanged .scope-confirm-card__count {
+  color: var(--text-main);
+}
+.scope-confirm-dialog__foot {
+  display: flex;
+  justify-content: flex-end;
+  gap: 0.5rem;
+  padding: 0.75rem 1.25rem;
+  background: rgba(0, 0, 0, 0.2);
+  border-top: 1px solid var(--border-color, rgba(255, 255, 255, 0.08));
 }
 
 /* Narrow windows: the rail sits above the list rather than squeezing it. */
@@ -8952,10 +9244,13 @@ video::cue {
    only ever edited in the moment you notice it is wrong, so its management
    lives behind the pill it belongs to. */
 .profile-bar {
-  display: flex; align-items: flex-start; gap: .5rem;
-  padding: .6rem .9rem;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.35rem 0.75rem;
+  min-height: 38px;
   border-bottom: 1px solid var(--border-color);
-  background: rgba(0, 0, 0, .12);
+  background: rgba(0, 0, 0, 0.12);
 }
 .profile-bar--naming { align-items: center; }
 .profile-bar--naming input {
@@ -8965,10 +9260,61 @@ video::cue {
   padding: .35rem .55rem; font-size: .84rem;
 }
 
-/* Wraps rather than scrolls: a horizontal scroller hides the pill on the end,
-   and the pill on the end is the one just created. */
-.profile-bar__pills { display: flex; flex-wrap: wrap; gap: .35rem; flex: 1; min-width: 0; }
-.profile-bar__save { flex-shrink: 0; display: inline-flex; align-items: center; gap: .3rem; }
+/* Ambient single row with smooth horizontal scrolling so it never vertically dominates the dialog */
+.profile-bar__pills {
+  display: flex;
+  flex-wrap: nowrap;
+  align-items: center;
+  gap: 0.35rem;
+  flex: 1;
+  min-width: 0;
+  overflow-x: auto;
+  overflow-y: hidden;
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+  padding: 2px 0;
+}
+.profile-bar__pills::-webkit-scrollbar {
+  display: none;
+}
+.profile-bar__group {
+  display: inline-flex;
+  align-items: center;
+  flex-wrap: nowrap;
+  gap: 0.35rem;
+  flex-shrink: 0;
+}
+.profile-bar__group--builtin {
+  padding-right: 0.45rem;
+  border-right: 1px solid var(--border-color);
+}
+.profile-bar__group--custom {
+  padding-left: 0.15rem;
+}
+.profile-bar__create-btn {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  white-space: nowrap;
+  margin-left: auto;
+}
+.profile-bar--delete-confirm {
+  align-items: center;
+  background: rgba(239, 68, 68, 0.1);
+  border-bottom: 1px solid rgba(239, 68, 68, 0.3);
+  gap: .6rem;
+}
+.profile-bar__warning-icon {
+  color: #f87171;
+  flex-shrink: 0;
+}
+.profile-bar__confirm-text {
+  font-size: .82rem;
+  color: var(--text-main);
+  flex: 1;
+  min-width: 0;
+}
 
 .profile-pill-group { position: relative; display: inline-flex; }
 
@@ -8982,6 +9328,25 @@ video::cue {
   font-size: .8rem;
   cursor: pointer;
   white-space: nowrap;
+}
+.profile-pill--builtin { font-size: .78rem; }
+.profile-pill--disabled {
+  opacity: .45;
+  cursor: not-allowed;
+}
+.profile-pill--disabled:hover {
+  border-color: var(--border-color);
+}
+.profile-pill--draft {
+  border-style: dashed;
+  border-color: rgba(245, 158, 11, .5);
+}
+.profile-pill__draft-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: #f59e0b;
+  display: inline-block;
 }
 .profile-pill:hover { border-color: rgba(255, 255, 255, .28); }
 .profile-pill--on {
@@ -9020,6 +9385,462 @@ video::cue {
 }
 .profile-menu button:hover { background: var(--bg-card-hover); }
 .profile-menu__danger { color: var(--status-error); }
+
+/* --- CS3 Guided Source Selection & Profile Switcher (PRD-2026-10) ---------- */
+
+.profile-bar-v2 {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  background: rgba(0, 0, 0, 0.22);
+  border-bottom: 1px solid var(--border-color);
+}
+
+.profile-hero {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1.25rem;
+  padding: 0.85rem 1.25rem;
+  position: relative;
+}
+
+.profile-hero__main {
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+  min-width: 0;
+  flex: 1;
+}
+
+.profile-hero__label-row {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45rem;
+}
+
+.profile-hero__tag {
+  font-size: 0.64rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--accent-primary, #60a5fa);
+  background: rgba(96, 165, 250, 0.12);
+  padding: 0.1rem 0.4rem;
+  border-radius: 4px;
+}
+
+.profile-hero__draft-indicator {
+  font-size: 0.68rem;
+  color: #f59e0b;
+  font-weight: 600;
+}
+
+.profile-hero__title-row {
+  display: flex;
+  align-items: baseline;
+  gap: 0.6rem;
+  flex-wrap: wrap;
+}
+
+.profile-hero__name {
+  margin: 0;
+  font-size: 1.15rem;
+  font-weight: 700;
+  color: #fff;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45rem;
+}
+
+.profile-hero__name svg {
+  color: var(--accent-primary, #60a5fa);
+}
+
+.profile-hero__count {
+  font-size: 0.78rem;
+  color: var(--text-muted);
+  font-weight: 500;
+}
+
+.profile-hero__actions {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  flex-shrink: 0;
+}
+
+.profile-hero__switch-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  font-weight: 600;
+  padding: 0.4rem 0.75rem;
+}
+
+/* Profile Switcher Dropdown Modal / Popover */
+.profile-dropdown {
+  position: absolute;
+  top: calc(100% + 4px);
+  right: 1.25rem;
+  z-index: 50;
+  width: 320px;
+  max-height: 400px;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg-card, #141922);
+  border: 1px solid var(--border-color);
+  border-radius: 10px;
+  box-shadow: 0 16px 36px rgba(0, 0, 0, 0.65);
+  overflow: hidden;
+}
+
+.profile-dropdown__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0.6rem 0.85rem;
+  border-bottom: 1px solid var(--border-color);
+  font-size: 0.75rem;
+  font-weight: 700;
+  color: #fff;
+  background: rgba(0, 0, 0, 0.2);
+}
+
+.profile-dropdown__new-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  border: none;
+  background: none;
+  color: var(--accent-primary, #60a5fa);
+  font-size: 0.72rem;
+  font-weight: 600;
+  cursor: pointer;
+  padding: 0.15rem 0.35rem;
+  border-radius: 4px;
+}
+
+.profile-dropdown__new-btn:hover {
+  background: rgba(96, 165, 250, 0.15);
+}
+
+.profile-dropdown__list {
+  display: flex;
+  flex-direction: column;
+  overflow-y: auto;
+  padding: 0.35rem;
+  gap: 0.15rem;
+}
+
+.profile-dropdown__section-title {
+  font-size: 0.64rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text-subtle);
+  padding: 0.45rem 0.6rem 0.15rem;
+}
+
+.profile-dropdown__item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  padding: 0.45rem 0.65rem;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: background 0.12s ease;
+  position: relative;
+}
+
+.profile-dropdown__item:hover {
+  background: rgba(255, 255, 255, 0.06);
+}
+
+.profile-dropdown__item--active {
+  background: rgba(96, 165, 250, 0.12);
+}
+
+.profile-dropdown__item--disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.profile-dropdown__item-info {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  min-width: 0;
+  flex: 1;
+}
+
+.profile-dropdown__item-name {
+  font-size: 0.82rem;
+  font-weight: 600;
+  color: #fff;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.profile-dropdown__item-count {
+  font-size: 0.7rem;
+  font-variant-numeric: tabular-nums;
+  color: var(--text-muted);
+  flex-shrink: 0;
+}
+
+.profile-dropdown__item-count--draft {
+  color: #f59e0b;
+  font-weight: 500;
+}
+
+.profile-dropdown__item-check {
+  color: var(--accent-primary, #60a5fa);
+  flex-shrink: 0;
+}
+
+.profile-dropdown__menu-wrapper {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  margin-left: 0.2rem;
+  flex-shrink: 0;
+}
+
+.profile-dropdown__dots-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  border: none;
+  background: none;
+  color: var(--text-subtle);
+  border-radius: 4px;
+  cursor: pointer;
+  opacity: 0.6;
+  transition: opacity 0.12s, background 0.12s;
+}
+
+.profile-dropdown__item:hover .profile-dropdown__dots-btn,
+.profile-dropdown__dots-btn:hover {
+  opacity: 1;
+  background: rgba(255, 255, 255, 0.1);
+  color: var(--text-main);
+}
+
+/* Context menu popover for custom profiles */
+.profile-context-menu {
+  position: absolute;
+  top: 100%;
+  right: 0;
+  z-index: 60;
+  width: 120px;
+  background: #1a202c;
+  border: 1px solid var(--border-color);
+  border-radius: 6px;
+  box-shadow: 0 8px 20px rgba(0, 0, 0, 0.6);
+  padding: 0.25rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+}
+
+.profile-context-menu__item {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.35rem 0.5rem;
+  border-radius: 4px;
+  border: none;
+  background: none;
+  color: var(--text-main);
+  font-size: 0.74rem;
+  cursor: pointer;
+  width: 100%;
+  text-align: left;
+  transition: background 0.1s;
+}
+
+.profile-context-menu__item:hover {
+  background: rgba(255, 255, 255, 0.08);
+  color: #fff;
+}
+
+.profile-context-menu__item--danger {
+  color: #f87171;
+}
+
+.profile-context-menu__item--danger:hover {
+  background: rgba(239, 68, 68, 0.15);
+  color: #fca5a5;
+}
+
+/* --- Level 1: Quick Setup Body ---------------------------------------------- */
+
+.scope-guided {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+}
+
+.scope-guided__body {
+  display: flex;
+  flex-direction: column;
+  gap: 1.3rem;
+  padding: 1.25rem 1.4rem;
+}
+
+.scope-guided__section {
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+}
+
+.scope-guided__section-title {
+  margin: 0;
+  font-size: 0.88rem;
+  font-weight: 700;
+  color: #fff;
+}
+
+.scope-guided__chips-grid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.45rem;
+}
+
+.scope-guided__chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45rem;
+  padding: 0.42rem 0.75rem;
+  border-radius: 8px;
+  border: 1px solid var(--border-color);
+  background: rgba(255, 255, 255, 0.03);
+  color: var(--text-main);
+  font-size: 0.8rem;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.scope-guided__chip:hover {
+  background: rgba(255, 255, 255, 0.08);
+  border-color: rgba(255, 255, 255, 0.24);
+}
+
+.scope-guided__chip--active {
+  background: rgba(96, 165, 250, 0.18);
+  border-color: var(--accent-primary, #60a5fa);
+  color: #fff;
+  font-weight: 600;
+}
+
+.scope-guided__chip--expand {
+  border-style: dashed;
+  color: var(--accent-primary, #60a5fa);
+  font-weight: 500;
+}
+
+.scope-guided__chip--expand:hover {
+  background: rgba(96, 165, 250, 0.1);
+  border-color: var(--accent-primary, #60a5fa);
+}
+
+.scope-guided__chip-label {
+  display: inline-block;
+}
+
+/* Customize sources action card */
+.scope-guided__customize-action {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 1rem 1.25rem;
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid var(--border-color);
+  cursor: pointer;
+  transition: all 0.15s ease;
+  text-align: left;
+  margin-top: 0.4rem;
+}
+
+.scope-guided__customize-action:hover {
+  background: rgba(255, 255, 255, 0.07);
+  border-color: rgba(96, 165, 250, 0.4);
+}
+
+.scope-guided__customize-info {
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+  min-width: 0;
+}
+
+.scope-guided__customize-title {
+  font-size: 0.92rem;
+  font-weight: 700;
+  color: #fff;
+}
+
+.scope-guided__customize-sub {
+  font-size: 0.77rem;
+  color: var(--text-muted);
+}
+
+.scope-guided__customize-arrow {
+  color: var(--text-subtle);
+  flex-shrink: 0;
+  transition: transform 0.15s ease, color 0.15s ease;
+}
+
+.scope-guided__customize-action:hover .scope-guided__customize-arrow {
+  color: var(--accent-primary, #60a5fa);
+  transform: translateX(2px);
+}
+
+/* --- Level 2: Advanced Explorer Filter Tabs -------------------------------- */
+
+.scope-explorer-tabs {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  border-bottom: 1px solid var(--border-color);
+  padding: 0 0 0.5rem;
+  flex-shrink: 0;
+}
+
+.scope-explorer-tab {
+  background: none;
+  border: none;
+  padding: 0.35rem 0.75rem;
+  font-size: 0.78rem;
+  color: var(--text-subtle);
+  cursor: pointer;
+  border-radius: 6px;
+  font-weight: 500;
+  transition: all 0.12s ease;
+}
+
+.scope-explorer-tab:hover {
+  background: rgba(255, 255, 255, 0.06);
+  color: var(--text-main);
+}
+
+.scope-explorer-tab--active {
+  background: var(--bg-card-hover, rgba(255, 255, 255, 0.1));
+  color: #fff;
+  font-weight: 600;
+}
 
 /* --- provider health, in the list where the switch is ---------------------
    A word, not a number, and only when there is evidence for it. `unknown` has
@@ -9171,25 +9992,31 @@ video::cue {
 
 /* Contextual top navigation Unblur / Blur control (§129.5) */
 .navbar-adult-blur-btn {
+  height: 34px;
+  min-height: 34px;
   display: inline-flex;
   align-items: center;
-  gap: 0.35rem;
-  height: 28px;
-  padding: 0 0.65rem;
-  border-radius: var(--radius-full, 999px);
-  border: 1px solid var(--border-color);
-  background: rgba(255, 255, 255, 0.04);
+  gap: 0.45rem;
+  padding: 0 0.75rem;
+  border-radius: var(--control-radius);
+  border: 1px solid var(--control-border);
+  background: var(--control-bg);
   color: var(--text-muted);
-  font-size: 0.74rem;
+  font-size: 0.78rem;
   font-weight: 500;
   cursor: pointer;
   transition: all 0.15s ease;
   white-space: nowrap;
+  user-select: none;
 }
 .navbar-adult-blur-btn:hover {
-  background: rgba(255, 255, 255, 0.08);
-  border-color: rgba(255, 255, 255, 0.25);
-  color: #fff;
+  background: var(--control-bg-hover);
+  border-color: var(--control-border-hover);
+  color: var(--text-main);
+}
+.navbar-adult-blur-btn:focus-visible {
+  outline: none;
+  box-shadow: var(--control-focus-ring);
 }
 .navbar-adult-blur-btn--revealed {
   background: rgba(239, 68, 68, 0.12);
@@ -12077,3 +12904,13 @@ button.credit-card { border: 0; background: none; padding: 0; font: inherit; col
 @media (prefers-reduced-motion: reduce) {
   .fullscreen-hint { animation: none; }
 }
+
+/* Quiet, always-visible actions under the quick-setup sections. */
+.scope-guided__actions { display: flex; gap: 0.75rem; justify-content: flex-end; padding-top: 0.25rem; }
+.scope-guided__action {
+  background: none; border: 0; padding: 0.25rem 0; cursor: pointer;
+  font-size: 0.8125rem; color: var(--control-muted, inherit); text-decoration: underline;
+  text-underline-offset: 3px;
+}
+.scope-guided__action:hover { color: inherit; }
+.scope-guided__action:focus-visible { outline: 2px solid currentColor; outline-offset: 2px; border-radius: 2px; }

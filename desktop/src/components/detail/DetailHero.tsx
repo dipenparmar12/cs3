@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { useIsDeveloper } from '../../utils/ExperienceModeContext';
 import { Poster } from '../Poster';
 import {
@@ -22,8 +22,8 @@ import {
   Loader2,
   Zap,
 } from 'lucide-react';
-import { useDismissable } from '../../utils/useDismissable';
 import { MediaRatings } from './MediaRatings';
+import { Menu } from '../ui';
 import type { PlotChoice } from '../../utils/metadataDisplay';
 
 /**
@@ -191,20 +191,11 @@ export const DetailHero: React.FC<DetailHeroProps> = ({
   useRegisterAdultPresence(sensitive);
   const resolvedItemKey = itemKey || provenance.imdbId || title;
   const backdropBlurred = sensitive && isAdultItemBlurred(adult, resolvedItemKey);
-  const [menuOpen, setMenuOpen] = useState(false);
   const [plotOpen, setPlotOpen] = useState(false);
   const [plotChoiceId, setPlotChoiceId] = useState<string | null>(null);
   const choices = plotChoices ?? [];
   const chosenPlot = choices.find((choice) => choice.id === plotChoiceId) ?? choices[0];
   const plot = chosenPlot?.text ?? providedPlot;
-  const menuWrapper = useRef<HTMLDivElement | null>(null);
-  const closeMenu = useCallback(() => setMenuOpen(false), []);
-  useDismissable(menuOpen, menuWrapper, closeMenu);
-
-  const run = (action: () => void) => () => {
-    setMenuOpen(false);
-    action();
-  };
 
   const shownBackdrop = useLoadedImage(backdropUrl);
   const ratingsIdentity = useMemo(
@@ -370,44 +361,36 @@ export const DetailHero: React.FC<DetailHeroProps> = ({
                 {sourceCount > 0 && <span className="detail-icon__badge">{sourceCount > 99 ? '99+' : sourceCount}</span>}
               </button>
 
-              <div className="detail-action__more" ref={menuWrapper}>
-                <button
-                  type="button"
-                  className="detail-icon"
-                  onClick={() => setMenuOpen((open) => !open)}
-                  aria-haspopup="menu"
-                  aria-expanded={menuOpen}
-                  aria-label="More actions"
-                  title="More"
-                >
-                  <MoreHorizontal size={17} />
-                </button>
-
-                {menuOpen && (
-                  <div className="detail-menu detail-menu--end" role="menu">
-                    <button role="menuitem" onClick={run(onFindMoreSources)}>
-                      <SearchCheck size={14} />
-                      <span>
-                        <strong>Search again for sources</strong>
-                        <em>
-                          {isDeveloper
-                            ? 'Ask every enabled provider again, ignoring the cache — finds more and replaces expired links.'
-                            : 'Look everywhere again — finds more, and replaces links that stopped working.'}
-                        </em>
-                      </span>
-                    </button>
-                    {isSeries && onDownloadSeason && (
-                      <button role="menuitem" onClick={run(onDownloadSeason)}>
-                        <Layers size={14} />
-                        <span>
-                          <strong>Download season</strong>
-                          <em>Queue every episode in the current season.</em>
-                        </span>
-                      </button>
-                    )}
-                  </div>
+              <Menu
+                label="More actions"
+                align="end"
+                className="detail-action__more"
+                trigger={(props) => (
+                  <button {...props} type="button" className="detail-icon" aria-label="More actions" title="More">
+                    <MoreHorizontal size={17} />
+                  </button>
                 )}
-              </div>
+                items={[
+                  {
+                    label: 'Search again for sources',
+                    description: isDeveloper
+                      ? 'Every enabled provider again, past the cache'
+                      : 'Finds more, and replaces links that stopped working',
+                    icon: SearchCheck,
+                    onSelect: onFindMoreSources,
+                  },
+                  ...(isSeries && onDownloadSeason
+                    ? [
+                        {
+                          label: 'Download season',
+                          description: 'Every episode in this season',
+                          icon: Layers,
+                          onSelect: onDownloadSeason,
+                        },
+                      ]
+                    : []),
+                ]}
+              />
             </div>
           </div>
 

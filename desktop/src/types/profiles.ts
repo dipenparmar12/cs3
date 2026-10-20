@@ -69,8 +69,8 @@ export interface ProfileDraft {
   secret?: string;
 }
 
-/** Shortest and longest PIN or password a lock accepts. Digits, words, anything. */
-export const PROFILE_SECRET_MIN = 4;
+/** Shortest and longest PIN or password a lock accepts. No format is imposed. */
+export const PROFILE_SECRET_MIN = 1;
 export const PROFILE_SECRET_MAX = 128;
 export const PROFILE_NAME_MAX = 32;
 export const MAX_PROFILES = 12;

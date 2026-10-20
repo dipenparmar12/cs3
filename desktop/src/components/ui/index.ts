@@ -10,6 +10,7 @@
 export { Button, BUTTON_ICON_SIZE, type ButtonVariant, type ButtonSize } from './Button';
 export { Dialog, DialogActions } from './Dialog';
 export { FormField, Input, Select, SearchInput, type SearchVariant, type FieldControlProps } from './Field';
+export { SecretInput } from './SecretInput';
 export { Checkbox, RadioGroup, Switch } from './Choice';
 export { Menu, type MenuItem } from './Menu';
 export { SelectionToolbar } from './SelectionToolbar';

@@ -35,7 +35,7 @@ CloudStream (Gradle root)
 
 Declared targets are `android { }` and `jvm()` only (`library/build.gradle.kts:23-42`). `webMain` is therefore staged-but-dormant: upstream has written the actuals ahead of enabling the target (commit `#3072`, 2026-07-15).
 
-**Why this matters for the migration — this is the single most consequential fact in the document.** A JVM artifact of the provider API already builds today (`library-jvm.jar`, produced by `:app:copyJar`, `app/build.gradle.kts:305-317`), and upstream's `makeJar` already merges it into the very classpath every community provider compiles against (`app/build.gradle.kts:319-325`). The desktop app therefore **links upstream's real provider API rather than reimplementing it**, and existing `.cs3` plugins run drop-in on a bundled JVM. That is the technical basis for Runtime 3 in [27](27-plugin-and-extension-architecture.md) §6.2 and [31-cs3-dropin-compatibility.md](31-cs3-dropin-compatibility.md).
+**Why this matters for the migration — this is the single most consequential fact in the document.** A JVM artifact of the provider API already builds today (`library-jvm.jar`, produced by `:app:copyJar`, `app/build.gradle.kts:305-317`), and upstream's `makeJar` already merges it into the very classpath every community provider compiles against (`app/build.gradle.kts:319-325`). The desktop app therefore **links upstream's real provider API rather than reimplementing it**, and existing `.cs3` plugins run drop-in on a bundled JVM. That is the technical basis for Runtime 3 in [27](27-plugin-and-extension-architecture.md) §6.2 and [31-cs3-dropin-compatibility.md](../done/31-cs3-dropin-compatibility.md).
 
 **Confidence: High** for the source-set facts; **Medium** for the inference that a JS target is imminent.
 
@@ -145,7 +145,7 @@ Most user data keys are prefixed with the current profile index: `"$currentAccou
 
 ## B1. Process topology
 
-**Revised 2026-08-12 (ADR-10).** The topology gained a third child-process class — a bundled JVM sidecar — when drop-in `.cs3` compatibility became a P0 product commitment. See [31-cs3-dropin-compatibility.md](31-cs3-dropin-compatibility.md).
+**Revised 2026-08-12 (ADR-10).** The topology gained a third child-process class — a bundled JVM sidecar — when drop-in `.cs3` compatibility became a P0 product commitment. See [31-cs3-dropin-compatibility.md](../done/31-cs3-dropin-compatibility.md).
 
 ```
 ┌──── MAIN PROCESS (Node.js, full privilege) ────────────────────┐
@@ -182,7 +182,7 @@ Most user data keys are prefixed with the current profile index: `"$currentAccou
 
 **Requirement ARCH-1 (P0).** Provider code never executes in the UI renderer and never receives Node.js capabilities. Rationale in [11-security-and-compliance.md](11-security-and-compliance.md) §3.
 
-**Requirement ARCH-1b (P0).** The JVM sidecar is subject to every constraint the V8 plugin host is, enforced by OS-level sandboxing and class-loader denial rather than by V8 isolate limits — Java's `SecurityManager` is deprecated and disabled (JEP 411/486), so no design may assume it. Mechanism mapping in [31](31-cs3-dropin-compatibility.md) §6.
+**Requirement ARCH-1b (P0).** The JVM sidecar is subject to every constraint the V8 plugin host is, enforced by OS-level sandboxing and class-loader denial rather than by V8 isolate limits — Java's `SecurityManager` is deprecated and disabled (JEP 411/486), so no design may assume it. Mechanism mapping in [31](../done/31-cs3-dropin-compatibility.md) §6.
 
 **Requirement ARCH-2 (P0).** All IPC crosses a typed, allow-listed `contextBridge` surface. No `remote`, no `nodeIntegration`, no wildcard channel names.
 
@@ -241,13 +241,13 @@ Each subsystem below is specified as: responsibility · inputs · outputs · dep
 
 ### B2.4b JvmSidecar (Runtime 3 — `.cs3` drop-in)
 
-- **Responsibility.** Execute unmodified `.cs3` plugins from the existing Android ecosystem. Full specification in [31-cs3-dropin-compatibility.md](31-cs3-dropin-compatibility.md).
+- **Responsibility.** Execute unmodified `.cs3` plugins from the existing Android ecosystem. Full specification in [31-cs3-dropin-compatibility.md](../done/31-cs3-dropin-compatibility.md).
 - **Inputs.** The same provider operation calls as B2.4, over typed JSON-RPC.
 - **Outputs.** The same typed responses as B2.4. **Callers cannot tell which runtime served a request** — that is the point of the adapter boundary.
 - **Dependencies.** A bundled `jlink`-minimized JRE 17; upstream's `library-jvm.jar`; `cs3-app-shim.jar` (22 `:app` types); `cs3-android-shim.jar` (5 core `android.*` stubs); a DEX→`.class` translator; the offscreen `BrowserWindow` bridge for `WebViewResolver`.
 - **Lifecycle.** Spawned lazily on first `.cs3` provider use, so it stays out of the PERF-1 cold-start budget (DSK-57). Idle-evicted. Force-killed on timeout. A quarantined plugin may be given its own sidecar process.
 - **Errors.** Translation failure, unimplemented `android.*` API, timeout, OOM, and crash are each distinct, attributable, reportable outcomes — never a bare stack trace and never a silent empty result (AC-D5).
-- **Security.** The critical boundary, and the one most likely to be got wrong: it hosts translated third-party Android bytecode. ARCH-1b; [31](31-cs3-dropin-compatibility.md) §6.
+- **Security.** The critical boundary, and the one most likely to be got wrong: it hosts translated third-party Android bytecode. ARCH-1b; [31](../done/31-cs3-dropin-compatibility.md) §6.
 - **Platform.** Windows is the P0 target; the sandbox uses an AppContainer/job-object restricted token. macOS and Linux need equivalent mechanisms (sandbox-exec, seccomp/namespaces) before those platforms ship — see [29](29-platform-compatibility.md) §1.
 - **Testing.** TC-D1..TC-D12 in [30](30-migration-test-cases.md); differential testing against Android output (AC-D7).
 
@@ -277,7 +277,7 @@ Rotating file logs in the platform log directory, in-app log viewer (parity with
 | Jetpack Navigation | Renderer-side router | Replace |
 | Fragments + ViewBinding | Component tree | Replace |
 | ViewModel + LiveData | Renderer state store | Replace |
-| `PathClassLoader` / DEX | JVM sidecar: install-time DEX→`.class` + `URLClassLoader` ([31](31-cs3-dropin-compatibility.md)) | **Drop-in — plugins run unmodified** |
+| `PathClassLoader` / DEX | JVM sidecar: install-time DEX→`.class` + `URLClassLoader` ([31](../done/31-cs3-dropin-compatibility.md)) | **Drop-in — plugins run unmodified** |
 | `MainAPI` / `ExtractorApi` / `M3u8Helper` | Upstream `library-jvm.jar`, linked as-is | **Reused, not reimplemented** |
 | `:app` provider-facing types (22) | `cs3-app-shim.jar`, ABI-diffed against upstream in CI | Shim |
 | `android.util.Log`, `Base64`, `Context`, `SharedPreferences`, `CookieManager` | `cs3-android-shim.jar` | Shim |

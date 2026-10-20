@@ -597,9 +597,9 @@ In Electron on Windows, delegating playback of difficult streams (4K/8K, HEVC 10
 
 ### 1. Current State vs. Native `mpv` Engine
 
-Here is how our existing **Universal Media Compatibility Engine** ([PRD-37](file:///D:/projects/cs3/docs/PRD/37-universal-media-compatibility-and-adaptive-playback-engine.md)) in `desktop` compares to adding a native `mpv` engine:
+Here is how our existing **Universal Media Compatibility Engine** ([PRD-37](../done/37-universal-media-compatibility-and-adaptive-playback-engine.md)) in `desktop` compares to adding a native `mpv` engine:
 
-| Stream Characteristic | Current Strategy ([PRD-37](file:///D:/projects/cs3/docs/PRD/37-universal-media-compatibility-and-adaptive-playback-engine.md)) | Native `mpv` Engine Strategy | Result with `mpv` |
+| Stream Characteristic | Current Strategy ([PRD-37](../done/37-universal-media-compatibility-and-adaptive-playback-engine.md)) | Native `mpv` Engine Strategy | Result with `mpv` |
 |---|---|---|---|
 | **MP4 / H.264 / AAC (1080p)** | Direct Play in Chromium `<video>` | Direct Play in Chromium `<video>` | Instant, 0% CPU |
 | **MKV / H.264 / AC-3 or DTS** | FFmpeg Remux + Audio Xcode (`-c:v copy -c:a aac`) | Native `mpv` hardware playback | Instant, 0% CPU, preserves 5.1/7.1 audio |
@@ -645,7 +645,7 @@ There are two primary ways to integrate `mpv` into `desktop`:
 
 #### Option A: Headless `mpv.exe` with JSON IPC & Window Embedding (`--wid`) — *Recommended First Step*
 
-Electron can launch a portable, bundled `mpv.exe` in the background (managed by [`binaryDownloader.ts`](file:///D:/projects/cs3/desktop/electron/binaryDownloader.ts)), attach it to a designated window handle (`HWND`), and control it via JSON-RPC over a Windows Named Pipe (`\\.\pipe\mpvsocket`).
+Electron can launch a portable, bundled `mpv.exe` in the background (managed by [`binaryDownloader.ts`](../../desktop/electron/binaryDownloader.ts)), attach it to a designated window handle (`HWND`), and control it via JSON-RPC over a Windows Named Pipe (`\\.\pipe\mpvsocket`).
 
 ```typescript
 // electron/mpvEngine.ts
@@ -710,10 +710,10 @@ export class MpvEngine {
 
 We can integrate this into our existing codebase without breaking any existing features:
 
-1. **Auto-Provision `mpv.exe` in [`binaryDownloader.ts`](file:///D:/projects/cs3/desktop/electron/binaryDownloader.ts)**:
+1. **Auto-Provision `mpv.exe` in [`binaryDownloader.ts`](../../desktop/electron/binaryDownloader.ts)**:
    Add `mpv` to the portable binary mirrors alongside `aria2c`, `yt-dlp`, and `ffmpeg`. Download the lightweight official Windows build (~25MB) into `%APPDATA%/cs3/bin/mpv.exe` on first launch.
 
-2. **Update the Decision Matrix in [`decisionEngine.ts`](file:///D:/projects/cs3/desktop/electron/media/decisionEngine.ts)**:
+2. **Update the Decision Matrix in [`decisionEngine.ts`](../../desktop/electron/media/decisionEngine.ts)**:
    Instead of forcing HEVC 10-bit or 4K/8K through CPU/GPU transcoding down to 8-bit H.264, route it directly to strategy `NATIVE_MPV`:
    ```typescript
    if (isTenBit || videoCodec === 'hevc' || resolution.height >= 2160) {
@@ -727,16 +727,16 @@ We can integrate this into our existing codebase without breaking any existing f
    ```
 
 3. **Provide In-Player Source & Engine Switching in React**:
-   In [`VideoPlayer.tsx`](file:///D:/projects/cs3/desktop/src/components/VideoPlayer.tsx), allow the user to toggle between:
+   In [`VideoPlayer.tsx`](../../desktop/src/components/VideoPlayer.tsx), allow the user to toggle between:
    - **Internal Browser Player** (standard web streams)
    - **Native Accelerated Engine (`mpv`)** (4K, HDR, 10-bit HEVC, Blu-ray Remuxes)
-   - **External Player Handoff** (VLC, MPC-HC via [`externalPlayer.ts`](file:///D:/projects/cs3/desktop/electron/externalPlayer.ts))
+   - **External Player Handoff** (VLC, MPC-HC via [`externalPlayer.ts`](../../desktop/electron/externalPlayer.ts))
 
 ---
 
 ### Next Step
 
 Would you like to start by:
-1. Adding **portable `mpv` provisioning** to [`binaryDownloader.ts`](file:///D:/projects/cs3/desktop/electron/binaryDownloader.ts)?
+1. Adding **portable `mpv` provisioning** to [`binaryDownloader.ts`](../../desktop/electron/binaryDownloader.ts)?
 2. Implementing the **`MpvEngine` IPC controller** in `electron/` for Windows D3D11 hardware decoding?
 3. Updating the **decision engine & player UI** to support seamless native playback switching?**

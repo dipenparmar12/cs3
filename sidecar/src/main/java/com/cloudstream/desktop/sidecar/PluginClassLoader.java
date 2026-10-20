@@ -42,7 +42,7 @@ import java.util.Set;
 public final class PluginClassLoader extends URLClassLoader {
 
     /**
-     * Controls named in docs/PRD/31 §6 that this build does not yet enforce.
+     * Controls named in docs/done/31 §6 that this build does not yet enforce.
      * Reported to the host so the UI can tell the truth about the sandbox
      * instead of implying a guarantee that is not there.
      */

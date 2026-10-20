@@ -19,7 +19,7 @@ import java.util.zip.ZipInputStream;
  * shared classpath, and reports what is missing.
  *
  * This is the measurement behind DROP-28's compatibility tier. Static analysis
- * over Kotlin imports — the method docs/PRD/31 §2.3 used — systematically
+ * over Kotlin imports — the method docs/done/31 §2.3 used — systematically
  * understates the surface, because a shipped {@code .cs3} also carries library
  * code that R8 inlined into it. Working from the translated bytecode measures
  * what actually has to link.

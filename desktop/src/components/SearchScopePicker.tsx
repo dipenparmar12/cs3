@@ -9,11 +9,20 @@ import React, {
 import { ChevronDown, Filter } from 'lucide-react';
 import type { ProviderTreeRepository, ProviderTreeProvider } from '../types/plugin';
 import type { ProviderLoadProgress } from '../../electron/pluginManager';
-import { SourceScopeDialog } from './search/SourceScopeDialog';
-import { SourceProfileBar, type ProfileSummary } from './search/SourceProfileBar';
+import { useAdultMode } from '../utils/useAdultMode';
+import {
+  SourceScopeDialog,
+  type PendingImpactConfirmation,
+} from './search/SourceScopeDialog';
+import {
+  SourceProfileBar,
+  type ProfileSummary,
+  type BuiltInProfileDef,
+} from './search/SourceProfileBar';
 import { healthIndex, type ProviderHealth } from './search/providerHealth';
 import {
   areAllFilteredSelected,
+  calculateSelectionImpact,
   excludeSection,
   getFilteredMembers,
   includeSection,
@@ -213,9 +222,65 @@ export const SearchScopePicker: React.FC<SearchScopePickerProps> = ({
    * owners would let the pills and the checkboxes disagree about what is
    * scoped, which is the disagreement the whole scope model exists to prevent.
    */
+  const adult = useAdultMode();
   const [profiles, setProfiles] = useState<ProfileSummary[]>([]);
   const [activeProfile, setActiveProfile] = useState<string>('all');
   const [draftCount, setDraftCount] = useState(0);
+
+  const [pendingImpact, setPendingImpact] = useState<PendingImpactConfirmation | null>(null);
+  const pendingCommitRef = useRef<(() => void) | null>(null);
+  const [feedbackToast, setFeedbackToast] = useState<string | null>(null);
+  const feedbackTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const triggerFeedback = useCallback((message: string) => {
+    if (feedbackTimer.current) clearTimeout(feedbackTimer.current);
+    setFeedbackToast(message);
+    feedbackTimer.current = setTimeout(() => {
+      setFeedbackToast(null);
+    }, 3200);
+  }, []);
+
+  const handleDismissFeedback = useCallback(() => {
+    if (feedbackTimer.current) clearTimeout(feedbackTimer.current);
+    setFeedbackToast(null);
+  }, []);
+
+  const handleConfirmImpact = useCallback(() => {
+    const commit = pendingCommitRef.current;
+    pendingCommitRef.current = null;
+    setPendingImpact(null);
+    commit?.();
+  }, []);
+
+  const handleCancelImpact = useCallback(() => {
+    pendingCommitRef.current = null;
+    setPendingImpact(null);
+  }, []);
+
+  const inferFacetsForProviders = useCallback(
+    (providerNames: string[] | Set<string>) => {
+      const names = new Set(providerNames);
+      const languages = new Set<string>();
+      const types = new Set<string>();
+
+      for (const repo of repositories) {
+        for (const ext of repo.extensions) {
+          for (const p of ext.providers) {
+            if (names.has(p.name)) {
+              const lang = p.lang ?? ext.language;
+              if (lang) languages.add(lang);
+              for (const t of p.supportedTypes ?? []) {
+                types.add(t);
+              }
+            }
+          }
+        }
+      }
+
+      return { languages, types };
+    },
+    [repositories]
+  );
 
   /**
    * Applies a profile answer to everything on screen.
@@ -225,26 +290,41 @@ export const SearchScopePicker: React.FC<SearchScopePickerProps> = ({
    * result — so the tree is redrawn from that answer rather than from what the
    * click was expected to do.
    */
-  const applyProfiles = useCallback((snapshot: {
-    ok?: boolean;
-    profiles?: ProfileSummary[];
-    activeId?: string;
-    draft?: { providers?: string[]; indexers?: string[] };
-  } | undefined) => {
-    if (!snapshot?.ok) return;
-    setProfiles(snapshot.profiles ?? []);
-    setActiveProfile(snapshot.activeId ?? 'all');
-    const draft = snapshot.draft ?? {};
-    setDraftCount((draft.providers?.length ?? 0) + (draft.indexers?.length ?? 0));
+  const applyProfiles = useCallback(
+    (snapshot: {
+      ok?: boolean;
+      profiles?: ProfileSummary[];
+      activeId?: string;
+      draft?: { providers?: string[]; indexers?: string[] };
+    } | undefined) => {
+      if (!snapshot?.ok) return;
+      setProfiles(snapshot.profiles ?? []);
+      setActiveProfile(snapshot.activeId ?? 'all');
+      const draft = snapshot.draft ?? {};
+      setDraftCount((draft.providers?.length ?? 0) + (draft.indexers?.length ?? 0));
 
-    const active = (snapshot.profiles ?? []).find((p) => p.id === snapshot.activeId);
-    const scoped =
-      snapshot.activeId === 'all'
-        ? { providers: [] as string[], indexers: [] as string[] }
-        : active ?? { providers: draft.providers ?? [], indexers: draft.indexers ?? [] };
-    setProviders(new Set(scoped.providers));
-    setChosenIndexers(new Set(scoped.indexers));
-  }, []);
+      const active = (snapshot.profiles ?? []).find((p) => p.id === snapshot.activeId);
+      const scoped =
+        snapshot.activeId === 'all'
+          ? { providers: [] as string[], indexers: [] as string[] }
+          : active ?? { providers: draft.providers ?? [], indexers: draft.indexers ?? [] };
+      setProviders(new Set(scoped.providers));
+      setChosenIndexers(new Set(scoped.indexers));
+
+      // Clear leftover selections when All sources is active, or reflect active profile's facets
+      if (snapshot.activeId === 'all') {
+        setFacets(EMPTY_SELECTION);
+      } else if (scoped.providers.length > 0) {
+        const inferred = inferFacetsForProviders(scoped.providers);
+        setFacets({
+          kinds: new Set(),
+          languages: inferred.languages,
+          types: inferred.types,
+        });
+      }
+    },
+    [inferFacetsForProviders]
+  );
 
   useEffect(() => {
     void window.cloudstream?.listSourceProfiles?.().then(applyProfiles);
@@ -281,6 +361,38 @@ export const SearchScopePicker: React.FC<SearchScopePickerProps> = ({
     [applyProfiles]
   );
 
+  const applyWithImpactCheck = useCallback(
+    (
+      actionName: string,
+      actionDescription: string,
+      targetProviders: Set<string>,
+      targetIndexers: Set<string>,
+      commit: () => void,
+      successMessage?: string
+    ) => {
+      const impact = calculateSelectionImpact(
+        { providers, indexers: chosenIndexers },
+        { providers: targetProviders, indexers: targetIndexers }
+      );
+
+      if (impact.isConsequential) {
+        pendingCommitRef.current = () => {
+          commit();
+          if (successMessage) triggerFeedback(successMessage);
+        };
+        setPendingImpact({
+          actionName,
+          actionDescription,
+          impact,
+        });
+      } else {
+        commit();
+        if (successMessage) triggerFeedback(successMessage);
+      }
+    },
+    [providers, chosenIndexers, triggerFeedback]
+  );
+
   /** Every selectable source, split by which dimension of the scope it lives in. */
   const universe = useMemo(() => {
     const providerNames: string[] = [];
@@ -293,6 +405,125 @@ export const SearchScopePicker: React.FC<SearchScopePickerProps> = ({
     }
     return { providers: providerNames, indexers: indexers.map((i) => i.id) };
   }, [repositories, indexers]);
+
+  const resolveBuiltInSelection = useCallback(
+    (id: string): { providers: Set<string>; indexers: Set<string> } => {
+      if (id === 'all') {
+        return { providers: new Set(), indexers: new Set() };
+      }
+      const provs = new Set<string>();
+      for (const repo of repositories) {
+        for (const ext of repo.extensions) {
+          for (const p of ext.providers) {
+            if (!isSelectable(p)) continue;
+            const lang = (p.lang ?? ext.language ?? '').toLowerCase();
+            const types = (p.supportedTypes ?? []).map((t) => t.toLowerCase());
+            if (id === 'builtin:english') {
+              if (lang.startsWith('en')) provs.add(p.name);
+            } else if (id === 'builtin:hindi') {
+              if (lang.startsWith('hi') || lang === 'hin') provs.add(p.name);
+            } else if (id === 'builtin:anime') {
+              if (types.includes('anime') || p.name.toLowerCase().includes('anime')) {
+                provs.add(p.name);
+              }
+            } else if (id === 'builtin:drama') {
+              if (
+                types.some((t) => t.includes('drama') || t.includes('asian')) ||
+                p.name.toLowerCase().includes('drama')
+              ) {
+                provs.add(p.name);
+              }
+            } else if (id === 'builtin:nsfw') {
+              if (types.includes('nsfw') || adult.adultProviders.has(p.name)) {
+                provs.add(p.name);
+              }
+            }
+          }
+        }
+      }
+      return { providers: provs, indexers: new Set() };
+    },
+    [repositories, adult]
+  );
+
+  const builtInProfiles = useMemo<BuiltInProfileDef[]>(() => {
+    let enCount = 0;
+    let hiCount = 0;
+    let animeCount = 0;
+    let dramaCount = 0;
+    let nsfwCount = 0;
+
+    for (const repo of repositories) {
+      for (const ext of repo.extensions) {
+        for (const p of ext.providers) {
+          if (!isSelectable(p)) continue;
+          const lang = (p.lang ?? ext.language ?? '').toLowerCase();
+          const types = (p.supportedTypes ?? []).map((t) => t.toLowerCase());
+
+          if (lang.startsWith('en')) enCount++;
+          if (lang.startsWith('hi') || lang === 'hin') hiCount++;
+          if (types.includes('anime') || p.name.toLowerCase().includes('anime')) animeCount++;
+          if (
+            types.some((t) => t.includes('drama') || t.includes('asian')) ||
+            p.name.toLowerCase().includes('drama')
+          ) {
+            dramaCount++;
+          }
+          if (types.includes('nsfw') || adult.adultProviders.has(p.name)) nsfwCount++;
+        }
+      }
+    }
+
+    const list: BuiltInProfileDef[] = [
+      {
+        id: 'all',
+        name: 'All sources',
+        description: 'Search every enabled extension and torrent source installed on your app.',
+        icon: 'globe',
+        count: universe.providers.length + universe.indexers.length,
+      },
+      {
+        id: 'builtin:english',
+        name: 'English',
+        description: 'Prioritize extensions and providers providing English-language content.',
+        icon: 'languages',
+        count: enCount,
+      },
+      {
+        id: 'builtin:hindi',
+        name: 'Hindi',
+        description: 'Prioritize extensions and providers providing Hindi-language content.',
+        icon: 'languages',
+        count: hiCount,
+      },
+      {
+        id: 'builtin:anime',
+        name: 'Anime',
+        description: 'Focus on dedicated anime extensions and streaming providers.',
+        icon: 'sparkles',
+        count: animeCount,
+      },
+      {
+        id: 'builtin:drama',
+        name: 'Asian Drama',
+        description: 'Focus on Asian drama, K-drama, and C-drama providers.',
+        icon: 'clapperboard',
+        count: dramaCount,
+      },
+    ];
+
+    if (adult.allowed) {
+      list.push({
+        id: 'builtin:nsfw',
+        name: 'NSFW (18+)',
+        description: 'Focus on adult and 18+ content providers.',
+        icon: 'shield',
+        count: nsfwCount,
+      });
+    }
+
+    return list;
+  }, [repositories, universe, adult]);
 
   /**
    * The facet values that actually exist, counted from what is installed.
@@ -309,6 +540,7 @@ export const SearchScopePicker: React.FC<SearchScopePickerProps> = ({
         for (const provider of ext.providers) {
           if (!isSelectable(provider)) continue;
           for (const type of provider.supportedTypes ?? []) {
+            if (type.toLowerCase() === 'nsfw' && !adult.allowed) continue;
             types.set(type, (types.get(type) ?? 0) + 1);
           }
           const lang = provider.lang ?? ext.language;
@@ -322,7 +554,7 @@ export const SearchScopePicker: React.FC<SearchScopePickerProps> = ({
       types: [...types.entries()].sort(byCount).map(([value]) => value),
       languages: [...languages.entries()].sort(byCount).map(([value]) => value),
     };
-  }, [repositories]);
+  }, [repositories, adult.allowed]);
 
   const facetsActive =
     facets.types.size > 0 || facets.languages.size > 0 || facets.kinds.size > 0;
@@ -368,10 +600,41 @@ export const SearchScopePicker: React.FC<SearchScopePickerProps> = ({
         const bucket = next[group] as Set<string>;
         if (bucket.has(value)) bucket.delete(value);
         else bucket.add(value);
+
+        // When toggling language or content in quick setup, also update the participating providers
+        if (group === 'languages' || group === 'types') {
+          if (next.languages.size === 0 && next.types.size === 0) {
+            persist(new Set(), new Set());
+            setActiveProfile('all');
+          } else {
+            const matchingProviders = new Set<string>();
+            for (const repo of repositories) {
+              for (const ext of repo.extensions) {
+                for (const p of ext.providers) {
+                  if (!isSelectable(p)) continue;
+                  const lang = p.lang ?? ext.language;
+                  const types = p.supportedTypes ?? [];
+
+                  const matchesLang =
+                    next.languages.size === 0 || (lang !== undefined && next.languages.has(lang));
+                  const matchesType =
+                    next.types.size === 0 || types.some((t) => next.types.has(t));
+
+                  if (matchesLang && matchesType) {
+                    matchingProviders.add(p.name);
+                  }
+                }
+              }
+            }
+            persist(matchingProviders, chosenIndexers);
+            setActiveProfile('');
+          }
+        }
+
         return next;
       });
     },
-    []
+    [repositories, chosenIndexers, persist]
   );
 
   /**
@@ -387,13 +650,15 @@ export const SearchScopePicker: React.FC<SearchScopePickerProps> = ({
     // is in force: hiding a match inside a collapsed group would read as "no
     // results" for something that is right there.
     const isOpen = (key: string) => searching || !collapsed.has(key);
-    const out: Row[] = [];
+    const activeRepos: { repoRow: Row; children: Row[] }[] = [];
+    const unselectableRepos: { repoRow: Row; children: Row[] }[] = [];
 
     for (const repo of repositories) {
       const repoKey = `repo:${repo.id ?? repo.url ?? repo.name}`;
       const repoMatches = repo.name.toLowerCase().includes(needle);
       const repoMembers: string[] = [];
-      const children: Row[] = [];
+      const selectableChildren: Row[] = [];
+      const unselectableChildren: Row[] = [];
 
       for (const ext of repo.extensions) {
         const extKey = `${repoKey}/ext:${ext.id ?? ext.internalName}`;
@@ -404,12 +669,9 @@ export const SearchScopePicker: React.FC<SearchScopePickerProps> = ({
         repoMembers.push(...active.map((provider) => provider.name));
 
         if (active.length === 0) {
-          // A facet that filtered everything out of this extension is not the
-          // same as an extension that registered nothing, and saying "no
-          // providers registered" for the first would be a lie about the data.
           if (facetsActive) continue;
           if (searching && !extMatches) continue;
-          children.push({
+          unselectableChildren.push({
             key: extKey,
             kind: 'ext',
             depth: 1,
@@ -417,7 +679,7 @@ export const SearchScopePicker: React.FC<SearchScopePickerProps> = ({
             members: [],
             isIndexer: false,
           });
-          children.push({
+          unselectableChildren.push({
             key: `${extKey}/note`,
             kind: 'note',
             depth: 2,
@@ -437,7 +699,7 @@ export const SearchScopePicker: React.FC<SearchScopePickerProps> = ({
         if (active.length === 1 && normalise(active[0].name) === normalise(ext.name)) {
           if (searching && !extMatches && !active[0].name.toLowerCase().includes(needle)) continue;
           repoMembers.push(active[0].name);
-          children.push({
+          selectableChildren.push({
             key: extKey,
             kind: 'leaf',
             depth: 1,
@@ -452,7 +714,7 @@ export const SearchScopePicker: React.FC<SearchScopePickerProps> = ({
         const extMatchingMembers = matching.map((provider) => provider.name);
         repoMembers.push(...extMatchingMembers);
 
-        children.push({
+        selectableChildren.push({
           key: extKey,
           kind: 'ext',
           depth: 1,
@@ -464,7 +726,7 @@ export const SearchScopePicker: React.FC<SearchScopePickerProps> = ({
 
         if (isOpen(extKey)) {
           for (const provider of matching) {
-            children.push({
+            selectableChildren.push({
               key: `${extKey}/p:${provider.id ?? provider.name}`,
               kind: 'leaf',
               depth: 2,
@@ -477,9 +739,10 @@ export const SearchScopePicker: React.FC<SearchScopePickerProps> = ({
         }
       }
 
-      if (children.length === 0) continue;
+      const allChildren = [...selectableChildren, ...unselectableChildren];
+      if (allChildren.length === 0) continue;
 
-      out.push({
+      const repoRow: Row = {
         key: repoKey,
         kind: 'repo',
         depth: 0,
@@ -489,10 +752,24 @@ export const SearchScopePicker: React.FC<SearchScopePickerProps> = ({
         title: repo.url || 'Sideloaded extension',
         isIndexer: false,
         icon: 'package',
-      });
-      if (isOpen(repoKey)) out.push(...children);
+      };
+
+      if (repoMembers.length > 0) {
+        activeRepos.push({ repoRow, children: allChildren });
+      } else {
+        unselectableRepos.push({ repoRow, children: allChildren });
+      }
     }
 
+    const out: Row[] = [];
+
+    // 1. Active, selectable repositories first
+    for (const { repoRow, children } of activeRepos) {
+      out.push(repoRow);
+      if (isOpen(repoRow.key)) out.push(...children);
+    }
+
+    // 2. Torrent sources group
     const matchingIndexers = !indexersVisible
       ? []
       : searching
@@ -530,6 +807,27 @@ export const SearchScopePicker: React.FC<SearchScopePickerProps> = ({
       }
     }
 
+    // 3. Unselectable/disabled repositories moved to the bottom with clear partition
+    if (unselectableRepos.length > 0 && !searching) {
+      out.push({
+        key: 'divider:unselectable',
+        kind: 'note',
+        depth: 0,
+        label: '— Unavailable or empty sources —',
+        members: [],
+        isIndexer: false,
+      });
+      for (const { repoRow, children } of unselectableRepos) {
+        out.push(repoRow);
+        if (isOpen(repoRow.key)) out.push(...children);
+      }
+    } else if (unselectableRepos.length > 0 && searching) {
+      for (const { repoRow, children } of unselectableRepos) {
+        out.push(repoRow);
+        if (isOpen(repoRow.key)) out.push(...children);
+      }
+    }
+
     return out;
   }, [repositories, indexers, deferredQuery, collapsed, matchesFacets, facetsActive, indexersVisible]);
 
@@ -555,6 +853,9 @@ export const SearchScopePicker: React.FC<SearchScopePickerProps> = ({
     });
   };
 
+  const totalChosen = providers.size + chosenIndexers.size;
+  const totalAvailable = universe.providers.length + universe.indexers.length;
+
   const filteredMembers = useMemo(() => getFilteredMembers(rows), [rows]);
   const isFiltered = facetsActive || deferredQuery.trim().length > 0;
   const filteredCount = filteredMembers.providers.length + filteredMembers.indexers.length;
@@ -568,20 +869,41 @@ export const SearchScopePicker: React.FC<SearchScopePickerProps> = ({
     const nextIndexers = new Set(chosenIndexers);
     for (const p of filteredMembers.providers) nextProviders.add(p);
     for (const i of filteredMembers.indexers) nextIndexers.add(i);
-    persist(nextProviders, nextIndexers);
-  }, [providers, chosenIndexers, filteredMembers, persist]);
+    applyWithImpactCheck(
+      'Select filtered sources',
+      `This will add ${filteredCount} filtered sources to your current selection.`,
+      nextProviders,
+      nextIndexers,
+      () => persist(nextProviders, nextIndexers),
+      `${filteredCount} filtered sources selected.`
+    );
+  }, [providers, chosenIndexers, filteredMembers, filteredCount, applyWithImpactCheck, persist]);
 
   const unselectAllFiltered = useCallback(() => {
     const nextProviders = new Set(providers);
     const nextIndexers = new Set(chosenIndexers);
     for (const p of filteredMembers.providers) nextProviders.delete(p);
     for (const i of filteredMembers.indexers) nextIndexers.delete(i);
-    persist(nextProviders, nextIndexers);
-  }, [providers, chosenIndexers, filteredMembers, persist]);
+    applyWithImpactCheck(
+      'Unselect filtered sources',
+      'This will remove matching filtered sources from your current selection.',
+      nextProviders,
+      nextIndexers,
+      () => persist(nextProviders, nextIndexers),
+      'Filtered sources unselected.'
+    );
+  }, [providers, chosenIndexers, filteredMembers, applyWithImpactCheck, persist]);
 
   const clearAllChosen = useCallback(() => {
-    persist(new Set(), new Set());
-  }, [persist]);
+    applyWithImpactCheck(
+      'Clear all selected sources',
+      `This will remove all ${totalChosen} selected sources from your current search scope.`,
+      new Set(),
+      new Set(),
+      () => persist(new Set(), new Set()),
+      `${totalChosen} source${totalChosen === 1 ? '' : 's'} cleared.`
+    );
+  }, [applyWithImpactCheck, totalChosen, persist]);
 
   /**
    * Flips every visible source (PRD-051 §31–32): the filtered ones when a
@@ -604,18 +926,41 @@ export const SearchScopePicker: React.FC<SearchScopePickerProps> = ({
   }, [providers, chosenIndexers, invertTargets]);
   const canInvert = invertedSelection.providers.size + invertedSelection.indexers.size > 0;
   const invertSelection = useCallback(() => {
-    if (canInvert) persist(invertedSelection.providers, invertedSelection.indexers);
-  }, [canInvert, invertedSelection, persist]);
+    if (canInvert) {
+      applyWithImpactCheck(
+        'Invert source selection',
+        'This will flip the selection of the displayed sources.',
+        invertedSelection.providers,
+        invertedSelection.indexers,
+        () => persist(invertedSelection.providers, invertedSelection.indexers),
+        'Selection inverted.'
+      );
+    }
+  }, [canInvert, invertedSelection, applyWithImpactCheck, persist]);
 
   const handleIncludeSection = useCallback((row: Row) => {
     const next = includeSection(row, providers, chosenIndexers);
-    persist(next.providers, next.indexers);
-  }, [providers, chosenIndexers, persist]);
+    applyWithImpactCheck(
+      `Select all in “${row.label}”`,
+      `This will select ${row.members.length} sources under “${row.label}”.`,
+      next.providers,
+      next.indexers,
+      () => persist(next.providers, next.indexers),
+      `Selected ${row.members.length} sources in “${row.label}”.`
+    );
+  }, [providers, chosenIndexers, applyWithImpactCheck, persist]);
 
   const handleExcludeSection = useCallback((row: Row) => {
     const next = excludeSection(row, providers, chosenIndexers);
-    persist(next.providers, next.indexers);
-  }, [providers, chosenIndexers, persist]);
+    applyWithImpactCheck(
+      `Unselect all in “${row.label}”`,
+      `This will unselect ${row.members.length} sources under “${row.label}”.`,
+      next.providers,
+      next.indexers,
+      () => persist(next.providers, next.indexers),
+      `Unselected ${row.members.length} sources in “${row.label}”.`
+    );
+  }, [providers, chosenIndexers, applyWithImpactCheck, persist]);
 
   const handleExpandAll = useCallback(() => {
     setCollapsed(new Set());
@@ -653,9 +998,6 @@ export const SearchScopePicker: React.FC<SearchScopePickerProps> = ({
     }
   }, [providers, chosenIndexers, universe.indexers, persist]);
 
-  const totalChosen = providers.size + chosenIndexers.size;
-  const totalAvailable = universe.providers.length + universe.indexers.length;
-
   /**
    * What is scoped, as names rather than a number.
    *
@@ -691,6 +1033,149 @@ export const SearchScopePicker: React.FC<SearchScopePickerProps> = ({
     [providers, chosenIndexers, persist]
   );
 
+  const handleSelectAll = useCallback(() => {
+    const allProviders = new Set(universe.providers);
+    const allIndexers = new Set(universe.indexers);
+    applyWithImpactCheck(
+      'Select all sources',
+      `This will add all ${totalAvailable} available sources to your current selection.`,
+      allProviders,
+      allIndexers,
+      () => {
+        setFacets(EMPTY_SELECTION);
+        persist(allProviders, allIndexers);
+      },
+      `All ${totalAvailable} sources selected.`
+    );
+  }, [universe, totalAvailable, applyWithImpactCheck, persist]);
+
+  const handleReset = useCallback(() => {
+    applyWithImpactCheck(
+      'Reset to All Sources',
+      `This will remove your current selection (${totalChosen} sources) and search all installed sources.`,
+      new Set(),
+      new Set(),
+      () => {
+        setFacets(EMPTY_SELECTION);
+        void window.cloudstream?.activateSourceProfile?.('all').then(applyProfiles);
+      },
+      'Selection reset to All Sources.'
+    );
+  }, [totalChosen, applyWithImpactCheck, applyProfiles]);
+
+  const handleActivateProfile = useCallback(
+    (id: string) => {
+      // Switching profiles should be smooth and direct. Only warn/confirm if the user
+      // has an active unsaved draft selection (activeProfile === '') that would be discarded.
+      const hasUnsavedDraft = draftCount > 0 && activeProfile === '';
+
+      if (id === 'all') {
+        if (hasUnsavedDraft) {
+          applyWithImpactCheck(
+            'Reset to All Sources',
+            `This will discard your current unsaved selection (${draftCount} sources) and search all installed sources.`,
+            new Set(),
+            new Set(),
+            () => {
+              setFacets(EMPTY_SELECTION);
+              void window.cloudstream?.activateSourceProfile?.('all').then(applyProfiles);
+            },
+            'Selection reset to All Sources.'
+          );
+        } else {
+          setFacets(EMPTY_SELECTION);
+          void window.cloudstream?.activateSourceProfile?.('all').then(applyProfiles);
+          triggerFeedback('Reset to All Sources.');
+        }
+        return;
+      }
+
+      if (id === '') {
+        void window.cloudstream?.activateSourceProfile?.('').then(applyProfiles);
+        return;
+      }
+
+      if (id.startsWith('builtin:')) {
+        const target = resolveBuiltInSelection(id);
+        const builtinDef = builtInProfiles.find((b) => b.id === id);
+        const name = builtinDef?.name ?? 'Built-in profile';
+        const inferred = inferFacetsForProviders(target.providers);
+
+        if (hasUnsavedDraft) {
+          applyWithImpactCheck(
+            `Switch to profile “${name}”`,
+            `This will replace your current unsaved selection with ${name} (${target.providers.size} sources).`,
+            target.providers,
+            target.indexers,
+            () => {
+              persist(target.providers, target.indexers);
+              setActiveProfile(id);
+              setFacets({
+                kinds: new Set(),
+                languages: inferred.languages,
+                types: inferred.types,
+              });
+            },
+            `Switched to profile “${name}”.`
+          );
+        } else {
+          persist(target.providers, target.indexers);
+          setActiveProfile(id);
+          setFacets({
+            kinds: new Set(),
+            languages: inferred.languages,
+            types: inferred.types,
+          });
+          triggerFeedback(`Switched to profile “${name}”.`);
+        }
+        return;
+      }
+
+      const custom = profiles.find((p) => p.id === id);
+      const targetProv = new Set(custom?.providers ?? []);
+      const targetIdx = new Set(custom?.indexers ?? []);
+      const inferred = inferFacetsForProviders(custom?.providers ?? []);
+
+      if (hasUnsavedDraft) {
+        applyWithImpactCheck(
+          `Switch to profile “${custom?.name ?? 'profile'}”`,
+          `This will replace your current unsaved selection with “${custom?.name}”.`,
+          targetProv,
+          targetIdx,
+          () => {
+            setFacets({
+              kinds: new Set(),
+              languages: inferred.languages,
+              types: inferred.types,
+            });
+            void window.cloudstream?.activateSourceProfile?.(id).then(applyProfiles);
+          },
+          `Switched to profile “${custom?.name}”.`
+        );
+      } else {
+        setFacets({
+          kinds: new Set(),
+          languages: inferred.languages,
+          types: inferred.types,
+        });
+        void window.cloudstream?.activateSourceProfile?.(id).then(applyProfiles);
+        triggerFeedback(`Switched to profile “${custom?.name}”.`);
+      }
+    },
+    [
+      draftCount,
+      activeProfile,
+      applyWithImpactCheck,
+      applyProfiles,
+      triggerFeedback,
+      resolveBuiltInSelection,
+      builtInProfiles,
+      inferFacetsForProviders,
+      persist,
+      profiles,
+    ]
+  );
+
   const label =
     totalChosen === 0
       ? 'All sources'
@@ -711,9 +1196,14 @@ export const SearchScopePicker: React.FC<SearchScopePickerProps> = ({
             : `Searching only ${totalChosen} selected source(s)`
         }
       >
-        <Filter size={14} />
+        <Filter size={14} className="scope__icon" />
         <span className="scope__label">{label}</span>
-        <ChevronDown size={14} />
+        {totalChosen > 0 && (
+          <span className="scope__count-badge" aria-hidden>
+            {totalChosen}
+          </span>
+        )}
+        <ChevronDown size={14} className="scope__chevron" />
       </button>
 
       {open && (
@@ -755,21 +1245,23 @@ export const SearchScopePicker: React.FC<SearchScopePickerProps> = ({
           onExpandAll={handleExpandAll}
           onCollapseAll={handleCollapseAll}
           onDeselect={deselect}
-          onSelectAll={() => persist(new Set(universe.providers), new Set(universe.indexers))}
-          /* Reset is now "switch to All sources", which keeps the selection
-             rather than overwriting it with an empty one. */
-          onReset={() => void window.cloudstream?.activateSourceProfile?.('all').then(applyProfiles)}
+          onSelectAll={handleSelectAll}
+          onReset={handleReset}
           onClose={close}
           healthFor={(provider) => health.get(provider)}
+          pendingImpact={pendingImpact}
+          onConfirmImpact={handleConfirmImpact}
+          onCancelImpact={handleCancelImpact}
+          feedbackToast={feedbackToast}
+          onDismissFeedback={handleDismissFeedback}
           profileBar={
             <SourceProfileBar
               profiles={profiles}
+              builtInProfiles={builtInProfiles}
               activeId={activeProfile}
               hasDraft={draftCount > 0}
               draftCount={draftCount}
-              onActivate={(id) =>
-                void window.cloudstream?.activateSourceProfile?.(id).then(applyProfiles)
-              }
+              onActivate={handleActivateProfile}
               onCreate={(name) =>
                 void window.cloudstream?.createSourceProfile?.(name).then(applyProfiles)
               }

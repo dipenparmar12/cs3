@@ -1,32 +1,43 @@
 import React, { useRef, useState } from 'react';
-import { Check, Copy, Globe, Pencil, Plus, Trash2 } from 'lucide-react';
+import {
+  AlertTriangle,
+  Check,
+  ChevronDown,
+  Clapperboard,
+  Copy,
+  Globe,
+  Languages,
+  MoreVertical,
+  Pencil,
+  Plus,
+  ShieldAlert,
+  Sparkles,
+  Trash2,
+} from 'lucide-react';
 import { useDismissable } from '../../utils/useDismissable';
+
+export interface BuiltInProfileDef {
+  id: string;
+  name: string;
+  description: string;
+  icon?: 'globe' | 'languages' | 'sparkles' | 'clapperboard' | 'shield';
+  count: number;
+  disabled?: boolean;
+  disabledReason?: string;
+}
 
 export interface ProfileSummary {
   id: string;
   name: string;
   providers: string[];
   indexers: string[];
+  updatedAt?: number;
+  createdAt?: number;
 }
 
-/**
- * Switching between saved selections, and the reason there are any.
- *
- * "All sources" used to be wired to an erasure. Someone who picked eleven Hindi
- * providers out of two hundred, searched, then pressed it to check one thing
- * had thrown that minute away with no undo and no record of what was lost. It
- * is a pill here, and switching to it puts the selection down rather than
- * deleting it — the state machine in `electron/cs3/sourceProfiles.ts` has a
- * test named after exactly that round trip.
- *
- * Everything else follows from having somewhere to put a selection that is not
- * the bin: name one, keep several, copy one to vary it. A profile is one click
- * to switch, which is the whole feature — the management lives behind the pill
- * it belongs to rather than in a settings screen, because a profile is only
- * ever edited in the moment you notice it is wrong.
- */
-export const SourceProfileBar: React.FC<{
+export interface SourceProfileBarProps {
   profiles: ProfileSummary[];
+  builtInProfiles?: BuiltInProfileDef[];
   activeId: string;
   /** True when the unnamed selection holds something worth keeping. */
   hasDraft: boolean;
@@ -36,8 +47,36 @@ export const SourceProfileBar: React.FC<{
   onRename: (id: string, name: string) => void;
   onDuplicate: (id: string) => void;
   onDelete: (id: string) => void;
-}> = ({
+}
+
+function renderBuiltInIcon(icon?: BuiltInProfileDef['icon']) {
+  switch (icon) {
+    case 'globe':
+      return <Globe size={13} />;
+    case 'languages':
+      return <Languages size={13} />;
+    case 'sparkles':
+      return <Sparkles size={13} />;
+    case 'clapperboard':
+      return <Clapperboard size={13} />;
+    case 'shield':
+      return <ShieldAlert size={13} />;
+    default:
+      return <Globe size={13} />;
+  }
+}
+
+/**
+ * Search profiles management and switcher bar.
+ * Follows progressive disclosure:
+ * 1. All sources (pinned first)
+ * 2. Your profiles (user-created, ordered by most recently modified)
+ * 3. Presets (built-in profiles like Anime, Drama)
+ * 4. Custom selection (draft state, shown only when unsaved changes exist)
+ */
+export const SourceProfileBar: React.FC<SourceProfileBarProps> = ({
   profiles,
+  builtInProfiles = [],
   activeId,
   hasDraft,
   draftCount,
@@ -50,9 +89,16 @@ export const SourceProfileBar: React.FC<{
   const [naming, setNaming] = useState<'new' | string | null>(null);
   const [draftName, setDraftName] = useState('');
   const [menuFor, setMenuFor] = useState<string | null>(null);
+  const [deleteConfirm, setDeleteConfirm] = useState<string | null>(null);
+  const [dropdownOpen, setDropdownOpen] = useState(false);
   const menuWrapper = useRef<HTMLDivElement | null>(null);
+  const dropdownRef = useRef<HTMLDivElement | null>(null);
 
   useDismissable(menuFor !== null, menuWrapper, () => setMenuFor(null));
+  useDismissable(dropdownOpen, dropdownRef, () => {
+    setDropdownOpen(false);
+    setMenuFor(null);
+  });
 
   const submitName = () => {
     const name = draftName.trim();
@@ -64,14 +110,7 @@ export const SourceProfileBar: React.FC<{
     setDraftName('');
   };
 
-  /**
-   * The name box replaces the bar rather than opening a dialog.
-   *
-   * A modal over a modal is the shape that makes Escape ambiguous, and this
-   * dialog already binds Escape in the capture phase so that closing a menu
-   * does not close the film behind it. One text field in place costs nothing
-   * and cannot stack.
-   */
+  /** In-place naming field replaces the bar so no stacked modals occur. */
   if (naming !== null) {
     return (
       <div className="profile-bar profile-bar--naming">
@@ -82,16 +121,19 @@ export const SourceProfileBar: React.FC<{
           onKeyDown={(event) => {
             if (event.key === 'Enter') submitName();
             if (event.key === 'Escape') {
-              // Consumed here so the dialog behind does not also close.
               event.stopPropagation();
               setNaming(null);
               setDraftName('');
             }
           }}
-          placeholder={naming === 'new' ? 'Name this set of sources…' : 'New name…'}
+          placeholder={naming === 'new' ? 'Name this profile…' : 'New name…'}
           aria-label={naming === 'new' ? 'Name for the new profile' : 'New name for this profile'}
         />
-        <button className="btn btn-primary btn-sm" onClick={submitName} disabled={!draftName.trim()}>
+        <button
+          className="btn btn-primary btn-sm"
+          onClick={submitName}
+          disabled={!draftName.trim()}
+        >
           <Check size={13} /> Save
         </button>
         <button
@@ -107,123 +149,312 @@ export const SourceProfileBar: React.FC<{
     );
   }
 
-  return (
-    <div className="profile-bar" ref={menuWrapper}>
-      <div className="profile-bar__pills" role="group" aria-label="Saved source sets">
+  /** In-place delete confirmation for custom profile removal. */
+  if (deleteConfirm !== null) {
+    const profileToDelete = profiles.find((p) => p.id === deleteConfirm);
+    return (
+      <div className="profile-bar profile-bar--delete-confirm" role="alertdialog">
+        <AlertTriangle size={14} className="profile-bar__warning-icon" />
+        <span className="profile-bar__confirm-text">
+          Delete profile <strong>“{profileToDelete?.name ?? 'selected'}”</strong>?
+        </span>
         <button
-          className={`profile-pill${activeId === 'all' ? ' profile-pill--on' : ''}`}
-          onClick={() => onActivate('all')}
-          aria-pressed={activeId === 'all'}
-          title="Search everything you have installed"
-        >
-          <Globe size={13} />
-          All sources
-        </button>
-
-        {/*
-          The unnamed selection, shown only when it holds something.
-
-          Without a pill it has nowhere to be: switching to All sources would
-          keep it safely in the store and give the user no way back to it, which
-          is a quieter version of the bug this replaces.
-        */}
-        {hasDraft && (
-          <button
-            className={`profile-pill${activeId === '' ? ' profile-pill--on' : ''}`}
-            onClick={() => onActivate('')}
-            aria-pressed={activeId === ''}
-            title="The selection you have not named yet"
-          >
-            Current selection
-            <span className="profile-pill__count">{draftCount}</span>
-          </button>
-        )}
-
-        {profiles.map((profile) => {
-          const count = profile.providers.length + profile.indexers.length;
-          const active = profile.id === activeId;
-          return (
-            <div key={profile.id} className="profile-pill-group">
-              <button
-                className={`profile-pill${active ? ' profile-pill--on' : ''}`}
-                onClick={() => onActivate(profile.id)}
-                aria-pressed={active}
-                title={`Search ${count} source${count === 1 ? '' : 's'}`}
-              >
-                {profile.name}
-                <span className="profile-pill__count">{count}</span>
-              </button>
-              <button
-                className="profile-pill__more"
-                onClick={() => setMenuFor(menuFor === profile.id ? null : profile.id)}
-                aria-label={`Manage ${profile.name}`}
-                aria-expanded={menuFor === profile.id}
-              >
-                ⋯
-              </button>
-
-              {menuFor === profile.id && (
-                <div className="profile-menu" role="menu">
-                  <button
-                    role="menuitem"
-                    onClick={() => {
-                      setNaming(profile.id);
-                      setDraftName(profile.name);
-                      setMenuFor(null);
-                    }}
-                  >
-                    <Pencil size={13} /> Rename
-                  </button>
-                  <button
-                    role="menuitem"
-                    onClick={() => {
-                      onDuplicate(profile.id);
-                      setMenuFor(null);
-                    }}
-                  >
-                    <Copy size={13} /> Duplicate
-                  </button>
-                  {/*
-                    No confirmation. A profile is a shortcut to a selection, not
-                    the selection itself — deleting one loses no sources, no
-                    downloads and no history, and a prompt in front of a
-                    reversible thirty-second action is noise. Compare the delete
-                    prompt on downloads, which guards a file.
-                  */}
-                  <button
-                    role="menuitem"
-                    className="profile-menu__danger"
-                    onClick={() => {
-                      onDelete(profile.id);
-                      setMenuFor(null);
-                    }}
-                  >
-                    <Trash2 size={13} /> Delete
-                  </button>
-                </div>
-              )}
-            </div>
-          );
-        })}
-      </div>
-
-      {/*
-        Offered only when there is something to save.
-
-        "Save as profile" over an empty selection creates a profile that
-        searches everything, which is what the All sources pill already is.
-      */}
-      {hasDraft && activeId === '' && (
-        <button
-          className="btn btn-ghost btn-sm profile-bar__save"
+          className="btn btn-danger btn-sm"
           onClick={() => {
-            setNaming('new');
-            setDraftName('');
+            onDelete(deleteConfirm);
+            setDeleteConfirm(null);
           }}
         >
-          <Plus size={13} /> Save these {draftCount}
+          <Trash2 size={13} /> Delete
         </button>
-      )}
+        <button
+          className="btn btn-ghost btn-sm"
+          onClick={() => setDeleteConfirm(null)}
+        >
+          Cancel
+        </button>
+      </div>
+    );
+  }
+
+  const defaultBuiltIns: BuiltInProfileDef[] =
+    builtInProfiles.length > 0
+      ? builtInProfiles
+      : [
+          {
+            id: 'all',
+            name: 'All sources',
+            description: 'Search everything you have installed',
+            icon: 'globe',
+            count: 0,
+          },
+        ];
+
+  // User-created profiles ordered by most recently modified
+  const sortedCustomProfiles = [...profiles].sort((a, b) => {
+    const timeA = a.updatedAt ?? a.createdAt ?? 0;
+    const timeB = b.updatedAt ?? b.createdAt ?? 0;
+    if (timeB !== timeA) return timeB - timeA;
+    return a.name.localeCompare(b.name);
+  });
+
+  const allBuiltIn = defaultBuiltIns.find((b) => b.id === 'all');
+  const otherPresets = defaultBuiltIns.filter((b) => b.id !== 'all');
+
+  // Resolve current active profile info
+  const activeCustom = profiles.find((p) => p.id === activeId);
+  const activeBuiltIn = defaultBuiltIns.find((b) => b.id === activeId);
+  const isDraftActive = activeId === '';
+
+  let activeTitle = 'All sources';
+  let activeCount = allBuiltIn?.count ?? 0;
+  let activeIcon: BuiltInProfileDef['icon'] = 'globe';
+
+  if (isDraftActive) {
+    activeTitle = 'Your selection';
+    activeCount = draftCount;
+  } else if (activeCustom) {
+    activeTitle = activeCustom.name;
+    activeCount = activeCustom.providers.length + activeCustom.indexers.length;
+  } else if (activeBuiltIn) {
+    activeTitle = activeBuiltIn.name;
+    activeCount = activeBuiltIn.count;
+    activeIcon = activeBuiltIn.icon;
+  }
+
+  return (
+    <div className="profile-bar-v2" ref={menuWrapper}>
+      {/* Profile hero card */}
+      <div className="profile-hero" ref={dropdownRef}>
+        <div className="profile-hero__main">
+          <div className="profile-hero__label-row">
+            <span className="profile-hero__tag">
+              {isDraftActive ? 'Unsaved' : 'Profile'}
+            </span>
+            {hasDraft && !isDraftActive && (
+              <span className="profile-hero__draft-indicator" title="Working selection has unsaved changes">
+                • Not saved yet
+              </span>
+            )}
+          </div>
+          <div className="profile-hero__title-row">
+            <h3 className="profile-hero__name">
+              {renderBuiltInIcon(activeIcon)}
+              <span>{activeTitle}</span>
+            </h3>
+            <span className="profile-hero__count">
+              {activeId === 'all' && activeCount > 0
+                ? `${activeCount} available`
+                : `${activeCount} ${activeCount === 1 ? 'source' : 'sources'}`}
+            </span>
+          </div>
+        </div>
+
+        <div className="profile-hero__actions">
+          <button
+            type="button"
+            className="btn btn-secondary btn-sm profile-hero__switch-btn"
+            onClick={() => setDropdownOpen((prev) => !prev)}
+            aria-expanded={dropdownOpen}
+            aria-haspopup="true"
+          >
+            <span>Change</span>
+            <ChevronDown size={13} className={dropdownOpen ? 'rotate-180' : ''} />
+          </button>
+        </div>
+
+        {/* Profile Switcher Dropdown */}
+        {dropdownOpen && (
+          <div className="profile-dropdown" role="menu">
+            <div className="profile-dropdown__header">
+              <span className="profile-dropdown__title">Search profiles</span>
+              <button
+                type="button"
+                className="profile-dropdown__new-btn"
+                onClick={() => {
+                  setNaming('new');
+                  setDraftName('');
+                  setDropdownOpen(false);
+                }}
+              >
+                <Plus size={12} /> New
+              </button>
+            </div>
+
+            <div className="profile-dropdown__list">
+              {/* 1. All sources: Pinned at top */}
+              {allBuiltIn && (
+                <div
+                  role="menuitem"
+                  className={`profile-dropdown__item${activeId === 'all' ? ' profile-dropdown__item--active' : ''}`}
+                  onClick={() => {
+                    onActivate('all');
+                    setDropdownOpen(false);
+                  }}
+                  title={allBuiltIn.description}
+                >
+                  <div className="profile-dropdown__item-info">
+                    <span className="profile-dropdown__item-name">
+                      {renderBuiltInIcon(allBuiltIn.icon)}
+                      {allBuiltIn.name}
+                    </span>
+                  </div>
+                  <span className="profile-dropdown__item-count">
+                    {allBuiltIn.count > 0 ? `${allBuiltIn.count} available` : 'All'}
+                  </span>
+                  {activeId === 'all' && <Check size={14} className="profile-dropdown__item-check" />}
+                </div>
+              )}
+
+              {/* 2. Your profiles: User-created, ordered by most recently modified */}
+              {sortedCustomProfiles.length > 0 && (
+                <>
+                  <div className="profile-dropdown__section-title">Your profiles</div>
+                  {sortedCustomProfiles.map((profile) => {
+                    const count = profile.providers.length + profile.indexers.length;
+                    const active = profile.id === activeId;
+                    return (
+                      <div
+                        key={profile.id}
+                        role="menuitem"
+                        className={`profile-dropdown__item${active ? ' profile-dropdown__item--active' : ''}`}
+                        onClick={() => {
+                          onActivate(profile.id);
+                          setDropdownOpen(false);
+                        }}
+                        title={`${profile.name} · ${count} sources saved`}
+                      >
+                        <div className="profile-dropdown__item-info">
+                          <span className="profile-dropdown__item-name">{profile.name}</span>
+                        </div>
+                        <span className="profile-dropdown__item-count">{count} sources</span>
+                        {active && <Check size={14} className="profile-dropdown__item-check" />}
+
+                        <div
+                          className="profile-dropdown__menu-wrapper"
+                          onClick={(e) => e.stopPropagation()}
+                        >
+                          <button
+                            type="button"
+                            className="profile-dropdown__dots-btn"
+                            title="Profile options"
+                            aria-label={`Options for ${profile.name}`}
+                            onClick={() => setMenuFor(menuFor === profile.id ? null : profile.id)}
+                          >
+                            <MoreVertical size={13} />
+                          </button>
+                          {menuFor === profile.id && (
+                            <div className="profile-context-menu" role="menu">
+                              <button
+                                type="button"
+                                className="profile-context-menu__item"
+                                onClick={() => {
+                                  setMenuFor(null);
+                                  setNaming(profile.id);
+                                  setDraftName(profile.name);
+                                  setDropdownOpen(false);
+                                }}
+                              >
+                                <Pencil size={12} /> Rename
+                              </button>
+                              <button
+                                type="button"
+                                className="profile-context-menu__item"
+                                onClick={() => {
+                                  setMenuFor(null);
+                                  onDuplicate(profile.id);
+                                  setDropdownOpen(false);
+                                }}
+                              >
+                                <Copy size={12} /> Duplicate
+                              </button>
+                              <button
+                                type="button"
+                                className="profile-context-menu__item profile-context-menu__item--danger"
+                                onClick={() => {
+                                  setMenuFor(null);
+                                  setDeleteConfirm(profile.id);
+                                  setDropdownOpen(false);
+                                }}
+                              >
+                                <Trash2 size={12} /> Delete
+                              </button>
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                    );
+                  })}
+                </>
+              )}
+
+              {/* 3. Presets: Built-in profiles always below user profiles */}
+              {otherPresets.length > 0 && (
+                <>
+                  <div className="profile-dropdown__section-title">Presets</div>
+                  {otherPresets.map((builtin) => {
+                    const active = activeId === builtin.id;
+                    return (
+                      <div
+                        key={builtin.id}
+                        role="menuitem"
+                        className={`profile-dropdown__item${active ? ' profile-dropdown__item--active' : ''}${
+                          builtin.disabled ? ' profile-dropdown__item--disabled' : ''
+                        }`}
+                        onClick={() => {
+                          if (!builtin.disabled) {
+                            onActivate(builtin.id);
+                            setDropdownOpen(false);
+                          }
+                        }}
+                        title={builtin.disabled ? builtin.disabledReason : builtin.description}
+                      >
+                        <div className="profile-dropdown__item-info">
+                          <span className="profile-dropdown__item-name">
+                            {renderBuiltInIcon(builtin.icon)}
+                            {builtin.name}
+                          </span>
+                        </div>
+                        {builtin.count > 0 && (
+                          <span className="profile-dropdown__item-count">{builtin.count} sources</span>
+                        )}
+                        {active && <Check size={14} className="profile-dropdown__item-check" />}
+                      </div>
+                    );
+                  })}
+                </>
+              )}
+
+              {/* 4. Current selection: Shown only when unsaved changes exist */}
+              {hasDraft && (
+                <>
+                  <div className="profile-dropdown__section-title">Your selection</div>
+                  <div
+                    role="menuitem"
+                    className={`profile-dropdown__item${isDraftActive ? ' profile-dropdown__item--active' : ''}`}
+                    onClick={() => {
+                      onActivate('');
+                      setDropdownOpen(false);
+                    }}
+                    title="Working selection with unsaved changes"
+                  >
+                    <div className="profile-dropdown__item-info">
+                      <span className="profile-dropdown__item-name">
+                        <span className="profile-pill__draft-dot" aria-hidden />
+                        Custom selection
+                      </span>
+                    </div>
+                    <span className="profile-dropdown__item-count profile-dropdown__item-count--draft">
+                      {draftCount} sources · Unsaved
+                    </span>
+                    {isDraftActive && <Check size={14} className="profile-dropdown__item-check" />}
+                  </div>
+                </>
+              )}
+            </div>
+          </div>
+        )}
+      </div>
     </div>
   );
 };

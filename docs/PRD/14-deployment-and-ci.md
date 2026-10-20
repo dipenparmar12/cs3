@@ -53,7 +53,7 @@
 
 ### 3.1 Bundled JVM runtime (ADR-10)
 
-Every artifact above ships a `jlink`-minimized JRE for the `.cs3` drop-in sidecar ([31](31-cs3-dropin-compatibility.md)).
+Every artifact above ships a `jlink`-minimized JRE for the `.cs3` drop-in sidecar ([31](../done/31-cs3-dropin-compatibility.md)).
 
 | ID | Requirement | Priority |
 |---|---|---|

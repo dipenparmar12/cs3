@@ -1,6 +1,6 @@
 # 03. Extension & Plugin System Architecture
 
-> **Scope.** This document describes the plugin system **as built on Android**. For how the same `.cs3` artifacts run on the Windows desktop port — install-time DEX→`.class` translation, a sandboxed JVM sidecar, the `android.*` and `:app` compatibility shims, and the four compatibility tiers — see [`../PRD/31-cs3-dropin-compatibility.md`](../PRD/31-cs3-dropin-compatibility.md).
+> **Scope.** This document describes the plugin system **as built on Android**. For how the same `.cs3` artifacts run on the Windows desktop port — install-time DEX→`.class` translation, a sandboxed JVM sidecar, the `android.*` and `:app` compatibility shims, and the four compatibility tiers — see [`../done/31-cs3-dropin-compatibility.md`](../../done/31-cs3-dropin-compatibility.md).
 
 ## 1. Overview of the Plugin System
 

@@ -10,7 +10,7 @@ import java.util.concurrent.ConcurrentHashMap;
  * in the ecosystem, appearing in the translated bytecode of 299 of 392 surveyed
  * plugins.
  *
- * <p>That number is far above what docs/PRD/31 §2.3 predicted from Kotlin
+ * <p>That number is far above what docs/done/31 §2.3 predicted from Kotlin
  * imports (4 files), because a shipped {@code .cs3} also contains CloudStream
  * library code that R8 inlined into it. Most plugins never dereference the
  * Context they are handed — but it has to exist, and the methods that are

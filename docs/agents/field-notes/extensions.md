@@ -161,7 +161,7 @@ one.
 
 **Translation risk was measured, not assumed.** Against all 392 real community plugins:
 392 translated, 18,217 classes emitted, 0 verification failures, 6,617 Kotlin coroutine
-state machines, 0 failures — see `docs/PRD/35`, reproducible via `tools/dex-spike/`.
+state machines, 0 failures — see `docs/done/35`, reproducible via `tools/dex-spike/`.
 
 ### Provider execution: working as of 2026-08-13
 

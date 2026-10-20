@@ -9,7 +9,7 @@ trees, and every line reference was verified in source.
 
 It is deliberately narrow: it covers **the gap between the two products**, not our own
 roadmap. For the extension/media/network *standards* work, see
-[PRD 39](../PRD/39-native-extension-and-playback-standards.md), which reaches the same
+[PRD 39](./39-native-extension-and-playback-standards.md), which reaches the same
 conclusion about the network layer from the other direction.
 
 ---

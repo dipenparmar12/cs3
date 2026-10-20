@@ -1,9 +1,10 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Search, Loader2, Paperclip, Eye, EyeOff, X, Square, Trash2 } from 'lucide-react';
+import { Search, Loader2, Paperclip, Eye, EyeOff, X, Square, Trash2, VenetianMask, Code2 } from 'lucide-react';
 import { usePrivacy } from '../utils/usePrivacy';
 import { isAdultMedia, isSensitiveTitle } from '../utils/adultContent';
 import { EMERGENCY_BLUR_KEY_LABEL } from '../utils/emergencyBlur';
 import { setAdultVisualBlurred, useAdultMode } from '../utils/useAdultMode';
+import { useIsDeveloper } from '../utils/ExperienceModeContext';
 import { SearchScopePicker } from './SearchScopePicker';
 import type {
   ExactMedia,
@@ -15,6 +16,7 @@ import { SearchSuggestions } from './SearchSuggestions';
 import type { SavedSearchSummary } from '../../electron/savedSearches';
 import { mergeHistoryAndSaved } from '../utils/searchHistoryMerge';
 import { ProfileMenu } from './profiles/ProfileMenu';
+import { Button } from './ui';
 
 interface NavbarProps {
   onSearch: (query: string, options?: SearchOptions) => void;
@@ -92,10 +94,12 @@ export const Navbar: React.FC<NavbarProps> = ({
   onTorrentPickFailed,
   isSearching = false,
   onScopeChange,
+  onOpenInspector,
   externalQuery,
   onOpenSavedSearch,
   contentContext = true,
 }) => {
+  const isDeveloper = useIsDeveloper();
   const [query, setQuery] = useState('');
   const { active: incognito, setActive: setIncognito } = usePrivacy();
   const adult = useAdultMode();
@@ -434,11 +438,8 @@ export const Navbar: React.FC<NavbarProps> = ({
           ref={inputRef}
           type="text"
           className="search-input"
-          placeholder={
-            incognito
-              ? "Incognito: searches aren't saved. Search movies, anime, TV shows…"
-              : 'Search movies, anime, TV shows across providers or paste URL...'
-          }
+          placeholder={incognito ? "Search — incognito, searches aren't saved" : 'Search titles, or paste a link'}
+          aria-label="Search movies, shows and anime"
           value={query}
           onChange={(e) => setQuery(e.target.value)}
           onKeyDown={handleKeyDown}
@@ -482,24 +483,16 @@ export const Navbar: React.FC<NavbarProps> = ({
         )}
 
         {hasSearchResults && onClearResults && !isSearching && (
-          <button
-            type="button"
+          <Button
+            size="compact"
+            variant="ambient"
+            icon={Trash2}
             onClick={onClearResults}
-            className="btn btn-secondary search-bar__clear-results-btn"
-            style={{
-              padding: '0.35rem 0.65rem',
-              fontSize: '0.8rem',
-              display: 'flex',
-              alignItems: 'center',
-              gap: '0.35rem',
-              color: 'var(--text-muted)',
-            }}
-            title="Clear current search results"
-            aria-label="Clear current search results"
+            className="search-bar__clear-results-btn"
+            title="Clear these results"
           >
-            <Trash2 size={13} />
-            <span>Clear</span>
-          </button>
+            Clear
+          </Button>
         )}
 
         {isSearching ? (
@@ -514,17 +507,9 @@ export const Navbar: React.FC<NavbarProps> = ({
             <span>Stop</span>
           </button>
         ) : (
-          <button
-            type="button"
-            onClick={() => runSearch(query)}
-            className="btn btn-primary"
-            style={{ padding: '0.35rem 0.85rem', fontSize: '0.8rem', display: 'flex', alignItems: 'center', gap: '0.4rem' }}
-            title="Search"
-            aria-label="Search"
-          >
-            <Search size={14} />
-            <span>Search</span>
-          </button>
+          <Button size="compact" variant="prominent" icon={Search} onClick={() => runSearch(query)}>
+            Search
+          </Button>
         )}
 
         <SearchSuggestions
@@ -568,7 +553,15 @@ export const Navbar: React.FC<NavbarProps> = ({
         />
       </div>
 
-      <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', position: 'relative' }}>
+      {/* Right-side navigation controls */}
+      <div className="navbar__actions">
+        {/* Source Scope Selector */}
+        <SearchScopePicker onScopeChange={onScopeChange} />
+
+        {/* Subtle divider between search-scoping and session/profile controls */}
+        <div className="navbar__divider" aria-hidden="true" />
+
+        {/* Contextual Adult Content Blur / Privacy toggle */}
         {showAdultBlurControl && (
           <button
             type="button"
@@ -579,8 +572,8 @@ export const Navbar: React.FC<NavbarProps> = ({
             aria-pressed={!adult.blurred}
             title={
               adult.blurred
-                ? 'Adult content posters are blurred for privacy. Click to unblur for this session.'
-                : `Adult content posters are visible for this session. Click to blur them, or press ${EMERGENCY_BLUR_KEY_LABEL} anywhere.`
+                ? `Adult content posters are blurred for privacy. Click to unblur for this session (or press ${EMERGENCY_BLUR_KEY_LABEL} anywhere).`
+                : `Adult content posters are visible for this session. Click to blur them immediately (or press ${EMERGENCY_BLUR_KEY_LABEL} anywhere).`
             }
           >
             {adult.blurred ? <Eye size={14} /> : <EyeOff size={14} />}
@@ -588,23 +581,38 @@ export const Navbar: React.FC<NavbarProps> = ({
           </button>
         )}
 
-        <SearchScopePicker onScopeChange={onScopeChange} />
-
+        {/* Incognito mode toggle */}
         <button
           type="button"
           onClick={() => setIncognito(!incognito)}
-          className={`btn btn-icon navbar__incognito${incognito ? ' navbar__incognito--on' : ' btn-secondary'}`}
+          className={`btn navbar__incognito${incognito ? ' navbar__incognito--on' : ' btn-secondary'}`}
           aria-pressed={incognito}
           title={
             incognito
-              ? "Incognito: activity isn't being saved. Bookmarks and downloads you choose are still kept. (Ctrl+Shift+N to leave)"
-              : 'Incognito (Ctrl+Shift+N): stop saving history, progress and searches for this session'
+              ? 'Incognito is active (Ctrl+Shift+N) — history, progress and searches aren’t saved. Click to exit'
+              : 'Incognito mode (Ctrl+Shift+N) — browse without saving history or searches'
           }
+          aria-label={incognito ? 'Leave incognito' : 'Go incognito'}
         >
-          <EyeOff size={16} />
-          {incognito && <span>Incognito</span>}
+          <VenetianMask size={16} className="navbar__incognito-icon" />
+          {incognito && <span className="navbar__incognito-dot" aria-hidden />}
+          <span className="navbar__incognito-label">Incognito</span>
         </button>
 
+        {/* Developer UI Inspector trigger (developer mode only) */}
+        {isDeveloper && onOpenInspector && (
+          <button
+            type="button"
+            onClick={onOpenInspector}
+            className="btn btn-secondary navbar-control-btn navbar-inspector-btn"
+            title="Open Developer Inspector Drawer"
+            aria-label="Open Developer Inspector"
+          >
+            <Code2 size={15} />
+          </button>
+        )}
+
+        {/* Viewer Profile switcher & settings */}
         <ProfileMenu />
       </div>
     </header>

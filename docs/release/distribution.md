@@ -107,7 +107,7 @@ Not covered by CI — no extension is installed in a CI smoke profile, nothing i
 | `search` / `search-again` | A search scoped to that provider returns results (launch 2: the archive on disk still loads in a fresh JVM) |
 | `details`, `links` | `load()` and `loadLinks()` answer; direct links come back |
 | `play` | `media:prepare` classifies a link and it **plays** on the engine chosen: mpv reports ≥ 2 s of playback position, a `<video>` reaches `currentTime` ≥ 2 s, or an HLS manifest leads to segment bytes |
-| `play-in-app` | When `play` went to mpv: the player's own "Play in this window" request (`force` + `avoidNativeEngine`) — ffmpeg converts, the app's `<video>` plays; mpv as the answer fails |
+| `play-in-app` | The same link again as the player's own "Play in this window" request (`force` + `avoidNativeEngine`), whichever engine played it first — a forced ffmpeg conversion into the app's `<video>`, the OS-sensitive half of the media pipeline; mpv as the answer fails. On failure the detail adds the element's `readyState`/`networkState`/buffered range and how many bytes the main process could read from the conversion itself |
 | `download` | `download:request` with a task built by the app's own `buildDownloadTask` reaches 2 MB, then is removed with its file |
 
 The target defaults to phisher98's `MovieBoxProvider` searching "Interstellar" (picked from this project's own provider analytics) and is set with `CS3_SMOKE_DEEP_REPO`, `CS3_SMOKE_DEEP_PLUGIN`, `CS3_SMOKE_DEEP_QUERY`. A deep failure says whether the provider or the package is at fault only together with its detail line: a provider that is down fails `search` or `links` on every OS alike.
@@ -157,7 +157,7 @@ Verifying a download:
 
 ## 6. Known limitations
 
-- **None of the macOS or Linux packages has been built or launched yet** (AGENTS.md §3), and the release workflow — including its install-and-launch smoke test (§3) — has never run on GitHub. Its first run should be a `v<x>-rc` tag or a manual `workflow_dispatch`, which tests everything and publishes nothing. The Windows smoke test has been run locally (see AGENTS.md, Packaging).
+- **The macOS and Linux packages have been built and smoke-launched only on GitHub's runners** (first full run 2026-10-19, all 13 packages; AGENTS.md §3) — never on a real Mac or Linux desktop: no Finder/desktop-entry launch, no Gatekeeper on a downloaded file, no GPU, no Wayland. §3.2 is what closes that. The deep mode (§3.1) has been run on Windows only.
 - macOS signing and notarisation are configured but untested without a Developer ID; the entitlements are the documented minimum for Electron + a bundled JRE and may need adjusting on first notarisation.
 - The Microsoft Store is not a target yet. CS3 downloads and runs third-party extension code and executables at run time; whether that is acceptable under the Store's current policies for desktop apps has to be checked against them before investing in an MSIX build, which would also need the JVM sidecar's process model reviewed.
 - `appId` is `com.lagradost.cloudstream3.desktop` (the upstream author's namespace). Changing it changes the Windows install identity (uninstaller entry, user-data folder), so it needs a migration plan before a first signed release, not after.

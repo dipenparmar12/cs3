@@ -92,7 +92,7 @@ The full runtime design is in [27](27-plugin-and-extension-architecture.md) §7.
 
 ### 4.1 The JVM sidecar (ADR-10) — same controls, different mechanisms
 
-Drop-in `.cs3` support ([31](31-cs3-dropin-compatibility.md)) introduces a second untrusted-code host that runs **translated third-party Android bytecode**. SEC-15..27 apply to it in full. The mechanisms differ, and the difference matters.
+Drop-in `.cs3` support ([31](../done/31-cs3-dropin-compatibility.md)) introduces a second untrusted-code host that runs **translated third-party Android bytecode**. SEC-15..27 apply to it in full. The mechanisms differ, and the difference matters.
 
 | ID | Control | Priority |
 |---|---|---|

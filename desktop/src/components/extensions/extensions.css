@@ -841,6 +841,7 @@
 .ext-updates__status strong { font-size: 0.9rem; color: var(--text-primary); }
 .ext-updates__meta { font-size: 0.72rem; color: var(--text-subtle); }
 .ext-updates__actions, .ext-updates__row-actions { display: inline-flex; align-items: center; gap: 0.35rem; }
+.ext-updates__auto { display: inline-flex; align-items: center; padding: 0 0.35rem; font-size: 0.78rem; color: var(--text-muted); }
 .ext-updates__message, .ext-updates__notice { display: flex; align-items: center; gap: 0.4rem; margin: 0; font-size: 0.78rem; color: var(--text-muted); }
 .ext-updates__message--error { color: #fca5a5; }
 .ext-updates__notice svg { color: #f59e0b; flex-shrink: 0; }
@@ -918,3 +919,25 @@
 .ext-drawer__facts code { font-size: 0.72rem; }
 .ext-drawer__foot { display: flex; justify-content: flex-end; padding: 0.55rem 1rem; border-top: 1px solid var(--border-color); }
 .ext-drawer__foot .btn:hover { color: #fca5a5; }
+
+/* "Install all" for a Browse search: one line above the cards. */
+.ext-install-bar {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+  margin: 0.5rem 0 0.75rem;
+  padding: 0.55rem 0.75rem;
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-md);
+  background: var(--bg-card);
+  font-size: 0.82rem;
+}
+.ext-install-bar__text { display: inline-flex; align-items: center; gap: 0.45rem; flex: 1; min-width: 0; flex-wrap: wrap; }
+.ext-install-bar__meta { color: var(--text-subtle); font-size: 0.76rem; }
+.ext-install-bar__actions { display: inline-flex; align-items: center; gap: 0.35rem; }
+.ext-install-bar__ok { color: var(--status-success); }
+.ext-install-bar__warn { color: var(--status-warning); }
+.ext-install-bar__summary { list-style: none; margin: 0 0 0.5rem; padding: 0; display: flex; flex-direction: column; gap: 0.25rem; max-height: 220px; overflow-y: auto; }
+.ext-install-bar__summary li { display: flex; justify-content: space-between; gap: 1rem; font-size: 0.82rem; }
+.ext-install-bar__summary li span:last-child { color: var(--text-muted); font-variant-numeric: tabular-nums; }

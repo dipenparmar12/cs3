@@ -38,15 +38,15 @@ Ordered by **dependency and risk**, not by user-visible value. The two highest-r
 
 | # | Deliverable | Notes |
 |---|---|---|
-| 1 | **★ DEX→JVM translation spike (OQ-27 / RISK-D1)** | Run the candidate translators against **every** `.cs3` producible from the 26 vendored repositories — not a sample. Assert specifically on Kotlin `suspend` call paths, default arguments, and inline classes. **This is the highest-severity unknown in the project** ([31](31-cs3-dropin-compatibility.md) §8) |
+| 1 | **★ DEX→JVM translation spike (OQ-27 / RISK-D1)** | Run the candidate translators against **every** `.cs3` producible from the 26 vendored repositories — not a sample. Assert specifically on Kotlin `suspend` call paths, default arguments, and inline classes. **This is the highest-severity unknown in the project** ([31](../done/31-cs3-dropin-compatibility.md) §8) |
 | 2 | **Drop-in end-to-end spike** | One real, unmodified community `.cs3` installs and returns real search results from a real site through the JVM sidecar — the minimum proof that AC-D1 is achievable |
-| 3 | **Compatibility Analyzer corpus run (DROP-30)** | Produces the measured tier distribution across all 299 providers, replacing the static-analysis projections in [27](27-plugin-and-extension-architecture.md) §6.1 and [31](31-cs3-dropin-compatibility.md) §7 |
+| 3 | **Compatibility Analyzer corpus run (DROP-30)** | Produces the measured tier distribution across all 299 providers, replacing the static-analysis projections in [27](27-plugin-and-extension-architecture.md) §6.1 and [31](../done/31-cs3-dropin-compatibility.md) §7 |
 | 4 | **UTIL-1 hash implementation + JVM oracle** | `hash-vectors.json` generated from a real JVM; property test over 100k random strings |
 | 5 | **Streaming JSON import parser spike** | Proves PERF-19 against a synthetic 400 MB backup |
 | 6 | Sandbox spike (DROP-23/24) | Prove a Windows job-object + AppContainer restricted token actually denies sockets, process spawn, and `System.loadLibrary` from inside a plugin |
 | 7 | Android backup corpus, anonymized and catalogued | Resolves several Medium/Low confidence items in [21](21-open-issues-and-assumptions.md) |
 | 8 | Key-grammar parser | Reads any backup into the canonical model, in memory, read-only |
-| 9 | This PRD updated with corpus and tier findings | Replaces every estimated share in [31](31-cs3-dropin-compatibility.md) with a measured one |
+| 9 | This PRD updated with corpus and tier findings | Replaces every estimated share in [31](../done/31-cs3-dropin-compatibility.md) with a measured one |
 
 **Exit.** Translation succeeds on a large majority of the corpus. One unmodified community plugin returns real results. The sandbox denies all four escape attempts. Hash tests pass 100%. A 400 MB backup parses within the PERF-15 memory bound.
 
@@ -60,7 +60,7 @@ Ordered by **dependency and risk**, not by user-visible value. The two highest-r
 |---|
 | Main/renderer/preload skeleton with SEC-1..14 enforced and audited in CI |
 | **JVM sidecar process skeleton**: lazy spawn, typed JSON-RPC, Supervisor kill/timeout, OS sandbox from the Phase 1 spike (DROP-23..27) |
-| **`cs3-android-shim` and `cs3-app-shim`** built from the [31](31-cs3-dropin-compatibility.md) §2.3/§2.4 inventories, with the ABI diff against upstream running in CI (DROP-10/11) |
+| **`cs3-android-shim` and `cs3-app-shim`** built from the [31](../done/31-cs3-dropin-compatibility.md) §2.3/§2.4 inventories, with the ABI diff against upstream running in CI (DROP-10/11) |
 | **`jlink` JRE bundling** proven inside a signed installer (DROP-31..33), including the DSK-56a degradation path when the sidecar is blocked |
 | Windows CI matrix (build, test, lint, security audit) + Linux unit/integration canary (XP-0c) |
 | Window management: sizing, state persistence, multi-monitor (UI-5/6) |

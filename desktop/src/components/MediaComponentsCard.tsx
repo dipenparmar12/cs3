@@ -101,7 +101,6 @@ export const MediaComponentsCard: React.FC = () => {
         className={`btn ${installed ? 'btn-secondary' : 'btn-primary'}`}
         onClick={install}
         disabled={installing}
-        style={{ width: 'fit-content' }}
       >
         {installing ? <Loader2 className="spin" size={15} /> : <Wrench size={15} />}
         <span>

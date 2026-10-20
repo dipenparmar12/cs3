@@ -65,6 +65,6 @@ Read [../debugging/overview.md](../debugging/overview.md) then the matching entr
 | Startup | `main.ts` (background tasks), `startupProfile.ts`, `util/startupQueue.ts` |
 
 ## 8. Known stale or unfinished areas (do not trust)
-* `docs/PRD/33` (partially stale), PRD-39 (superseded), PRD-41 (proposed; not built), PRD-40.1 (`sourceLease`/`playbackTelemetry` not wired — verified: `wrapLease` has no callers).
+* `docs/done/33` (partially stale), PRD-39 (superseded), PRD-41 (proposed; not built), PRD-40.1 (`sourceLease`/`playbackTelemetry` not wired — verified: `wrapLease` has no callers).
 * `docs/docs_cs3/android/*` describes the *Android* app, not this code.
 * No CI exists; nothing runs tests but you. No code-signing certificate.

@@ -40,7 +40,7 @@ the app; visual placement may differ. Labels were taken from JSX where noted in 
   (which compared them to the Android reference, not to this repository). Not re-audited here; they were moved, not rewritten.
 * `docs/PRD/*` — intent documents; several are marked stale/proposed in `CLAUDE.md §13`. Not changed.
 * `docs/agents/*` — domain notes; read for depth, same authority as `CLAUDE.md`. Not changed.
-* Dated working notes at `docs/` root (`2026-10-0*…md`) and `docs/PRD/2026-10-*` — design notes for specific features
+* Dated feature notes live in `docs/done/` (built) and `docs/roadmap/` (pending, partial, unverified)
   (startup cache, ratings, reviews/related media, franchise navigation, buffer indicator, subtitles, updates, adult-only hiding);
   not audited against code. **Requires verification** before being treated as current behaviour.
 

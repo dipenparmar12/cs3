@@ -169,7 +169,7 @@ const SOURCES = {
 };
 
 /*
- * Apple silicon: evermeet publishes Intel builds only, and an x86 binary
+ * Apple silicon: the macOS build above is Intel-only, and an x86 binary
  * spawned by the app fails with "Bad CPU type" wherever Rosetta is not
  * installed — which is most new Macs. Rather than ship a binary that may not
  * run, the arm64 package uses Homebrew's ffmpeg (`brew install ffmpeg`); the
@@ -506,7 +506,7 @@ async function stage(name, component) {
    * Cached under a name that carries the platform. The "any cached archive for
    * this component" fallbacks in `download` match on the name alone, and with
    * a bare `ffmpeg.tar.xz` a Linux arm64 build on a machine that had built x64
-   * picked up the x86-64 ffmpeg — and the evermeet (macOS) and gyan (Windows)
+   * picked up the x86-64 ffmpeg — and the macOS and gyan (Windows)
    * zips were both `ffmpeg.zip`.
    */
   const cacheName = `${key}-${component.archive}`;

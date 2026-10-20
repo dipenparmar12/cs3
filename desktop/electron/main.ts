@@ -1909,6 +1909,22 @@ app.whenReady().then(async () => {
       mainWindow.webContents.send('extension:updateEvent', event, payload);
     }
   });
+  // An automatic update is the same job a press of Update makes — see
+  // `ExtensionUpdater.installer`.
+  extensionUpdater.setInstaller(async (updates) => {
+    const { ids, refused } = extensionJobs.enqueue(
+      updates.map((update) => ({ kind: 'update' as const, internalName: update.internalName, name: update.name }))
+    );
+    const finished = await extensionJobs.whenSettled(ids);
+    return [
+      ...finished.map((job) => ({
+        internalName: job.target.slice('ext:'.length),
+        ok: job.state === 'done',
+        message: job.message ?? (job.state === 'cancelled' ? 'Cancelled' : ''),
+      })),
+      ...refused.map((entry) => ({ internalName: entry.target.slice('ext:'.length), ok: false, message: entry.reason })),
+    ];
+  });
   extensionUpdater.schedule();
 
   batchDownloader.setNotifier((progress) => {

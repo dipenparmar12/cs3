@@ -218,7 +218,7 @@ export class PluginCompatibilityAnalyzer {
     }
 
     details.push(
-      'Static analysis only. Nothing in this build can execute a .cs3; see docs/PRD/31-cs3-dropin-compatibility.md.'
+      'Static analysis only. Nothing in this build can execute a .cs3; see docs/done/31-cs3-dropin-compatibility.md.'
     );
 
     const tier = facts.hasNativeLibs

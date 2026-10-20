@@ -148,3 +148,71 @@ export function excludeSection(
   return { providers: nextProviders, indexers: nextIndexers };
 }
 
+export interface SelectionImpact {
+  addedProviders: string[];
+  removedProviders: string[];
+  addedIndexers: string[];
+  removedIndexers: string[];
+  unchangedProviders: number;
+  unchangedIndexers: number;
+  totalAdded: number;
+  totalRemoved: number;
+  totalUnchanged: number;
+  newTotal: number;
+  isConsequential: boolean;
+}
+
+/**
+ * Calculates the exact delta between the current selection and a proposed target selection.
+ * Categorizes changes between extension providers and torrent indexers.
+ */
+export function calculateSelectionImpact(
+  current: { providers: Set<string>; indexers: Set<string> },
+  target: { providers: Set<string>; indexers: Set<string> },
+  threshold = { remove: 3, add: 10 }
+): SelectionImpact {
+  const addedProviders: string[] = [];
+  const removedProviders: string[] = [];
+  let unchangedProviders = 0;
+
+  for (const p of target.providers) {
+    if (!current.providers.has(p)) addedProviders.push(p);
+    else unchangedProviders += 1;
+  }
+  for (const p of current.providers) {
+    if (!target.providers.has(p)) removedProviders.push(p);
+  }
+
+  const addedIndexers: string[] = [];
+  const removedIndexers: string[] = [];
+  let unchangedIndexers = 0;
+
+  for (const i of target.indexers) {
+    if (!current.indexers.has(i)) addedIndexers.push(i);
+    else unchangedIndexers += 1;
+  }
+  for (const i of current.indexers) {
+    if (!target.indexers.has(i)) removedIndexers.push(i);
+  }
+
+  const totalAdded = addedProviders.length + addedIndexers.length;
+  const totalRemoved = removedProviders.length + removedIndexers.length;
+  const totalUnchanged = unchangedProviders + unchangedIndexers;
+  const newTotal = target.providers.size + target.indexers.size;
+  const isConsequential = totalRemoved >= threshold.remove || totalAdded >= threshold.add;
+
+  return {
+    addedProviders,
+    removedProviders,
+    addedIndexers,
+    removedIndexers,
+    unchangedProviders,
+    unchangedIndexers,
+    totalAdded,
+    totalRemoved,
+    totalUnchanged,
+    newTotal,
+    isConsequential,
+  };
+}
+

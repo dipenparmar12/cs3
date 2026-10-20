@@ -26,6 +26,8 @@ import { ViewSkeleton } from './components/ViewSkeleton';
 import { FirstRunBanner } from './components/FirstRunBanner';
 import { RegionOnboarding } from './components/regions/RegionOnboarding';
 import { AdultSessionPrompt } from './components/AdultSessionPrompt';
+import { ExtensionUpdateNotice } from './components/extensions/ExtensionUpdateNotice';
+import type { ExtensionsTab } from './components/extensions/ExtensionsScreen';
 
 import { TvType, type Episode, type SearchOptions, type SearchResponse } from './types/api';
 import type { HistoryEvent } from './types/history';
@@ -452,6 +454,11 @@ export const App: React.FC = () => {
   const [isInspectorOpen, setIsInspectorOpen] = useState(false);
   /** Which Settings pane to open on, when something deep-links into it. */
   const [settingsTab, setSettingsTab] = useState<'general' | 'about'>('general');
+  /** Which Extensions tab opens next — Updates when the update notice is followed. */
+  const [extensionsTab, setExtensionsTab] = useState<ExtensionsTab | undefined>(undefined);
+  useEffect(() => {
+    if (activeTab !== 'extensions') setExtensionsTab(undefined);
+  }, [activeTab]);
 
   /**
    * Whether the machine has a network at all.
@@ -1182,11 +1189,16 @@ export const App: React.FC = () => {
     return true;
   }, [search]);
 
-  /** Re-runs the current query under a scope the user just changed. */
+  /**
+   * Scope changed by the user in the search sources dialog.
+   *
+   * PRD 2.4: Separated from search execution. Changing or confirming the
+   * source selection commits the scope without automatically re-triggering search.
+   * The updated selection is used when the user next explicitly submits a query.
+   */
   const handleScopeChange = useCallback(() => {
-    const previous = lastQuery.current;
-    if (previous?.query) void handleSearch(previous.query, previous.options);
-  }, [handleSearch]);
+    // Intentionally no-op on auto-search. The committed scope is used on next explicit search.
+  }, []);
 
   /**
    * Re-run the last query with no scope at all.
@@ -2587,7 +2599,7 @@ export const App: React.FC = () => {
               )}
               {!openTorrent && activeTab === 'extensions' && (
                 <ErrorBoundary fallbackTitle="Error loading Extensions Manager">
-                  <ExtensionsScreen />
+                  <ExtensionsScreen key={extensionsTab ?? 'default'} initialTab={extensionsTab} />
                 </ErrorBoundary>
               )}
               {!openTorrent && activeTab === 'settings' && (
@@ -2640,6 +2652,13 @@ export const App: React.FC = () => {
 
       {/* Dismissed by clicking it, because it reports something the viewer
           asked for and may want to read twice — not a status that ages out. */}
+      <ExtensionUpdateNotice
+        onReview={() => {
+          setExtensionsTab('updates');
+          switchTab('extensions');
+        }}
+      />
+
       {actionNotice && (
         <div
           className="toast"

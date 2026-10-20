@@ -7,19 +7,35 @@ import React, {
   useState,
 } from 'react';
 import {
+  AlertTriangle,
+  ArrowLeft,
+  BookOpen,
   Check,
   ChevronDown,
   ChevronRight,
-  Globe,
+  Clapperboard,
+  Compass,
+  Disc,
+  FileVideo,
+  Film,
+  Layers,
   Loader2,
   Minus,
+  Music,
   Package,
   Radio,
   RotateCcw,
   Search,
+  ShieldAlert,
+  Smile,
+  Sparkles,
+  Tv,
+  Video,
   X,
 } from 'lucide-react';
 import type { ProviderLoadProgress } from '../../../electron/pluginManager';
+import { FlagIcon } from '../FlagIcon';
+import { getLanguageFlag, getLanguageName } from '../../utils/languageFlag';
 import { isWorthShowing, type ProviderHealth } from './providerHealth';
 import {
   prettyType,
@@ -29,9 +45,36 @@ import {
   type Facets,
   type FacetSelection,
   type Row,
+  type SelectionImpact,
 } from './sourceScopeModel';
 
 export type { CheckState, ChosenSource, Facets, FacetSelection, Row };
+
+export interface PendingImpactConfirmation {
+  actionName: string;
+  actionDescription: string;
+  impact: SelectionImpact;
+}
+
+function getContentTypeIcon(type: string): React.ReactNode {
+  const norm = type.toLowerCase();
+  if (norm.includes('animemovie') || (norm.includes('anime') && norm.includes('movie')))
+    return <FileVideo size={12} />;
+  if (norm.includes('ova')) return <Disc size={12} />;
+  if (norm.includes('anime')) return <Sparkles size={12} />;
+  if (norm.includes('movie') || norm.includes('film')) return <Film size={12} />;
+  if (norm.includes('tv') || norm.includes('series')) return <Tv size={12} />;
+  if (norm.includes('drama') || norm.includes('asian')) return <Clapperboard size={12} />;
+  if (norm.includes('cartoon') || norm.includes('animation')) return <Smile size={12} />;
+  if (norm.includes('documentary')) return <Compass size={12} />;
+  if (norm.includes('live')) return <Video size={12} />;
+  if (norm.includes('music')) return <Music size={12} />;
+  if (norm.includes('torrent')) return <Radio size={12} />;
+  if (norm.includes('book') || norm.includes('manga') || norm.includes('comic') || norm.includes('novel'))
+    return <BookOpen size={12} />;
+  if (norm.includes('nsfw') || norm.includes('adult')) return <ShieldAlert size={12} />;
+  return <Layers size={12} />;
+}
 
 const Box: React.FC<{ state: CheckState }> = ({ state }) => (
   <span className={`scope__box scope__box--${state}`} aria-hidden>
@@ -303,6 +346,9 @@ const ChosenSourcesBar: React.FC<ChosenSourcesBarProps> = ({ chosen, onDeselect,
 
   if (chosen.length === 0) return null;
 
+  const extCount = chosen.filter((c) => !c.isIndexer).length;
+  const torrentCount = chosen.filter((c) => c.isIndexer).length;
+
   const hasOverflow = chosen.length > CHIP_COLLAPSE_THRESHOLD;
   const visible = expanded || !hasOverflow ? chosen : chosen.slice(0, CHIP_COLLAPSE_THRESHOLD);
 
@@ -311,6 +357,12 @@ const ChosenSourcesBar: React.FC<ChosenSourcesBarProps> = ({ chosen, onDeselect,
       <div className="scope-modal__chosen-header">
         <span className="scope-modal__chosen-title">
           Selected sources ({chosen.length})
+          <span className="scope-modal__chosen-breakdown">
+            {' · '}
+            {extCount > 0 && `${extCount} ext${extCount === 1 ? '' : 's'}`}
+            {extCount > 0 && torrentCount > 0 && ' · '}
+            {torrentCount > 0 && `${torrentCount} torrent${torrentCount === 1 ? '' : 's'}`}
+          </span>
         </span>
         <div className="scope-modal__chosen-actions">
           {hasOverflow && (
@@ -414,6 +466,12 @@ export interface SourceScopeDialogProps {
   onClose: () => void;
   profileBar?: React.ReactNode;
   healthFor?: (provider: string) => ProviderHealth | undefined;
+
+  pendingImpact?: PendingImpactConfirmation | null;
+  onConfirmImpact?: () => void;
+  onCancelImpact?: () => void;
+  feedbackToast?: string | null;
+  onDismissFeedback?: () => void;
 }
 
 export const SourceScopeDialog: React.FC<SourceScopeDialogProps> = ({
@@ -459,6 +517,11 @@ export const SourceScopeDialog: React.FC<SourceScopeDialogProps> = ({
   onClose,
   profileBar,
   healthFor,
+  pendingImpact,
+  onConfirmImpact,
+  onCancelImpact,
+  feedbackToast,
+  onDismissFeedback,
 }) => {
   const dialog = useRef<HTMLDivElement | null>(null);
   const scroller = useRef<HTMLDivElement | null>(null);
@@ -609,13 +672,55 @@ export const SourceScopeDialog: React.FC<SourceScopeDialogProps> = ({
   const rowDomId = (row: Row) => `scope-row-${row.key.replace(/[^a-zA-Z0-9_-]/g, '_')}`;
   const activeRow = rows[clampedActive];
 
-  const summary = useMemo(() => {
-    if (totalChosen === 0) {
-      return 'Searching every enabled provider, catalogue and torrent source.';
-    }
-    if (totalChosen === 1) return 'Searching one source. Catalogue metadata is not consulted.';
-    return `Searching ${totalChosen} sources. Catalogue metadata is not consulted.`;
-  }, [totalChosen]);
+  const [viewMode, setViewMode] = useState<'guided' | 'explorer'>('guided');
+  const [explorerTab, setExplorerTab] = useState<'all' | 'selected' | 'excluded' | 'attention'>('all');
+  const [showAllLanguages, setShowAllLanguages] = useState(false);
+  const [showAllTypes, setShowAllTypes] = useState(false);
+
+  const displayedLanguages = useMemo(() => {
+    if (showAllLanguages || available.languages.length <= 8) return available.languages;
+    const top = available.languages.slice(0, 8);
+    const extraSelected = available.languages.filter(
+      (lang, idx) => idx >= 8 && facets.languages.has(lang)
+    );
+    return [...top, ...extraSelected];
+  }, [available.languages, showAllLanguages, facets.languages]);
+
+  const displayedTypes = useMemo(() => {
+    if (showAllTypes || available.types.length <= 6) return available.types;
+    const top = available.types.slice(0, 6);
+    const extraSelected = available.types.filter(
+      (type, idx) => idx >= 6 && facets.types.has(type)
+    );
+    return [...top, ...extraSelected];
+  }, [available.types, showAllTypes, facets.types]);
+
+  // Filter rows based on explorerTab when in explorer mode
+  const displayedRows = useMemo(() => {
+    if (viewMode === 'guided') return rows;
+    if (explorerTab === 'all') return rows;
+
+    return rows.filter((row) => {
+      if (row.kind === 'note') return false;
+      const target = row.isIndexer ? indexers : providers;
+      const state = stateOf(row.members, target);
+
+      if (explorerTab === 'selected') {
+        return state === 'on' || state === 'mixed';
+      }
+      if (explorerTab === 'excluded') {
+        return state === 'off';
+      }
+      if (explorerTab === 'attention') {
+        if (row.kind === 'leaf' && !row.isIndexer) {
+          const health = healthFor?.(row.members[0]);
+          return health?.level === 'poor' || health?.level === 'average';
+        }
+        return false;
+      }
+      return true;
+    });
+  }, [rows, viewMode, explorerTab, indexers, providers, healthFor]);
 
   const selectAllButtonText = useMemo(() => {
     if (isFiltered) {
@@ -660,260 +765,437 @@ export const SourceScopeDialog: React.FC<SourceScopeDialogProps> = ({
         onKeyDown={onDialogKeyDown}
       >
         <header className="scope-modal__head">
-          <div>
-            <h2 id="scope-modal-title">Search sources</h2>
-            <p className="scope-modal__subtitle">
-              {totalChosen === 0
-                ? `All ${totalAvailable} sources`
-                : `${totalChosen} of ${totalAvailable} selected`}
-            </p>
+          <div className="scope-modal__head-left">
+            {viewMode === 'explorer' && (
+              <button
+                type="button"
+                className="scope-modal__back-btn"
+                onClick={() => setViewMode('guided')}
+                title="Back to search profiles and filters"
+                aria-label="Back to search profiles"
+              >
+                <ArrowLeft size={16} />
+              </button>
+            )}
+            <div>
+              <h2 id="scope-modal-title">
+                {viewMode === 'guided' ? 'Search sources' : 'Customize sources'}
+              </h2>
+              <p className="scope-modal__subtitle">
+                {totalChosen === 0
+                  ? `Searching all ${totalAvailable} sources`
+                  : `Searching ${totalChosen} of ${totalAvailable} sources`}
+              </p>
+            </div>
           </div>
-          <button
-            className="scope-modal__close"
-            onClick={onClose}
-            aria-label="Close search sources"
-            title="Close (Esc)"
-          >
-            <X size={18} />
-          </button>
+
+          <div className="scope-modal__head-actions">
+            <button
+              className="scope-modal__close"
+              onClick={onClose}
+              aria-label="Close search sources"
+              title="Close (Esc)"
+            >
+              <X size={18} />
+            </button>
+          </div>
         </header>
 
-        <div className="scope-modal__body">
-          <aside className="scope-modal__rail" aria-label="Filters">
-            <p className="scope-modal__rail-note">
-              Filters change what this list shows. Ticking a source is what narrows the search.
-            </p>
-
-            {hasExtensions && hasIndexers && (
-              <FacetGroup
-                label="Kind"
-                onSelectAll={
-                  onSelectAllFacetGroup ? () => onSelectAllFacetGroup('kinds') : undefined
-                }
-                onClear={onClearFacetGroup ? () => onClearFacetGroup('kinds') : undefined}
-              >
-                <FacetChip
-                  on={facets.kinds.has('extension')}
-                  onClick={() => onToggleFacet('kinds', 'extension')}
-                  title="Show only extension providers"
-                >
-                  <Package size={12} /> Extensions
-                </FacetChip>
-                <FacetChip
-                  on={facets.kinds.has('indexer')}
-                  onClick={() => onToggleFacet('kinds', 'indexer')}
-                  title="Show only torrent sources"
-                >
-                  <Radio size={12} /> Torrents
-                </FacetChip>
-              </FacetGroup>
-            )}
-
-            {available.types.length > 0 && (
-              <FacetGroup
-                label="Content type"
-                onSelectAll={
-                  onSelectAllFacetGroup ? () => onSelectAllFacetGroup('types') : undefined
-                }
-                onClear={onClearFacetGroup ? () => onClearFacetGroup('types') : undefined}
-              >
-                {available.types.map((type) => (
-                  <FacetChip
-                    key={type}
-                    on={facets.types.has(type)}
-                    onClick={() => onToggleFacet('types', type)}
-                  >
-                    {prettyType(type)}
-                  </FacetChip>
-                ))}
-              </FacetGroup>
-            )}
-
-            {available.languages.length > 1 && (
-              <FacetGroup
-                label="Language"
-                onSelectAll={
-                  onSelectAllFacetGroup ? () => onSelectAllFacetGroup('languages') : undefined
-                }
-                onClear={onClearFacetGroup ? () => onClearFacetGroup('languages') : undefined}
-              >
-                {available.languages.map((lang) => (
-                  <FacetChip
-                    key={lang}
-                    on={facets.languages.has(lang)}
-                    onClick={() => onToggleFacet('languages', lang)}
-                  >
-                    {lang.toUpperCase()}
-                  </FacetChip>
-                ))}
-              </FacetGroup>
-            )}
-
-            {facetsActive && (
-              <button className="scope-modal__clear" onClick={onClearFacets}>
-                <RotateCcw size={12} /> Clear filters
-              </button>
-            )}
-          </aside>
-
-          <section className="scope-modal__main" aria-label="Sources">
+        {viewMode === 'guided' ? (
+          /* ========================================================================= */
+          /* Level 1: Quick Setup View (Intent-Driven, 4 Elements Only)                */
+          /* ========================================================================= */
+          <div className="scope-guided">
             {profileBar}
 
-            <div className="scope-modal__search">
-              <Search size={15} />
-              <input
-                ref={searchField}
-                value={inputValue}
-                onChange={handleInputChange}
-                placeholder="Find a repository, extension or provider…"
-                aria-label="Filter the source list"
-                type="search"
-              />
-              {inputValue && (
-                <button onClick={handleInputClear} aria-label="Clear the source filter">
-                  <X size={14} />
+            <div className="scope-guided__body">
+
+              {/* Content */}
+              {available.types.length > 0 && (
+                <div className="scope-guided__section">
+                  <div className="scope-guided__section-header">
+                    <h4 className="scope-guided__section-title">Content</h4>
+                  </div>
+
+                  <div className="scope-guided__chips-grid">
+                    {displayedTypes.map((type) => {
+                      const active = facets.types.has(type);
+                      return (
+                        <button
+                          key={type}
+                          type="button"
+                          className={`scope-guided__chip${active ? ' scope-guided__chip--active' : ''}`}
+                          onClick={() => onToggleFacet('types', type)}
+                          title={prettyType(type)}
+                        >
+                          {getContentTypeIcon(type)}
+                          <span className="scope-guided__chip-label">{prettyType(type)}</span>
+                        </button>
+                      );
+                    })}
+                    {available.types.length > 6 && (
+                      <button
+                        type="button"
+                        className="scope-guided__chip scope-guided__chip--expand"
+                        onClick={() => setShowAllTypes((prev) => !prev)}
+                      >
+                        <span>
+                          {showAllTypes ? 'Fewer' : `+ More (${available.types.length - 6})`}
+                        </span>
+                      </button>
+                    )}
+                  </div>
+                </div>
+              )}
+              {/* Languages */}
+              <div className="scope-guided__section">
+                <div className="scope-guided__section-header">
+                  <h4 className="scope-guided__section-title">Languages</h4>
+                </div>
+
+                <div className="scope-guided__chips-grid">
+                  {displayedLanguages.map((lang) => {
+                    const code = lang.toUpperCase();
+                    const flag = getLanguageFlag(lang);
+                    const fullName = getLanguageName(lang);
+                    const active = facets.languages.has(lang);
+                    return (
+                      <button
+                        key={lang}
+                        type="button"
+                        className={`scope-guided__chip${active ? ' scope-guided__chip--active' : ''}`}
+                        onClick={() => onToggleFacet('languages', lang)}
+                        title={fullName ? `${fullName} (${code})` : code}
+                      >
+                        <FlagIcon flag={flag} size={14} fallback={code.slice(0, 2)} />
+                        <span className="scope-guided__chip-label">{fullName || code}</span>
+                      </button>
+                    );
+                  })}
+                  {available.languages.length > 8 && (
+                    <button
+                      type="button"
+                      className="scope-guided__chip scope-guided__chip--expand"
+                      onClick={() => setShowAllLanguages((prev) => !prev)}
+                    >
+                      <span>
+                        {showAllLanguages ? 'Fewer' : `+ Add (${available.languages.length - 8})`}
+                      </span>
+                    </button>
+                  )}
+                </div>
+              </div>
+              {/* Actions: quiet, always in the same place */}
+              <div className="scope-guided__actions">
+                <button type="button" className="scope-guided__action" onClick={onSelectAll}>Select all</button>
+                <button type="button" className="scope-guided__action" onClick={onReset}>Reset</button>
+              </div>
+
+              {/* Customize sources */}
+              <button
+                type="button"
+                className="scope-guided__customize-action"
+                onClick={() => setViewMode('explorer')}
+              >
+                <div className="scope-guided__customize-info">
+                  <span className="scope-guided__customize-title">Customize sources</span>
+                  <span className="scope-guided__customize-sub">
+                    Individual providers and advanced controls
+                  </span>
+                </div>
+                <ChevronRight size={18} className="scope-guided__customize-arrow" />
+              </button>
+            </div>
+          </div>
+        ) : (
+          /* ========================================================================= */
+          /* Level 2 & 3: Advanced Source Explorer View                                 */
+          /* ========================================================================= */
+          <div className="scope-modal__body">
+            <aside className="scope-modal__rail" aria-label="Filters">
+              <p className="scope-modal__rail-note">
+                Filters control which sources are visible in the list below.
+              </p>
+
+              {hasExtensions && hasIndexers && (
+                <FacetGroup
+                  label="Kind"
+                  onSelectAll={
+                    onSelectAllFacetGroup ? () => onSelectAllFacetGroup('kinds') : undefined
+                  }
+                  onClear={onClearFacetGroup ? () => onClearFacetGroup('kinds') : undefined}
+                >
+                  <FacetChip
+                    on={facets.kinds.has('extension')}
+                    onClick={() => onToggleFacet('kinds', 'extension')}
+                    title="Show only extension providers"
+                  >
+                    <Package size={12} /> Extensions
+                  </FacetChip>
+                  <FacetChip
+                    on={facets.kinds.has('indexer')}
+                    onClick={() => onToggleFacet('kinds', 'indexer')}
+                    title="Show only torrent sources"
+                  >
+                    <Radio size={12} /> Torrents
+                  </FacetChip>
+                </FacetGroup>
+              )}
+
+              {available.types.length > 0 && (
+                <FacetGroup
+                  label="Content"
+                  onSelectAll={
+                    onSelectAllFacetGroup ? () => onSelectAllFacetGroup('types') : undefined
+                  }
+                  onClear={onClearFacetGroup ? () => onClearFacetGroup('types') : undefined}
+                >
+                  {available.types.map((type) => (
+                    <FacetChip
+                      key={type}
+                      on={facets.types.has(type)}
+                      onClick={() => onToggleFacet('types', type)}
+                      title={prettyType(type)}
+                    >
+                      {getContentTypeIcon(type)}
+                      <span>{prettyType(type)}</span>
+                    </FacetChip>
+                  ))}
+                </FacetGroup>
+              )}
+
+              {available.languages.length > 1 && (
+                <FacetGroup
+                  label="Languages and regions"
+                  onSelectAll={
+                    onSelectAllFacetGroup ? () => onSelectAllFacetGroup('languages') : undefined
+                  }
+                  onClear={onClearFacetGroup ? () => onClearFacetGroup('languages') : undefined}
+                >
+                  {available.languages.map((lang) => {
+                    const code = lang.toUpperCase();
+                    const flag = getLanguageFlag(lang);
+                    const fullName = getLanguageName(lang);
+                    const title = fullName ? `${fullName} (${code})` : code;
+                    return (
+                      <FacetChip
+                        key={lang}
+                        on={facets.languages.has(lang)}
+                        onClick={() => onToggleFacet('languages', lang)}
+                        title={title}
+                      >
+                        <FlagIcon flag={flag} size={13} fallback={code.slice(0, 2)} />
+                        <span className="scope-modal__chip-code">{code}</span>
+                      </FacetChip>
+                    );
+                  })}
+                </FacetGroup>
+              )}
+
+              {facetsActive && (
+                <button className="scope-modal__clear" onClick={onClearFacets}>
+                  <RotateCcw size={12} /> Clear filters
                 </button>
               )}
-            </div>
+            </aside>
 
-            {!profileBar && (
-              <button
-                className={`scope-modal__all${totalChosen === 0 ? ' scope-modal__all--current' : ''}`}
-                onClick={onReset}
-                aria-pressed={totalChosen === 0}
-              >
-                <Box state={totalChosen === 0 ? 'on' : 'off'} />
-                <Globe size={15} />
-                <span className="scope-modal__all-label">
-                  All sources
-                  <span className="scope-modal__all-hint">Follows whatever you have installed</span>
-                </span>
-                <span className="scope-modal__count">{totalAvailable}</span>
-              </button>
-            )}
+            <section className="scope-modal__main" aria-label="Sources">
+              {/* Explorer Tabs: All sources, Included sources, Not included, Unavailable or issues */}
+              <div className="scope-explorer-tabs" role="tablist">
+                <button
+                  type="button"
+                  role="tab"
+                  className={`scope-explorer-tab${explorerTab === 'all' ? ' scope-explorer-tab--active' : ''}`}
+                  onClick={() => setExplorerTab('all')}
+                  aria-selected={explorerTab === 'all'}
+                >
+                  All sources ({totalAvailable})
+                </button>
+                <button
+                  type="button"
+                  role="tab"
+                  className={`scope-explorer-tab${explorerTab === 'selected' ? ' scope-explorer-tab--active' : ''}`}
+                  onClick={() => setExplorerTab('selected')}
+                  aria-selected={explorerTab === 'selected'}
+                >
+                  Included sources ({totalChosen})
+                </button>
+                <button
+                  type="button"
+                  role="tab"
+                  className={`scope-explorer-tab${explorerTab === 'excluded' ? ' scope-explorer-tab--active' : ''}`}
+                  onClick={() => setExplorerTab('excluded')}
+                  aria-selected={explorerTab === 'excluded'}
+                >
+                  Not included ({Math.max(0, totalAvailable - totalChosen)})
+                </button>
+                <button
+                  type="button"
+                  role="tab"
+                  className={`scope-explorer-tab${explorerTab === 'attention' ? ' scope-explorer-tab--active' : ''}`}
+                  onClick={() => setExplorerTab('attention')}
+                  aria-selected={explorerTab === 'attention'}
+                  title="Sources reporting poor or unreliable performance"
+                >
+                  Unavailable or issues
+                </button>
+              </div>
 
-            <ChosenSourcesBar
-              chosen={chosen}
-              onDeselect={onDeselect}
-              onClearAll={onClearAllChosen}
-            />
+              <div className="scope-modal__search">
+                <Search size={15} />
+                <input
+                  ref={searchField}
+                  value={inputValue}
+                  onChange={handleInputChange}
+                  placeholder="Search providers, extensions, repositories… (Ctrl+F)"
+                  aria-label="Filter the source list"
+                  type="search"
+                />
+                {inputValue && (
+                  <button onClick={handleInputClear} aria-label="Clear the source filter">
+                    <X size={14} />
+                  </button>
+                )}
+              </div>
 
-            {progress?.running && (
-              <p className="scope-modal__progress">
-                <Loader2 size={13} className="spin" />
-                <span>
-                  Loading extensions — {progress.loaded} of {progress.total}
-                  {progress.providers > 0 ? `, ${progress.providers} providers so far` : ''}
-                  {progress.current ? ` · ${progress.current}` : ''}
-                </span>
-              </p>
-            )}
-            {loading && !loaded && !progress?.running && (
-              <p className="scope-modal__progress">
-                <Loader2 size={13} className="spin" /> Loading extensions…
-              </p>
-            )}
-            {loading && loaded && !progress?.running && (
-              <p className="scope-modal__progress scope-modal__progress--quiet">
-                <Loader2 size={12} className="spin" /> Refreshing…
-              </p>
-            )}
+              <ChosenSourcesBar
+                chosen={chosen}
+                onDeselect={onDeselect}
+                onClearAll={onClearAllChosen}
+              />
 
-            {!loading && rows.length === 0 ? (
-              <p className="scope-modal__empty">
-                {query.trim()
-                  ? `Nothing matches “${query.trim()}”.`
-                  : facetsActive
-                    ? 'No source matches these filters.'
-                    : progress?.running
-                      ? 'Loading the installed extensions…'
-                      : 'No extension providers are installed. Add a repository in Extensions.'}
-              </p>
-            ) : (
-              <>
-                <div className="scope-modal__tree-bar">
-                  <span>{rows.length} {rows.length === 1 ? 'item' : 'items'}</span>
-                  {(onExpandAll || onCollapseAll || (hasIndexers && onToggleAllTorrents)) && (
+              {progress?.running && (
+                <p className="scope-modal__progress">
+                  <Loader2 size={13} className="spin" />
+                  <span>
+                    Loading extensions — {progress.loaded} of {progress.total}
+                    {progress.providers > 0 ? `, ${progress.providers} providers so far` : ''}
+                    {progress.current ? ` · ${progress.current}` : ''}
+                  </span>
+                </p>
+              )}
+              {loading && !loaded && !progress?.running && (
+                <p className="scope-modal__progress">
+                  <Loader2 size={13} className="spin" /> Loading extensions…
+                </p>
+              )}
+              {loading && loaded && !progress?.running && (
+                <p className="scope-modal__progress scope-modal__progress--quiet">
+                  <Loader2 size={12} className="spin" /> Refreshing…
+                </p>
+              )}
+
+              {!loading && displayedRows.length === 0 ? (
+                <p className="scope-modal__empty">
+                  {query.trim()
+                    ? `Nothing matches “${query.trim()}”.`
+                    : explorerTab === 'selected'
+                      ? 'No sources are currently included.'
+                      : explorerTab === 'attention'
+                        ? 'No sources currently report errors or poor health.'
+                        : facetsActive
+                          ? 'No source matches these filters.'
+                          : progress?.running
+                            ? 'Loading the installed extensions…'
+                            : 'No extension providers are installed. Add a repository in Extensions.'}
+                </p>
+              ) : (
+                <>
+                  <div className="scope-modal__tree-bar">
+                    <span>{displayedRows.length} {displayedRows.length === 1 ? 'item' : 'items'}</span>
                     <div className="scope-modal__tree-controls">
+                      <button
+                        type="button"
+                        className="scope-modal__tree-control-btn"
+                        onClick={handleSelectAllAction}
+                        disabled={isFiltered ? (filteredCount ?? 0) === 0 : totalAvailable === 0}
+                        title={
+                          isFiltered
+                            ? allFilteredSelected
+                              ? 'Deselect all sources matching current filter'
+                              : 'Select all sources matching current filter'
+                            : 'Tick every source as it is right now, rather than following what is installed'
+                        }
+                      >
+                        {selectAllButtonText}
+                      </button>
                       {hasIndexers && onToggleAllTorrents && (
                         <button
                           type="button"
                           className="scope-modal__tree-control-btn"
                           onClick={onToggleAllTorrents}
                           title={
-                            chosenTorrentCount > 0
+                            (chosenTorrentCount ?? 0) > 0
                               ? 'Unselect all torrent sources'
                               : 'Select all torrent sources'
                           }
                         >
-                          {chosenTorrentCount > 0 ? 'Exclude torrents' : 'Include torrents'}
+                          {(chosenTorrentCount ?? 0) > 0 ? 'Exclude torrents' : 'Include torrents'}
                         </button>
                       )}
-                      {onExpandAll && (
+                      {(onExpandAll || onCollapseAll) && (
                         <button
                           type="button"
                           className="scope-modal__tree-control-btn"
-                          onClick={onExpandAll}
-                          title="Expand all sections"
+                          onClick={() => {
+                            const allExpanded = displayedRows
+                              .filter((r) => r.kind === 'repo' || r.kind === 'ext')
+                              .every((r) => r.expanded);
+                            if (allExpanded) {
+                              onCollapseAll?.();
+                            } else {
+                              onExpandAll?.();
+                            }
+                          }}
+                          title={
+                            displayedRows
+                              .filter((r) => r.kind === 'repo' || r.kind === 'ext')
+                              .every((r) => r.expanded)
+                              ? 'Collapse all sections'
+                              : 'Expand all sections'
+                          }
                         >
-                          Expand all
-                        </button>
-                      )}
-                      {onCollapseAll && (
-                        <button
-                          type="button"
-                          className="scope-modal__tree-control-btn"
-                          onClick={onCollapseAll}
-                          title="Collapse all sections"
-                        >
-                          Collapse all
+                          {displayedRows
+                            .filter((r) => r.kind === 'repo' || r.kind === 'ext')
+                            .every((r) => r.expanded)
+                            ? 'Collapse all'
+                            : 'Expand all'}
                         </button>
                       )}
                     </div>
-                  )}
-                </div>
+                  </div>
 
-                <SourceVirtualTree
-                  rows={rows}
-                  providers={providers}
-                  indexers={indexers}
-                  healthFor={healthFor}
-                  clampedActive={clampedActive}
-                  scrollerRef={scroller}
-                  onSetActive={setActiveIndex}
-                  onToggleRow={onToggleRow}
-                  onToggleCollapse={onToggleCollapse}
-                  onIncludeSection={onIncludeSection}
-                  onExcludeSection={onExcludeSection}
-                  onKeyDown={onTreeKeyDown}
-                  activeRowDomId={activeRow ? rowDomId(activeRow) : undefined}
-                />
-              </>
-            )}
-          </section>
-        </div>
+                  <SourceVirtualTree
+                    rows={displayedRows}
+                    providers={providers}
+                    indexers={indexers}
+                    healthFor={healthFor}
+                    clampedActive={clampedActive}
+                    scrollerRef={scroller}
+                    onSetActive={setActiveIndex}
+                    onToggleRow={onToggleRow}
+                    onToggleCollapse={onToggleCollapse}
+                    onIncludeSection={onIncludeSection}
+                    onExcludeSection={onExcludeSection}
+                    onKeyDown={onTreeKeyDown}
+                    activeRowDomId={activeRow ? rowDomId(activeRow) : undefined}
+                  />
+                </>
+              )}
+            </section>
+          </div>
+        )}
 
         <footer className="scope-modal__foot">
           <p id="scope-modal-summary" className="scope-modal__summary">
-            {summary}
+            {totalChosen === 0
+              ? `All ${totalAvailable} sources selected`
+              : `${totalChosen} sources selected`}
           </p>
           <div className="scope-modal__actions">
-            <button
-              className="btn btn-ghost"
-              onClick={handleSelectAllAction}
-              disabled={isFiltered ? (filteredCount ?? 0) === 0 : totalAvailable === 0}
-              title={
-                isFiltered
-                  ? allFilteredSelected
-                    ? 'Deselect all sources matching current filter'
-                    : 'Select all sources matching current filter'
-                  : 'Tick every source as it is right now, rather than following what is installed'
-              }
-            >
-              {selectAllButtonText}
-            </button>
-            {onInvert && (
+            {viewMode === 'explorer' && onInvert && (
               <button
+                type="button"
                 className="btn btn-ghost"
                 onClick={onInvert}
                 disabled={!canInvert}
@@ -928,14 +1210,111 @@ export const SourceScopeDialog: React.FC<SourceScopeDialogProps> = ({
                 Invert
               </button>
             )}
-            <button className="btn btn-ghost" onClick={onReset} disabled={totalChosen === 0}>
-              Reset
-            </button>
-            <button className="btn btn-primary" onClick={onClose}>
+            {viewMode === 'explorer' && (
+              <button
+                type="button"
+                className="btn btn-ghost"
+                onClick={onReset}
+                disabled={totalChosen === 0}
+              >
+                Reset
+              </button>
+            )}
+            <button type="button" className="btn btn-primary" onClick={onClose}>
               Done
             </button>
           </div>
         </footer>
+
+        {feedbackToast && (
+          <div className="scope-modal__feedback-toast" role="status" aria-live="polite">
+            <Check size={14} className="scope-modal__feedback-icon" />
+            <span>{feedbackToast}</span>
+            {onDismissFeedback && (
+              <button
+                type="button"
+                className="scope-modal__feedback-close"
+                onClick={onDismissFeedback}
+                aria-label="Dismiss notice"
+              >
+                <X size={12} />
+              </button>
+            )}
+          </div>
+        )}
+
+        {pendingImpact && (
+          <div className="scope-confirm-backdrop" role="presentation">
+            <div
+              className="scope-confirm-dialog"
+              role="alertdialog"
+              aria-modal="true"
+              aria-labelledby="scope-confirm-title"
+              aria-describedby="scope-confirm-desc"
+            >
+              <div className="scope-confirm-dialog__head">
+                <AlertTriangle size={18} className="scope-confirm-dialog__warn-icon" />
+                <h3 id="scope-confirm-title">{pendingImpact.actionName}?</h3>
+              </div>
+              <div className="scope-confirm-dialog__body">
+                <p id="scope-confirm-desc" className="scope-confirm-dialog__desc">
+                  {pendingImpact.actionDescription}
+                </p>
+
+                <div className="scope-confirm-grid">
+                  <div className="scope-confirm-card scope-confirm-card--removed">
+                    <span className="scope-confirm-card__count">
+                      -{pendingImpact.impact.totalRemoved}
+                    </span>
+                    <span className="scope-confirm-card__label">Removed</span>
+                    {pendingImpact.impact.totalRemoved > 0 && (
+                      <span className="scope-confirm-card__sub">
+                        {pendingImpact.impact.removedProviders.length} ext ·{' '}
+                        {pendingImpact.impact.removedIndexers.length} torrent
+                      </span>
+                    )}
+                  </div>
+
+                  <div className="scope-confirm-card scope-confirm-card--added">
+                    <span className="scope-confirm-card__count">
+                      +{pendingImpact.impact.totalAdded}
+                    </span>
+                    <span className="scope-confirm-card__label">Added</span>
+                    {pendingImpact.impact.totalAdded > 0 && (
+                      <span className="scope-confirm-card__sub">
+                        {pendingImpact.impact.addedProviders.length} ext ·{' '}
+                        {pendingImpact.impact.addedIndexers.length} torrent
+                      </span>
+                    )}
+                  </div>
+
+                  <div className="scope-confirm-card scope-confirm-card--unchanged">
+                    <span className="scope-confirm-card__count">
+                      {pendingImpact.impact.totalUnchanged}
+                    </span>
+                    <span className="scope-confirm-card__label">Unchanged</span>
+                  </div>
+                </div>
+              </div>
+              <div className="scope-confirm-dialog__foot">
+                <button
+                  type="button"
+                  className="btn btn-ghost"
+                  onClick={onCancelImpact}
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  className="btn btn-primary"
+                  onClick={onConfirmImpact}
+                >
+                  Confirm changes
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
       </div>
     </div>
   );

@@ -830,7 +830,7 @@ since backwards it would make Simple mode silently lose every setting added from
 then on.
 
 **And splitting it that way is what blanked the whole app (2026-09-01).** The
-React half was `SettingsLevel.tsx`, beside the pure `settingsLevel.ts`. On
+React half was `settingsLevel.ts`, beside the pure `settingsLevel.ts`. On
 Windows' case-insensitive filesystem those are **one name**, and module
 resolution tries `.ts` before `.tsx` — so `import { useSettingsLevel } from
 './SettingsLevel'` resolved to the pure rule, which exports `shouldShow` and
