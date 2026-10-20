@@ -152,14 +152,14 @@ Known, not changed: `WebViewHost`'s `MAX_CONCURRENT` of 3 — three hidden Chrom
 
 ### 6.11 PRD-40.1 Tier 1 is half-built — and it looks finished
 
-`docs/done/40.1` is **"Approved — frozen for implementation"** and every box in its §6 Definition of Done is still unchecked. Two of its Tier 1 modules were written, given passing test suites, and **never wired**:
+`docs/roadmap/40.1` is **"Approved — frozen for implementation"**. Two of its Tier 1 modules were written and tested. Their wiring was re-checked on 2026-10-20:
 
-| Module | State | What does not happen |
+| Module | State (2026-10-20) | Evidence |
 |---|---|---|
-| `media/sourceLease.ts` (287 lines, `bun run test lease`) | `MediaProxy.wrapLease` exists and **has no caller**; `new SourceLease` appears nowhere in production; `mediaProxy.ts` imports it as `import type` only | Signed-URL refresh never runs. `this.leases` is always empty, so the 401/403 lease-refresh branch in `MediaProxy` is **unreachable code**. The DoD's "a 2-hour playback of a source with a 15-minute token completes with zero 403 interruptions" is not true |
-| `media/playbackTelemetry.ts` (262 lines, `bun run test telemetry`) | only its `InspectionStrategyType` is imported, as a type, by `mediaInspector` | No session ever emits a telemetry record. `media:getPlaybackDiagnostics` returns `PlaybackEngine`'s **own** ring buffer, which is a different and smaller thing |
+| `media/sourceLease.ts` (`bun run test lease`) | **Wired.** `PlaybackEngine.prepare` builds a `SourceLease` for each prepare and passes it to `MediaProxy.wrapLease`; `MediaProxy` keeps leases in `this.leases` and refreshes expired signed URLs | `playbackEngine.ts` (`new SourceLease`, `wrapLease`); `mediaProxy.ts` (`leases`) |
+| `media/playbackTelemetry.ts` (`bun run test telemetry`) | **Not wired.** Only its `InspectionStrategyType` is imported (as a type). The recorder and `PlaybackTelemetryStore` have no caller, so no session emits a record. `media:getPlaybackDiagnostics` returns `PlaybackEngine`'s own ring buffer | Zero callers outside tests; allow-listed in `moduleReachability.test.mts` |
 
-**Do not delete these as dead code** — they are approved in-flight work, and §4.1's problem (expired signed URLs) is a real recurring failure here. But do not read their green suites as evidence the feature ships either: that is exactly the trap `moduleReachability.test.mts` now names. Both are allow-listed there with the reason and the condition for removing the entry.
+Remaining 40.1 work: the §6 Definition of Done is not checked (the 2-hour playback with zero 403s is not measured), and telemetry needs wiring. `playbackTelemetry.ts` is allow-listed with its removal condition: remove the entry when a session emits exactly one record on terminal state.
 
 `§4.2` (container-aware inspection) *is* built — `mediaInspector` dispatches on `InspectionStrategyType`.
 

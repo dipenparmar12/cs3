@@ -1,0 +1,93 @@
+# Roadmap — open work register
+
+**Single source for what is not finished.** Built work lives in [`docs/done/`](../done/); the evidence for each status is in [`docs-audit-2026-10-20.md`](./docs-audit-2026-10-20.md). When an item ships, move its line to the audit's done list and delete it here. Do not keep the same status in a second place.
+
+Written 2026-10-20 to the review standard in `.claude/skills/cs3-architecture-simplifier/SKILL.md`: facts with a file reference, one severity scale, and the simplest next step for each item.
+
+## 1. Context
+
+Requirement: finish the PRDs that are partly built, decide the ones that are not started, and keep the docs true to the code. Shipped behaviour is in `AGENTS.md`. Most open items are scope decisions, not code defects.
+
+## 2. Requirement coverage
+
+| Item | Source | Status | Evidence |
+|---|---|---|---|
+| Playback telemetry | [40.1](./40.1-playback-reliability-observability-and-routing-baseline.md) §4.3 | Not wired | `media/playbackTelemetry.ts` has no caller outside tests. Allow-listed in `moduleReachability.test.mts` |
+| Lease refresh acceptance | 40.1 §6 DoD | Not measured | `sourceLease.ts` is wired (`playbackEngine.ts`, `mediaProxy.ts`); the 2-hour / zero-403 check has not run |
+| Extension platform standard | [41](./41-desktop-extension-platform-and-community-standard.md) | Pending | Nothing built (§6–23) |
+| Native standards (superseded) | [39](./39-native-extension-and-playback-standards.md) | Superseded by 41 | Header says "Nothing built"; 41 replaces it |
+| Resume continuity | [42](./42-resume-continuity-and-seekable-sources.md) | Partial | `resumePoint.ts`, `playedSource.ts` built. The PRD names `seriesContext.ts`, which does not exist |
+| Source & provider expansion | [43](./43-source-and-provider-expansion.md) | Partial | Items 1–4 built (`nativeProviders/*`); later items not started |
+| UX & developer research | [44](./44-user-and-developer-experience-research-and-roadmap.md) | Partial | Startup profile and inspector built; §6–8 not built |
+| New source integration | [45](./45-new-source-integration-movies-series-documentaries.md) | Partial | §6–7 not built |
+| Platform catalogue discovery | [53](./53-research-platform-catalogue-discovery.md) | Partial | `ottService` discovers platforms and pins; the PRD still says "nothing built" |
+| Trailers & provider verification | [55](./55-media-sources-discovery-ux-trailer-and-provider-verification.md) | Partial | `videoTitles.ts`, `youtube.ts`, `TrailerPopup.tsx` built; the rest is unchecked |
+| Subtitles requirements | 2026-10 subtitle note | Partial | `subtitles/*` built; requirements not checked one by one |
+| Search sources panel | 2026-10 panel UI/UX | Partial | Guided view and profile bar shipped; decisions below are open |
+| Provider test harness | 2026-10 providers-support-testing | Pending | Names eight files that do not exist: `attribution.ts`, `budget.ts`, `diff.ts`, `quirks.ts`, `schema.ts`, `sourceSniff.ts`, `stageResult.ts`, `test.mts` |
+| Six unverified notes | `unverified/` | Unverified | Not checked against the code |
+
+## 3. Findings by severity
+
+### High
+
+**H1. Search sources panel: two decisions block the next change.**
+- What: selecting a content type silently rewrites which providers are searched (`SearchScopePicker.tsx` `toggleFacet` → `persist`). The language chips do not change.
+- Why it matters: a user who ticks "Movie" sees the provider list change with no explanation. That is the confusion the redesign was meant to remove.
+- Simpler alternative: make content and language pure filters that change nothing until one explicit Apply, or show one line ("Movie + English → 12 sources"). Recommended: the Apply option.
+- Decision needed: which option, and what "set as default" means (launch profile, or the profile new searches start from). The model has no default concept (`electron/cs3/sourceProfiles.ts`).
+
+**H2. PRD 40.1 playback telemetry is unwired.**
+- What: the record, the store and `calculatePercentile` have no caller. `media:getPlaybackDiagnostics` returns the older ring buffer.
+- Simpler alternative: emit one record from `PlaybackEngine` at the terminal state, then drop the allow-list entry. The removal condition is written in `moduleReachability.test.mts`.
+- Risk if left: a green suite over code nothing runs.
+
+**H3. PRD 41 vs 39: two standards, one is already superseded.**
+- What: 39 says "superseded by 41" and 41 is pending. Keeping both invites someone to implement the wrong one.
+- Simpler alternative: keep 41; mark 39 superseded in the file header and in the index; do not delete (both are cited from `AGENTS.md`).
+
+### Medium
+
+**M1. PRD 42 names a file that does not exist** (`cs3/seriesContext.ts`). The furthest-episode rule is in `resumePoint.ts` (AGENTS §9). Fix the reference in the PRD; no code change.
+
+**M2. Status in four places.** The same status is written in the audit, in each PRD's stamp, in the `AGENTS.md` §13 table and in this file. They will drift.
+- Simpler alternative: this file is the status; the audit keeps only the evidence; `AGENTS.md` §13 links here and does not repeat statuses.
+
+**M3. PRD 40 duplicates 37.** Same title and contract. Mark 40 superseded by 37 in its header; do not delete.
+
+**M4. Sidecar test count and indexer count drift.** `AGENTS.md` says 19 indexer adapters; `indexerRegistry.ts` has 20 `case` labels. Measure once and write the number with its date.
+
+### Low
+
+**L1. Twelve broken links in `docs_cs3/android/08` and `09`.** They point at upstream Android files (gradle, `.github/`, fastlane) not in this repo. Remove them or link to upstream.
+
+**L2. The six unverified notes** (`unverified/`). Each needs one decision: verify, or delete with its content already recorded in the audit.
+
+## 4. Simplification opportunities
+
+- One status register (this file) replaces four status records (M2).
+- Done PRDs need no status stamp beyond "done, see audit"; drop the stamp body text once the register is authoritative.
+- `docs/roadmap/` holds one file per PRD (about 10). Pending PRDs that have no work scheduled could be merged into a single "parked" section with a link each.
+
+## 5. Proposed structure
+
+```
+docs/done/            built PRDs (stamped "Done")
+docs/roadmap/
+  ROADMAP.md          this register: open items, severity, next step
+  docs-audit-…md      evidence for statuses
+  <PRD>.md            partial or pending PRDs (the specification)
+  unverified/         not yet checked
+```
+
+## 6. Verification for each item when it is closed
+
+- [ ] Requirement met, checked against the shipped code (not the PRD text)
+- [ ] Module is reachable: a caller exists outside tests (`moduleReachability.test.mts` passes without an allow-list entry)
+- [ ] Any new IPC channel changes all four sides (AGENTS §4)
+- [ ] `docs/agents/*.md` and `AGENTS.md` updated in the same change
+- [ ] The line is removed from this file and the PRD is moved to `docs/done/`
+
+## 7. Decision
+
+**APPROVED WITH REFACTOR REQUIRED.** The status set is correct, but it is written in four places (M2), and two items (H1, H2) need a product or code decision before the next change. Fix M2 first; it stops the other records drifting.

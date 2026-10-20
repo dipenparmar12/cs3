@@ -8,7 +8,7 @@
 **Document Generation Date:** October 2026  
 **Related Documents:** 
 - `docs/roadmap/unverified/37-universal-media-compatibility-and-adaptive-playback-engine.md`
-- `docs/done/40.1-playback-reliability-observability-and-routing-baseline.md`
+- `docs/roadmap/40.1-playback-reliability-observability-and-routing-baseline.md`
 - `docs/roadmap/42-resume-continuity-and-seekable-sources.md`
 - `docs/done/49-security-anti-bot-challenge-and-session-interception.md`
 - `docs/done/51-push-search-multi-profile-scope-and-aggregation-engine.md`

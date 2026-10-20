@@ -535,7 +535,7 @@ registered) · `cs3/webViewHost.ts` (Cloudflare challenges) · `cs3/extensionIss
 - **Nothing reaches the main thread per frame or per chunk.** mpv snapshots are coalesced (`mpvEmitPolicy.ts`, 200ms) and proxy route eviction is scheduled, not per-mint — both were "not responding" freezes. An array/object field added to `MpvSnapshot` that only redraws (e.g. `bufferedRanges`) must go in `COALESCEABLE`: `!==` calls every fresh array significant.
 - **Probes are cached by *origin* URL; verdicts are always recomputed** — a verdict depends on this machine's decoders.
 - **A loopback URL returned from `wrap` is untouched**, or output gets double-wrapped one hop per call.
-- **PRD-40.1's `sourceLease.ts` and `playbackTelemetry.ts` are built, tested and never wired** — green suites over unreachable code. See §6.11 before touching either.
+- **PRD-40.1's `sourceLease.ts` is wired** (PlaybackEngine → MediaProxy.wrapLease); **`playbackTelemetry.ts` is built, tested and not wired** — its suite is green over unreachable code. See §6.11 before touching either.
 - **ClearKey:** browser-decodable payload → `EME_NATIVE`; undecodable → ladder with `-decryption_keys`, **progressive only** (FFmpeg's DASH demuxer answers `Option decryption_key not found`, fatal to the whole command line); encrypted DASH plays only through Shaka `DASH_NATIVE`.
 - **The forced retry** in `PlaybackEngine.prepare` routes to `NATIVE_MPV` when available and policy ≠ `off` (not for `EME_NATIVE`/DRM) and rewrites the returned capability, or `VideoPlayer` hands the URL back to the element that just failed.
 - **`MediaProxy`:** `Accept-Ranges` is stated, never forwarded; a 200 answering a mid-file range is refused; never-served routes are evicted after served ones, newest first (`createdAt` vs `lastAccess`); bodies are read as bytes and decoded only to sniff; the reader is cancelled and upstream fetches carry an `AbortSignal` tied to the client socket; tokens are 16 random bytes and a non-loopback `Host` is refused.
@@ -686,11 +686,12 @@ screen groups by subject and filters by *level*. All teardown happens on `before
 | `docs/done/33-…` | Desktop as-built. **Stale in part**: names `electron/cs3ArchiveLoader.ts`/`jvmProviderBridge.ts`, which don't exist (that role is `cs3/sidecarSupervisor.ts` + the sidecar) |
 | `docs/done/34-…` · `35-…` | Torrent architecture · translation spike results (done). Provider execution (36) is in `docs/roadmap/unverified/` |
 | `docs/roadmap/39-…` | **Pending, nothing built.** Superseded by 41 |
-| `docs/done/40.1-…` | Playback reliability baseline. **Conflict:** the PRD says fully implemented; §6 says `sourceLease.ts`/`playbackTelemetry.ts` are never wired. Trust §6 until resolved |
+| `docs/roadmap/40.1-…` | Playback reliability baseline. `sourceLease.ts` is wired; `playbackTelemetry.ts` is not (checked 2026-10-20). The §6 Definition of Done is still unchecked |
 | `docs/roadmap/41-…` | **Pending, nothing built** — read instead of 39. §2 is a measured Android-ecosystem account worth reading standalone |
 | `docs/roadmap/43-…` | Partial: research 2026-09-03; items 1–4 built. §6's rule: a direct HTTP link is not an indexer result |
 | `docs/roadmap/44-…` | Partial: research + proposal, most of §6–§8 not built. §5 is an 8-shape failure taxonomy from a 6,180-record log; read §6.1 before any failure-UI design |
-| `docs/roadmap/docs-audit-2026-10-20.md` | Status of every PRD against the code, and the doc/code conflicts |
+| `docs/roadmap/ROADMAP.md` | **The open-work register.** Every unfinished PRD, its severity and next step. Status lives here only |
+| `docs/roadmap/docs-audit-2026-10-20.md` | Evidence for each PRD status, and the doc/code conflicts |
 | `fn:*` (`docs/agents/field-notes/*.md`) | The dated post-mortems, measurements and "why" behind every rule — moved verbatim from this file; five files by area (see **Field notes** above) |
 | domain files (`docs/agents/*.md`) | **The other half of this document.** `extensions.md` (§5) · `media.md` (§6) · `torrents-and-search.md` (§7–8) · `library-and-ui.md` (§9–11). Same authority as this file |
 | `docs/docs_cs3/` | Android app architecture, 9 documents, written from source |
