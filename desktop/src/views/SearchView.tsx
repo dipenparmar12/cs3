@@ -835,9 +835,19 @@ const VirtualCardGrid: React.FC<VirtualCardGridProps> = ({
     let frame: number | null = null;
     const read = () => {
       frame = null;
+      // Content above the grid (progress strip, summaries) can change height
+      // without resizing the grid, so its offset is re-read here, once per
+      // scroll frame, rather than on every render.
+      const el = gridRef.current;
       if (scroller) {
         setScrollTop(scroller.scrollTop);
         setViewportHeight(scroller.clientHeight);
+        if (el) {
+          const top = Math.round(
+            el.getBoundingClientRect().top - scroller.getBoundingClientRect().top + scroller.scrollTop
+          );
+          setGridTop((prev) => (Math.abs(prev - top) >= 2 ? top : prev));
+        }
       } else {
         setScrollTop(window.scrollY);
         setViewportHeight(window.innerHeight);

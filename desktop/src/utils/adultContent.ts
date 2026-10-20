@@ -52,6 +52,13 @@ const STRONG = [
  */
 const ROW_ONLY = [/\bhot\b/i, /\b(adult|sexy|sensual)\b/i, /\b18[-_ ]?(plus|movies?|adult)\b/i];
 
+/**
+ * A page address names adult content only with an explicit marker as a whole
+ * path segment. The row-label words (`hot`, `sexy`…) are not used here: they
+ * match ordinary addresses (`/hot-wheels/`).
+ */
+const ADULT_ADDRESS = /(^|[/_.-])(hentai|porn\w*|xxx|nsfw|adult|onlyfans|brazzers|18[-_]?(plus|movies?|adult))([/_.-]|$)/i;
+
 export function isSensitiveTitle(text: string | undefined): boolean {
   if (!text) return false;
   return STRONG.some((pattern) => pattern.test(text));
@@ -205,7 +212,7 @@ export function isAdultMedia(
       const extProvider = decodeURIComponent(slash >= 0 ? rest.slice(0, slash) : rest);
       if (adultProviders.has(extProvider) || isSensitiveTitle(extProvider)) return true;
     }
-    if (isSensitiveRowLabel(u)) return true;
+    if (ADULT_ADDRESS.test(u)) return true;
   }
 
   if (

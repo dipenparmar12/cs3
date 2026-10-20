@@ -135,6 +135,10 @@ test('adult genre, tag, description, and media classification across sources', (
   assert.equal(isAdultMedia({ name: 'Animation Title', url: 'https://site.com/hentai/video' }), true);
   assert.equal(isAdultMedia({ name: 'Animation Title', type: 'Hentai' }), true);
 
+// A row-label word in an address is not evidence: `hot` names ordinary titles.
+assert.equal(isAdultMedia({ name: 'Hot Wheels', url: 'https://site.example/series/hot-wheels-s01/' }), false);
+assert.equal(isAdultMedia({ name: 'Hot 100', url: 'https://example.com/hot-100-songs/' }), false);
+
   assert.equal(isSensitiveDescription('An explicit XXX pornographic film.'), true);
   assert.equal(isSensitiveDescription('A thriller about a detective solving a murder.'), false);
 
