@@ -56,7 +56,7 @@ import { detailFromSnapshot, mergeDetail, savedCopyAge } from '../utils/savedPag
 import { FranchiseRail } from '../components/detail/FranchiseRail';
 import { distinctRecommendations } from '../utils/relatedRails';
 import { filterAdultItems, isAdultMedia } from '../utils/adultContent';
-import { useAdultMode } from '../utils/useAdultMode';
+import { revealAdultForSession, useAdultMode } from '../utils/useAdultMode';
 
 /** Cards the rail is sized for before "Show all" is worth offering. */
 const RAIL_PREVIEW = 8;
@@ -1960,6 +1960,14 @@ export const DetailView: React.FC<DetailViewProps> = ({
         <div className="detail-view__actions">
           <button className="btn" onClick={onBack}>
             <ArrowLeft size={16} /> Back
+          </button>
+          <button
+            className="btn btn-primary"
+            onClick={async () => {
+              await revealAdultForSession(true, { blurred: false });
+            }}
+          >
+            Enable for Session
           </button>
         </div>
       </div>

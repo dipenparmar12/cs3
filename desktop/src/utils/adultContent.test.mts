@@ -129,6 +129,11 @@ test('adult genre, tag, description, and media classification across sources', (
   assert.equal(isAdultGenreOrTag('Erotica'), true);
   assert.equal(isAdultGenreOrTag('Action'), false);
   assert.equal(isAdultGenreOrTag('Drama'), false);
+  assert.equal(isAdultGenreOrTag('Ecchi'), false);
+  assert.equal(isAdultMedia({ name: 'Yoasobi Gurashi!', tags: ['Ecchi', 'Romance'] }), false);
+  assert.equal(isAdultMedia({ name: 'Yoasobi Gurashi!', tags: ['Hentai'] }), true);
+  assert.equal(isAdultMedia({ name: 'Animation Title', url: 'https://site.com/hentai/video' }), true);
+  assert.equal(isAdultMedia({ name: 'Animation Title', type: 'Hentai' }), true);
 
   assert.equal(isSensitiveDescription('An explicit XXX pornographic film.'), true);
   assert.equal(isSensitiveDescription('A thriller about a detective solving a murder.'), false);

@@ -122,7 +122,7 @@ export function isSensitiveRow(row: {
 }
 
 const ADULT_TAG_PATTERNS = [
-  /^(?:18\s*[+＋]|nsfw|xxx|adult|erotica|erotic|hentai|porn|pornography|uncensored|ecchi|jav)$/i,
+  /^(?:18\s*[+＋]|nsfw|xxx|adult|erotica|erotic|hentai|porn|pornography|uncensored|jav|r18|r-18)$/i,
 ];
 
 /** True when a genre or tag string explicitly classifies a title as 18+/NSFW. */
@@ -180,7 +180,9 @@ export function isAdultMedia(
   if (item.adult === true) return true;
   if (
     String(item.type ?? '').toUpperCase() === 'NSFW' ||
-    String(item.mediaType ?? '').toUpperCase() === 'NSFW'
+    String(item.mediaType ?? '').toUpperCase() === 'NSFW' ||
+    isAdultGenreOrTag(item.type) ||
+    isAdultGenreOrTag(item.mediaType)
   ) {
     return true;
   }
@@ -203,6 +205,7 @@ export function isAdultMedia(
       const extProvider = decodeURIComponent(slash >= 0 ? rest.slice(0, slash) : rest);
       if (adultProviders.has(extProvider) || isSensitiveTitle(extProvider)) return true;
     }
+    if (isSensitiveRowLabel(u)) return true;
   }
 
   if (

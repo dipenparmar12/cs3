@@ -68,6 +68,8 @@ export interface SearchResponse {
   year?: number;
   quality?: string;
   id?: number;
+  /** Canonical genres if enriched by metadata catalogues. */
+  genres?: string[];
   /** Present when the identity is known; the strongest merge key there is. */
   imdbId?: string;
   /** Present when the item is the exact selection chosen from search suggestions. */

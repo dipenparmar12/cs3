@@ -1,6 +1,7 @@
 import { fetchJson } from '../torrent/http.ts';
 import { TvType, type SearchResponse } from '../../src/types/api.ts';
 import { normaliseTitleForMatch, titleSimilarity } from '../torrent/releaseParser.ts';
+import { isAdultGenreOrTag, isSensitiveTitle } from '../../src/utils/adultContent.ts';
 
 /**
  * Turns a provider's release name into the title it is actually about.
@@ -291,6 +292,9 @@ export class TitleEnricher {
             year: result.year,
           });
           if (!metadata) continue;
+          const isAdult =
+            metadata.genres?.some((g) => isAdultGenreOrTag(g)) ||
+            isSensitiveTitle(metadata.title);
           out[index] = {
             ...result,
             // The address is untouched. Only what the user reads changes.
@@ -298,6 +302,8 @@ export class TitleEnricher {
             name: metadata.title,
             year: metadata.year ?? result.year,
             posterUrl: metadata.posterUrl ?? result.posterUrl,
+            genres: metadata.genres,
+            adult: isAdult || result.adult,
           };
         } catch {
           // Enrichment is an improvement, never a requirement.
