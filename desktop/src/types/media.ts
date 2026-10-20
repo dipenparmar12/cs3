@@ -298,6 +298,12 @@ export interface SourceCapabilityModel {
   /** Plain-language account of the decision, for the player and the clipboard. */
   explanation: string;
   probeLatencyMs: number;
+  /**
+   * An HLS playlist with no declared audio renditions whose first segment could
+   * not be read: the track list is the manifest's single-track guess, so a
+   * stream carrying several languages looks like one. Never cached.
+   */
+  languagesUnverified?: boolean;
 }
 
 /** Why a probe produced nothing. */

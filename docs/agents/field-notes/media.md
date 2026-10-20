@@ -970,3 +970,13 @@ Verified in the app afterwards: resume at 2:48 on the Hindi remux, then English,
 (hls.js, position carried), Hindi, Telugu — each `-map 0:a:N` at the live position, no
 skips, no forced retries. Private mode was on in that profile, which is why nothing was
 recorded between runs; check `privacy:getState` before blaming the resume code.
+
+## 2026-10-20 — Castle TV: "I switched to Hindi and kept hearing English"
+
+The stream is HLS with four AAC tracks muxed in its TS segments (eng, hin, tam, tel; no `#EXT-X-MEDIA`). Fetched and parsed directly: PAT/PMT lists PIDs 257–260 with language descriptors; segments are plain TS named `.jpg`. The app's own `readTsStreams`, `withSegmentStreams` and `decideStrategy` give the right answer for it: `hin` → `REMUX_CONTAINER`, audio index 1, video and audio copied. A manual remux with the app's options (`-allowed_extensions ALL -extension_picky 0`, `-bsf:a aac_adtstoasc`) produced a clip whose audio was `hin`. Without `-extension_picky 0` ffmpeg 9.0.2 refuses the `.jpg` segments; capability detection reported `extensionPicky: true` on the dev machine, so that was not the cause.
+
+The log showed the cause. Same loopback route, five prepares: the first had `videoCodec: h264` (complete); the next three returned `HLS_NATIVE` with **no video codec** and `probeLatencyMs` of 13.8 s, then 0, then 0; only a fresh route (`REMUX_CONTAINER`) worked. `decideBrowserStrategy` remuxes only with `metadata.video` present, so a record without video fell through to `HLS_NATIVE`, and the player kept the first track.
+
+Mechanism: `MediaInspector.segmentStreams` returned `null` on any failure ("the manifest's answer stands"). For an fMP4 playlist that is correct. For a TS playlist it turns a slow or failed 64 KB read (4 s deadline, while hls.js was loading segments through the same proxy) into "one audio track, no video", and `isMetadataIncomplete` did not flag it. `PlaybackEngine` stored that in `InspectionStore` and in its capability cache, so every later switch was answered from the guess (`probeLatencyMs: 0`). Nothing was logged.
+
+Fix: one retry, `segmentsUnread` / `languagesUnverified`, never stored or cached, `MEASUREMENT` 4 (drops records already poisoned), 8 s deadline, `segment_streams_unread` log. Not changed: a player that has already opened an unverified stream keeps its one-track menu until the next prepare; replaying the source measures again.

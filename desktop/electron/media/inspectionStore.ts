@@ -43,10 +43,12 @@ const TTL_MS = 30 * 24 * 60 * 60 * 1000;
  * an HLS media playlist without `#EXT-X-MEDIA` was recorded as one audio
  * track, and a cached record would go on hiding the other three languages for
  * a month; before 3 an HLS playlist had no duration, so a converted HLS title
- * had no length at all. Entries from an older measurement are misses, and
- * re-probed.
+ * had no length at all; before 4 a segment read that failed (4 s deadline, slow
+ * origin) was stored as a measurement of one audio track and no video, which
+ * hid Castle TV's four languages on every later play. Entries from an older
+ * measurement are misses, and re-probed.
  */
-const MEASUREMENT = 3;
+const MEASUREMENT = 4;
 
 /** Bounded like every other cache here; this one holds a few KB per entry. */
 const MAX_ENTRIES = 400;

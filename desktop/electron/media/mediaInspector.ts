@@ -949,6 +949,15 @@ export function parseProbeOutput(raw: string): MediaMetadata | null {
   };
 }
 
+/** Host only, for logs: a signed address must not be written to disk. */
+function hostOf(url: string): string {
+  try {
+    return new URL(url).host;
+  } catch {
+    return 'unparsable';
+  }
+}
+
 export interface InspectionResult {
   metadata: MediaMetadata | null;
   transport: MediaTransport;
@@ -961,6 +970,13 @@ export interface InspectionResult {
   probeBytesTransferred: number;
   probeNetworkMs: number;
   probeParseMs: number;
+  /**
+   * The playlist declares no audio renditions and its first segment could not
+   * be read, so whether it carries several languages is unknown. The metadata
+   * is the manifest's guess (one audio track) and must not be kept as a
+   * measurement: it made every later prepare answer "one language".
+   */
+  segmentsUnread?: boolean;
 }
 
 export class MediaInspector {
@@ -985,28 +1001,33 @@ export class MediaInspector {
    * Two short requests at most (a master's first variant, then 64 KB of its
    * first segment), through the same proxy routes playback uses, so the
    * provider's `Referer` and the PNG-wrapper unwrapping apply. `null` for fMP4
-   * segments, unreadable bytes or any failure — the manifest's answer stands.
+   * segments or bytes that are not TS — the manifest's answer stands. `unread`
+   * is different: a request that failed, so the answer is not known.
    */
   private async segmentStreams(
     url: string,
     manifest: string
-  ): Promise<{ streams: TsElementaryStream[] | null; mediaPlaylist: string | null }> {
-    const none = { streams: null, mediaPlaylist: null };
+  ): Promise<{ streams: TsElementaryStream[] | null; mediaPlaylist: string | null; unread: boolean }> {
+    const none = { streams: null, mediaPlaylist: null, unread: false };
     if (!this.fetchBytes) return none;
     let entry = firstPlaylistEntry(manifest, url);
     let playlist = manifest;
     if (entry?.kind === 'variant') {
       const variant = await this.fetchHead(entry.url);
-      if (!variant) return none;
+      if (!variant) return { ...none, unread: true };
       playlist = variant;
       entry = firstPlaylistEntry(variant, entry.url);
     }
     // fMP4 segments carry their tracks in the init segment, not a PMT.
     if (!entry || entry.kind !== 'segment' || /#EXT-X-MAP/i.test(playlist)) {
-      return { streams: null, mediaPlaylist: playlist };
+      return { streams: null, mediaPlaylist: playlist, unread: false };
     }
     const bytes = await this.fetchBytes(entry.url, 64 * 1024);
-    return { streams: bytes ? readTsStreams(bytes) : null, mediaPlaylist: playlist };
+    return {
+      streams: bytes ? readTsStreams(bytes) : null,
+      mediaPlaylist: playlist,
+      unread: bytes === null,
+    };
   }
 
   public async inspect(url: string, hintM3u8?: boolean): Promise<InspectionResult> {
@@ -1061,8 +1082,15 @@ export class MediaInspector {
            * A playlist that does declare them is believed, and hls.js switches
            * those itself.
            */
+          let segmentsUnread = false;
           if (meta && !/#EXT-X-MEDIA:[^\n]*TYPE=AUDIO/i.test(head)) {
-            const found = await this.segmentStreams(url, head).catch(() => null);
+            // One more try before giving up: this request shares the proxy with
+            // a player that is already loading segments, and a single slow
+            // answer used to decide "one language" for the stream.
+            let found = await this.segmentStreams(url, head).catch(() => null);
+            if (!found || found.unread) found = await this.segmentStreams(url, head).catch(() => null);
+            segmentsUnread = !found || found.unread;
+            if (segmentsUnread) log.warn('segment_streams_unread', { host: hostOf(url) });
             if (found?.streams) meta = withSegmentStreams(meta, found.streams, head);
             // A master states no length; the variant read on the way does.
             if (meta.durationSeconds === undefined && found?.mediaPlaylist) {
@@ -1081,6 +1109,7 @@ export class MediaInspector {
             probeBytesTransferred: head.length,
             probeNetworkMs: headFetchMs,
             probeParseMs: parseMs,
+            ...(segmentsUnread ? { segmentsUnread: true } : {}),
           };
         }
 

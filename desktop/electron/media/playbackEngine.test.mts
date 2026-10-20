@@ -39,7 +39,9 @@ const opened: Array<{ shutdown(): void }> = [];
 // Their loopback servers would keep the process alive past the last test.
 after(() => opened.forEach((server) => server.shutdown()));
 
-function engine() {
+type FetchBytes = (url: string, bytes: number) => Promise<Uint8Array | null>;
+
+function engine(options: { fetchBytes?: FetchBytes; inspections?: unknown } = {}) {
   const proxy = new MediaProxy(async () =>
     new Response(PLAYLIST, { headers: { 'content-type': 'application/vnd.apple.mpegurl' } })
   );
@@ -51,9 +53,10 @@ function engine() {
     transcoder,
     nativeEngine: () => ({ available: false, policy: 'off' }),
     fetchText: async () => PLAYLIST,
-    fetchBytes: async () => SEGMENT,
+    fetchBytes: options.fetchBytes ?? (async () => SEGMENT),
     describeUnreadable: async () => ({ reason: 'unreadable', dead: false }),
     diagnostics: { record() {} },
+    ...(options.inspections ? { inspections: options.inspections as never } : {}),
   });
   playback.setCapabilities({ video: { h264: true, vp9: true, av1: true, hevc: false, hevc10: false } });
   return playback;
@@ -91,4 +94,58 @@ test('the forced conversion keeps the chosen track', async () => {
   });
   assert.equal(forced.capability.requiredStrategy, 'FULL_TRANSCODE');
   assert.equal(forced.capability.transformationPlan.selectedAudioIndex, 2);
+});
+
+/**
+ * Castle TV, 2026-10-20: a segment read that failed once decided "one language"
+ * for the stream. The manifest's guess (one audio track, no video) was stored as
+ * a measurement, and every later switch to Hindi was answered `HLS_NATIVE` from
+ * it — audio never changed, and the menu never offered the other languages.
+ */
+function memoryInspections() {
+  const stored = new Map<string, unknown>();
+  return {
+    stored,
+    read: (key: string) => (stored.get(key) as never) ?? null,
+    write: (key: string, metadata: unknown, transport: unknown, drm: unknown) => {
+      stored.set(key, { metadata, transport, drm });
+    },
+  };
+}
+
+test('a segment read that fails once is retried, and the languages are found', async () => {
+  let calls = 0;
+  const playback = engine({
+    fetchBytes: async () => (++calls === 1 ? null : SEGMENT),
+  });
+  const hindi = await playback.prepare({ url: URL_, isM3u8: true, preferredAudioLanguage: 'hin' });
+  assert.equal(hindi.capability.requiredStrategy, 'REMUX_CONTAINER');
+  assert.equal(hindi.capability.transformationPlan.selectedAudioIndex, 1);
+  assert.equal(hindi.capability.languagesUnverified, undefined);
+});
+
+test('an unreadable segment is flagged and is neither cached nor persisted', async () => {
+  const inspections = memoryInspections();
+  const playback = engine({ fetchBytes: async () => null, inspections });
+  const first = await playback.prepare({ url: URL_, isM3u8: true, preferredAudioLanguage: 'hin' });
+  assert.equal(first.capability.languagesUnverified, true, 'the answer is a guess and says so');
+  assert.equal(inspections.stored.size, 0, 'a guess is not stored as a measurement');
+});
+
+test('after an unreadable segment, the next ask measures again and finds every language', async () => {
+  const inspections = memoryInspections();
+  let readable = false;
+  const playback = engine({
+    fetchBytes: async () => (readable ? SEGMENT : null),
+    inspections,
+  });
+  const guess = await playback.prepare({ url: URL_, isM3u8: true, preferredAudioLanguage: 'hin' });
+  assert.equal(guess.capability.requiredStrategy, 'HLS_NATIVE');
+
+  readable = true;
+  const measured = await playback.prepare({ url: URL_, isM3u8: true, preferredAudioLanguage: 'hin' });
+  assert.equal(measured.capability.requiredStrategy, 'REMUX_CONTAINER');
+  assert.equal(measured.capability.metadata?.audio.length, 4);
+  assert.equal(measured.capability.transformationPlan.selectedAudioIndex, 1);
+  assert.equal(inspections.stored.size, 1, 'a real measurement is stored');
 });

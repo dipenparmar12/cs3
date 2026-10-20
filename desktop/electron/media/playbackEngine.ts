@@ -267,6 +267,10 @@ export class PlaybackEngine {
       headers: effectiveHeaders,
     });
 
+    // Not remembered when the languages could not be read: asking again, a
+    // moment later, is how a slow first answer gets corrected.
+    if (model.languagesUnverified) return model;
+
     if (this.cache.size >= MAX_CACHED_CAPABILITIES) {
       const oldest = this.cache.keys().next().value;
       if (oldest !== undefined) this.cache.delete(oldest);
@@ -407,7 +411,10 @@ export class PlaybackEngine {
       ? { ...remembered, error: undefined, timedOut: false, latencyMs: 0 }
       : await this.inspectWithRetry(resolvedUrl, isM3u8);
 
-    if (!remembered && inspection.metadata) {
+    // A playlist whose segments could not be read is a guess, not a measurement
+    // (see `InspectionResult.segmentsUnread`); keeping it would answer "one
+    // language" for this source on every later prepare.
+    if (!remembered && inspection.metadata && !inspection.segmentsUnread) {
       this.deps.inspections?.write(
         originUrl,
         inspection.metadata,
@@ -518,6 +525,7 @@ export class PlaybackEngine {
       requiresEmeDecryption: requiresEme,
       explanation: decision.explanation,
       probeLatencyMs: inspection.latencyMs,
+      ...(inspection.segmentsUnread ? { languagesUnverified: true } : {}),
     };
   }
 

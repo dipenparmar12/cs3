@@ -998,13 +998,16 @@ const playbackEngine = new PlaybackEngine({
       return null;
     }
   },
-  // A segment's first bytes, for its program table. Short deadline: this runs
-  // before playback starts, and the manifest's answer is the fallback.
+  // A segment's first bytes, for its program table. A bounded deadline, but not
+  // a tight one: this read decides whether a stream has one language or four,
+  // and a failed read is retried once by the inspector. Castle TV's whole
+  // inspection measured 11–14 s through the loopback proxy while hls.js was
+  // already loading segments, so 4 s dropped reads that a curl finishes in <1 s.
   fetchBytes: async (url, bytes) => {
     try {
       const response = await resilientFetch.fetch(
         url,
-        { headers: { Range: `bytes=0-${bytes - 1}` }, signal: AbortSignal.timeout(4_000) },
+        { headers: { Range: `bytes=0-${bytes - 1}` }, signal: AbortSignal.timeout(8_000) },
         { operation: 'segment-sniff' }
       );
       if (!response.ok && response.status !== 206) return null;
