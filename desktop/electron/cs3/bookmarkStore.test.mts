@@ -53,3 +53,13 @@ test('a name that is there is never replaced by a fallback', () => {
   const store = new BookmarkStore(datastore());
   assert.equal(store.save(input({ title: 'Bharat Ek Khoj' })).title, 'Bharat Ek Khoj');
 });
+
+test('a placeholder title ("Unknown Title") is repaired when read and never overwrites a real one', () => {
+  const stored = { ...input({ title: 'Unknown Title' }), id: ADDRESS, savedAt: 1, openCount: 0 } as Bookmark;
+  const store = new BookmarkStore(datastore([stored]));
+  assert.equal(store.list()[0].title, 'The Discovery of India 1988');
+
+  const fresh = new BookmarkStore(datastore());
+  fresh.save(input({ title: 'The Discovery of India' }));
+  assert.equal(fresh.save(input({ title: 'Unknown Title' })).title, 'The Discovery of India');
+});

@@ -2,7 +2,7 @@ import type { Datastore } from '../datastore';
 import type { SavedPlayback } from '../../src/types/library.ts';
 import type { TvType } from '../../src/types/api';
 import { prune } from '../util/prune.ts';
-import { bookmarkTitle } from '../../src/utils/bookmarkTitle.ts';
+import { bookmarkTitle, usableTitle } from '../../src/utils/bookmarkTitle.ts';
 import { isPrivateSession, allowsExplicitSaves } from './privacyMode.ts';
 
 /**
@@ -95,9 +95,10 @@ export interface Bookmark {
   openCount: number;
 }
 
-/** A row saved before the title rule (an empty `title`) is repaired as it is read. */
+/** A row saved before the title rule (empty or a placeholder like "Unknown Title") is repaired as it is read. */
 function withTitle(bookmark: Bookmark): Bookmark {
-  return bookmark.title?.trim() ? bookmark : { ...bookmark, title: bookmarkTitle(bookmark) };
+  const title = bookmarkTitle(bookmark);
+  return title === bookmark.title ? bookmark : { ...bookmark, title };
 }
 
 export class BookmarkStore {
@@ -161,7 +162,7 @@ export class BookmarkStore {
       Object.assign(existing, {
         ...input,
         origin: { ...existing.origin, ...prune(input.origin) },
-        title: bookmarkTitle({ ...input, title: input.title?.trim() || existing.title }),
+        title: bookmarkTitle({ ...input, title: usableTitle(input.title) ?? usableTitle(existing.title) }),
         posterUrl: input.posterUrl ?? existing.posterUrl,
         plot: input.plot ?? existing.plot,
         genres: input.genres ?? existing.genres,

@@ -28,12 +28,21 @@ export function titleFromAddress(address: string): string {
   return /[a-z]{3}/i.test(words) && !/^tt\d+$/i.test(words) ? words.slice(0, 80) : '';
 }
 
+/** What some providers send when they have no name: not a title. */
+const PLACEHOLDER_TITLE = /^(?:unknown(?:\s+title)?|untitled|no\s+title|n\/a|null|undefined|\?+)$/i;
+
+/** The title if it names something; undefined for blank or placeholder text. */
+export function usableTitle(title: string | undefined): string | undefined {
+  const own = title?.trim();
+  return own && !PLACEHOLDER_TITLE.test(own) ? own : undefined;
+}
+
 export function bookmarkTitle(bookmark: {
   title?: string;
   mediaUrl: string;
   origin?: { searchQuery?: string };
 }): string {
-  const own = bookmark.title?.trim();
+  const own = usableTitle(bookmark.title);
   if (own) return own;
   const query = bookmark.origin?.searchQuery?.trim();
   if (query) return query;

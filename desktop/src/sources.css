@@ -2548,6 +2548,19 @@
 }
 .poster-progress div { height: 100%; background: var(--accent-primary); }
 
+/*
+ * The placeholder fills its parent with `position: absolute; inset: 0`, which
+ * only means "its parent" when the parent is positioned. `.saved-row__art` was
+ * not, so a saved page with no poster drew this 6%-white layer over the whole
+ * window (1920x1009, measured in the UI inspector) and every click on it opened
+ * that row. Any parent of a placeholder becomes its containing block unless a
+ * rule already positions it; `:where` keeps this at zero specificity, so a
+ * parent that is `absolute` or `fixed` on purpose stays that way.
+ */
+:where(:has(> .poster-image--empty)) {
+  position: relative;
+}
+
 .poster-image--empty {
   position: absolute;
   inset: 0;

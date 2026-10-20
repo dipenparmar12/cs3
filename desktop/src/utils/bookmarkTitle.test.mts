@@ -33,3 +33,11 @@ test('an address that names nothing still gives a readable label, never an empty
 test('an undecodable address does not throw', () => {
   assert.doesNotThrow(() => titleFromAddress('cs3ext://P/%E0%A4%A'));
 });
+
+test('placeholder names are not titles', () => {
+  const origin = { searchQuery: 'Reva 2018' };
+  for (const placeholder of ['Unknown Title', 'unknown', 'Untitled', 'N/A', 'null', '???']) {
+    assert.equal(bookmarkTitle({ title: placeholder, mediaUrl: BINGED, origin }), 'Reva 2018', placeholder);
+  }
+  assert.equal(bookmarkTitle({ title: 'Unknown Pleasures', mediaUrl: BINGED, origin }), 'Unknown Pleasures');
+});

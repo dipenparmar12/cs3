@@ -1009,3 +1009,12 @@ errors are less useful than one true sentence.
 evidence, fixes and acceptance checks. Items marked `needs-app-run` there have not been
 verified in a running Electron app and should not be reported as done.
 
+
+
+## 2026-10-21 — Saved pages: a grey layer over the whole app, and a row that opened "Unknown Title"
+
+The UI inspector named it: a `Poster` placeholder, `<div class="poster-image--empty">`, measuring **1920x1009**, inside `button.saved-row__art`. The placeholder is `position: absolute; inset: 0` with a 6%-white background, and it relies on a positioned parent (`.poster-container` is one). `.saved-row__art` has `overflow: hidden` but no `position`, so for a saved page with no poster the layer anchored to a distant ancestor, lightened and covered the app, and every click on it was a click on that row's button, which opened the page. Other `Poster` wrappers (`filmography__head`, `credit-card__portrait`, `player-panel__meta`, `episode-row`) also have no `position` rule.
+
+The row's title was the literal "Unknown Title", sent by the provider and saved as the name.
+
+Fixes: a zero-specificity `:where(:has(> .poster-image--empty))` rule makes every parent of a placeholder its containing block (`src/styles/posterEmpty.test.mts`, mutation-checked). `bookmarkTitle` and `usableTitle` treat blank and placeholder names (`Unknown Title`, `Untitled`, `N/A`) as missing and fall back to the search query, then the address; `BookmarkStore` applies that on save and repairs stored rows when they are read.
