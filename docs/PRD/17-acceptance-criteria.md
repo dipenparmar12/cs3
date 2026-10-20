@@ -73,7 +73,7 @@ The project's premise. Failure on any of these means the desktop application is 
 
 ### 3.1 `.cs3` drop-in ★ (ADR-10)
 
-Full specification in [31](31-cs3-dropin-compatibility.md) §9. These are the criteria that decide whether the app has content on day one.
+Full specification in [31](../done/31-cs3-dropin-compatibility.md) §9. These are the criteria that decide whether the app has content on day one.
 
 | ID | Criterion | Verification |
 |---|---|---|

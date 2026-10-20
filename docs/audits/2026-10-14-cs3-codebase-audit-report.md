@@ -33,14 +33,14 @@ A comprehensive, repository-wide engineering and security audit was performed ac
 #### [SEC-01] Missing Content Security Policy (CSP) in Application Entry Point
 - **Severity:** High (CWE-79 / OWASP ASVS 14.4.1)
 - **Status:** **FIXED & VERIFIED**
-- **Affected File:** [desktop/index.html](file:///D:/projects/cs3/desktop/index.html)
+- **Affected File:** [desktop/index.html](../../desktop/index.html)
 - **Vulnerability:** The HTML entry point lacked a `Content-Security-Policy` meta tag or header. The renderer parses community provider scrapers, user-provided torrent metadata, external subtitles, and web previews. Without CSP, script injection could execute unauthorized remote scripts.
 - **Remediation:** Added strict CSP header restricting scripts to `'self' 'unsafe-eval'` (required for Shaka Player / WebAssembly), disallowing frames (`frame-src 'none'`), disallowing plugins (`object-src 'none'`), and confining network/media streams to loopback (`http://127.0.0.1:*`), HTTPS, and WebSockets.
 
 #### [SEC-02] Unrestricted Web Permissions in Electron Session
 - **Severity:** High (CWE-276 / OWASP ASVS 1.14.1)
 - **Status:** **FIXED & VERIFIED**
-- **Affected Files:** [desktop/electron/security/permissions.ts](file:///D:/projects/cs3/desktop/electron/security/permissions.ts), [desktop/electron/main.ts](file:///D:/projects/cs3/desktop/electron/main.ts#L1770)
+- **Affected Files:** [desktop/electron/security/permissions.ts](../../desktop/electron/security/permissions.ts), [desktop/electron/main.ts](../../desktop/electron/main.ts#L1770)
 - **Vulnerability:** Electron's default behavior with no handler grants all permission requests (camera, microphone, geolocation, screen capture) to any page, including offscreen challenge solver windows loading third-party websites.
 - **Remediation:** Registered `setPermissionRequestHandler` and `setPermissionCheckHandler` enforcing a strict allowlist. Only the app's own origin (`file:` or Vite dev server) can access clipboard writes, fullscreen, and ClearKey EME. All external URLs and non-whitelisted permissions are rejected.
 - **Verification:** Regression test suite `electron/security/permissions.test.mts` passes.
@@ -48,7 +48,7 @@ A comprehensive, repository-wide engineering and security audit was performed ac
 #### [SEC-03] Unverified Executable Mirror Downloads (Supply-Chain Risk)
 - **Severity:** High (CWE-494 / OWASP ASVS 10.3.2)
 - **Status:** **FIXED & VERIFIED**
-- **Affected Files:** [desktop/electron/fastDownloader.ts](file:///D:/projects/cs3/desktop/electron/fastDownloader.ts), [desktop/electron/binaryDownloader.ts](file:///D:/projects/cs3/desktop/electron/binaryDownloader.ts)
+- **Affected Files:** [desktop/electron/fastDownloader.ts](../../desktop/electron/fastDownloader.ts), [desktop/electron/binaryDownloader.ts](../../desktop/electron/binaryDownloader.ts)
 - **Vulnerability:** Fallback binary mirrors used third-party proxy endpoints (`ghproxy.net`) without cryptographic digest validation when downloading core executables (FFmpeg, MPV, aria2c). A compromised proxy could serve backdoored binaries.
 - **Remediation:** Implemented SHA-256 verification in `FastChunkDownloader`. Proxied mirrors are only permitted when the official release feed provides an authoritative SHA-256 digest (`sha256:...`); unverified mirrors were removed.
 - **Verification:** Regression test `electron/fastDownloaderIntegrity.test.mts` passes.
@@ -56,14 +56,14 @@ A comprehensive, repository-wide engineering and security audit was performed ac
 #### [SEC-04] Command Injection via Unsafe Shell Execution in Binary Extraction
 - **Severity:** High (CWE-78 / OWASP Top 10 A03: Injection)
 - **Status:** **FIXED & VERIFIED**
-- **Affected File:** [desktop/electron/binaryDownloader.ts](file:///D:/projects/cs3/desktop/electron/binaryDownloader.ts#L250-L290)
+- **Affected File:** [desktop/electron/binaryDownloader.ts](../../desktop/electron/binaryDownloader.ts#L250-L290)
 - **Vulnerability:** Archive extraction invoked `child_process.execSync` with command-line interpolation for `tar.exe` and PowerShell `Expand-Archive`. User profile paths containing shell metacharacters could trigger command injection.
 - **Remediation:** Replaced `execSync` with `child_process.execFileSync` passing arguments as discrete array parameters (`['tar.exe', '-xf', zipPath, '-C', destinationDir]`) and passing environment variables (`CS3_ARCHIVE`, `CS3_DESTINATION`) to PowerShell rather than script strings.
 
 #### [SEC-05] Arbitrary Local File Reading over Loopback Proxy
 - **Severity:** High (CWE-22 / OWASP ASVS 12.3.1)
 - **Status:** **FIXED & VERIFIED**
-- **Affected Files:** [desktop/electron/security/localFiles.ts](file:///D:/projects/cs3/desktop/electron/security/localFiles.ts), [desktop/electron/mediaProxy.ts](file:///D:/projects/cs3/desktop/electron/mediaProxy.ts#L535-L660)
+- **Affected Files:** [desktop/electron/security/localFiles.ts](../../desktop/electron/security/localFiles.ts), [desktop/electron/mediaProxy.ts](../../desktop/electron/mediaProxy.ts#L535-L660)
 - **Vulnerability:** `MediaProxy.serveFile` permitted any path under `process.cwd()` or `userData`, allowing attackers to craft requests reading sensitive stores (`cs3_datastore.json` containing tokens) or SSH keys.
 - **Remediation:** Enforced strict file validation: media files (`.mkv`, `.mp4`, `.vtt`, `.srt`, etc.) are permitted anywhere the user chooses to open them, but non-media files are strictly confined to designated download directories after resolving all symlinks and junctions.
 - **Verification:** Regression test `electron/security/localFiles.test.mts` and `electron/mediaProxy.test.mts` pass 34/34.
@@ -71,7 +71,7 @@ A comprehensive, repository-wide engineering and security audit was performed ac
 #### [SEC-06] Unconstrained Directory Path in `download:revealInFolder`
 - **Severity:** Medium (CWE-22 / CWE-706)
 - **Status:** **FIXED & VERIFIED**
-- **Affected Files:** [desktop/electron/download/revealTarget.ts](file:///D:/projects/cs3/desktop/electron/download/revealTarget.ts), [desktop/electron/main.ts](file:///D:/projects/cs3/desktop/electron/main.ts#L5150)
+- **Affected Files:** [desktop/electron/download/revealTarget.ts](../../desktop/electron/download/revealTarget.ts), [desktop/electron/main.ts](../../desktop/electron/main.ts#L5150)
 - **Vulnerability:** `download:revealInFolder` accepted an arbitrary renderer-provided path and invoked `shell.openPath` or `shell.showItemInFolder` on unvalidated directories, allowing unintended system file manager navigation.
 - **Remediation:** Implemented `resolveSafeRevealTarget` confining targets to the downloads directory (`storage.downloadsDir()`) or application data directory (`storage.dataDir`). Unconfined paths default to the downloads root.
 - **Verification:** Regression test `electron/download/revealTarget.test.mts` passes 5/5.
@@ -94,13 +94,13 @@ A comprehensive, repository-wide engineering and security audit was performed ac
 #### [ARCH-02] Interface Segregation Violation (ISP) on IPC Surface
 - **Severity:** Low / Architectural Debt
 - **Status:** Documented
-- **Location:** [desktop/electron/preload.ts](file:///D:/projects/cs3/desktop/electron/preload.ts)
+- **Location:** [desktop/electron/preload.ts](../../desktop/electron/preload.ts)
 - **Impact:** Exposes a single 349-method `window.cloudstream` interface rather than domain-scoped namespaces (`window.cloudstream.media`, `window.cloudstream.library`).
 
 #### [ARCH-03] Incomplete / Unwired PRD-40.1 Tier 1 Modules
 - **Severity:** Medium
 - **Status:** Documented in `moduleReachability.test.mts`
-- **Locations:** [sourceLease.ts](file:///D:/projects/cs3/desktop/electron/media/sourceLease.ts), [playbackTelemetry.ts](file:///D:/projects/cs3/desktop/electron/media/playbackTelemetry.ts)
+- **Locations:** [sourceLease.ts](../../desktop/electron/media/sourceLease.ts), [playbackTelemetry.ts](../../desktop/electron/media/playbackTelemetry.ts)
 - **Impact:** `sourceLease.ts` handles signed-URL lease refreshing, but `wrapLease` has no caller in production, leaving 2-hour playback of 15-minute token URLs vulnerable to expiry.
 - **Recommendation:** Hook `SourceLease` into `MediaProxy.wrapLease` during playback preparation.
 
@@ -112,7 +112,7 @@ A comprehensive, repository-wide engineering and security audit was performed ac
 - **Severity:** Low
 - **Status:** **FIXED & VERIFIED**
 - **Locations:** `App.tsx:1402`, `ReviewsAndExplanations.tsx:145`, `SubtitlePanel.tsx:355`, `mediaRatingService.ts:85`, `playbackEngine.ts:273`, `torrentEngine.ts:557,593`
-- **Issue:** Scattered instances of `err instanceof Error ? err.message : String(err)` violated the repo standard to use [`describeError`](file:///D:/projects/cs3/desktop/src/utils/errors.ts).
+- **Issue:** Scattered instances of `err instanceof Error ? err.message : String(err)` violated the repo standard to use [`describeError`](../../desktop/src/utils/errors.ts).
 - **Remediation:** Replaced ad-hoc checks with `describeError(err)`.
 
 #### [DRY-02] Regex Escapes and Unused Catch Parameters

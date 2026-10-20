@@ -8,7 +8,7 @@
 > 1. **Existing `.cs3` extensions run drop-in.** The desktop app bundles a sandboxed JVM sidecar, translates DEX at install time, and links upstream's own `library-jvm.jar`. The previous assessment — that the app would launch with an empty catalogue and require the whole ecosystem to be ported — was based on a Node/V8-only reading and is withdrawn. **The app has content on day one, with no maintainer action.**
 > 2. **Windows-first.** Windows 10/11 x64 is the P0 shipping target; macOS and Linux stay specified but phased.
 >
-> The residual risk did not disappear, it moved: drop-in depends on DEX→JVM translation surviving Kotlin coroutine state machines, which is **untested** and which every provider depends on. That spike (OQ-2a/OQ-27) is the first thing the project should fund. See [31-cs3-dropin-compatibility.md](31-cs3-dropin-compatibility.md).
+> The residual risk did not disappear, it moved: drop-in depends on DEX→JVM translation surviving Kotlin coroutine state machines, which is **untested** and which every provider depends on. That spike (OQ-2a/OQ-27) is the first thing the project should fund. See [31-cs3-dropin-compatibility.md](../done/31-cs3-dropin-compatibility.md).
 
 ---
 
@@ -64,7 +64,7 @@ The desktop app therefore *links* upstream's provider API rather than reimplemen
 
 | Area | The problem |
 |---|---|
-| ~~**Extensions (`.cs3`)**~~ | **Resolved by ADR-10.** DEX cannot execute in Chromium or Node.js — but it does on a bundled JVM sidecar after install-time translation. Existing plugins run unmodified ([31](31-cs3-dropin-compatibility.md)). **What does not port:** plugin *privileges* (Android grants `MANAGE_EXTERNAL_STORAGE`; desktop grants nothing), Android-View settings UI (~2.7% of providers, degrades settings only), and native `.so` dependencies. **Unproven:** translation of Kotlin coroutine state machines (RISK-D1). |
+| ~~**Extensions (`.cs3`)**~~ | **Resolved by ADR-10.** DEX cannot execute in Chromium or Node.js — but it does on a bundled JVM sidecar after install-time translation. Existing plugins run unmodified ([31](../done/31-cs3-dropin-compatibility.md)). **What does not port:** plugin *privileges* (Android grants `MANAGE_EXTERNAL_STORAGE`; desktop grants nothing), Android-View settings UI (~2.7% of providers, degrades settings only), and native `.so` dependencies. **Unproven:** translation of Kotlin coroutine state machines (RISK-D1). |
 | **Playback stack** | ExoPlayer/Media3 with `nextlib` FFmpeg software decoders, a custom Matroska extractor (3,242 lines), and a custom subtitle decoder factory. Chromium's `<video>` element supports a materially narrower codec and container set. |
 | **Torrent streaming** | A Go-based torrent server (`torrServer`) started in-process on `127.0.0.1`. Needs a full desktop replacement. |
 | **Chromecast** | Google Cast SDK is Android/iOS/Web-app only; no Electron-native equivalent. |
@@ -107,7 +107,7 @@ What remains genuinely duplicated is the **UI and application layer** — and th
 
 Drop-in is the **on-ramp, not the destination**: Runtime 3 is supported indefinitely and expected to shrink as providers migrate to 1 and 2 via `cli migrate`.
 
-**The prior recommendation was Strategy C (TypeScript only), with the JVM sidecar as "a possible later addition."** The evidence in [31](31-cs3-dropin-compatibility.md) §2 inverted that ordering. The adapter boundary from that recommendation is retained and is exactly what makes serving three runtimes tractable.
+**The prior recommendation was Strategy C (TypeScript only), with the JVM sidecar as "a possible later addition."** The evidence in [31](../done/31-cs3-dropin-compatibility.md) §2 inverted that ordering. The adapter boundary from that recommendation is retained and is exactly what makes serving three runtimes tractable.
 
 **One piece of the old advice still stands, and should be honored literally:** do not promise `.cs3` compatibility in any public communication until it is proven against the real corpus. The Phase 1 spike (OQ-2a) is that proof. Until it passes, drop-in is a plan, not a feature.
 

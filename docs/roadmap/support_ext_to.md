@@ -837,9 +837,9 @@ Across **322 provider search and link resolution cycles**:
 
 ## 3. Documents & Artifacts
 
-- **PRD Specification**: [`docs/PRD/38-multi-provider-streaming-matrix-and-test-spec.md`](file:///D:/projects/cs3/docs/PRD/38-multi-provider-streaming-matrix-and-test-spec.md)
-  - Registered in [`docs/PRD/00-index.md`](file:///D:/projects/cs3/docs/PRD/00-index.md).
-- **Automated Test Suite**: [`tools/e2e/multi-provider-streaming-matrix.test.mjs`](file:///D:/projects/cs3/tools/e2e/multi-provider-streaming-matrix.test.mjs)
+- **PRD Specification**: [`docs/roadmap/unverified/38-multi-provider-streaming-matrix-and-test-spec.md`](./38-multi-provider-streaming-matrix-and-test-spec.md)
+  - Registered in [`docs/PRD/00-index.md`](../../docs/PRD/00-index.md).
+- **Automated Test Suite**: [`tools/e2e/multi-provider-streaming-matrix.test.mjs`](../../tools/e2e/multi-provider-streaming-matrix.test.mjs)
   - **22 test assertions passed (0 failed)**.
 - **Detailed JSON Benchmark Report**: `%APPDATA%\CloudStream 3 Desktop\cs3-pan-provider-test-matrix.json` (322 detailed test records).
 - **Codebase Type Safety**: `bun run typecheck` (`tsc -b`) exits cleanly with **0 errors**.

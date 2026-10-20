@@ -1411,7 +1411,7 @@ the current clean look while restoring all of the above.
 
 ---
 
-### ENG-09 — `docs/PRD/33` is documented as stale and still stale
+### ENG-09 — `docs/done/33` is documented as stale and still stale
 **Severity:** ENG-low · **Effort:** 2 hours
 
 `CLAUDE.md` flags it: it references `electron/cs3ArchiveLoader.ts` and `electron/jvmProviderBridge.ts`,

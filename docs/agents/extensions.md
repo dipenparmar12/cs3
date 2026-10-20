@@ -82,7 +82,7 @@ Upstream's `isCrossPlatform` flag emits a plain JVM `.jar` beside the `.cs3`; `p
 - **The lane collapsed 4 days after shipping.** Across 36 catalogued repos: 958 extensions, **18 publishing `jarUrl` (1.9%)**, down from 12.0%; `phisher` 47→**0/81**. **Do not plan work assuming the corpus moves here.** The uncatalogued tail (122 repos, 1,158 extensions) is worse: 1.6%, and 3 of the 4 largest are majority-NSFW.
 - Trap: a declared `tvType` is a manifest default, not coverage (`Wiojelt/TurkSinema` declares every type on every extension).
 
-Translation risk **measured** against all 392 plugins: 392 translated, 18,217 classes, 0 verification failures, 6,617 Kotlin coroutine state machines, 0 failures (`docs/PRD/35`, `tools/dex-spike/`).
+Translation risk **measured** against all 392 plugins: 392 translated, 18,217 classes, 0 verification failures, 6,617 Kotlin coroutine state machines, 0 failures (`docs/done/35`, `tools/dex-spike/`).
 
 ### 5.5 Diagnosis: three surfaces, one taxonomy
 

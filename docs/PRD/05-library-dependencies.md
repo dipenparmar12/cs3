@@ -22,14 +22,14 @@ Complete inventory of the Android dependency set, each mapped to a desktop strat
 
 ## 1b. Desktop-side additions for the JVM sidecar (ADR-10)
 
-Drop-in `.cs3` support ([31](31-cs3-dropin-compatibility.md)) adds a JVM dependency set that has no Android counterpart. It is listed here because its **licensing and packaging obligations are as binding as the media stack's**.
+Drop-in `.cs3` support ([31](../done/31-cs3-dropin-compatibility.md)) adds a JVM dependency set that has no Android counterpart. It is listed here because its **licensing and packaging obligations are as binding as the media stack's**.
 
 | Item | Purpose | Strategy | License note |
 |---|---|---|---|
 | **JRE 17, `jlink`-minimized** | Hosts Runtime 3 | Bundled; the user is never asked to install Java (DROP-31) | **Eclipse Temurin (GPLv2+CPE) or equivalent.** The Classpath Exception is what makes bundling compatible with GPL-3.0 distribution — confirm with legal alongside OQ-23 (DROP-32) |
 | **`library-jvm.jar`** (upstream `com.lagradost.api`, v1.0.1) | The real provider API — `MainAPI`, `ExtractorApi`, `M3u8Helper`, extractor catalogue | **Consumed as a dependency, not reimplemented.** Built by `:library:jvmJar` | GPL-3.0, same as upstream — a compatible combination, and the reason the desktop app is a derivative work |
 | **DEX→`.class` translator** (`dex-translator` or `dex2jar`) | Install-time bytecode translation (DROP-2) | Selected by the Phase 1 spike (OQ-27) | **Must be verified GPL-3.0-compatible and free of native dependencies** before selection |
-| `cs3-app-shim.jar` | The 22 `:app` types providers import ([31](31-cs3-dropin-compatibility.md) §2.4) | Written by this project; ABI-diffed against upstream in CI (DROP-10/11) | Ours, GPL-3.0 |
+| `cs3-app-shim.jar` | The 22 `:app` types providers import ([31](../done/31-cs3-dropin-compatibility.md) §2.4) | Written by this project; ABI-diffed against upstream in CI (DROP-10/11) | Ours, GPL-3.0 |
 | `cs3-android-shim.jar` | `android.util.Log`, `Base64`, `Context`, `SharedPreferences`, `CookieManager`, and the smaller tail | Written by this project | Ours, GPL-3.0 |
 | OkHttp / NiceHttp (transitively, via `library-jvm`) | Providers' HTTP surface | Present on the sidecar classpath, but **all egress is marshalled to `NetworkBroker`** — the sidecar has no network permission (DROP-23) | Apache-2.0 |
 | jsoup, Jackson, Rhino (transitively) | HTML parsing, JSON, JS unpacking inside providers | Inherited from `library-jvm`; **not** pinned to Android's minSdk-driven versions | Various permissive |

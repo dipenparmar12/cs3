@@ -152,7 +152,7 @@ Known, not changed: `WebViewHost`'s `MAX_CONCURRENT` of 3 — three hidden Chrom
 
 ### 6.11 PRD-40.1 Tier 1 is half-built — and it looks finished
 
-`docs/PRD/40.1` is **"Approved — frozen for implementation"** and every box in its §6 Definition of Done is still unchecked. Two of its Tier 1 modules were written, given passing test suites, and **never wired**:
+`docs/done/40.1` is **"Approved — frozen for implementation"** and every box in its §6 Definition of Done is still unchecked. Two of its Tier 1 modules were written, given passing test suites, and **never wired**:
 
 | Module | State | What does not happen |
 |---|---|---|

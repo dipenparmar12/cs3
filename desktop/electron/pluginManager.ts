@@ -61,7 +61,7 @@ const DISPLACED_ARCHIVES_KEY = 'extension_displaced_archives';
  * Discovers repositories, parses CloudStream's real repository contract,
  * downloads and SHA-256-verifies `.cs3` archives, records them using Android's
  * install-path grammar, and hands each one to the JVM sidecar to be translated
- * from DEX to JVM bytecode and classified (`docs/PRD/31`).
+ * from DEX to JVM bytecode and classified (`docs/done/31`).
  *
  * **What still gates execution.** Translation and analysis work today; running a
  * provider additionally needs `library-jvm.jar`, the upstream provider API,

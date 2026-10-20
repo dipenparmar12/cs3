@@ -30,7 +30,7 @@ cs3/
 ├── desktop/          ← THE APP. Electron + React 19 + TypeScript + Vite 8. Most work here.
 ├── sidecar/          ← JVM (Java 21 / Maven) process that runs Android .cs3 extensions.
 ├── tools/dex-spike/  ← Maven harness; measured DEX→JVM translation across 392 real plugins.
-├── docs/PRD/         ← 37+ numbered specs — the reasoning behind everything.
+├── docs/PRD/         ← reference specs 00–30 (Android-era) and the index. Feature PRDs: docs/done/ (built) and docs/roadmap/ (pending, partial, unverified).
 ├── docs/docs_cs3/    ← 9 documents on the *Android* app (source of truth for behaviour).
 └── repositories/     ← 26 git submodules: vendored community extension corpus.
     └── _cloudstream_ref_android/  ← upstream Android source (a72f9e6c…, v4.8.0).
@@ -58,7 +58,7 @@ cs3/
 | Lint | `desktop/` | `bunx oxlint` (oxlint is a devDependency; there is deliberately **no** `lint` script yet) |
 | Typecheck only | `desktop/` | `bun run typecheck` (`tsc -b` — see the warning below) |
 | Sidecar build | `sidecar/` | `mvn package` → `target/cs3-sidecar.jar` + `target/lib/*` + the android shim into `runtime/` |
-| Sidecar tests | `sidecar/` | `mvn test` (50 tests) |
+| Sidecar tests | `sidecar/` | `mvn test` (53 `@Test` methods, counted 2026-10-20) |
 | Main-process tests (all) | `desktop/` | `bun run test` (~580 cases across 42 suites, Node type-stripping; or `bun run test:electron`) |
 | Fast unit tests (skips slow) | `desktop/` | `bun run test --fast` (120 suites in ~66s, measured 2026-10-08; was 40 in ~5s) |
 | Extension issues only | `desktop/` | `bun run test issues` (21 cases, pure) |
@@ -188,7 +188,7 @@ It once asked `findRuntimeDir()` where to copy *from* — which answers with the
           contextBridge, allow-listed, typed (electron/preload.ts)
 ┌───────────────────────────┴───────────────────────────────┐
 │                MAIN PROCESS (electron/main.ts)            │
-│  wires every service as a singleton, 341 ipcMain.handle   │
+│  wires every service as a singleton, 361 ipcMain.handle   │
 └─┬────────┬──────────┬───────────┬──────────┬──────────────┘
 Datastore Content   Plugin     Torrent   Download   Library
           Service   Manager    Engine    Service    Store
@@ -202,7 +202,7 @@ Datastore Content   Plugin     Torrent   Download   Library
 
 ### The IPC contract
 
-`electron/preload.ts` is the **only** bridge. `contextIsolation: true`, `nodeIntegration: false`. 349 channels in 45 namespaces (counted 2026-10-08; the generated table in `docs/docs_cs3/architecture/api-services.md` predates `userData:`/`dev:`): `api: torrent: playback: search: indexer: sources: download: extension: library: datastore: binary: dialog: pages: natives: ott: issues: profiles: media: mpv: external: player: analytics: bookmarks: discover: subtitles: log: runtime: history: home: backup: network: ratings: metadata: regions: privacy: interactions: diagnostics: components: videos: window: app: shell: storage: userData: dev: userProfiles:` (`userProfiles:` added 2026-10-19: 9 handles + the `userProfiles:changed` push).
+`electron/preload.ts` is the **only** bridge. `contextIsolation: true`, `nodeIntegration: false`. 361 invoke channels (recounted 2026-10-20; was 349 on 2026-10-08; the generated table in `docs/docs_cs3/architecture/api-services.md` predates `userData:`/`dev:`): `api: torrent: playback: search: indexer: sources: download: extension: library: datastore: binary: dialog: pages: natives: ott: issues: profiles: media: mpv: external: player: analytics: bookmarks: discover: subtitles: log: runtime: history: home: backup: network: ratings: metadata: regions: privacy: interactions: diagnostics: components: videos: window: app: shell: storage: userData: dev: userProfiles:` (`userProfiles:` added 2026-10-19: 9 handles + the `userProfiles:changed` push).
 
 **Four things change together when crossing the boundary:** 1) service in `electron/`, 2) `ipcMain.handle('ns:name', …)` in `main.ts`, 3) method + type in `CloudStreamElectronAPI` in `preload.ts`, 4) caller in `src/`. Shared types live in `src/types/{api,plugin,torrent,download,player,media,mpv}.ts` and are imported by both sides — intentional, not a layering mistake.
 
@@ -681,15 +681,16 @@ screen groups by subject and filters by *level*. All teardown happens on `before
 
 | Doc | Status |
 |---|---|
-| `docs/PRD/00-index.md` | Start here — F-1…F-5 findings, scope/cost baseline |
-| `docs/PRD/31` | Drop-in compatibility commitment, ADR-10 |
-| `docs/PRD/33` | Desktop as-built — **partially stale**: references `electron/cs3ArchiveLoader.ts`/`jvmProviderBridge.ts`, which don't exist (that role is `cs3/sidecarSupervisor.ts` + the sidecar); stale absolute Windows paths |
-| `docs/PRD/34` · `35` · `36` | Torrent architecture · translation spike results · provider execution roadmap |
-| `docs/PRD/39` | **Proposed, nothing built.** Superseded by 41 |
-| `docs/PRD/40` · `40.1` | Playback engine PRD; **40.1 is approved and frozen, Tier 1 half-built** — see §6.11 before touching leases or telemetry |
-| `docs/PRD/41` | **Proposed, nothing built** — read instead of 39. §2 is a measured Android-ecosystem account worth reading standalone |
-| `docs/PRD/43` | Research 2026-09-03; items 1–4 built. §6's rule: a direct HTTP link is not an indexer result |
-| `docs/PRD/44` | Research + proposal, §6–§8 not built. §5 is an 8-shape failure taxonomy from a 6,180-record log; read §6.1 before any failure-UI design |
+| `docs/PRD/00-index.md` | Start here — reference set (01–30) stays in `docs/PRD/`; F-1…F-5 findings, scope/cost baseline |
+| `docs/done/31-cs3-dropin-compatibility.md` | Drop-in compatibility commitment, ADR-10 (done) |
+| `docs/done/33-…` | Desktop as-built. **Stale in part**: names `electron/cs3ArchiveLoader.ts`/`jvmProviderBridge.ts`, which don't exist (that role is `cs3/sidecarSupervisor.ts` + the sidecar) |
+| `docs/done/34-…` · `35-…` | Torrent architecture · translation spike results (done). Provider execution (36) is in `docs/roadmap/unverified/` |
+| `docs/roadmap/39-…` | **Pending, nothing built.** Superseded by 41 |
+| `docs/done/40.1-…` | Playback reliability baseline. **Conflict:** the PRD says fully implemented; §6 says `sourceLease.ts`/`playbackTelemetry.ts` are never wired. Trust §6 until resolved |
+| `docs/roadmap/41-…` | **Pending, nothing built** — read instead of 39. §2 is a measured Android-ecosystem account worth reading standalone |
+| `docs/roadmap/43-…` | Partial: research 2026-09-03; items 1–4 built. §6's rule: a direct HTTP link is not an indexer result |
+| `docs/roadmap/44-…` | Partial: research + proposal, most of §6–§8 not built. §5 is an 8-shape failure taxonomy from a 6,180-record log; read §6.1 before any failure-UI design |
+| `docs/roadmap/docs-audit-2026-10-20.md` | Status of every PRD against the code, and the doc/code conflicts |
 | `fn:*` (`docs/agents/field-notes/*.md`) | The dated post-mortems, measurements and "why" behind every rule — moved verbatim from this file; five files by area (see **Field notes** above) |
 | domain files (`docs/agents/*.md`) | **The other half of this document.** `extensions.md` (§5) · `media.md` (§6) · `torrents-and-search.md` (§7–8) · `library-and-ui.md` (§9–11). Same authority as this file |
 | `docs/docs_cs3/` | Android app architecture, 9 documents, written from source |

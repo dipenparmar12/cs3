@@ -79,7 +79,7 @@ Improvements the desktop version should make, each with a compatibility note.
 
 ### ADR-2 — Plugin runtime
 **Superseded 2026-08-12 by [ADR-10](#adr-10--host-architecture-and-cs3-drop-in).** Retained for the reasoning trail.
-Full analysis in [27](27-plugin-and-extension-architecture.md) §6 and [31](31-cs3-dropin-compatibility.md).
+Full analysis in [27](27-plugin-and-extension-architecture.md) §6 and [31](../done/31-cs3-dropin-compatibility.md).
 **Android.** DEX bytecode via `PathClassLoader`.
 **Problem on desktop.** Cannot execute *in Node or V8*. The original wording — "Cannot execute. **No workaround exists.**" — overgeneralized from JavaScript runtimes to desktop, and that error drove the decision below.
 **Options.** (a) JVM sidecar running converted `.cs3`. (b) Zipline/QuickJS aligned with upstream. (c) A native JS/TS plugin API. (d) A headless-browser provider host.
@@ -96,7 +96,7 @@ Full analysis in [27](27-plugin-and-extension-architecture.md) §6 and [31](31-c
 **Reason.** Three verified facts: `:library` already declares a `jvm()` target with JVM actuals; upstream's `makeJar` already merges `library-jvm.jar` into the provider classpath; and 67.6% of surveyed providers import no `android.*` at all, with a 22-type `:app` surface. The desktop app links upstream's provider API rather than reimplementing it.
 **Tradeoffs.** A bundled JRE (installer size, endpoint-protection friction, an extra licensing obligation), a second sandbox to design and defend, and a long-term dependency on translated Android bytecode (RISK-D5, accepted).
 **Risk.** RISK-D1 — DEX→JVM translation is unproven against Kotlin coroutine state machines and is the gate on the whole decision.
-**Full record.** [31-cs3-dropin-compatibility.md](31-cs3-dropin-compatibility.md).
+**Full record.** [31-cs3-dropin-compatibility.md](../done/31-cs3-dropin-compatibility.md).
 
 ### ADR-3 — Media playback
 **Android.** ExoPlayer/Media3 + nextlib FFmpeg + a custom Matroska extractor + a custom subtitle decoder factory.

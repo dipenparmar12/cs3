@@ -12,9 +12,9 @@ What will not work, and why. Every limitation here must appear in user-facing re
 ### L-1 · Android extensions (`.cs3`) run drop-in, but not with Android privileges ★
 **Revised 2026-08-12 (ADR-10). This entry previously read "do not run on desktop" and was rated Fatal. That rating was based on a JavaScript-runtime-only reading and is withdrawn.**
 
-`.cs3` files contain Android DEX bytecode loaded by `dalvik.system.PathClassLoader`. No Electron, Node, or Chromium configuration executes DEX — but a **bundled JVM sidecar** does, after an install-time DEX→`.class` translation, linking upstream's own `library-jvm.jar`. Existing plugins therefore run without rebuild or source change ([31](31-cs3-dropin-compatibility.md)).
+`.cs3` files contain Android DEX bytecode loaded by `dalvik.system.PathClassLoader`. No Electron, Node, or Chromium configuration executes DEX — but a **bundled JVM sidecar** does, after an install-time DEX→`.class` translation, linking upstream's own `library-jvm.jar`. Existing plugins therefore run without rebuild or source change ([31](../done/31-cs3-dropin-compatibility.md)).
 
-**What remains genuinely limited**, and the tier it maps to in [31](31-cs3-dropin-compatibility.md) §7:
+**What remains genuinely limited**, and the tier it maps to in [31](../done/31-cs3-dropin-compatibility.md) §7:
 
 | Limitation | Tier | Est. share of 299 surveyed providers |
 |---|---|---|
@@ -26,7 +26,7 @@ What will not work, and why. Every limitation here must appear in user-facing re
 
 **The residual fatal risk moved, it did not disappear.** It is now RISK-D1: DEX→JVM translation must survive Kotlin coroutine state machines, and *every* provider is coroutine-heavy, so a failure there is systemic rather than long-tail. Until the Phase 1 spike (OQ-27) passes against the full vendored corpus, treat the drop-in commitment as unproven.
 
-**Deliberate divergence.** Drop-in covers plugin *code*, never plugin *privileges*. Android annotates `MANAGE_EXTERNAL_STORAGE` as "Plugin API"; desktop grants no filesystem, no sockets, and no native code at any runtime ([31](31-cs3-dropin-compatibility.md) §6). A provider that reads arbitrary user files on Android **will** fail on desktop, and that is the correct outcome.
+**Deliberate divergence.** Drop-in covers plugin *code*, never plugin *privileges*. Android annotates `MANAGE_EXTERNAL_STORAGE` as "Plugin API"; desktop grants no filesystem, no sockets, and no native code at any runtime ([31](../done/31-cs3-dropin-compatibility.md) §6). A provider that reads arbitrary user files on Android **will** fail on desktop, and that is the correct outcome.
 
 **Evidence.** `app/.../plugins/PluginManager.kt:611`; `library/build.gradle.kts:23-42`; `app/build.gradle.kts:305-325`; survey of `repositories/**` 2026-08-12. **Confidence: High** for the mechanism; **Low** for translation success until the spike runs.
 

@@ -12,7 +12,7 @@ Everything not confirmed. Nothing here is presented as settled. **Open questions
 ### OQ-1 ★ — Electron, or contribute to upstream's Kotlin Multiplatform desktop target?
 **Status: RESOLVED 2026-08-12 as ADR-10 — Electron host + bundled JVM sidecar, Windows-first.** Retained below as a decision record.
 
-**What the decision was.** Electron for the application and UI layer; a sandboxed, bundled JVM child process for Runtime 3, which executes existing `.cs3` plugins drop-in ([31](31-cs3-dropin-compatibility.md)).
+**What the decision was.** Electron for the application and UI layer; a sandboxed, bundled JVM child process for Runtime 3, which executes existing `.cs3` plugins drop-in ([31](../done/31-cs3-dropin-compatibility.md)).
 
 **Why the trade-off table below is less stark than it looks.** Its "forks the ecosystem / every provider needs porting" cost was the decisive argument against Electron, and ADR-10 removes most of it: Runtime 3 consumes upstream's own `library-jvm.jar` rather than reimplementing the provider API, existing plugins run unmodified, and Runtime 2 (KMP/JS) is positioned to absorb upstream's cross-platform work as it lands. What genuinely remains divergent is the UI and application layer — a rewrite under either option.
 
@@ -37,7 +37,7 @@ Upstream is actively building a cross-platform foundation: `COMPOSE.md` states t
 ### OQ-2 ★ — Which plugin-runtime strategy is funded?
 **Status: RESOLVED 2026-08-12 — all three runtimes in [27](27-plugin-and-extension-architecture.md) §6.2, with Runtime 3 (`.cs3` drop-in) as the P0 day-one path.**
 
-The prior recommendation was "Strategy C (native JS/TS) behind an adapter boundary, with a Phase 1 spike validating the JVM sidecar as a *possible later addition*". The evidence in [31](31-cs3-dropin-compatibility.md) §2 inverted the ordering: the JVM sidecar is what makes the app non-empty at launch, and TS/KMP are where the ecosystem goes afterward. The adapter boundary from the original recommendation is retained and is what makes serving three runtimes tractable.
+The prior recommendation was "Strategy C (native JS/TS) behind an adapter boundary, with a Phase 1 spike validating the JVM sidecar as a *possible later addition*". The evidence in [31](../done/31-cs3-dropin-compatibility.md) §2 inverted the ordering: the JVM sidecar is what makes the app non-empty at launch, and TS/KMP are where the ecosystem goes afterward. The adapter boundary from the original recommendation is retained and is what makes serving three runtimes tractable.
 
 **Owner:** Sponsor + engineering + provider-developer representatives. **Superseded by ADR-10.**
 
@@ -111,7 +111,7 @@ These are cheap to answer and expensive to guess. **Collect real backups before 
 | **OQ-35** | Does a Windows job object + AppContainer restricted token actually deny sockets, process spawn, and `System.loadLibrary` to a JVM child, given `SecurityManager` is unavailable (DROP-25)? | Phase 1 spike; four separate escape tests |
 | **OQ-36** | How large is the `jlink`-minimized JRE in practice, and does the installer stay under the AC-D8 250 MB cap? | Phase 2 |
 | **OQ-37** | Which behavioral differences exist between `library-jvm.jar`'s JVM actuals and the Android actuals, beyond the known `WebViewResolver` stub? | Differential testing (AC-D7); ongoing |
-| **OQ-38** | What is the measured tier distribution (T1–T4) across the 299 surveyed providers? The [31](31-cs3-dropin-compatibility.md) §7 shares are static-analysis projections. | Phase 1 analyzer corpus run (DROP-30) |
+| **OQ-38** | What is the measured tier distribution (T1–T4) across the 299 surveyed providers? The [31](../done/31-cs3-dropin-compatibility.md) §7 shares are static-analysis projections. | Phase 1 analyzer corpus run (DROP-30) |
 | **OQ-28** | Which native player embeds most cleanly in Electron — mpv via libmpv, or libVLC? | Phase 1/7 spike on all three OSes |
 | **OQ-29** | Can Chromium `<video>` handle a usable fraction of real-world streams? | Measure against a real stream corpus |
 | **OQ-30** | What is the IPC overhead for chatty providers making hundreds of requests? | Phase 6 benchmark; may require request batching |
