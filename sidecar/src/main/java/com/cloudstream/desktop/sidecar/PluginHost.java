@@ -21,7 +21,7 @@ import java.util.concurrent.TimeUnit;
  * Loads translated CloudStream plugins, reproducing Android's load sequence.
  *
  * <p>Every step below is the desktop counterpart of a numbered step in
- * docs/PRD/31 §3.1, and the ordering is deliberate. In particular the manifest
+ * docs/done/31 §3.1, and the ordering is deliberate. In particular the manifest
  * is read <em>through the plugin's class loader</em> rather than straight out of
  * the archive (step 5), because a plugin that ships its own {@code manifest.json}
  * as a resource must resolve the same way it does on Android.

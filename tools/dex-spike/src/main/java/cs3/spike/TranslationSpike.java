@@ -19,7 +19,7 @@ import java.util.zip.ZipFile;
 import java.util.zip.ZipInputStream;
 
 /**
- * Phase 1 translation spike for docs/PRD/31 RISK-D1.
+ * Phase 1 translation spike for docs/done/31 RISK-D1.
  *
  * Answers one question with evidence: does DEX to JVM translation preserve the
  * Kotlin coroutine state machines that every CloudStream provider is built on?
@@ -280,7 +280,7 @@ public final class TranslationSpike {
         long missingEntry = rs.stream().filter(r -> r.translated && !r.manifestClassPresent).count();
 
         System.out.println("=".repeat(72));
-        System.out.println("DEX -> JVM TRANSLATION SPIKE  (docs/PRD/31 RISK-D1)");
+        System.out.println("DEX -> JVM TRANSLATION SPIKE  (docs/done/31 RISK-D1)");
         System.out.println("=".repeat(72));
         System.out.printf("plugins in corpus            : %d%n", total);
         System.out.printf("translated without throwing  : %d  (%.1f%%)%n", ok, pct(ok, total));

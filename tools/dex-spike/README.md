@@ -1,6 +1,6 @@
 # DEX → JVM translation spike
 
-The Phase 1 spike that [docs/PRD/31](../../docs/PRD/31-cs3-dropin-compatibility.md)
+The Phase 1 spike that [docs/PRD/31](../../docs/done/31-cs3-dropin-compatibility.md)
 required before any other drop-in work: *does translating Android DEX to JVM
 bytecode preserve the Kotlin coroutine state machines every CloudStream provider
 is built on?*
@@ -10,7 +10,7 @@ ecosystem is coroutine-heavy — a translator bug there would be systemic rather
 than long-tail, and would invalidate the whole approach.
 
 **It is answered.** Results and their interpretation are in
-[docs/PRD/35](../../docs/PRD/35-phase1-translation-spike-results.md).
+[docs/PRD/35](../../docs/done/35-phase1-translation-spike-results.md).
 
 ## Running it
 

@@ -30,14 +30,14 @@ import java.util.zip.ZipOutputStream;
 /**
  * DEX to JVM bytecode translation for {@code .cs3} archives.
  *
- * Implements DROP-2..DROP-5 of docs/PRD/31: translation happens once at install
+ * Implements DROP-2..DROP-5 of docs/done/31: translation happens once at install
  * time, the result is cached beside the archive and invalidated by content hash,
  * the original {@code .cs3} is never modified, multi-DEX archives are handled,
  * and failure is a reportable outcome rather than a crash.
  *
  * The translator is dex2jar 2.4.38. That choice is not a guess — it was measured
  * against the full vendored corpus of 392 community plugins; see
- * docs/PRD/35-phase1-translation-spike-results.md and tools/dex-spike.
+ * docs/done/35-phase1-translation-spike-results.md and tools/dex-spike.
  */
 public final class DexTranslator {
 

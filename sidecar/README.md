@@ -2,7 +2,7 @@
 
 Runs existing `.cs3` CloudStream extensions on Windows desktop **without a
 rebuild and without maintainer action** — the drop-in commitment in
-[docs/PRD/31](../docs/PRD/31-cs3-dropin-compatibility.md).
+[docs/PRD/31](../docs/done/31-cs3-dropin-compatibility.md).
 
 `.cs3` archives contain Android DEX bytecode compiled against a Kotlin provider
 API. Node.js cannot execute that, so this sidecar exists: a separate JVM process
@@ -67,7 +67,7 @@ Against all 392 real community plugins: **392 translated, 18,217 classes emitted
 0 verification failures, 6,617 coroutine state machines, 0 failures.** Checked
 against 53 publisher-built reference jars, **zero real methods were lost**.
 
-Full results: [docs/PRD/35](../docs/PRD/35-phase1-translation-spike-results.md).
+Full results: [docs/PRD/35](../docs/done/35-phase1-translation-spike-results.md).
 Reproduce: [`tools/dex-spike`](../tools/dex-spike/).
 
 ## Current limitation: the provider API
