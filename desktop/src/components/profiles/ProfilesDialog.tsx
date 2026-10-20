@@ -1,6 +1,6 @@
 import React, { useMemo, useState } from 'react';
 import { Copy, Lock, Pencil, Trash2, UserPlus } from 'lucide-react';
-import { Button, Checkbox, Dialog, DialogActions, FormField, Input } from '../ui';
+import { Button, Checkbox, Dialog, DialogActions, FormField, Input, SecretInput } from '../ui';
 import { ProfileAvatar, PROFILE_AVATARS } from './ProfileAvatar';
 import {
   MAX_PROFILES,
@@ -320,9 +320,8 @@ const UnlockView: React.FC<{
         <ProfileAvatar avatar={profile.avatar} size="lg" />
         <FormField label="PIN or password" error={error ?? undefined}>
           {(control) => (
-            <Input
+            <SecretInput
               {...control}
-              type="password"
               autoComplete="off"
               autoFocus
               value={secret}
@@ -489,9 +488,8 @@ const EditorView: React.FC<{
           {askCurrent ? (
             <FormField label="Current PIN or password">
               {(control) => (
-                <Input
+                <SecretInput
                   {...control}
-                  type="password"
                   autoComplete="off"
                   value={current}
                   onChange={(event) => setCurrent(event.target.value)}
@@ -504,12 +502,11 @@ const EditorView: React.FC<{
             <div className="profiles-dialog__secret">
               <FormField
                 label={lockMode === 'change' ? 'New PIN or password' : 'PIN or password'}
-                helper={`A short PIN is easiest for everyday switching. Anything from ${PROFILE_SECRET_MIN} characters works.`}
+                helper="A short PIN is easiest for everyday switching. Any PIN or password works, even a single character."
               >
                 {(control) => (
-                  <Input
+                  <SecretInput
                     {...control}
-                    type="password"
                     autoComplete="new-password"
                     value={secret}
                     onChange={(event) => setSecret(event.target.value)}
@@ -518,9 +515,8 @@ const EditorView: React.FC<{
               </FormField>
               <FormField label="Confirm">
                 {(control) => (
-                  <Input
+                  <SecretInput
                     {...control}
-                    type="password"
                     autoComplete="new-password"
                     value={confirm}
                     onChange={(event) => setConfirm(event.target.value)}

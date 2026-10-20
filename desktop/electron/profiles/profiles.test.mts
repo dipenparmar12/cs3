@@ -318,11 +318,13 @@ test('a locked profile cannot be entered without its secret, and any length of s
   assert.equal(activeProfileId(), id);
 });
 
-test('a short PIN is accepted, a too-short one is not', async () => {
+test('any PIN or password is accepted, from one character', async () => {
   const service = new UserProfileService({ storage: storage() });
   service.initialise();
-  assert.equal((await service.create({ name: 'A', avatar: 'sun', secret: '123' })).ok, false);
+  assert.ok((await service.create({ name: 'A', avatar: 'sun', secret: 'x' })).ok);
   assert.ok((await service.create({ name: 'B', avatar: 'sun', secret: '1234' })).ok);
+  const unlocked = await service.create({ name: 'C', avatar: 'sun', secret: '' });
+  assert.ok(unlocked.ok && !unlocked.state.profiles.find((p) => p.name === 'C')?.locked);
 });
 
 test('the secret never leaves the service', async () => {

@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { Lock } from 'lucide-react';
-import { Button, FormField, Input } from '../ui';
+import { Button, FormField, SecretInput } from '../ui';
 import { ProfileAvatar } from './ProfileAvatar';
 import type { UserProfilesState } from '../../types/profiles';
 import { loadUserProfiles, switchProfile, useUserProfiles } from '../../utils/useUserProfiles';
@@ -68,10 +68,9 @@ const ProfileLockScreen: React.FC<{ state: UserProfilesState }> = ({ state }) =>
           >
             <FormField label="PIN or password" error={error ?? undefined}>
               {(control) => (
-                <Input
+                <SecretInput
                   {...control}
                   key={chosen.id}
-                  type="password"
                   autoComplete="off"
                   autoFocus
                   value={secret}
@@ -84,7 +83,8 @@ const ProfileLockScreen: React.FC<{ state: UserProfilesState }> = ({ state }) =>
             </Button>
           </form>
         ) : (
-          <Button variant="prominent" loading={busy} onClick={() => void open(chosen.id)}>
+          // An unprotected profile opens on Enter with no extra click.
+          <Button key={chosen.id} variant="prominent" loading={busy} autoFocus onClick={() => void open(chosen.id)}>
             Open
           </Button>
         )}

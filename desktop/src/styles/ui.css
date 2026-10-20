@@ -605,3 +605,15 @@ select.ui-select:disabled { opacity: var(--control-disabled-opacity); cursor: no
   color: var(--text-subtle);
 }
 .sidebar__status svg { color: var(--status-success); }
+
+/* PIN and password field: masked, with an eye to reveal. */
+.ui-secret { position: relative; }
+.ui-secret .ui-input { padding-right: 2.25rem; }
+.ui-secret__toggle {
+  position: absolute; top: 50%; right: 0.25rem; transform: translateY(-50%);
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 1.75rem; height: 1.75rem; border: 0; border-radius: 4px;
+  background: transparent; color: var(--control-muted, inherit); cursor: pointer;
+}
+.ui-secret__toggle:hover { color: inherit; }
+.ui-secret__toggle:focus-visible { outline: 2px solid var(--control-focus, currentColor); outline-offset: 1px; }
