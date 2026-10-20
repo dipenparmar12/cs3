@@ -237,7 +237,20 @@ Rules carried over: rates are smoothed toward a neutral prior (a Beta prior), ev
 
 ### 7.7 Cold start and community data
 
-The first release learns **from this installation only**. It starts neutral and improves as the viewer rates. A community-wide ranking ("after a while from many users") needs a service to collect and publish aggregates; the app has none and must not gain one by accident. It is specified as an optional, opt-in later phase (§9, Phase 7) with its own privacy review, and the local event format is designed so it can be summarised without exposing titles.
+The first release learns **from this installation only**. It starts neutral and improves as the viewer rates. A shared ranking needs two things that are easy to confuse: a way to **write** signals in, and a way to **read** the totals back into the app. Most analytics services do only the first.
+
+**No server is built or hosted by this project.** The read path is a static file published from the repository, fetched the way the app already fetches extension repositories from GitHub (`provider-scores.json`: provider key, category, score, sample count; no titles, no user data). It is a ranking *hint* with a low weight; it can never disable a provider or change what is searched.
+
+Two stages, in this order:
+
+1. **Canary scorecard — no user data.** A scheduled job in the public repository (GitHub Actions) runs the existing e2e harnesses (`tools/e2e/provider-e2e.mjs`, `links-e2e.mjs`) against a fixed set of known titles and records, per provider, whether it returned the right work and a playable link. This measures *match accuracy* directly, which is the reported problem, and needs nobody's feedback. Limits: a data-centre run cannot see region-locked providers or ones behind a Cloudflare challenge (those need the app's browser host), so it is a partial signal; the checks are few and light so they do not hammer provider sites.
+2. **Optional anonymous votes — only if stage 1 and local feedback prove insufficient.** The app submits aggregate counts (provider key and category only) to a public web form that writes to a sheet; a scheduled job folds the sheet into the same static file. No server, no cost. Known weaknesses: no rate limiting or abuse protection, the form host sees the sender's IP address, and a form endpoint is not a documented API. Opt-in, off by default, and subject to a privacy review.
+
+**Services considered and why they are not the plan** (limits checked 2026-10-21):
+- *Google Analytics 4 / Measurement Protocol*: write-only for this purpose (events are sent with an `api_secret` that would ship inside the app; reports come back through a separate authenticated API), so the app cannot read the totals. Useful only for developer insight.
+- *Firebase (Firestore)*: could write and read with no server, within 20,000 writes and 50,000 reads a day on the free tier. But writes would be open to anyone, and App Check lists attestation providers for Apple and Android platforms only, with none for an Electron desktop app, so fake votes or quota exhaustion would break ranking for everyone. It also ties a community project to a Google project and policy.
+- *Cloudflare Workers*: free up to 100,000 requests a day, but the free KV store allows only 1,000 writes a day; it would need D1 (not verified) and is, in the end, a small backend. Kept as the fallback if the form route is abused.
+- *Self-hosted analytics (PostHog, Plausible, Umami)*: need hosting; their cloud tiers need a private key to read data, which cannot ship in the app.
 
 ### 7.8 Requirements
 
@@ -272,7 +285,8 @@ The first release learns **from this installation only**. It starts neutral and 
 | 4 | JVM priority and reserved worker; `ResilientFetch` queue; download yield | A2 measured |
 | 5 | Feedback control, storage, IPC, Incognito and profile behaviour | C1–C5 |
 | 6 | Ranking criteria and per-work effects; reduce `playback-success` on mismatch | C6; ranking tests |
-| 7 | *Optional, separate decision:* opt-in anonymous aggregate | Own PRD |
+| 7a | Canary scorecard: scheduled repository job, static `provider-scores.json`, low-weight ranking input | Scorecard published; app reads it; no user data involved |
+| 7b | *Optional, only if needed:* anonymous aggregate votes via a public form and sheet | Own privacy review; off by default |
 
 Phases 1 and 2 fix the reported bug and can ship before any scheduling work. Phase 0 comes first because the priorities and thresholds above are hypotheses until measured.
 
@@ -296,4 +310,4 @@ Acceptance:
 - **Priority inversion across the JVM boundary** if only the main side is changed; hence Phase 4 and the reserved worker.
 - **Feedback fatigue** if shown too often; hence C2 and the off switch.
 - **Gaming and noise** in a local-only first release is limited to the viewer's own choices; a community phase needs its own abuse model.
-- **Open:** does Electron's `net.fetch` honour a priority hint? What reserved share and class budgets does the baseline justify? Should "Wrong title" also feed the saved-page/bookmark system? Is a community aggregate wanted at all, given the privacy cost and the need for a service?
+- **Open:** does Electron's `net.fetch` honour a priority hint? What reserved share and class budgets does the baseline justify? Should "Wrong title" also feed the saved-page/bookmark system? Is stage 7b ever needed once 7a and local feedback exist, given its privacy cost? Which known titles make a fair canary set across languages and regions?
