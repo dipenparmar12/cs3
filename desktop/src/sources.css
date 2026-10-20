@@ -12904,3 +12904,13 @@ button.credit-card { border: 0; background: none; padding: 0; font: inherit; col
 @media (prefers-reduced-motion: reduce) {
   .fullscreen-hint { animation: none; }
 }
+
+/* Quiet, always-visible actions under the quick-setup sections. */
+.scope-guided__actions { display: flex; gap: 0.75rem; justify-content: flex-end; padding-top: 0.25rem; }
+.scope-guided__action {
+  background: none; border: 0; padding: 0.25rem 0; cursor: pointer;
+  font-size: 0.8125rem; color: var(--control-muted, inherit); text-decoration: underline;
+  text-underline-offset: 3px;
+}
+.scope-guided__action:hover { color: inherit; }
+.scope-guided__action:focus-visible { outline: 2px solid currentColor; outline-offset: 2px; border-radius: 2px; }

@@ -211,7 +211,7 @@ export const SourceProfileBar: React.FC<SourceProfileBarProps> = ({
   let activeIcon: BuiltInProfileDef['icon'] = 'globe';
 
   if (isDraftActive) {
-    activeTitle = 'Custom selection';
+    activeTitle = 'Your selection';
     activeCount = draftCount;
   } else if (activeCustom) {
     activeTitle = activeCustom.name;
@@ -229,11 +229,11 @@ export const SourceProfileBar: React.FC<SourceProfileBarProps> = ({
         <div className="profile-hero__main">
           <div className="profile-hero__label-row">
             <span className="profile-hero__tag">
-              {isDraftActive ? 'Custom selection' : 'Active profile'}
+              {isDraftActive ? 'Unsaved' : 'Profile'}
             </span>
             {hasDraft && !isDraftActive && (
               <span className="profile-hero__draft-indicator" title="Working selection has unsaved changes">
-                • Unsaved
+                • Not saved yet
               </span>
             )}
           </div>
@@ -428,7 +428,7 @@ export const SourceProfileBar: React.FC<SourceProfileBarProps> = ({
               {/* 4. Current selection: Shown only when unsaved changes exist */}
               {hasDraft && (
                 <>
-                  <div className="profile-dropdown__section-title">Custom selection</div>
+                  <div className="profile-dropdown__section-title">Your selection</div>
                   <div
                     role="menuitem"
                     className={`profile-dropdown__item${isDraftActive ? ' profile-dropdown__item--active' : ''}`}

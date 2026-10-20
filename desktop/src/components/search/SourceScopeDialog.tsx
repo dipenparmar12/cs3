@@ -783,8 +783,8 @@ export const SourceScopeDialog: React.FC<SourceScopeDialogProps> = ({
               </h2>
               <p className="scope-modal__subtitle">
                 {totalChosen === 0
-                  ? `All ${totalAvailable} sources selected`
-                  : `${totalChosen} sources selected`}
+                  ? `Searching all ${totalAvailable} sources`
+                  : `Searching ${totalChosen} of ${totalAvailable} sources`}
               </p>
             </div>
           </div>
@@ -809,44 +809,6 @@ export const SourceScopeDialog: React.FC<SourceScopeDialogProps> = ({
             {profileBar}
 
             <div className="scope-guided__body">
-              {/* Languages */}
-              <div className="scope-guided__section">
-                <div className="scope-guided__section-header">
-                  <h4 className="scope-guided__section-title">Languages</h4>
-                </div>
-
-                <div className="scope-guided__chips-grid">
-                  {displayedLanguages.map((lang) => {
-                    const code = lang.toUpperCase();
-                    const flag = getLanguageFlag(lang);
-                    const fullName = getLanguageName(lang);
-                    const active = facets.languages.has(lang);
-                    return (
-                      <button
-                        key={lang}
-                        type="button"
-                        className={`scope-guided__chip${active ? ' scope-guided__chip--active' : ''}`}
-                        onClick={() => onToggleFacet('languages', lang)}
-                        title={fullName ? `${fullName} (${code})` : code}
-                      >
-                        <FlagIcon flag={flag} size={14} fallback={code.slice(0, 2)} />
-                        <span className="scope-guided__chip-label">{fullName || code}</span>
-                      </button>
-                    );
-                  })}
-                  {available.languages.length > 8 && (
-                    <button
-                      type="button"
-                      className="scope-guided__chip scope-guided__chip--expand"
-                      onClick={() => setShowAllLanguages((prev) => !prev)}
-                    >
-                      <span>
-                        {showAllLanguages ? 'Fewer' : `+ Add (${available.languages.length - 8})`}
-                      </span>
-                    </button>
-                  )}
-                </div>
-              </div>
 
               {/* Content */}
               {available.types.length > 0 && (
@@ -885,6 +847,49 @@ export const SourceScopeDialog: React.FC<SourceScopeDialogProps> = ({
                   </div>
                 </div>
               )}
+              {/* Languages */}
+              <div className="scope-guided__section">
+                <div className="scope-guided__section-header">
+                  <h4 className="scope-guided__section-title">Languages</h4>
+                </div>
+
+                <div className="scope-guided__chips-grid">
+                  {displayedLanguages.map((lang) => {
+                    const code = lang.toUpperCase();
+                    const flag = getLanguageFlag(lang);
+                    const fullName = getLanguageName(lang);
+                    const active = facets.languages.has(lang);
+                    return (
+                      <button
+                        key={lang}
+                        type="button"
+                        className={`scope-guided__chip${active ? ' scope-guided__chip--active' : ''}`}
+                        onClick={() => onToggleFacet('languages', lang)}
+                        title={fullName ? `${fullName} (${code})` : code}
+                      >
+                        <FlagIcon flag={flag} size={14} fallback={code.slice(0, 2)} />
+                        <span className="scope-guided__chip-label">{fullName || code}</span>
+                      </button>
+                    );
+                  })}
+                  {available.languages.length > 8 && (
+                    <button
+                      type="button"
+                      className="scope-guided__chip scope-guided__chip--expand"
+                      onClick={() => setShowAllLanguages((prev) => !prev)}
+                    >
+                      <span>
+                        {showAllLanguages ? 'Fewer' : `+ Add (${available.languages.length - 8})`}
+                      </span>
+                    </button>
+                  )}
+                </div>
+              </div>
+              {/* Actions: quiet, always in the same place */}
+              <div className="scope-guided__actions">
+                <button type="button" className="scope-guided__action" onClick={onSelectAll}>Select all</button>
+                <button type="button" className="scope-guided__action" onClick={onReset}>Reset</button>
+              </div>
 
               {/* Customize sources */}
               <button
