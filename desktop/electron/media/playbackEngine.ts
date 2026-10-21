@@ -198,7 +198,7 @@ export class PlaybackEngine {
   public async inspect(
     request: Pick<
       PlaybackStreamRequest,
-      'url' | 'headers' | 'isM3u8' | 'isDash' | 'drm' | 'refresh' | 'provider' | 'preferredAudioLanguage' | 'avoidNativeEngine'
+      'url' | 'headers' | 'isM3u8' | 'isDash' | 'drm' | 'refresh' | 'provider' | 'preferredAudioLanguage' | 'preferredAudioIndex' | 'avoidNativeEngine'
     >
   ): Promise<SourceCapabilityModel> {
     /**
@@ -254,6 +254,7 @@ export class PlaybackEngine {
       originUrl,
       JSON.stringify(effectiveHeaders),
       request.preferredAudioLanguage ?? '',
+      request.preferredAudioIndex ?? '',
       request.avoidNativeEngine ? 'in-app' : '',
     ].join(' ');
 
@@ -338,7 +339,7 @@ export class PlaybackEngine {
   private async measure(
     resolvedUrl: string,
     originUrl: string,
-    request: Pick<PlaybackStreamRequest, 'isM3u8' | 'isDash' | 'drm' | 'headers' | 'preferredAudioLanguage' | 'avoidNativeEngine'>
+    request: Pick<PlaybackStreamRequest, 'isM3u8' | 'isDash' | 'drm' | 'headers' | 'preferredAudioLanguage' | 'preferredAudioIndex' | 'avoidNativeEngine'>
   ): Promise<SourceCapabilityModel> {
     const host = await this.hostCapability();
     const { isM3u8 } = request;
@@ -508,7 +509,8 @@ export class PlaybackEngine {
       host,
       inspection.drm,
       this.deps.nativeEngine(),
-      request.preferredAudioLanguage
+      request.preferredAudioLanguage,
+      request.preferredAudioIndex
     );
 
     return {

@@ -79,6 +79,19 @@ test('the same stream asked for in another language is not answered from the cac
   assert.equal(again.capability.requiredStrategy, 'HLS_NATIVE');
 });
 
+test('a track picked by index is not answered from the default-track verdict', async () => {
+  // The player's menu re-prepares with the index it was given. Keyed without
+  // it, the second pick would be answered with the first verdict (hls.js, the
+  // first language) exactly as the language once was.
+  const playback = engine();
+  const first = await playback.prepare({ url: URL_, isM3u8: true });
+  assert.equal(first.capability.requiredStrategy, 'HLS_NATIVE');
+
+  const tamil = await playback.prepare({ url: URL_, isM3u8: true, preferredAudioIndex: 2 });
+  assert.equal(tamil.capability.requiredStrategy, 'REMUX_CONTAINER');
+  assert.equal(tamil.capability.transformationPlan.selectedAudioIndex, 2);
+});
+
 test('a converted HLS title has the length its playlist states', async () => {
   const hindi = await engine().prepare({ url: URL_, isM3u8: true, preferredAudioLanguage: 'hin' });
   assert.equal(hindi.capability.metadata?.durationSeconds, 4.68 + 4.28);

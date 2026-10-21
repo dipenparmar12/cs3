@@ -395,6 +395,12 @@ export interface PlaybackStreamRequest {
   provider?: string;
   preferredAudioLanguage?: string;
   /**
+   * The track picked from the player's menu, as an index into the inspection's
+   * audio list. Outranks `preferredAudioLanguage`: two tracks can share a
+   * language, or carry none.
+   */
+  preferredAudioIndex?: number;
+  /**
    * Never route to mpv: the viewer pressed "Play in this window" on the native
    * engine. The stream is converted for the built-in player instead.
    */

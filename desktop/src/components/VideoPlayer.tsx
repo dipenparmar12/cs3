@@ -30,6 +30,13 @@ import {
 } from '../utils/downloadIdentity';
 import { HoverMenu } from './player/HoverMenu';
 import { controlLanguageLabel, languageLabels, languageSetLabel } from './player/controlLabels';
+import {
+  audioSwitchRoute,
+  enableLiveTrack,
+  liveTrackFor,
+  liveTrackId,
+  liveTrackLabel,
+} from './player/audioTrackSwitch';
 import { EpisodePanel } from './player/EpisodePanel';
 import { SourcePanel } from './player/SourcePanel';
 import { SourceResolveOverlay } from './player/SourceResolveOverlay';
@@ -1965,9 +1972,9 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
       let activeId: string | number = 0;
       for (let i = 0; i < nativeList.length; i++) {
         const t = nativeList[i];
-        const trackId = t.id !== undefined && t.id !== '' ? t.id : i;
+        const trackId = liveTrackId(t, i);
         const lang = t.language ? t.language.toUpperCase() : '';
-        const label = t.label || (lang ? `Audio (${lang})` : `Audio Track ${i + 1}`);
+        const label = liveTrackLabel(t.label) || (lang ? `Audio (${lang})` : `Audio Track ${i + 1}`);
         const isEnabled = Boolean(t.enabled);
         if (isEnabled) activeId = trackId;
         tracks.push({
@@ -2001,21 +2008,15 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
       const video = videoRef.current;
       if (!video) return;
 
-      // 1. Native HTML5 audioTracks
-      const nativeList = (video as any).audioTracks;
-      if (nativeList && nativeList.length > 0) {
-        for (let i = 0; i < nativeList.length; i++) {
-          const t = nativeList[i];
-          const currentId = t.id !== undefined && t.id !== '' ? t.id : i;
-          const match = String(currentId) === String(trackId) || i === Number(trackId);
-          t.enabled = match;
-        }
-      }
-
-      // 2. HLS.js audioTrack
+      // The same precedence as `detectAudioTracks`, so an id means what the
+      // list it came from meant: hls.js renditions by position, else the
+      // element's own tracks by id alone.
       const hls = hlsRef.current;
-      if (hls && (typeof trackId === 'number' || !isNaN(Number(trackId)))) {
-        hls.audioTrack = Number(trackId);
+      if (hls && Array.isArray(hls.audioTracks) && hls.audioTracks.length > 0) {
+        if (!Number.isNaN(Number(trackId))) hls.audioTrack = Number(trackId);
+      } else {
+        const nativeList = (video as any).audioTracks;
+        if (nativeList && nativeList.length > 0) enableLiveTrack(nativeList, trackId);
       }
 
       setActiveAudioTrack(trackId);
@@ -3592,23 +3593,42 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
         }
       }
 
-      selectAudioTrack(index);
+      /*
+       * The cheapest thing that changes the soundtrack (`audioTrackSwitch.ts`).
+       * Every direct file used to take the forced re-encode below, the path for
+       * streams whose contents are unknown, which sent a dub change to mpv's
+       * window or a software video encode. Languages muxed in an HLS stream's
+       * segments are a known quantity too: the engine remuxes the chosen one
+       * in, or hands the first back to hls.js.
+       */
+      const known = preparedRef.current?.capability;
+      const probe = known?.metadata?.audio ?? [];
+      const picked = probe.find((track) => track.index === index);
+      const hlsRenditions = (hlsRef.current?.audioTracks?.length ?? 0) > 1;
+      const live = picked
+        ? liveTrackFor(audioTracks, picked, probe.length) ??
+          // hls.js renditions the language cannot name: the position, as this
+          // always did. A likely-right rendition beats a forced conversion.
+          (hlsRenditions ? audioTracks[picked.index] : undefined)
+        : undefined;
+      const inSegments = Boolean(known?.metadata?.audioMuxedInSegments);
+      const route = audioSwitchRoute({
+        index,
+        liveMatch: Boolean(live),
+        measured:
+          known?.transport === 'progressive' && Boolean(known.metadata?.video) && !known.languagesUnverified,
+        inSegments,
+        isConverted,
+        defaultIndex: (probe.find((track) => track.isDefault) ?? probe[0])?.index ?? 0,
+      });
+      if (route === 'none') return;
+      if (route === 'live') {
+        if (live) selectAudioTrack(live.id);
+        return;
+      }
 
-      const hasNativeAudioSwitching = Boolean(
-        (video as any)?.audioTracks?.length > 1 ||
-        (hlsRef.current && (hlsRef.current.audioTracks?.length ?? 0) > 1)
-      );
-      if (!hasNativeAudioSwitching && streamUrl && window.cloudstream?.preparePlaybackStream) {
-        /*
-         * Languages muxed in an HLS stream's segments are a known quantity: the
-         * engine remuxes the chosen one in (copy, no decode), or hands the first
-         * back to hls.js. Only an unknown case still takes the forced re-encode,
-         * which for this stream had spent a software H.264 encode on changing
-         * the soundtrack — and mapped the first track anyway.
-         */
-        const inSegments = Boolean(preparedRef.current?.capability?.metadata?.audioMuxedInSegments);
-        // hls.js is already playing the first of them; there is nothing to change.
-        if (inSegments && index === 0 && !isConverted) return;
+      if (streamUrl && window.cloudstream?.preparePlaybackStream) {
+        const convert = route === 'convert';
         setConverting(true);
         try {
           const response = await window.cloudstream.preparePlaybackStream({
@@ -3617,8 +3637,9 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
             isM3u8: mimeType === 'application/x-mpegURL',
             provider: providerProvenance?.provider,
             preferredAudioLanguage: language,
-            refresh: !inSegments,
-            force: !inSegments,
+            preferredAudioIndex: index,
+            refresh: convert,
+            force: convert,
           });
           if (response?.ok && response.playbackUrl) {
             const previous = prepared?.sessionId;

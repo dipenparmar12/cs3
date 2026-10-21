@@ -910,6 +910,21 @@ const CHROMIUM_FEATURES = [
 app.commandLine.appendSwitch('enable-features', CHROMIUM_FEATURES.join(','));
 
 /**
+ * `HTMLMediaElement.audioTracks`, which Chromium ships behind a Blink runtime
+ * feature (a different switch from `enable-features`, and a replacing one too).
+ *
+ * Without it a direct MP4 or WebM with several dubs exposes no tracks at all,
+ * and the element plays the first whatever the menu says. Measured on this
+ * build (Electron 43, Chromium 150, 2026-10-21) with a two-track file, 440 Hz
+ * on track 1 and 880 Hz on track 2: without the feature there is no
+ * `audioTracks` and the tone stays at 439 Hz; with it, two tracks (`eng`,
+ * `hin`), and enabling the second moves the tone to 879 Hz and back again in
+ * place, position kept, in MP4 and WebM alike. The player switches through it
+ * (`player/audioTrackSwitch.ts`) before it considers a remux.
+ */
+app.commandLine.appendSwitch('enable-blink-features', 'AudioVideoTracks');
+
+/**
  * Retries, backs off, and downgrades HTTP/2 origins to HTTP/1.1.
  *
  * Node's `fetch` is the fallback because undici speaks HTTP/1.1 only, which is
