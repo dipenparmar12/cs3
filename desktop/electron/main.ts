@@ -61,7 +61,7 @@ import { Aria2Engine } from './aria2Engine';
 import { DownloadService } from './downloadService';
 import { resolveSafeRevealTarget } from './download/revealTarget.ts';
 import { PluginManager } from './pluginManager';
-import type { SearchScope } from './searchScope';
+import type { SearchScopeEdit } from './searchScope';
 import {
   DNS_PRESETS,
   NetworkSettingsStore,
@@ -6072,9 +6072,17 @@ ipcMain.handle('search:getScopeOptions', async (_, ensureLoaded = true) => {
  * "tick a box" and "switch profile" the same kind of event, and is why the
  * five paths that read scope did not have to change.
  */
-ipcMain.handle('search:setScope', async (_, scope: Partial<SearchScope>) => {
+ipcMain.handle('search:setScope', async (_, scope: SearchScopeEdit) => {
   const profiles = contentService.getProfiles();
-  profiles.edit({ providers: scope.providers, indexers: scope.indexers });
+  // The quick-setup chips travel with the selection they produced, so the
+  // picker can show what was asked for instead of guessing it back from the
+  // providers. Omitted means "unchanged" (`edit` keeps the stored value).
+  profiles.edit({
+    providers: scope.providers,
+    indexers: scope.indexers,
+    languages: scope.languages,
+    contentTypes: scope.contentTypes,
+  });
   return contentService.getScope().get();
 });
 

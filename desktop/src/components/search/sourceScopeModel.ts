@@ -9,6 +9,8 @@
  * that is pinned down and one that is merely believed.
  */
 
+import type { ProviderTreeProvider, ProviderTreeRepository } from '../../types/plugin';
+
 export type CheckState = 'on' | 'off' | 'mixed';
 
 /**
@@ -36,6 +38,9 @@ export interface Row {
 export interface Facets {
   types: string[];
   languages: string[];
+  /** Selectable providers per value, for the number on each chip. */
+  typeCounts?: Record<string, number>;
+  languageCounts?: Record<string, number>;
 }
 
 export interface FacetSelection {
@@ -216,3 +221,141 @@ export function calculateSelectionImpact(
   };
 }
 
+
+// --- quick setup: what the viewer asked for ---------------------------------
+
+/**
+ * The chips the viewer ticked in quick setup: "Hindi", "Movies".
+ *
+ * Stored with the profile or draft (`languages`, `contentTypes`) and read back
+ * from there, never worked out from the providers it selected. Worked out, it
+ * was wrong every time: a provider that carries Movies carries Series too, and
+ * the Movies providers between them speak every language, so ticking Movies
+ * lit up Series and every language chip, and the NSFW preset lit up a dozen
+ * languages (the 2026-10-21 report).
+ */
+export interface ScopeIntent {
+  languages: Set<string>;
+  types: Set<string>;
+}
+
+export const EMPTY_INTENT: ScopeIntent = { languages: new Set(), types: new Set() };
+
+export function isIntentEmpty(intent: ScopeIntent): boolean {
+  return intent.languages.size === 0 && intent.types.size === 0;
+}
+
+export function sameIntent(a: ScopeIntent, b: ScopeIntent): boolean {
+  const same = (x: Set<string>, y: Set<string>) =>
+    x.size === y.size && [...x].every((value) => y.has(value));
+  return same(a.languages, b.languages) && same(a.types, b.types);
+}
+
+/** One chip pressed: that value in or out, and nothing else. */
+export function toggleIntent(
+  intent: ScopeIntent,
+  group: 'languages' | 'types',
+  value: string
+): ScopeIntent {
+  const next = new Set(intent[group]);
+  if (next.has(value)) next.delete(value);
+  else next.add(value);
+  return { ...intent, [group]: next };
+}
+
+/**
+ * The providers quick setup searches for these chips.
+ *
+ * Any ticked language, and any ticked content type: OR inside a section, AND
+ * across them, so "Hindi + Tamil" is both and "Hindi + Movies" is Hindi
+ * providers that carry movies. No chips is no narrowing, which the scope
+ * means by an empty selection.
+ */
+export function providersForIntent(
+  repositories: ProviderTreeRepository[],
+  intent: ScopeIntent,
+  isSelectable: (provider: ProviderTreeProvider) => boolean
+): Set<string> {
+  const matched = new Set<string>();
+  if (isIntentEmpty(intent)) return matched;
+  for (const repo of repositories) {
+    for (const ext of repo.extensions) {
+      for (const provider of ext.providers) {
+        if (!isSelectable(provider)) continue;
+        const lang = provider.lang ?? ext.language;
+        const languageOk =
+          intent.languages.size === 0 || (lang !== undefined && intent.languages.has(lang));
+        const typeOk =
+          intent.types.size === 0 ||
+          (provider.supportedTypes ?? []).some((type) => intent.types.has(type));
+        if (languageOk && typeOk) matched.add(provider.name);
+      }
+    }
+  }
+  return matched;
+}
+
+/**
+ * The stored chips of whatever is driving the search: a profile, the draft,
+ * or nothing for All sources.
+ */
+export function intentFromSnapshot(snapshot: {
+  activeId?: string;
+  profiles?: Array<{ id: string; languages?: string[]; contentTypes?: string[] }>;
+  draft?: { languages?: string[]; contentTypes?: string[] };
+}): ScopeIntent {
+  // The draft's id is '' and falsy, so "no answer" is spelled out.
+  if (snapshot.activeId === undefined || snapshot.activeId === 'all') return EMPTY_INTENT;
+  const source =
+    snapshot.activeId === ''
+      ? snapshot.draft
+      : snapshot.profiles?.find((profile) => profile.id === snapshot.activeId) ?? snapshot.draft;
+  return {
+    languages: new Set(source?.languages ?? []),
+    types: new Set(source?.contentTypes ?? []),
+  };
+}
+
+/** The ready-made setups quick setup offers beside the chips. */
+export type BuiltInPreset = 'english' | 'hindi' | 'anime' | 'drama' | 'nsfw';
+
+const PRESET_TYPES: Partial<Record<BuiltInPreset, string[]>> = {
+  anime: ['Anime', 'AnimeMovie', 'OVA'],
+  drama: ['AsianDrama'],
+  nsfw: ['NSFW'],
+};
+
+/**
+ * A preset is a set of chips, not a rule of its own.
+ *
+ * It used to match provider *names* as well ("anime" anywhere in the name), so
+ * picking it selected providers no chip could explain. Built from the values
+ * that exist here, so "English" covers `en` and `en-US` alike.
+ */
+export function presetIntent(preset: BuiltInPreset, available: Facets): ScopeIntent {
+  if (preset === 'english' || preset === 'hindi') {
+    const prefix = preset === 'english' ? 'en' : 'hi';
+    return {
+      languages: new Set(available.languages.filter((lang) => lang.toLowerCase().startsWith(prefix))),
+      types: new Set(),
+    };
+  }
+  const wanted = new Set(PRESET_TYPES[preset] ?? []);
+  return { languages: new Set(), types: new Set(available.types.filter((type) => wanted.has(type))) };
+}
+
+/**
+ * Which preset, if any, the unnamed selection *is*.
+ *
+ * Derived, not remembered: the picker used to mark a preset active on click,
+ * and the reply from the save that followed marked the draft active instead,
+ * so the pill went dark the moment it was pressed.
+ */
+export function matchingPreset(
+  intent: ScopeIntent,
+  presets: BuiltInPreset[],
+  available: Facets
+): BuiltInPreset | undefined {
+  if (isIntentEmpty(intent)) return undefined;
+  return presets.find((preset) => sameIntent(intent, presetIntent(preset, available)));
+}

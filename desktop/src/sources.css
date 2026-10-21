@@ -9771,6 +9771,38 @@ video::cue {
   display: inline-block;
 }
 
+/* How many sources a chip covers; quiet, so the name still leads. */
+.scope-guided__chip-count {
+  font-size: 0.72rem;
+  font-variant-numeric: tabular-nums;
+  color: var(--text-muted, rgba(255, 255, 255, 0.55));
+}
+
+.scope-guided__chip--active .scope-guided__chip-count {
+  color: inherit;
+  opacity: 0.8;
+}
+
+.scope-guided__section-header {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 0.75rem;
+}
+
+.scope-guided__section-hint {
+  font-size: 0.75rem;
+  color: var(--text-muted, rgba(255, 255, 255, 0.55));
+}
+
+/* What the chips add up to, or why none are lit over a hand-picked set. */
+.scope-guided__note {
+  margin: 0;
+  font-size: 0.82rem;
+  line-height: 1.45;
+  color: var(--text-muted, rgba(255, 255, 255, 0.7));
+}
+
 /* Customize sources action card */
 .scope-guided__customize-action {
   display: flex;

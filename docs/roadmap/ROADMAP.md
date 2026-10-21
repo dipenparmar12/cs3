@@ -36,11 +36,9 @@ Requirement: finish the PRDs that are partly built, decide the ones that are not
 
 **H0. Wrong content plays automatically in standard mode.** After a source fails, the session widens to every provider and starts what it finds; the widened search takes each provider first two hits without checking they are the requested work. See the Playback Source Resolution PRD (v2), Phase 1; its section 1.1 lists 19 claims checked against the code. It needs no scheduler change to fix.
 
-**H1. Search sources panel: two decisions block the next change.**
-- What: selecting a content type silently rewrites which providers are searched (`SearchScopePicker.tsx` `toggleFacet` → `persist`). The language chips do not change.
-- Why it matters: a user who ticks "Movie" sees the provider list change with no explanation. That is the confusion the redesign was meant to remove.
-- Simpler alternative: make content and language pure filters that change nothing until one explicit Apply, or show one line ("Movie + English → 12 sources"). Recommended: the Apply option.
-- Decision needed: which option, and what "set as default" means (launch profile, or the profile new searches start from). The model has no default concept (`electron/cs3/sourceProfiles.ts`).
+**H1. Search sources panel: one decision left.**
+- Fixed 2026-10-21: the chips were rebuilt from the selected providers after every change, so ticking Movies ticked Series and every language, and NSFW ticked a dozen languages. Customize's filter rail also rewrote the selection, presets went dark right after being picked, and a preset picked over a named profile overwrote it. Chips are now stored intent (`languages`/`contentTypes` on the profile or draft), the rail only filters, presets are chip sets, and quick setup shows one line ("Sources in Hindi that carry Movies. Searching 12 of 300."), the option chosen over an Apply step. Pure half tested and mutation-checked (`sourceScopeModel.test.mts`); not yet exercised in the running app.
+- Decision needed: what "set as default" means (launch profile, or the profile new searches start from). The model has no default concept (`electron/cs3/sourceProfiles.ts`).
 
 **H2. PRD 40.1 playback telemetry is unwired.**
 - What: the record, the store and `calculatePercentile` have no caller. `media:getPlaybackDiagnostics` returns the older ring buffer.

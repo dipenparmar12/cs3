@@ -45,6 +45,7 @@ import {
   type Facets,
   type FacetSelection,
   type Row,
+  type ScopeIntent,
   type SelectionImpact,
 } from './sourceScopeModel';
 
@@ -420,6 +421,12 @@ const ChosenSourcesBar: React.FC<ChosenSourcesBarProps> = ({ chosen, onDeselect,
 export interface SourceScopeDialogProps {
   rows: Row[];
   available: Facets;
+  /** Quick setup's chips: what is searched. */
+  intent: ScopeIntent;
+  onToggleIntent: (group: 'languages' | 'types', value: string) => void;
+  /** Sources were picked one by one in Customize; no chip describes them. */
+  handPicked: boolean;
+  /** Customize's filters: which rows are shown. They select nothing. */
   facets: FacetSelection;
   facetsActive: boolean;
   onToggleFacet: (group: keyof FacetSelection, value: string) => void;
@@ -477,6 +484,9 @@ export interface SourceScopeDialogProps {
 export const SourceScopeDialog: React.FC<SourceScopeDialogProps> = ({
   rows,
   available,
+  intent,
+  onToggleIntent,
+  handPicked,
   facets,
   facetsActive,
   onToggleFacet,
@@ -681,19 +691,31 @@ export const SourceScopeDialog: React.FC<SourceScopeDialogProps> = ({
     if (showAllLanguages || available.languages.length <= 8) return available.languages;
     const top = available.languages.slice(0, 8);
     const extraSelected = available.languages.filter(
-      (lang, idx) => idx >= 8 && facets.languages.has(lang)
+      (lang, idx) => idx >= 8 && intent.languages.has(lang)
     );
     return [...top, ...extraSelected];
-  }, [available.languages, showAllLanguages, facets.languages]);
+  }, [available.languages, showAllLanguages, intent.languages]);
 
   const displayedTypes = useMemo(() => {
     if (showAllTypes || available.types.length <= 6) return available.types;
     const top = available.types.slice(0, 6);
     const extraSelected = available.types.filter(
-      (type, idx) => idx >= 6 && facets.types.has(type)
+      (type, idx) => idx >= 6 && intent.types.has(type)
     );
     return [...top, ...extraSelected];
-  }, [available.types, showAllTypes, facets.types]);
+  }, [available.types, showAllTypes, intent.types]);
+
+  /** The chips, read back as one sentence: what is being searched. */
+  const intentSummary = useMemo(() => {
+    const either = (words: string[]) =>
+      words.length <= 1 ? words.join('') : `${words.slice(0, -1).join(', ')} or ${words[words.length - 1]}`;
+    const languages = [...intent.languages].map((lang) => getLanguageName(lang) || lang.toUpperCase());
+    const types = [...intent.types].map(prettyType);
+    if (languages.length === 0 && types.length === 0) return null;
+    const inLanguage = languages.length > 0 ? ` in ${either(languages)}` : '';
+    const carrying = types.length > 0 ? ` that carry ${either(types)}` : '';
+    return `Sources${inLanguage}${carrying}.`;
+  }, [intent]);
 
   // Filter rows based on explorerTab when in explorer mode
   const displayedRows = useMemo(() => {
@@ -810,26 +832,44 @@ export const SourceScopeDialog: React.FC<SourceScopeDialogProps> = ({
 
             <div className="scope-guided__body">
 
+              {/* What the chips add up to, or why none are lit. */}
+              {handPicked ? (
+                <p className="scope-guided__note" role="status">
+                  You picked {totalChosen} source{totalChosen === 1 ? '' : 's'} by hand in Customize
+                  sources. Choosing a chip below starts a new selection from it.
+                </p>
+              ) : (
+                <p className="scope-guided__note" role="status">
+                  {intentSummary
+                    ? `${intentSummary} Searching ${totalChosen} of ${totalAvailable}.`
+                    : 'Choose a content type or language to narrow the search, or leave all clear to search everything.'}
+                </p>
+              )}
+
               {/* Content */}
               {available.types.length > 0 && (
                 <div className="scope-guided__section">
                   <div className="scope-guided__section-header">
                     <h4 className="scope-guided__section-title">Content</h4>
+                    <span className="scope-guided__section-hint">Any of these</span>
                   </div>
 
                   <div className="scope-guided__chips-grid">
                     {displayedTypes.map((type) => {
-                      const active = facets.types.has(type);
+                      const active = intent.types.has(type);
+                      const count = available.typeCounts?.[type];
                       return (
                         <button
                           key={type}
                           type="button"
+                          aria-pressed={active}
                           className={`scope-guided__chip${active ? ' scope-guided__chip--active' : ''}`}
-                          onClick={() => onToggleFacet('types', type)}
-                          title={prettyType(type)}
+                          onClick={() => onToggleIntent('types', type)}
+                          title={count !== undefined ? `${prettyType(type)}: ${count} sources` : prettyType(type)}
                         >
                           {getContentTypeIcon(type)}
                           <span className="scope-guided__chip-label">{prettyType(type)}</span>
+                          {count !== undefined && <span className="scope-guided__chip-count">{count}</span>}
                         </button>
                       );
                     })}
@@ -851,6 +891,9 @@ export const SourceScopeDialog: React.FC<SourceScopeDialogProps> = ({
               <div className="scope-guided__section">
                 <div className="scope-guided__section-header">
                   <h4 className="scope-guided__section-title">Languages</h4>
+                  <span className="scope-guided__section-hint">
+                    Any of these{intent.types.size > 0 ? ', and the content above' : ''}
+                  </span>
                 </div>
 
                 <div className="scope-guided__chips-grid">
@@ -858,17 +901,21 @@ export const SourceScopeDialog: React.FC<SourceScopeDialogProps> = ({
                     const code = lang.toUpperCase();
                     const flag = getLanguageFlag(lang);
                     const fullName = getLanguageName(lang);
-                    const active = facets.languages.has(lang);
+                    const active = intent.languages.has(lang);
+                    const count = available.languageCounts?.[lang];
+                    const name = fullName ? `${fullName} (${code})` : code;
                     return (
                       <button
                         key={lang}
                         type="button"
+                        aria-pressed={active}
                         className={`scope-guided__chip${active ? ' scope-guided__chip--active' : ''}`}
-                        onClick={() => onToggleFacet('languages', lang)}
-                        title={fullName ? `${fullName} (${code})` : code}
+                        onClick={() => onToggleIntent('languages', lang)}
+                        title={count !== undefined ? `${name}: ${count} sources` : name}
                       >
                         <FlagIcon flag={flag} size={14} fallback={code.slice(0, 2)} />
                         <span className="scope-guided__chip-label">{fullName || code}</span>
+                        {count !== undefined && <span className="scope-guided__chip-count">{count}</span>}
                       </button>
                     );
                   })}
@@ -914,7 +961,8 @@ export const SourceScopeDialog: React.FC<SourceScopeDialogProps> = ({
           <div className="scope-modal__body">
             <aside className="scope-modal__rail" aria-label="Filters">
               <p className="scope-modal__rail-note">
-                Filters control which sources are visible in the list below.
+                Show only: these narrow the list, not the search. Tick sources in the list,
+                or use “Select filtered”, to search them.
               </p>
 
               {hasExtensions && hasIndexers && (
@@ -966,7 +1014,7 @@ export const SourceScopeDialog: React.FC<SourceScopeDialogProps> = ({
 
               {available.languages.length > 1 && (
                 <FacetGroup
-                  label="Languages and regions"
+                  label="Languages"
                   onSelectAll={
                     onSelectAllFacetGroup ? () => onSelectAllFacetGroup('languages') : undefined
                   }

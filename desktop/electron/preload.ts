@@ -75,7 +75,7 @@ import type {
 import type { StartupProfile } from './startupProfile.ts';
 import type { StartupTaskReport } from './util/startupQueue.ts';
 import type { ProbeConfig } from './media/mediaInspector';
-import type { SearchScope } from './searchScope';
+import type { SearchScope, SearchScopeEdit } from './searchScope';
 import type { SearchSnapshot } from './searchSession';
 import type { DnsPreset, NetworkSettings } from './networkSettings';
 import type { SystemRuntimeStatus, RuntimeProgress } from './cs3/runtimeProvisioner';
@@ -645,7 +645,7 @@ export interface CloudStreamElectronAPI {
       progress: ProviderLoadProgress;
     }
   >;
-  setSearchScope: (scope: Partial<SearchScope>) => Promise<SearchScope>;
+  setSearchScope: (scope: SearchScopeEdit) => Promise<SearchScope>;
 
   /**
    * Named search configurations.
