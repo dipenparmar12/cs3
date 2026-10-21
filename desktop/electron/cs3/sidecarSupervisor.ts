@@ -59,6 +59,9 @@ interface Pending {
  */
 const sidecarLog = scopedLogger('runtime', { component: 'sidecar' });
 
+/** A wait for a JVM worker worth a log line (`rpc_queued`). */
+const QUEUED_LOG_MS = 1_000;
+
 /**
  * RPC names this build will actually call.
  *
@@ -413,6 +416,7 @@ export class SidecarSupervisor {
       result?: Record<string, unknown>;
       error?: string;
       errorKind?: string;
+      queuedMs?: unknown;
       hostCall?: string;
       hostId?: string;
       params?: Record<string, unknown>;
@@ -438,11 +442,18 @@ export class SidecarSupervisor {
 
     this.pending.delete(id);
     clearTimeout(pending.timer);
+    const queuedMs = typeof frame.queuedMs === 'number' ? frame.queuedMs : undefined;
+    // The only record of contention for JVM workers: without it a slow source
+    // lookup cannot be told from a slow provider.
+    if (queuedMs !== undefined && queuedMs >= QUEUED_LOG_MS) {
+      sidecarLog.info('rpc_queued', { method: pending.method, queuedMs, ok: Boolean(frame.ok) });
+    }
     pending.resolve({
       ok: Boolean(frame.ok),
       result: frame.result,
       error: this.explainUnknownMethod(pending.method, frame.error),
       errorKind: frame.errorKind,
+      queuedMs,
     });
   }
 

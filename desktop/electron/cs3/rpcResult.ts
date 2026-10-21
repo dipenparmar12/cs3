@@ -33,6 +33,11 @@ export interface RpcResult {
   result?: Record<string, unknown>;
   error?: string;
   errorKind?: string;
+  /**
+   * How long the call waited for a JVM worker before it started (`RpcLanes`).
+   * Absent from a runtime older than the lanes, and from host-made failures.
+   */
+  queuedMs?: number;
 }
 
 /**
@@ -52,4 +57,14 @@ export const TRANSPORT_ERROR_KINDS = new Set([
 /** Whether a failed call means "the runtime never answered", not "the answer was no". */
 export function isTransportFailure(result: RpcResult): boolean {
   return !result.ok && TRANSPORT_ERROR_KINDS.has(result.errorKind ?? '');
+}
+
+/**
+ * How long the provider itself took: the call's wall time less the time it
+ * queued for a worker. The ranking reads latency as the provider's speed, and a
+ * call stuck behind a search fan-out was scoring the provider for the app's own
+ * queue.
+ */
+export function providerLatencyMs(startedAt: number, result: RpcResult, now = Date.now()): number {
+  return Math.max(0, now - startedAt - (result.queuedMs ?? 0));
 }

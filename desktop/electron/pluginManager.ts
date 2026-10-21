@@ -26,7 +26,7 @@ import { fetchBuffer, fetchJson } from './torrent/http';
 import type { DatastoreManager } from './datastore';
 import { DisabledSet } from './util/disabledSet';
 import { SidecarSupervisor } from './cs3/sidecarSupervisor';
-import { isTransportFailure } from './cs3/rpcResult.ts';
+import { isTransportFailure, providerLatencyMs } from './cs3/rpcResult.ts';
 import { OFFICIAL_REPOSITORIES, type OfficialRepository } from './officialRepositories';
 import { getIssueLog } from './cs3/extensionIssues';
 import { scopedLogger } from './logging/logger';
@@ -3705,7 +3705,7 @@ export class PluginManager {
       { query, providers: [name] },
       PROVIDER_CALL_TIMEOUT_MS
     );
-    const latencyMs = Date.now() - started;
+    const latencyMs = providerLatencyMs(started, response);
 
     if (!response.ok) {
       const error = response.error ?? 'The extension runtime did not answer.';
@@ -3905,7 +3905,7 @@ export class PluginManager {
       },
       PROVIDER_CALL_TIMEOUT_MS
     );
-    const latencyMs = Date.now() - started;
+    const latencyMs = providerLatencyMs(started, response);
 
     const fail = (message: string): ProviderCatalogPage => {
       this.diagnostics?.record({
@@ -4043,7 +4043,7 @@ export class PluginManager {
       { provider: ref.provider, url: ref.target },
       PROVIDER_CALL_TIMEOUT_MS
     );
-    const latencyMs = Date.now() - startedAt;
+    const latencyMs = providerLatencyMs(startedAt, response);
 
     /**
      * Every way this can fail says which way it was.
@@ -4254,7 +4254,7 @@ export class PluginManager {
       { provider: ref.provider, data: ref.target },
       PROVIDER_CALL_TIMEOUT_MS
     );
-    const latencyMs = Date.now() - startedAt;
+    const latencyMs = providerLatencyMs(startedAt, response);
 
     /** Shared shape for the four ways this ends with nothing. */
     const nothing = (
