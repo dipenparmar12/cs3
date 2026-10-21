@@ -54,6 +54,7 @@ import { NativeProviderRegistry } from './cs3/nativeProviderRegistry.ts';
 import { parseNativeAddress } from './cs3/nativeProviders/types.ts';
 import { classifyFailure } from './cs3/failureTaxonomy.ts';
 import { planSourceScope, shouldEscalateScope } from './cs3/sourceScope';
+import { judgeProviderHit } from './cs3/providerHitMatch.ts';
 import { describeError } from '../src/utils/errors.ts';
 import type { PageSnapshotStore } from './cs3/pageSnapshot.ts';
 import { tidyReleaseName } from '../src/utils/releaseName.ts';
@@ -1582,6 +1583,17 @@ export class ContentService {
     const totalExtensionsToAsk = routes.length + (needProviderSearch ? providerList.length : 0);
 
     const fromExtensions: TorrentResult[] = [];
+    /** Provider hits the widened search refused as another work, with why. */
+    const refusedHits: SourceResponse['filtered'] = [];
+    // Who the widened search is looking for. Anime years are left out for the
+    // reason the indexer query leaves them out.
+    const work = {
+      title: wanted.title,
+      year: isAnime ? undefined : wanted.year,
+      type: detail?.type,
+      imdbId: wanted.imdbId,
+      season,
+    };
     let extensionsSettled = 0;
     let latestIndexerProgress: SearchProgress | null = null;
 
@@ -1652,7 +1664,19 @@ export class ContentService {
                     // Already asked through a route; asking again would double
                     // the work and the results.
                     const ref = parseExtensionUrl(m.url);
-                    return ref ? !routeProviders.has(ref.provider) : true;
+                    if (ref && routeProviders.has(ref.provider)) return false;
+                    // A provider without the title answers anyway, with a
+                    // sequel, another season or its home page. Judged before
+                    // the first two are taken, so a wrong first hit does not
+                    // push the right second one out (PRD Phase 1).
+                    const verdict = judgeProviderHit(work, m);
+                    if (verdict.kind !== 'mismatch') return true;
+                    refusedHits.push({
+                      title: m.name,
+                      reason: `${providerOutcome.provider}: ${verdict.reason}`,
+                      seeders: 0,
+                    });
+                    return false;
                   });
                   if (extMatches.length > 0) {
                     for (const match of extMatches.slice(0, 2)) {
@@ -1694,11 +1718,14 @@ export class ContentService {
 
     const response: SourceResponse = {
       sources: deduped,
-      filtered: outcome.rejected.slice(0, 50).map((r) => ({
-        title: r.result.title,
-        reason: r.reason,
-        seeders: r.result.seeders,
-      })),
+      filtered: [
+        ...refusedHits,
+        ...outcome.rejected.map((r) => ({
+          title: r.result.title,
+          reason: r.reason,
+          seeders: r.result.seeders,
+        })),
+      ].slice(0, 50),
       indexerOutcomes: outcome.indexerOutcomes,
       query: { title: wanted.title, season, episode, imdbId: wanted.imdbId },
       scopeUsed,
