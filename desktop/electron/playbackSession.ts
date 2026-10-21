@@ -507,9 +507,14 @@ export class PlaybackSessionManager {
     const session = this.sessions.get(sessionId);
     if (!session) return null;
     if (session.started) return this.snapshot(session);
-    if (session.sources.length === 0) return this.snapshot(session);
+    // After a widened offer the list still holds the sources that already
+    // failed here; pressing Play must not start the walk over with them.
+    const untried = session.sources.filter(
+      (source) => !source.infoHash || !session.unplayable.has(source.infoHash)
+    );
+    if (untried.length === 0) return this.snapshot(session);
 
-    await this.beginStream(session, session.sources);
+    await this.beginStream(session, untried);
     return this.snapshot(session);
   }
 
@@ -721,7 +726,7 @@ export class PlaybackSessionManager {
 
   /**
    * Asks every provider and indexer, once the sources where the title was
-   * found have all failed — and keeps going with whatever that finds.
+   * found have all failed — and offers whatever that finds, without starting it.
    *
    * This is the "Find more sources" button, pressed for the viewer. The
    * narrow default stays right while it is paying for itself (fewer sites
@@ -731,9 +736,9 @@ export class PlaybackSessionManager {
    * (`shouldEscalateScope`); this is the other case, sources that exist and
    * do not play.
    *
-   * The walk starts as the new sources arrive, after a moment's settle, rather
-   * than when the slowest of two hundred sites has answered; later arrivals
-   * join the list the walk continues through.
+   * The offer is made as the new sources arrive, after a moment's settle,
+   * rather than when the slowest of two hundred sites has answered; later
+   * arrivals join the list the viewer chooses from.
    *
    * Answers whether it took over. False means there was nothing wider to ask,
    * or asking found nothing new, and the caller reports the failure.
@@ -782,7 +787,17 @@ export class PlaybackSessionManager {
       return false;
     }
 
-    await this.beginStream(session, candidates, { failover: true });
+    // Offered, never started (Playback Source Resolution, Phase 1). The wider
+    // search matched by title alone, and a provider's first hits for a title it
+    // does not carry are often a sequel or whatever is trending: started
+    // automatically, the wrong film played and counted as a success. This is
+    // the state an empty origin search already ends in when it widens
+    // (`discover`), so the overlay's "Play now" and "Choose source" apply.
+    session.widened = true;
+    session.retryingElsewhere = false;
+    session.started = false;
+    session.phase = 'searching';
+    this.emit(session);
     return true;
   }
 

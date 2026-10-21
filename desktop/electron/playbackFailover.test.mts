@@ -244,20 +244,38 @@ test('standard mode walks the whole list rather than stopping after two passes',
   assert.equal(after?.activeInfoHash, 'hash60');
 });
 
-test('when every source here fails, standard mode looks everywhere and keeps going', async () => {
+/**
+ * Playback Source Resolution, Phase 1. The wider search matches by title
+ * alone, and a provider's first hits for a title it does not carry can be a
+ * sequel or whatever is trending. Started automatically, the wrong film played
+ * and was counted a success. What it finds is offered; the viewer starts it.
+ */
+test('when every source here fails, standard mode looks everywhere and offers, never starts, what it finds', async () => {
   const here = Array.from({ length: 5 }, (_, i) => source(i));
   // The wider search repeats the dead ones and finds three more; one plays.
   const wider = [...here, source(20), source(21), source(22)];
-  const { content, scopes } = wideningContent(new Set(['hash21']), wider);
+  const { content, offered, scopes } = wideningContent(new Set(['hash21']), wider);
   const manager = new PlaybackSessionManager(content);
   const id = persistentSessionWith(manager, here);
 
   const after = await manager.skipCurrentSource(id, 'the swarm looks dead');
 
   assert.deepEqual(scopes, ['all'], 'the wider search is asked for, once');
-  assert.equal(after?.phase, 'playing');
-  assert.equal(after?.activeInfoHash, 'hash21');
-  assert.equal(after?.retryingElsewhere, false, 'the notice clears once something plays');
+  assert.equal(after?.phase, 'searching', 'the overlay offers Play now and Choose source');
+  assert.equal(after?.widened, true);
+  assert.equal(after?.retryingElsewhere, false);
+  assert.ok(
+    offered.flat().every((hash) => !['hash20', 'hash21', 'hash22'].includes(hash)),
+    'nothing the wider search found was started'
+  );
+
+  const played = await manager.playNow(id);
+  assert.equal(played?.phase, 'playing', 'Play now starts the offer');
+  assert.equal(played?.activeInfoHash, 'hash21');
+  assert.ok(
+    offered.at(-1)!.every((hash) => !here.some((s) => s.infoHash === hash)),
+    'Play now does not retry the sources that already failed here'
+  );
 });
 
 test('looking everywhere happens once, and running out after it is still reported', async () => {
@@ -266,8 +284,10 @@ test('looking everywhere happens once, and running out after it is still reporte
   const manager = new PlaybackSessionManager(content);
   const id = persistentSessionWith(manager, here);
 
-  const after = await manager.skipCurrentSource(id, 'the swarm looks dead');
+  const offer = await manager.skipCurrentSource(id, 'the swarm looks dead');
+  assert.equal(offer?.phase, 'searching');
 
+  const after = await manager.playNow(id);
   assert.deepEqual(scopes, ['all']);
   assert.equal(after?.phase, 'error');
 });
