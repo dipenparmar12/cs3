@@ -243,7 +243,38 @@ What never changes: push subscriptions (H), the store modules (F, G), and the im
 | Profile data leaks across a switch (G) | Switch profiles with a query cached; the second profile must not see it |
 | Retry storms against scrapers | `retry: 0` on search and playback; default only for cheap reads |
 
-## 9. Not verified
+## 9. External view: selective adoption of public packages
+
+The review distinguishes renderer server-state management from HTTP transport and provider integrations. These solve different problems and are evaluated independently.
+
+### Decisions
+
+| Area | Recommendation | Rationale |
+|---|---|---|
+| Renderer server state | **Adopt TanStack Query selectively**, through the proposed IPC adapter (§7) | Reduces duplicated fetching, manual stale-response guards and renderer cache management without replacing IPC or application services. |
+| HTTP transport | **Add no new HTTP client** | Preserve the injected-fetch boundary and Electron networking configuration. Any shared policy must account for both the Node and JVM transport paths. |
+| Failure handling | **Standardise classification, not retry behaviour** | Apply consistent timeout, cancellation and failure semantics across both runtimes, keeping provider-specific deadlines, cooldowns and retry decisions. |
+| Response validation | **Pilot a schema validator on one JSON indexer adapter** | Validate untrusted responses at the boundary and reject invalid data without guessing missing or unrecognised fields. |
+| Provider SDKs | **Evaluate individually** | Prefer keyless integrations where practical. Do not add an API-key requirement or a substantial dependency for a small integration without clear benefit. |
+
+### Constraints and acceptance criteria
+
+Any candidate package must preserve the application's injected transport configuration, cancellation semantics, error classification, cache ownership and provider-specific policies. It must not introduce generic retries into search or playback, conceal malformed responses, or treat HTTP status alone as proof that a source is playable or permanently unavailable.
+
+New dependencies must also be checked for cold-start cost, lazy-loading opportunities, Electron packaging and runtime externalisation, native-addon rebuild requirements, and GPL-3.0 licence compatibility.
+
+### Proposed sequence
+
+1. Pilot the TanStack Query adapter on a low-risk, read-only renderer screen (§7, step 1).
+2. Verify cache-key scope, cancellation propagation, error parity and profile isolation before expanding the migration.
+3. Pilot schema validation on one JSON indexer adapter and measure its impact.
+4. Keep transport and SDK decisions separate, and require evidence of a concrete improvement before adding a dependency.
+
+**Verdict:** Adopt TanStack Query for renderer server state. Retain the existing transport and provider architecture. Improve cross-runtime failure semantics. Pilot validation at an untrusted-data boundary. Measure each change before broad adoption.
+
+*Status: review recommendation, not an implementation claim.* The `useIpcQuery` adapter in §7 is proposed, not compiled. This document does not imply that migration is complete, or that cancellation reaches the main process, until those behaviours are implemented and tested.
+
+## 10. Not verified
 
 - Nothing was run. Counts are grep counts; a read-versus-action split needs Phase 0 of the design doc.
 - Behaviour under load, memory growth and the cost of the extra renderer cache were not measured.
