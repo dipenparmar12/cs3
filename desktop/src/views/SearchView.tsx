@@ -2,7 +2,7 @@ import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useSta
 import { useTitleInteractions } from '../components/useTitleInteractions';
 import { EmptyState } from '../components/EmptyState';
 import type { SearchHistoryEntry, SearchResponse } from '../types/api';
-import { TYPE_TABS, matchesTab, tabsFor } from '../utils/contentTypes';
+import { TYPE_TABS, allCount, liveBelongsInAll, matchesTab, tabsFor } from '../utils/contentTypes';
 import { groupResults, type ResultGroup, type ResultGroupId } from '../utils/resultGroups';
 import type { SearchSnapshot, SearchSourceOutcome } from '../../electron/searchSession';
 import { AlertTriangle, Bookmark, BookmarkCheck, CheckCircle2, ChevronDown, ChevronRight, Filter, Loader2, MoreHorizontal, RotateCw, Search, SearchX, Server, Target, Trash2, Wrench, X } from 'lucide-react';
@@ -375,6 +375,7 @@ export const SearchView: React.FC<SearchViewProps> = ({
    * that lead to an empty grid is worse than offering none.
    */
   const typeTabs = useMemo(() => tabsFor(results), [results]);
+  const liveInAll = useMemo(() => liveBelongsInAll(results), [results]);
 
   // A tab that stops matching as results stream in must not strand the grid.
   const activeTab = typeTabs.some((tab) => tab.id === typeTab) ? typeTab : 'all';
@@ -399,9 +400,9 @@ export const SearchView: React.FC<SearchViewProps> = ({
     () =>
       results.filter((item) => {
         if (sourceFilter !== 'all' && !sourcesOf(item).includes(sourceFilter)) return false;
-        return matchesTab(item, activeTab);
+        return matchesTab(item, activeTab, { liveInAll });
       }),
-    [results, sourceFilter, activeTab]
+    [results, sourceFilter, activeTab, liveInAll]
   );
 
   /**
@@ -482,7 +483,7 @@ export const SearchView: React.FC<SearchViewProps> = ({
                 className={`type-tabs__tab${activeTab === 'all' ? ' type-tabs__tab--on' : ''}`}
                 onClick={() => setTypeTab('all')}
               >
-                All <span>{results.length}</span>
+                All <span>{allCount(results)}</span>
               </button>
               {typeTabs.map((tab) => (
                 <button
