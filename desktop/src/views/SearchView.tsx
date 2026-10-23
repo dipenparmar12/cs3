@@ -13,6 +13,7 @@ import { groupResults, type ResultGroup, type ResultGroupId } from '../utils/res
 import type { SearchSnapshot, SearchSourceOutcome } from '../../electron/searchSession';
 import { AlertTriangle, Bookmark, BookmarkCheck, CheckCircle2, ChevronDown, ChevronRight, Filter, Loader2, MoreHorizontal, RotateCw, Search, SearchX, Server, Target, Trash2, Wrench, X } from 'lucide-react';
 import { PosterCard } from '../components/PosterCard';
+import { Poster } from '../components/Poster';
 import { partitionDeadRows } from '../utils/deadRows';
 import { cardKeyOf, calculateVirtualWindow, gridColumns, rowPitch } from './searchVirtualGrid';
 import { resultSources } from '../utils/resultSources';
@@ -771,7 +772,11 @@ const ResultGrid: React.FC<{
       {groups.map((group) => {
         const open = openGroups[group.id] ?? group.defaultOpen;
         return (
-          <section key={group.id} style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+          <section
+            key={group.id}
+            className={group.id === 'other' && !open ? 'search-other' : undefined}
+            style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}
+          >
             <div className="search-section">
               <button
                 className="search-group__toggle"
@@ -785,7 +790,7 @@ const ResultGrid: React.FC<{
                 ) : (
                   <Search size={15} style={{ color: 'var(--text-subtle)' }} />
                 )}
-                <h3 className={group.id === 'other' ? 'search-section__muted' : undefined}>
+                <h3 className={group.id === 'other' && open ? 'search-section__muted' : undefined}>
                   {group.label}
                 </h3>
                 <span className="search-group__count">{group.items.length}</span>
@@ -800,6 +805,39 @@ const ResultGrid: React.FC<{
                 </span>
               )}
             </div>
+
+            {/*
+              Folded by default, but not out of sight. A bare collapsed heading
+              read as the end of the results, and most viewers never opened it:
+              a preview of what is inside and a plain "Show all" is what makes
+              these rows (often the same work under another name) reachable.
+            */}
+            {group.id === 'other' && !open && (
+              <div className="search-other__body">
+                <p className="search-other__note">
+                  These sources answered with titles that don&apos;t match what you typed. Often the
+                  same film or show under another name, a translation or a related release.
+                </p>
+                <div className="search-other__preview" aria-label="Preview">
+                  {[...group.items.filter((i) => i.posterUrl), ...group.items.filter((i) => !i.posterUrl)]
+                    .slice(0, 6)
+                    .map((item) => (
+                    <button
+                      key={item.url}
+                      type="button"
+                      className="search-other__thumb"
+                      title={`${item.name}${item.apiName ? ` · ${item.apiName}` : ''}`}
+                      onClick={() => onSelectMedia(item)}
+                    >
+                      <Poster src={item.posterUrl} title={item.name} sensitive={item.adult} itemKey={item.url} />
+                    </button>
+                  ))}
+                </div>
+                <Button onClick={() => onToggleGroup(group.id)} icon={ChevronDown}>
+                  Show all {group.items.length}
+                </Button>
+              </div>
+            )}
 
             {open && (
               <div id={`group-${group.id}`}>
