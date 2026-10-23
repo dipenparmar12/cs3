@@ -3217,6 +3217,75 @@ ipcMain.handle(
  * button, which keeps the exact playback. Pressing it again updates the
  * position rather than unsaving, so a second press can never lose the save.
  */
+/**
+ * A playback saved from the player is also a title being watched.
+ *
+ * Saving *Office Space* at a working source put it in Saved pages and nowhere
+ * else: not in Library › Watching, not in History, no resume point. A saved
+ * playback now also files the title under Watching (unless it is already on
+ * another shelf the viewer chose, other than Plan to watch), records where it
+ * stands so Continue watching resumes it, and writes a History entry with the
+ * source. Incognito is checked by the caller and by each store.
+ */
+function recordSavedPlayback(input: Parameters<BookmarkStore['save']>[0]): void {
+  const playback = input?.playback;
+  if (!playback || !input.title) return;
+  const type = input.type as Parameters<LibraryStore['upsertEntry']>[0]['type'];
+  const existing = libraryStore.getEntry(canonicalKey(input.title, input.year));
+  if (!existing || existing.status === 'PlanToWatch') {
+    libraryStore.upsertEntry({
+      title: input.title,
+      originalTitle: input.originalTitle,
+      year: input.year,
+      type,
+      posterUrl: input.posterUrl,
+      mediaUrl: input.mediaUrl,
+      status: 'Watching',
+      sources: playback.source ? [playback.source] : undefined,
+      metadata: input.origin?.provider ? { provider: input.origin.provider } : undefined,
+    });
+  }
+  if (playback.positionSeconds && playback.durationSeconds) {
+    libraryStore.recordProgress({
+      title: input.title,
+      year: input.year,
+      mediaUrl: input.mediaUrl,
+      posterUrl: input.posterUrl,
+      episodeTitle: playback.episodeTitle,
+      season: playback.season,
+      episode: playback.episode,
+      positionSeconds: playback.positionSeconds,
+      durationSeconds: playback.durationSeconds,
+      type,
+    });
+  }
+  historyStore.record({
+    title: input.title,
+    originalTitle: input.originalTitle,
+    year: input.year,
+    type,
+    posterUrl: input.posterUrl,
+    mediaUrl: input.mediaUrl,
+    season: playback.season,
+    episode: playback.episode,
+    episodeTitle: playback.episodeTitle,
+    action: 'playback_stopped',
+    status: 'Played',
+    positionSeconds: playback.positionSeconds,
+    durationSeconds: playback.durationSeconds,
+    source: playback.source
+      ? {
+          sourceName: playback.source.title,
+          providerName: playback.source.providerName ?? input.origin?.provider,
+          indexerName: playback.source.indexerName,
+          extension: input.origin?.extensionName,
+          repository: input.origin?.repositoryName,
+        }
+      : undefined,
+    metadata: { savedPage: true },
+  });
+}
+
 ipcMain.handle('bookmarks:save', async (_, input: Parameters<BookmarkStore['save']>[0]) => {
   try {
     if (isPrivateSession() && !allowsExplicitSaves()) {
@@ -3225,6 +3294,7 @@ ipcMain.handle('bookmarks:save', async (_, input: Parameters<BookmarkStore['save
     const bookmark = bookmarks.save(input);
     if (!isPrivateSession()) {
       pageSnapshots.setPinned({ url: input?.mediaUrl, title: input?.title, year: input?.year }, true);
+      recordSavedPlayback(input);
     }
     return { ok: true, bookmark };
   } catch (error) {
