@@ -16,8 +16,6 @@
  * The active flag itself is persisted only when `rememberPreference` is on.
  */
 
-import { currentProfileId } from '../profiles/profileContext.ts';
-
 export interface IncognitoSettings {
   allowDownloads: boolean;
   askBeforeDownload: boolean;
@@ -84,14 +82,23 @@ export class PrivacyMode {
   private readonly listeners = new Set<(state: PrivacyState) => void>();
   private readonly sessionClearers = new Set<() => void>();
 
-  constructor(store: PrivacyBackingStore) {
+  /**
+   * Which viewer profile is asking. Passed in (`currentProfileId` in `main.ts`)
+   * rather than imported: the renderer reaches this module through
+   * `libraryStore.canonicalKey`, and the profile context is Node-only
+   * (`AsyncLocalStorage`), which blanked the window when bundled.
+   */
+  private readonly profile: () => string;
+
+  constructor(store: PrivacyBackingStore, profile: () => string = () => 'default') {
     this.store = store;
+    this.profile = profile;
     // oxlint-disable-next-line no-this-alias
     current = this;
   }
 
   private state(): { active: boolean; settings: IncognitoSettings } {
-    const profile = currentProfileId();
+    const profile = this.profile();
     let state = this.states.get(profile);
     if (!state) {
       const settings = { ...DEFAULT_INCOGNITO_SETTINGS };

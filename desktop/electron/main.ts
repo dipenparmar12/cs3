@@ -188,7 +188,13 @@ import {
   type SubtitleBackground,
   type SubtitleWeight,
 } from '../src/utils/subtitleStyle.ts';
-import { activeProfileId, DEFAULT_PROFILE_ID, onActiveProfileChange, runAsProfile } from './profiles/profileContext.ts';
+import {
+  activeProfileId,
+  currentProfileId,
+  DEFAULT_PROFILE_ID,
+  onActiveProfileChange,
+  runAsProfile,
+} from './profiles/profileContext.ts';
 import { PREFERENCE_KEYS } from './profiles/profileKeys.ts';
 import { perProfile } from './profiles/perProfile.ts';
 import { UserProfileService } from './profiles/userProfiles.ts';
@@ -316,7 +322,7 @@ function profileDataDir(profileId: string): string {
 
 // Constructed before every store that records activity, so the first write any
 // of them makes already sees the right answer (PRD-52).
-const privacyMode = new PrivacyMode(datastore);
+const privacyMode = new PrivacyMode(datastore, currentProfileId);
 privacyMode.onChange((state) => {
   BrowserWindow.getAllWindows().forEach((w) => w.webContents.send('privacy:changed', state));
   const item = Menu.getApplicationMenu()?.getMenuItemById('incognito-toggle');
