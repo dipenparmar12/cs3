@@ -32,7 +32,7 @@ cs3/
 │   ├── release/        distribution.md — signing, notarisation, release gating.
 │   └── troubleshooting/
 ├── repositories/       26 git submodules: vendored community extension corpus (not checked out by default).
-│   └── _cloudstream_ref_android/   Upstream Android source (a72f9e6c…, v4.8.0).
+│   └── _cloudstream_ref_android/   Upstream Android source, pinned at eb962b4f (tag `pre-release`; descends from a72f9e6c, the v4.8.0 commit the PRDs cite; checked 2026-10-23).
 ```
 
 - Submodules are empty in a fresh clone (including cloud/CI). Never claim you verified something against Android source unless you initialised the submodule.
@@ -589,7 +589,7 @@ Moved verbatim out of this file, each with a contents list: `extensions.md`, `me
 | `docs/roadmap/docs-audit-2026-10-20.md` | Evidence for each PRD status; doc/code conflicts; what was verified and what was not. |
 | `docs/roadmap/unverified/` | Notes not yet checked against the code (five files). Treat as proposals. |
 | `docs/agents/*.md`, `field-notes/` | Domain files and dated post-mortems. Same authority as this file. |
-| `docs/docs_cs3/` | Android app documentation (behaviour reference). Upstream; not this repo. Its links to upstream gradle, `.github/` and fastlane files are broken here by design. |
+| `docs/docs_cs3/` | Android app documentation (behaviour reference). Upstream; not this repo. Links to upstream gradle, `.github/` and fastlane files point at GitHub, pinned to the submodule commit (2026-10-23). |
 | `docs/audits/2026-10-14-codebase-audit.md` | Security and reliability audit (PRD §125): findings with IDs (SEC-, REL-, DEP-), what was fixed with which evidence, what is open and why. |
 | `docs/release/distribution.md` | Signing, notarisation, release gating, user verification steps (PRD §126). |
 | `docs/troubleshooting/chromium-lock-and-cache-errors.md` | Chromium lock and cache errors. |
@@ -636,4 +636,4 @@ Built and verified in this pass; the rest is in `docs/roadmap/ROADMAP.md`.
 - **Viewer profiles:** PIN any length 1–128, masked with reveal; Open button focused for an unprotected profile on the lock screen; 26 of 26 profile tests pass.
 - **PRD 40.1:** `sourceLease.ts` wired but inert (no resolver, so it never refreshes); `playbackTelemetry.ts` records one session each, with the element's runtime report; shown in Settings → Playback sessions (H2 in the roadmap).
 - **Search results at scale (not yet fixed):** the grid is not virtualised; every provider arrival re-merges and re-sends the full result set; card keys use the array index. Research and recommendations: `docs/roadmap/2026-10-High-Performance Search Results and Large-Scale Rendering.md` §5–§7. Measure in Electron before changing code.
-- **Docs:** all PRDs are filed under `docs/done/`, `docs/roadmap/` or `docs/PRD/` (reference). Links checked: 12 broken, all to upstream Android files not in this repo.
+- **Docs:** all PRDs are filed under `docs/done/`, `docs/roadmap/` or `docs/PRD/` (reference). Links checked: the 12 that pointed at upstream Android files now link to GitHub at the submodule commit (2026-10-23).

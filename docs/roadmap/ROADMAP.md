@@ -63,7 +63,7 @@ Requirement: finish the PRDs that are partly built, decide the ones that are not
 
 ### Low
 
-**L1. Twelve broken links in `docs_cs3/android/08` and `09`.** They point at upstream Android files (gradle, `.github/`, fastlane) not in this repo. Remove them or link to upstream.
+**L1. Closed 2026-10-23:** all 12 now link to upstream GitHub at the submodule commit (eb962b4f; every target checked to exist there). **Twelve broken links in `docs_cs3/android/08` and `09`.** They point at upstream Android files (gradle, `.github/`, fastlane) not in this repo. Remove them or link to upstream.
 
 **L2. The five unverified notes** (`unverified/`). Each needs one decision: verify, or delete with its content already recorded in the audit.
 
