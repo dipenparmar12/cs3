@@ -56,7 +56,8 @@ const NUMBER_WORDS: Record<string, string> = {
 const INSTALMENT_WORDS = new Set(['part', 'chapter', 'vol', 'volume']);
 
 function isInstalmentToken(token: string): boolean {
-  return INSTALMENT_WORDS.has(token) || /^\d{1,2}$/.test(token);
+  // Any number: *Blade Runner 2049* is not *Blade Runner*.
+  return INSTALMENT_WORDS.has(token) || /^\d{1,4}$/.test(token);
 }
 
 /** Movie against series, only where both are definite. Anime types are not. */

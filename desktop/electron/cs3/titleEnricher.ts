@@ -122,7 +122,9 @@ export function parseReleaseTitle(raw: string): { title: string; year?: number }
     )
     // A trailing release group after a dash.
     .replace(/-\s*[A-Za-z0-9]+$/, ' ')
-    .replace(/\b(19\d{2}|20\d{2})\b/g, ' ')
+    // Only the year taken above. Any other four-digit number is the title's own
+    // (*Blade Runner 2049*), and dropping it read a sequel as the film it follows.
+    .replace(year ? new RegExp(`\\b${year}\\b`, 'g') : /$^/, ' ')
     .replace(/\s{2,}/g, ' ')
     .trim();
 

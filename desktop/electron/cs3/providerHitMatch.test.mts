@@ -84,6 +84,10 @@ test('a sequel is another work, however close the words', () => {
   assert.equal(kind(film('Toy Story', 1995), { name: 'Toy Story 2' }), 'mismatch');
   assert.equal(kind(film('Charlie'), { name: 'Charlie 2' }), 'mismatch');
   assert.equal(kind(film('Dune', 2021), { name: 'Dune: Part Two' }), 'mismatch');
+  // A number in the title that cannot be a release year is the title's own.
+  assert.equal(kind(film('Blade Runner', 1982), { name: 'Blade Runner 2049' }), 'mismatch');
+  assert.equal(kind(film('Blade Runner 2049', 2017), { name: 'Blade.Runner.2049.2017.1080p' }), 'match');
+  assert.equal(kind(film('Blade Runner', 1982), { name: 'Blade Runner 1982 Final Cut' }), 'match');
   assert.equal(
     kind(film('Mission: Impossible - Dead Reckoning Part One'), { name: 'Mission Impossible Dead Reckoning Part Two' }),
     'mismatch'
