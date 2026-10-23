@@ -3,6 +3,12 @@ import { useTitleInteractions } from '../components/useTitleInteractions';
 import { EmptyState } from '../components/EmptyState';
 import type { SearchHistoryEntry, SearchResponse } from '../types/api';
 import { TYPE_TABS, allCount, liveBelongsInAll, matchesTab, tabsFor } from '../utils/contentTypes';
+import {
+  ResultContextMenuProvider,
+  useOpenResultMenu,
+  type ResultMenuActions,
+} from '../components/search/ResultContextMenu';
+import { useFlash } from '../utils/useFlash';
 import { groupResults, type ResultGroup, type ResultGroupId } from '../utils/resultGroups';
 import type { SearchSnapshot, SearchSourceOutcome } from '../../electron/searchSession';
 import { AlertTriangle, Bookmark, BookmarkCheck, CheckCircle2, ChevronDown, ChevronRight, Filter, Loader2, MoreHorizontal, RotateCw, Search, SearchX, Server, Target, Trash2, Wrench, X } from 'lucide-react';
@@ -362,9 +368,62 @@ export const SearchView: React.FC<SearchViewProps> = ({
    * are both called *Avengers: Endgame*.
    */
   const rawResults = useTitleEnrichment(search?.results ?? []);
+  /** Providers hidden from this search by the card menu; a new query shows them again. */
+  const [hiddenProviders, setHiddenProviders] = useState<ReadonlySet<string>>(new Set());
+  useEffect(() => setHiddenProviders(new Set()), [query]);
   const results = useMemo(
-    () => filterAdultItems(rawResults, adult.allowed, adult.adultProviders),
-    [rawResults, adult.allowed, adult.adultProviders]
+    () =>
+      filterAdultItems(rawResults, adult.allowed, adult.adultProviders).filter(
+        (item) => !hiddenProviders.has(item.apiName)
+      ),
+    [rawResults, adult.allowed, adult.adultProviders, hiddenProviders]
+  );
+  const { message: menuNotice, flash: setMenuNotice } = useFlash<string>(4000);
+
+  const menuActions = useMemo<ResultMenuActions>(
+    () => ({
+      async save(item) {
+        await window.cloudstream?.upsertLibraryEntry({
+          title: item.name,
+          year: item.year,
+          type: item.type,
+          posterUrl: item.posterUrl,
+          mediaUrl: item.url,
+          status: 'PlanToWatch',
+          metadata: { provider: item.apiName },
+        });
+        setMenuNotice(`Saved “${item.name}” to Plan to watch.`);
+      },
+      hideProvider(provider) {
+        setHiddenProviders((current) => new Set([...current, provider]));
+        setMenuNotice(`Hiding results from ${provider} in this search.`);
+      },
+      async excludeProvider(provider) {
+        // Scope selections are provider names. Leaving one out of "everything"
+        // means selecting every other enabled provider, which the sources menu
+        // then shows as a hand-picked set.
+        const options = await window.cloudstream?.getSearchScopeOptions(false);
+        if (!options?.ok) return;
+        const disabled = new Set(options.disabledProviders);
+        const names = options.repositories
+          .flatMap((repo) => repo.extensions.flatMap((ext) => ext.providers))
+          .map((p) => p.name)
+          .filter((name) => !disabled.has(name));
+        const current = options.scope.providers.length > 0 ? options.scope.providers : names;
+        await window.cloudstream?.setSearchScope({
+          providers: current.filter((name) => name !== provider),
+          indexers: options.scope.indexers,
+        });
+        setHiddenProviders((now) => new Set([...now, provider]));
+        setMenuNotice(`${provider} is left out of your searches. Change it under Search sources.`);
+      },
+      async disableProvider(provider) {
+        await window.cloudstream?.setProviderEnabled(provider, false);
+        setHiddenProviders((now) => new Set([...now, provider]));
+        setMenuNotice(`${provider} is turned off. Turn it back on in Extensions.`);
+      },
+    }),
+    [setMenuNotice]
   );
 
   /**
@@ -463,7 +522,13 @@ export const SearchView: React.FC<SearchViewProps> = ({
   }
 
   return (
+    <ResultContextMenuProvider actions={menuActions}>
     <div style={{ display: 'flex', flexDirection: 'column', gap: '0.85rem' }}>
+      {menuNotice && (
+        <p className="settings-note" role="status">
+          {menuNotice}
+        </p>
+      )}
       {/*
         One quiet toolbar instead of a heading, a scope paragraph and three
         buttons. The query is already in the search box, so "Search Results for
@@ -678,6 +743,7 @@ export const SearchView: React.FC<SearchViewProps> = ({
         />
       )}
     </div>
+    </ResultContextMenuProvider>
   );
 };
 
@@ -792,6 +858,7 @@ const VirtualCardGrid: React.FC<VirtualCardGridProps> = ({
   const [scrollTop, setScrollTop] = useState(0);
   const [viewportHeight, setViewportHeight] = useState(0);
   const [focusedUrl, setFocusedUrl] = useState<string | null>(null);
+  const openMenu = useOpenResultMenu();
 
   // Layout effect measures container metrics and grid offset once on mount,
   // and updates when container resizes or item count changes.
@@ -921,6 +988,7 @@ const VirtualCardGrid: React.FC<VirtualCardGridProps> = ({
               aria-posinset={globalIdx + 1}
               aria-setsize={items.length}
               style={{ height: '100%' }}
+              onContextMenu={openMenu ? (event) => openMenu(item, event) : undefined}
             >
               <PosterCard
                 item={item}
