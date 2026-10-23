@@ -12463,6 +12463,7 @@ video::cue {
 .detail-hero--cinema .detail-origin { margin-top: 0.2rem; color: rgba(255, 255, 255, 0.5); }
 .detail-hero__original--late { margin: 0; font-style: normal; font-size: 0.78rem; }
 .detail-hero__status { margin: 0; font-size: 0.8rem; color: var(--text-muted); }
+.detail-hero__status--warn { max-width: 60ch; font-size: 0.9rem; color: var(--warning, #f5b942); }
 
 /* The masthead while the provider is asked: blocks shaped like the rows that
    replace them, still rather than shimmering — a placeholder that pulses for

@@ -555,10 +555,51 @@ export const DetailHeroSkeleton: React.FC<{
   itemKey?: string;
   /** One line saying what is happening, when it is more than loading. */
   status?: string;
-}> = ({ title, posterUrl, year, type, sensitive = false, itemKey, status }) => {
+  /**
+   * The provider's page could not be opened. What the search card already knew
+   * (title, poster, year, genres) stays on screen, with the reason and the way
+   * on, instead of a bare error that loses the poster the viewer clicked.
+   */
+  unavailable?: { reason: string; genres?: string[]; quality?: string; actions: React.ReactNode };
+}> = ({ title, posterUrl, year, type, sensitive = false, itemKey, status, unavailable }) => {
   const adult = useAdultMode();
   useRegisterAdultPresence(sensitive);
   const blurred = sensitive && isAdultItemBlurred(adult, itemKey || title);
+  if (unavailable) {
+    return (
+      <header className="detail-hero detail-hero--cinema">
+        <HeroArtwork posterUrl={posterUrl} blurred={blurred} />
+        <div className="detail-hero__inner">
+          <div className="detail-art" aria-hidden>
+            <Poster
+              src={posterUrl}
+              title={title}
+              decorative
+              sensitive={sensitive}
+              itemKey={itemKey}
+              className="detail-art__image"
+              fallback={<div className="detail-art__placeholder" />}
+            />
+          </div>
+          <div className="detail-hero__body">
+            <div className="detail-hero__title-row">
+              <h1>{title}</h1>
+            </div>
+            <div className="detail-hero__meta">
+              {year && <span>{year}</span>}
+              {type && <span className="detail-hero__type">{type}</span>}
+              {unavailable.quality && <span>{unavailable.quality}</span>}
+              {unavailable.genres?.slice(0, 4).map((genre) => <span key={genre}>{genre}</span>)}
+            </div>
+            <p className="detail-hero__status detail-hero__status--warn" role="alert">
+              {unavailable.reason}
+            </p>
+            <div className="detail-hero__cta">{unavailable.actions}</div>
+          </div>
+        </div>
+      </header>
+    );
+  }
   return (
     <header className="detail-hero detail-hero--cinema" aria-busy="true">
       <HeroArtwork posterUrl={posterUrl} blurred={blurred} />
