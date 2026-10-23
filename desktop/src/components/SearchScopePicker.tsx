@@ -241,6 +241,7 @@ export const SearchScopePicker: React.FC<SearchScopePickerProps> = ({
   const adult = useAdultMode();
   const [profiles, setProfiles] = useState<ProfileSummary[]>([]);
   const [activeProfile, setActiveProfile] = useState<string>('all');
+  const [defaultProfile, setDefaultProfile] = useState<string | undefined>();
   const [draftCount, setDraftCount] = useState(0);
 
   const [pendingImpact, setPendingImpact] = useState<PendingImpactConfirmation | null>(null);
@@ -286,6 +287,7 @@ export const SearchScopePicker: React.FC<SearchScopePickerProps> = ({
       ok?: boolean;
       profiles?: ProfileSummary[];
       activeId?: string;
+      defaultId?: string;
       draft?: {
         providers?: string[];
         indexers?: string[];
@@ -296,6 +298,7 @@ export const SearchScopePicker: React.FC<SearchScopePickerProps> = ({
       if (!snapshot?.ok) return;
       setProfiles(snapshot.profiles ?? []);
       setActiveProfile(snapshot.activeId ?? 'all');
+      setDefaultProfile(snapshot.defaultId);
       const draft = snapshot.draft ?? {};
       setDraftCount((draft.providers?.length ?? 0) + (draft.indexers?.length ?? 0));
 
@@ -1212,6 +1215,10 @@ export const SearchScopePicker: React.FC<SearchScopePickerProps> = ({
               }
               onDuplicate={(id) =>
                 void window.cloudstream?.duplicateSourceProfile?.(id).then(applyProfiles)
+              }
+              defaultId={defaultProfile}
+              onSetDefault={(id) =>
+                void window.cloudstream?.setDefaultSourceProfile?.(id).then(applyProfiles)
               }
               onDelete={(id) =>
                 void window.cloudstream?.deleteSourceProfile?.(id).then(applyProfiles)

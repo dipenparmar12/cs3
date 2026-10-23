@@ -34,6 +34,8 @@ export interface SourceProfileSnapshot {
   profiles: SourceProfile[];
   activeId: string;
   draft: ProfileState['draft'];
+  /** The profile new searches start from; absent means All sources. */
+  defaultId?: string;
   label: string;
   narrowed: boolean;
 }
@@ -667,6 +669,8 @@ export interface CloudStreamElectronAPI {
   createSourceProfile: (name: string) => Promise<SourceProfileSnapshot>;
   renameSourceProfile: (id: string, name: string) => Promise<SourceProfileSnapshot>;
   duplicateSourceProfile: (id: string) => Promise<SourceProfileSnapshot>;
+  /** Makes a profile the one new searches start from; `all` clears it. */
+  setDefaultSourceProfile: (id: string) => Promise<SourceProfileSnapshot>;
   deleteSourceProfile: (id: string) => Promise<SourceProfileSnapshot>;
   /**
    * Viewer profiles: separate libraries, histories and preferences. Optional —
@@ -2399,6 +2403,7 @@ const api: CloudStreamElectronAPI = {
   createSourceProfile: (name) => ipcRenderer.invoke('profiles:create', name),
   renameSourceProfile: (id, name) => ipcRenderer.invoke('profiles:rename', id, name),
   duplicateSourceProfile: (id) => ipcRenderer.invoke('profiles:duplicate', id),
+  setDefaultSourceProfile: (id) => ipcRenderer.invoke('profiles:setDefault', id),
   deleteSourceProfile: (id) => ipcRenderer.invoke('profiles:delete', id),
   getUserProfiles: () => ipcRenderer.invoke('userProfiles:get'),
   verifyUserProfile: (id, secret) => ipcRenderer.invoke('userProfiles:verify', id, secret),

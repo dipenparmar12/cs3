@@ -5,6 +5,8 @@ import {
   DRAFT_ID,
   INITIAL_STATE,
   activate,
+  atLaunch,
+  setDefault,
   create,
   duplicate,
   edit,
@@ -53,7 +55,13 @@ export class SourceProfileStore {
      * whatever they last picked in `SearchScopeStore`; overwriting the second
      * with the first at startup would silently widen their search on upgrade.
      * The first explicit action adopts them — see `adoptExistingScope`.
+     * A default profile is that explicit action, taken earlier: it is applied.
      */
+    if (this.state.defaultId) this.write(atLaunch(this.state));
+  }
+
+  public setDefault(id: string): ProfileState {
+    return this.write(setDefault(this.state, id));
   }
 
   public get(): ProfileState {

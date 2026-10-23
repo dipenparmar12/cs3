@@ -47,6 +47,10 @@ export interface SourceProfileBarProps {
   onRename: (id: string, name: string) => void;
   onDuplicate: (id: string) => void;
   onDelete: (id: string) => void;
+  /** The profile new searches start from (applied at launch). */
+  defaultId?: string;
+  /** `all` clears the default. */
+  onSetDefault?: (id: string) => void;
 }
 
 function renderBuiltInIcon(icon?: BuiltInProfileDef['icon']) {
@@ -84,6 +88,8 @@ export const SourceProfileBar: React.FC<SourceProfileBarProps> = ({
   onCreate,
   onRename,
   onDuplicate,
+  defaultId,
+  onSetDefault,
   onDelete,
 }) => {
   const [naming, setNaming] = useState<'new' | string | null>(null);
@@ -326,6 +332,7 @@ export const SourceProfileBar: React.FC<SourceProfileBarProps> = ({
                       >
                         <div className="profile-dropdown__item-info">
                           <span className="profile-dropdown__item-name">{profile.name}</span>
+                          {defaultId === profile.id && <span className="profile-dropdown__item-hint">Default</span>}
                         </div>
                         <span className="profile-dropdown__item-count">{count} sources</span>
                         {active && <Check size={14} className="profile-dropdown__item-check" />}
@@ -368,6 +375,19 @@ export const SourceProfileBar: React.FC<SourceProfileBarProps> = ({
                               >
                                 <Copy size={12} /> Duplicate
                               </button>
+                              {onSetDefault && (
+                                <button
+                                  type="button"
+                                  className="profile-context-menu__item"
+                                  onClick={() => {
+                                    setMenuFor(null);
+                                    onSetDefault(defaultId === profile.id ? 'all' : profile.id);
+                                    setDropdownOpen(false);
+                                  }}
+                                >
+                                  {defaultId === profile.id ? 'Stop using as default' : 'Set as default'}
+                                </button>
+                              )}
                               <button
                                 type="button"
                                 className="profile-context-menu__item profile-context-menu__item--danger"

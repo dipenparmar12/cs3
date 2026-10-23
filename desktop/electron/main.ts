@@ -6300,6 +6300,7 @@ function profileSnapshot() {
     profiles: state.profiles,
     activeId: state.activeId,
     draft: state.draft,
+    defaultId: state.defaultId,
     label: profiles.activeLabel(),
     narrowed: profiles.isNarrowed(),
   };
@@ -6330,6 +6331,11 @@ ipcMain.handle('profiles:rename', async (_, id: string, name: string) => {
 
 ipcMain.handle('profiles:duplicate', async (_, id: string) => {
   contentService.getProfiles().duplicate(String(id ?? ''));
+  return profileSnapshot();
+});
+
+ipcMain.handle('profiles:setDefault', async (_, id: string) => {
+  contentService.getProfiles().setDefault(String(id ?? ''));
   return profileSnapshot();
 });
 
