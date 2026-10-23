@@ -8,6 +8,7 @@ import { NativeEngineStage, trackLabel } from './player/NativeEngineStage';
 import { PlaybackPrivacyOverlay } from './player/PlaybackPrivacyOverlay';
 import { mediaSessionRecord } from './player/playbackPrivacy';
 import { PlaybackStats } from './player/playbackStats';
+import { shouldSkipStalledTorrent } from './player/torrentStall';
 import { usePlaybackPrivacy } from './player/usePlaybackPrivacy';
 import {
   Play, Pause, Volume2, VolumeX, Maximize, Minimize, ArrowLeft,
@@ -1098,6 +1099,29 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [streamUrl, duration, hasStartedPlayback]);
+
+  /**
+   * A torrent that never got going is left for the next source, as the
+   * wrong-media check above does (`player/torrentStall.ts`). Only before the
+   * first frame, only in standard mode (developer mode stops to show what
+   * failed), and once per stream.
+   */
+  const stallSkippedFor = useRef<string | null>(null);
+  useEffect(() => {
+    if (!stats || !streamUrl || stallSkippedFor.current === streamUrl) return;
+    if (isDeveloper || !sourceSession?.onSourceUnplayable) return;
+    const reason = shouldSkipStalledTorrent({
+      startedPlayback: hasStartedPlayback,
+      stalledMs: stats.stalledMs,
+      peers: stats.peers,
+      isStalled: stats.isStalled,
+    });
+    if (!reason) return;
+    stallSkippedFor.current = streamUrl;
+    notify('That torrent is not delivering — trying the next source', 'info');
+    sourceSession.onSourceUnplayable(reason);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [stats, streamUrl, hasStartedPlayback, isDeveloper]);
 
   // A new stream is a new question about which source works.
   useEffect(() => {
