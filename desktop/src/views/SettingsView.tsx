@@ -51,6 +51,7 @@ import { PlaybackTelemetryPanel } from '../components/settings/PlaybackTelemetry
 import { CardStatusLegend } from '../components/settings/CardStatusLegend';
 import { ExtensionIssuesPanel } from '../components/settings/ExtensionIssuesPanel';
 import { AboutPanel } from '../components/settings/AboutPanel';
+import { AppUpdateSettings } from '../components/settings/AppUpdateSettings';
 import { StoragePanel } from '../components/settings/StoragePanel';
 import { BackupPanel } from '../components/settings/BackupPanel';
 import { DeveloperPanel, SupportCard, SupportSettings } from '../components/settings/SupportPanels';
@@ -954,6 +955,10 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ initialTab }) => {
             THIRD-PARTY-NOTICES.md are not. GPL-3.0 §6 asks that whoever has the
             binary can find the source; a notice nobody can open does not do it.
           */}
+          <SettingGroup title="App updates" icon={<RefreshCw size={15} />} keywords="update version release beta stable">
+            <AppUpdateSettings />
+          </SettingGroup>
+
           <SettingGroup
             title="About and licences"
             icon={<Scale size={15} />}

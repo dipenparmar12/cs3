@@ -10,6 +10,7 @@ import type {
   SuggestionUpdate,
 } from '../src/types/api';
 import type { OttPlatformView } from './cs3/ottPlatforms';
+import type { AppUpdateState } from './appUpdate/appUpdateService';
 import type { PlaybackTelemetryRecord, TelemetrySummary } from './media/playbackTelemetry';
 import type { ProfileState, SourceProfile } from './cs3/sourceProfiles.ts';
 import type {
@@ -1955,6 +1956,14 @@ export interface CloudStreamElectronAPI {
    * where the main thread stopped answering, which a list of stage durations
    * cannot distinguish from an app that was merely busy.
    */
+  /** App update notifications (App Update PRD). Whole state every time. */
+  getAppUpdateState: () => Promise<AppUpdateState>;
+  checkAppUpdate: () => Promise<AppUpdateState>;
+  setAppUpdateSettings: (patch: { channel?: 'stable' | 'beta'; autoCheck?: boolean }) => Promise<AppUpdateState>;
+  skipAppUpdate: (version: string) => Promise<AppUpdateState>;
+  unskipAppUpdate: () => Promise<AppUpdateState>;
+  openAppUpdateDownload: () => Promise<{ ok: boolean }>;
+  onAppUpdateChanged: (callback: (state: AppUpdateState) => void) => () => void;
   getStartupProfile: () => Promise<
     | { ok: true; profile: StartupProfile; tasks: StartupTaskReport[] }
     | { ok: false; error: string }
@@ -2628,6 +2637,13 @@ const api: CloudStreamElectronAPI = {
   selectDirectory: () => ipcRenderer.invoke('dialog:selectDirectory'),
   reloadApp: () => ipcRenderer.invoke('app:reload'),
   relaunchApp: () => ipcRenderer.invoke('app:relaunch'),
+  getAppUpdateState: () => ipcRenderer.invoke('appUpdate:getState'),
+  checkAppUpdate: () => ipcRenderer.invoke('appUpdate:check'),
+  setAppUpdateSettings: (patch) => ipcRenderer.invoke('appUpdate:setSettings', patch),
+  skipAppUpdate: (version) => ipcRenderer.invoke('appUpdate:skip', version),
+  unskipAppUpdate: () => ipcRenderer.invoke('appUpdate:unskip'),
+  openAppUpdateDownload: () => ipcRenderer.invoke('appUpdate:openDownload'),
+  onAppUpdateChanged: (callback) => subscribe('appUpdate:changed', callback),
   getStartupProfile: () => ipcRenderer.invoke('app:getStartupProfile'),
   exportUserData: (only) => ipcRenderer.invoke('backup:export', only),
   inspectBackup: () => ipcRenderer.invoke('backup:inspect'),

@@ -67,7 +67,8 @@ import {
   NetworkSettingsStore,
   type NetworkSettings,
 } from './networkSettings';
-import { setChallengeSolver, setHttpFetch } from './torrent/http';
+import { rawFetch, setChallengeSolver, setHttpFetch } from './torrent/http';
+import { AppUpdateService } from './appUpdate/appUpdateService.ts';
 import { ResilientFetch, classifyNetworkError } from './networkResilience';
 import { BinaryDownloader } from './binaryDownloader';
 import { MpvEngine } from './media/mpvEngine';
@@ -1994,6 +1995,7 @@ app.whenReady().then(async () => {
     () => bootstrap.isAdultAllowed()
   );
   extensionUpdater.schedule();
+  appUpdates.schedule();
 
   batchDownloader.setNotifier((progress) => {
     if (mainWindow && !mainWindow.isDestroyed()) {
@@ -7442,6 +7444,46 @@ ipcMain.handle('app:relaunch', async () => {
  * that never arrived are the same report, and splitting them across two
  * channels would mean the panel could show one without the other.
  */
+/**
+ * Whether a newer CloudStream 3 Desktop is published (App Update PRD Phase 1).
+ * GitHub's release list through Electron's fetch (system proxy, DoH); never in
+ * a development build or a smoke run. Phase 1 opens the download in the browser.
+ */
+const appUpdates = new AppUpdateService({
+  store: datastore,
+  fetch: (url, init) => rawFetch(url, init),
+  currentVersion: app.getVersion(),
+  platform: {
+    os: process.platform,
+    arch: process.arch,
+    kind: process.env.PORTABLE_EXECUTABLE_DIR
+      ? 'portable'
+      : process.env.APPIMAGE
+        ? 'appimage'
+        : process.platform === 'win32' || process.platform === 'darwin'
+          ? 'installed'
+          : 'other',
+    hasDpkg: process.platform === 'linux' && fs.existsSync('/usr/bin/dpkg'),
+  },
+  // CS3_FORCE_UPDATE_CHECK=1 exercises the check from an unpackaged build.
+  enabled: (app.isPackaged || process.env.CS3_FORCE_UPDATE_CHECK === '1') && !process.env.CS3_SMOKE_REPORT,
+  openExternal: (url) => shell.openExternal(url),
+  log: (event, data) => logger.info('app', event, data),
+});
+appUpdates.onChange((state) => {
+  BrowserWindow.getAllWindows().forEach((w) => w.webContents.send('appUpdate:changed', state));
+});
+app.on('before-quit', () => appUpdates.dispose());
+
+ipcMain.handle('appUpdate:getState', async () => appUpdates.getState());
+ipcMain.handle('appUpdate:check', async () => appUpdates.check());
+ipcMain.handle('appUpdate:setSettings', async (_, patch: Parameters<AppUpdateService['setSettings']>[0]) =>
+  appUpdates.setSettings(patch ?? {})
+);
+ipcMain.handle('appUpdate:skip', async (_, version: string) => appUpdates.skip(String(version)));
+ipcMain.handle('appUpdate:unskip', async () => appUpdates.unskip());
+ipcMain.handle('appUpdate:openDownload', async () => ({ ok: await appUpdates.openDownload() }));
+
 ipcMain.handle('app:getStartupProfile', async () => {
   try {
     return { ok: true, profile: startup.snapshot(), tasks: background.report() };

@@ -27,6 +27,7 @@ import { FirstRunBanner } from './components/FirstRunBanner';
 import { RegionOnboarding } from './components/regions/RegionOnboarding';
 import { AdultSessionPrompt } from './components/AdultSessionPrompt';
 import { ExtensionUpdateNotice } from './components/extensions/ExtensionUpdateNotice';
+import { AppUpdateNotice } from './components/AppUpdateNotice';
 import type { ExtensionsTab } from './components/extensions/ExtensionsScreen';
 
 import { TvType, type Episode, type SearchOptions, type SearchResponse } from './types/api';
@@ -2660,6 +2661,8 @@ export const App: React.FC = () => {
           onCancel={() => pendingDownload.decide(false, false)}
         />
       )}
+
+      <AppUpdateNotice held={playerInFront} />
 
       {/* Dismissed by clicking it, because it reports something the viewer
           asked for and may want to read twice — not a status that ages out. */}

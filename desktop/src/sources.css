@@ -1155,6 +1155,11 @@
   cursor: pointer;
 }
 .ext-update-notice__close:hover { color: var(--text-main); background: var(--control-ambient-hover); }
+/* App update notice: above the extension notice, never on it. */
+.app-update-notice { bottom: 4.75rem; flex-wrap: wrap; max-width: min(520px, calc(100vw - 3rem)); }
+.app-update-notice > span { flex: 1 1 14rem; }
+.app-update-notice__hint { display: block; font-size: 0.75rem; color: var(--text-muted); }
+.app-update-notes { margin: 0; max-height: 50vh; overflow: auto; white-space: pre-wrap; font: inherit; font-size: 0.85rem; color: var(--text-main); }
 
 /* --- player --- */
 
