@@ -22,6 +22,8 @@ export interface EpisodeRef {
   name?: string;
   season?: number;
   episode?: number;
+  /** This episode's own quality, over the run's `maxResolution`. */
+  maxResolution?: number;
 }
 
 export interface BatchDownloadRequest {
@@ -138,7 +140,7 @@ export class BatchDownloader {
           titleOverride: request.title,
         });
 
-        const choice = pickSource(response.sources, request.maxResolution);
+        const choice = pickSource(response.sources, episode.maxResolution ?? request.maxResolution);
         if (!choice) {
           progress.failed++;
           progress.failures.push({
