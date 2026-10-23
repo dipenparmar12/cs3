@@ -18,6 +18,13 @@
 # artifacts to the run without publishing, for checking a release before
 # tagging it.
 #
+# beta.yml calls this workflow (workflow_call) with a semver prerelease version
+# (1.1.0-beta.20261023.7) and publish: true. The same builds and checks run, and
+# the release is tagged v<version> at the commit built and published as a
+# prerelease; the app's beta channel reads it (App Update PRD §4.3). A tag the
+# workflow pushed itself would not start this workflow, which is why it is
+# called rather than triggered.
+#
 # Artifacts are named CS3-<version>-<os>-<arch>[-<kind>].<ext>
 # (electron-builder.yml; tools/package/package-layout.mjs is the check), with a
 # SHA256SUMS.txt beside them.
@@ -32,6 +39,16 @@ on:
       version:
         description: 'Version to name the artifacts (no leading v), e.g. 1.2.3'
         required: true
+  workflow_call:
+    inputs:
+      version:
+        description: 'Version to name and tag the release (no leading v)'
+        type: string
+        required: true
+      publish:
+        description: 'Publish a release tagged v<version> at this commit'
+        type: boolean
+        default: false
 
 # Read-only by default (audit SEC-08): the build jobs run `bun install`, whose
 # dependency scripts must not hold a token that can rewrite the repository or
@@ -57,7 +74,7 @@ jobs:
       - id: v
         shell: bash
         run: |
-          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+          if [ -n "${{ inputs.version }}" ]; then
             VERSION="${{ inputs.version }}"
           else
             VERSION="${GITHUB_REF_NAME#v}"
@@ -240,7 +257,7 @@ jobs:
   release:
     name: Publish release
     needs: [version, build]
-    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+    if: (github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')) || inputs.publish == true
     runs-on: ubuntu-latest
     timeout-minutes: 30
     # The one job that publishes, and so the only one that may write.
@@ -279,6 +296,10 @@ jobs:
         # leaves a draft nobody sees, never a release missing a platform.
         uses: softprops/action-gh-release@v2
         with:
+          # The tag for a called (beta) run, which has no tag of its own; a tag
+          # push names the same tag it was started by.
+          tag_name: v${{ needs.version.outputs.version }}
+          target_commitish: ${{ github.sha }}
           draft: true
           name: CloudStream 3 Desktop ${{ needs.version.outputs.version }}${{ steps.signing.outputs.complete != 'true' && ' (unsigned preview)' || '' }}
           generate_release_notes: true
@@ -291,4 +312,4 @@ jobs:
       - name: Publish it
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh release edit "${{ github.ref_name }}" --repo "${{ github.repository }}" --draft=false
+        run: gh release edit "v${{ needs.version.outputs.version }}" --repo "${{ github.repository }}" --draft=false

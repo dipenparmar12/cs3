@@ -2,7 +2,7 @@
 
 **Status (2026-10-23):** Proposed. Nothing built. The register entry is in `ROADMAP.md`.
 
-**Owner decision needed before Phase 2:** §13 (three questions). Phase 1 can start without them.
+**Decided 2026-10-23 (§13):** betas are built manually only; unsigned stable releases are offered to stable viewers; Phase 3 downloads in the app and verifies against `SHA256SUMS.txt`. **Built:** Phase 1 (app side) and Phase 2 (`.github/workflows/beta.yml`, `release.yml` callable); Phase 2 not yet run on GitHub.
 
 ---
 
@@ -203,7 +203,13 @@ Whole state every time, never deltas (AGENTS §12).
 - Pipeline: a `beta.yml` dry run (`workflow_dispatch` without publishing) produces `1.5.0-beta.<date>.<run>` artifacts that pass `verify-package.mjs`.
 - Phase 2: a checksum mismatch deletes the file and opens the release page.
 
-## 13. Open decisions
+## 13. Decisions (answered 2026-10-23)
+
+1. Beta cadence: **manual only** (`beta.yml`, workflow_dispatch on master).
+2. Unsigned stable releases: **offered** to stable viewers.
+3. In-app download: **yes**, verified against the release's `SHA256SUMS.txt` (already published by `release.yml`).
+
+The questions as first asked:
 
 1. **Beta cadence:** manual only, or daily when `master` moved? (Actions minutes: five targets per build.)
 2. **Unsigned stable releases:** offer them to stable viewers (today they are the only releases), or only when signed?
