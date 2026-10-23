@@ -1,6 +1,7 @@
-import type { StoredSource } from '../../src/types/library';
+import type { PlayedSource, StoredSource } from '../../src/types/library';
 import type { TorrentResult } from '../../src/types/torrent';
 import { hasRealInfoHash, normaliseReleaseName } from '../../src/utils/sourceIdentity.ts';
+import { parseExtensionUrl } from './extensionAddress.ts';
 
 /**
  * Finding a saved source again after its link has died.
@@ -132,6 +133,26 @@ export function pickReplacement(
  * resolution and language each narrow further when the candidate states them,
  * and an unstated one is not held against it.
  */
+/**
+ * Whether what played last time may steer a Play on this provider's page.
+ *
+ * The record is keyed on the title, so The Matrix played from Provider A is the
+ * record for The Matrix. Pressing Play on Provider B's page used to start A's
+ * saved link (and order B's walk by A's release): the viewer chose B. A record
+ * counts only for the provider it was played through, by the page it was
+ * played from or by the source's own provider. A request that names no provider
+ * (a catalogue row, a resume surface that replays the recorded page) takes any.
+ */
+export function playedThroughProvider(
+  record: Pick<PlayedSource, 'source' | 'origin'>,
+  requestUrl: string | undefined
+): boolean {
+  const wanted = requestUrl ? parseExtensionUrl(requestUrl)?.provider : undefined;
+  if (!wanted) return true;
+  const same = (name: string | undefined) => Boolean(name) && normaliseReleaseName(name) === normaliseReleaseName(wanted);
+  return same(parseExtensionUrl(record.origin.mediaUrl)?.provider) || same(record.source.providerName);
+}
+
 export function pickSibling(
   saved: StoredSource,
   candidates: TorrentResult[]

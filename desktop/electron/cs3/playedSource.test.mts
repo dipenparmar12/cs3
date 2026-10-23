@@ -16,7 +16,7 @@
  * it alone can never re-find one.
  */
 import assert from 'node:assert/strict';
-import { isLinkUsable, isWorthTryingFirst, matchesRelease, pickReplacement, pickSibling } from './playedSource.ts';
+import { isLinkUsable, isWorthTryingFirst, matchesRelease, pickReplacement, pickSibling, playedThroughProvider } from './playedSource.ts';
 import type { StoredSource } from '../../src/types/library.ts';
 import type { TorrentResult } from '../../src/types/torrent.ts';
 
@@ -83,6 +83,17 @@ test('a resume tries a link with no deadline first, but never one past its deadl
   assert.equal(isWorthTryingFirst(saved({ expiresAt: now - 1 }), now), false);
   assert.equal(isWorthTryingFirst(saved({ expiresAt: now + 60_000 }), now), true);
   assert.equal(isWorthTryingFirst(saved({ directUrl: undefined, expiresAt: undefined }), now), false);
+});
+
+test("Play on Provider B's page never uses what played through Provider A", () => {
+  const record = {
+    source: saved({ providerName: 'ProviderA' }),
+    origin: { mediaUrl: 'cs3ext://ProviderA/https%3A%2F%2Fa.example%2Fmatrix', title: 'The Matrix', year: 1999 },
+  };
+  assert.equal(playedThroughProvider(record, 'cs3ext://ProviderB/https%3A%2F%2Fb.example%2Fmatrix'), false);
+  assert.equal(playedThroughProvider(record, 'cs3ext://ProviderA/https%3A%2F%2Fa.example%2Fmatrix'), true);
+  assert.equal(playedThroughProvider(record, 'cs3meta://movie/tt0133093'), true, 'a catalogue row names no provider');
+  assert.equal(playedThroughProvider(record, undefined), true);
 });
 
 // --- matching --------------------------------------------------------------

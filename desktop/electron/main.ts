@@ -148,7 +148,13 @@ import {
   continueWatchingEnabled,
   setContinueWatchingEnabled,
 } from './cs3/continueWatching';
-import { isLinkUsable, isWorthTryingFirst, pickReplacement, pickSibling } from './cs3/playedSource';
+import {
+  isLinkUsable,
+  isWorthTryingFirst,
+  pickReplacement,
+  pickSibling,
+  playedThroughProvider,
+} from './cs3/playedSource';
 import {
   LibraryStore,
   type WatchStatus,
@@ -3824,7 +3830,7 @@ ipcMain.handle(
           resume: options?.preferSource
             ? preferenceFor(options.preferSource)
             : options?.resumeKey
-              ? resumePreference(options.resumeKey, request.season, request.episode)
+              ? resumePreference(options.resumeKey, request.season, request.episode, request.mediaUrl)
               : undefined,
         }),
       };
@@ -6729,9 +6735,15 @@ function preferenceFor(source: StoredSource): ResumePreference {
   };
 }
 
-function resumePreference(key: string, season?: number, episode?: number): ResumePreference | undefined {
+function resumePreference(
+  key: string,
+  season?: number,
+  episode?: number,
+  requestUrl?: string
+): ResumePreference | undefined {
   const record = libraryStore.getPlayedSource(key, season, episode);
-  if (record && record.source.status !== 'Unavailable') {
+  // Only what played through the provider being asked (`playedThroughProvider`).
+  if (record && record.source.status !== 'Unavailable' && playedThroughProvider(record, requestUrl)) {
     return {
       // Tried first even without a stated deadline; discovery runs alongside.
       start: isWorthTryingFirst(record.source) ? storedSourceToTorrentResult(record.source) : undefined,
@@ -6747,7 +6759,7 @@ function resumePreference(key: string, season?: number, episode?: number): Resum
    */
   const sibling = libraryStore
     .getPlayedSourcesForKey(key)
-    .filter((entry) => entry.source.status !== 'Unavailable')
+    .filter((entry) => entry.source.status !== 'Unavailable' && playedThroughProvider(entry, requestUrl))
     .sort((a, b) => b.playedAt - a.playedAt)[0];
   if (!sibling) return undefined;
   return { match: (candidates) => pickSibling(sibling.source, candidates) };
