@@ -51,6 +51,7 @@ import type { SeriesContext } from './player/seriesContext';
 import type { PlaybackPreferences, StoredSource } from '../types/library';
 import { matchesRelease } from '../../electron/cs3/playedSource';
 import { judgeableDuration, looksLikeWrongMedia, wrongMediaReason } from '../utils/mediaSanity';
+import { validateContent } from '../utils/contentValidation';
 import { torrentResultToStoredSource } from '../../electron/cs3/libraryStore';
 import { isPlaceholderOrigin } from '../utils/originName';
 import { canonicalKey } from '../../electron/cs3/libraryStore';
@@ -523,6 +524,9 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
   const [activeSubtitle, setActiveSubtitle] = useState<string | null>(null);
   const [panelOpen, setPanelOpen] = useState(false);
   const [sourcePanelOpen, setSourcePanelOpen] = useState(false);
+  /** A possible-mismatch warning for the stream playing now (see the sanity check). */
+  const [mismatchWarning, setMismatchWarning] = useState<string | null>(null);
+  useEffect(() => setMismatchWarning(null), [streamUrl]);
   const [subtitlePanelOpen, setSubtitlePanelOpen] = useState(false);
 
   // `s` in mpv's own window asks for the subtitle search, which lives here.
@@ -1089,7 +1093,23 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
     if (actual === undefined) return;
     sanityCheckedFor.current = streamUrl;
     const expected = progress?.expectedDurationSeconds;
-    if (!looksLikeWrongMedia({ actualSeconds: actual, expectedSeconds: expected })) return;
+    if (!looksLikeWrongMedia({ actualSeconds: actual, expectedSeconds: expected })) {
+      /*
+       * Not plainly wrong, but possibly (Content Validation PRD §9.1): a
+       * 25-minute stream for a 2-hour film may be part one, or a different
+       * cut. Said once, with the way out; playback is never stopped for it.
+       */
+      const verdict = validateContent({
+        kind: progress?.season !== undefined ? 'episode' : 'movie',
+        expectedSeconds: expected,
+        detectedSeconds: actual,
+      });
+      if (verdict.identity === 'possible-mismatch') {
+        const provider = providerProvenance?.provider || activeSource?.indexerName;
+        setMismatchWarning(provider ? `${verdict.summary} (${provider})` : verdict.summary);
+      }
+      return;
+    }
     const reason = wrongMediaReason(actual, expected!);
     if (sourceSession?.onSourceUnplayable) {
       notify('That source was not the title — trying the next one', 'info');
@@ -5154,6 +5174,24 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
       <div className="player__messages player__messages--bottom">
         {showStrategyNote && capability && (
           <div className="player__strategy-note">{capability.explanation}</div>
+        )}
+        {mismatchWarning && (
+          <div className="player__mismatch" role="alert">
+            <span>{mismatchWarning}</span>
+            <button
+              type="button"
+              className="btn btn-primary btn-sm"
+              onClick={() => {
+                setMismatchWarning(null);
+                setSourcePanelOpen(true);
+              }}
+            >
+              Choose another source
+            </button>
+            <button type="button" className="btn btn-sm" onClick={() => setMismatchWarning(null)}>
+              Keep watching
+            </button>
+          </div>
         )}
         {/* Above the controls, clear of the seek bar, gone in four seconds. */}
         {toasts.length > 0 && (
