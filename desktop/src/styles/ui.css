@@ -417,7 +417,18 @@ select.ui-select:disabled { opacity: var(--control-disabled-opacity); cursor: no
 
 /* Library card controls on the shared tokens. */
 .library-card__status { flex: 1; min-width: 0; }
-.library-card__sources { color: var(--accent-light); padding-left: 0.3rem; }
+/* Library card: remove and saved sources live on the poster (fixed card height). */
+.library-card__remove, .library-card__sources-chip {
+  position: absolute; z-index: 3; display: inline-flex; align-items: center; gap: 0.25rem;
+  border: 1px solid rgba(255, 255, 255, 0.18); background: rgba(10, 12, 18, 0.78); color: #fff;
+  font: inherit; font-size: 0.72rem; cursor: pointer; backdrop-filter: blur(6px);
+}
+.library-card__remove { top: 0.4rem; right: 0.4rem; width: 1.6rem; height: 1.6rem; justify-content: center; border-radius: 50%; opacity: 0; transition: opacity 120ms ease; }
+.poster-card:hover .library-card__remove, .library-card__remove:focus-visible { opacity: 1; }
+.library-card__remove:hover { background: var(--danger, #e5484d); border-color: transparent; }
+.library-card__sources-chip { left: 0.4rem; bottom: 0.55rem; padding: 0.15rem 0.45rem; border-radius: 999px; }
+.library-card__sources-chip:hover, .library-card__sources-chip:focus-visible { background: var(--accent, #3b82f6); border-color: transparent; }
+@media (hover: none) { .library-card__remove { opacity: 1; } }
 
 /* --- Erase my data (Settings → Privacy) ----------------------------------- */
 .erase-data { display: flex; flex-direction: column; gap: .85rem; }

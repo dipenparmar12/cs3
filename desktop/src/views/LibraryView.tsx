@@ -18,6 +18,7 @@ import type { PlayedSource } from '../types/library';
 import type { TorrentResult } from '../types/torrent';
 import {
   Trash2,
+  X,
   Star,
   Clock,
   Play,
@@ -673,6 +674,40 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
                       </button>
                     </div>
                   )}
+                  {/*
+                    Remove without entering selection mode, and the saved sources
+                    one press away. Both sit on the poster so every card keeps the
+                    same height: the sources line under the title used to push the
+                    actions row out through the card's border.
+                  */}
+                  {!selection.active && (
+                    <button
+                      type="button"
+                      className="library-card__remove"
+                      aria-label={`Remove ${entry.title} from library`}
+                      title="Remove from library"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        remove(entry);
+                      }}
+                    >
+                      <X size={14} aria-hidden />
+                    </button>
+                  )}
+                  {!selection.active && entry.sources && entry.sources.length > 0 && (
+                    <button
+                      type="button"
+                      className="library-card__sources-chip"
+                      aria-label={`${entry.sources.length} saved sources for ${entry.title}`}
+                      title="View saved sources"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setSourcesModalEntry(entry);
+                      }}
+                    >
+                      <Database size={11} aria-hidden /> {entry.sources.length}
+                    </button>
+                  )}
                   {percent > 0 && (
                     <div className="poster-progress">
                       <div style={{ width: `${Math.min(100, percent)}%` }} />
@@ -698,24 +733,6 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
                     </div>
                   )}
 
-                  {entry.sources && entry.sources.length > 0 && (
-                    <div style={{ marginTop: '0.2rem' }}>
-                      <Button
-                        size="compact"
-                        variant="ambient"
-                        icon={Database}
-                        className="library-card__sources"
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          setSourcesModalEntry(entry);
-                        }}
-                        title="View saved sources"
-                      >
-                        {entry.sources.length} saved sources
-                      </Button>
-                    </div>
-                  )}
-
                   <div className="library-card__actions">
                     <Select
                       size="compact"
@@ -737,14 +754,6 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
                       <RotateCw size={13} className={refreshingKey === entry.key ? 'animate-spin' : ''} />
                     </button>
 
-                    <button
-                      className="icon-button"
-                      onClick={() => remove(entry)}
-                      aria-label={`Remove ${entry.title}`}
-                      title="Remove from library"
-                    >
-                      <Trash2 size={14} />
-                    </button>
                   </div>
                 </div>
               </div>
