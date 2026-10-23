@@ -1967,6 +1967,25 @@ app.whenReady().then(async () => {
       ...refused.map((entry) => ({ internalName: entry.target.slice('ext:'.length), ok: false, message: entry.reason })),
     ];
   });
+  // Newly published extensions in repositories already in use install as
+  // ordinary jobs, beside updates (`cs3/newExtensions.ts`).
+  extensionUpdater.setNewExtensionInstaller(
+    async (extensions) => {
+      const { ids, refused } = extensionJobs.enqueue(
+        extensions.map((entry) => ({ kind: 'install' as const, plugin: entry.plugin, repositoryUrl: entry.repositoryUrl }))
+      );
+      const finished = await extensionJobs.whenSettled(ids);
+      return [
+        ...finished.map((job) => ({
+          internalName: job.target.slice('ext:'.length),
+          ok: job.state === 'done',
+          message: job.message ?? (job.state === 'cancelled' ? 'Cancelled' : ''),
+        })),
+        ...refused.map((entry) => ({ internalName: entry.target.slice('ext:'.length), ok: false, message: entry.reason })),
+      ];
+    },
+    () => bootstrap.isAdultAllowed()
+  );
   extensionUpdater.schedule();
 
   batchDownloader.setNotifier((progress) => {
