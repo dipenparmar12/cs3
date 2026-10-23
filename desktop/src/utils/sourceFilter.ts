@@ -278,6 +278,26 @@ export function foldTorrents(
   return { shown, hidden };
 }
 
+/**
+ * A long source list by where each row came from, for a list that can be
+ * folded and jumped through (the picker can hold a thousand rows). Groups are
+ * ordered by their best-ranked row and keep the ranking inside; nothing is
+ * dropped or reordered across the list.
+ */
+export function groupSourcesByOrigin(
+  sources: TorrentResult[]
+): Array<{ origin: string; sources: TorrentResult[] }> {
+  const groups = new Map<string, TorrentResult[]>();
+  for (const source of sources) {
+    // A row several indexers listed reads 'Torrentio, The Pirate Bay': the first names it.
+    const origin = (source.providerName || source.indexerName || 'Other').split(',')[0].trim() || 'Other';
+    const list = groups.get(origin) ?? [];
+    list.push(source);
+    groups.set(origin, list);
+  }
+  return [...groups.entries()].map(([origin, list]) => ({ origin, sources: list }));
+}
+
 export interface FacetCount {
   value: string;
   label: string;

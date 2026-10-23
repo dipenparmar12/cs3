@@ -10,6 +10,7 @@ import {
   detectResolutionCategory,
   filterAndSortSources,
   foldTorrents,
+  groupSourcesByOrigin,
   isFilterActive,
   matchesLanguage,
   matchesSize,
@@ -223,6 +224,16 @@ test('copies of a shown release fold behind it; an unknown size never groups', (
   const { shown, hidden } = foldTorrents([a, copy, other, noSize1, noSize2], DEFAULT_FILTER_STATE);
   assert.deepEqual(shown.map((s) => s.infoHash), ['a', 'c', 'd', 'e']);
   assert.equal(hidden, 1);
+});
+
+test('sources group by origin in order of their best row, ranking kept inside', () => {
+  const a1 = createSource({ infoHash: 'a1', indexerName: 'Torrentio' });
+  const b1 = createSource({ infoHash: 'b1', indexerName: 'YTS' });
+  const a2 = createSource({ infoHash: 'a2', indexerName: 'Torrentio, The Pirate Bay' });
+  const p1 = createSource({ infoHash: 'p1', indexerName: 'x', providerName: 'HDO', directUrl: 'https://h/x.m3u8' });
+  const groups = groupSourcesByOrigin([a1, b1, a2, p1]);
+  assert.deepEqual(groups.map((g) => [g.origin, g.sources.map((s) => s.infoHash)]), [['Torrentio', ['a1', 'a2']], ['YTS', ['b1']], ['HDO', ['p1']]]);
+  assert.equal(groupSourcesByOrigin([]).length, 0);
 });
 
 let failed = 0;

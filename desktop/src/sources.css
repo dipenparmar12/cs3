@@ -12981,3 +12981,25 @@ button.credit-card { border: 0; background: none; padding: 0; font: inherit; col
 .poster-attempt--empty { background: transparent; box-shadow: inset 0 0 0 1.5px rgba(255, 255, 255, 0.45); }
 .poster-attempt--wrong { background: #f59e0b; }
 .poster-attempt--error { background: #f87171; }
+/* Batch download: choose episodes across seasons (EpisodePicker). */
+.episode-picker { display: flex; flex-direction: column; gap: 0.6rem; margin-bottom: 1rem; }
+.episode-picker__toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 0.4rem; }
+.episode-picker__toolbar > :first-child { flex: 1 1 16rem; }
+.episode-picker__list { max-height: 46vh; overflow: auto; border: 1px solid rgba(255, 255, 255, 0.08); border-radius: 10px; }
+.episode-picker__season + .episode-picker__season { border-top: 1px solid rgba(255, 255, 255, 0.06); }
+.episode-picker__season-head { position: sticky; top: 0; z-index: 1; display: flex; align-items: center; justify-content: space-between; gap: 0.5rem; padding: 0.45rem 0.7rem; background: var(--bg-card); }
+.episode-picker__fold { display: inline-flex; align-items: center; gap: 0.35rem; border: 0; background: none; color: var(--text-main); font: inherit; font-weight: 600; cursor: pointer; }
+.episode-picker__count { font-weight: 400; font-size: 0.8rem; color: var(--text-muted); margin-left: 0.4rem; }
+.episode-picker__episodes { list-style: none; margin: 0; padding: 0 0.7rem 0.4rem; }
+.episode-picker__row { display: flex; align-items: center; justify-content: space-between; gap: 0.5rem; padding: 0.2rem 0; }
+.episode-picker__row .ui-check { min-width: 0; flex: 1; }
+.episode-picker__num { font-variant-numeric: tabular-nums; color: var(--text-muted); margin-right: 0.45rem; }
+.episode-picker__name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* Source picker: one foldable section per provider, with jump chips. */
+.source-picker__groups { display: flex; flex-wrap: wrap; align-items: center; gap: 0.35rem; margin: 0.4rem 0 0.6rem; }
+.source-picker__group-chip { cursor: pointer; }
+.source-picker__group-chip span { margin-left: 0.25rem; color: var(--text-muted); font-variant-numeric: tabular-nums; }
+.source-group { margin-bottom: 0.5rem; }
+.source-group__head { position: sticky; top: 0; z-index: 1; display: flex; align-items: center; gap: 0.4rem; width: 100%; padding: 0.45rem 0.6rem; border: 0; border-radius: 8px; background: var(--bg-card); color: var(--text-main); font: inherit; font-weight: 600; text-align: left; cursor: pointer; }
+.source-group__head:hover { background: var(--control-ambient-hover); }
+.source-group__count { margin-left: auto; font-weight: 400; font-size: 0.8rem; color: var(--text-muted); }

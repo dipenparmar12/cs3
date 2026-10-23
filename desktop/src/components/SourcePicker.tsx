@@ -1,4 +1,4 @@
-import React, { useCallback, useMemo, useState } from 'react';
+import React, { useCallback, useMemo, useState, useEffect } from 'react';
 import { useFlash } from '../utils/useFlash';
 import {
   X, Users, HardDrive, Loader2, AlertTriangle, Filter, ChevronDown,
@@ -25,9 +25,13 @@ import {
   DEFAULT_FILTER_STATE,
   filterAndSortSources,
   foldTorrents,
+  groupSourcesByOrigin,
   type SourceFilterState,
 } from '../utils/sourceFilter';
 import { formatBytes } from '../utils/format';
+
+/** A provider name as an element id, for the jump chips. */
+const slug = (value: string) => value.toLowerCase().replace(/[^a-z0-9]+/g, '-');
 
 export interface SourcePickerData {
   sources: TorrentResult[];
@@ -186,6 +190,151 @@ export const SourcePicker: React.FC<SourcePickerProps> = ({
     const filtered = data ? filterAndSortSources(data.sources, filterState) : [];
     return showAllTorrents ? { shown: filtered, hidden: 0 } : foldTorrents(filtered, filterState);
   }, [data, filterState, showAllTorrents]);
+
+  /**
+   * One section per provider or indexer once there is more than one, foldable,
+   * with chips to jump to each: a list of a thousand rows was one long scroll
+   * (2026-10-23). The best-ranked group opens; with more than 30 rows the
+   * others start folded. Rank order is untouched inside each group, and the
+   * "best" badge stays on the overall first row.
+   */
+  const groups = useMemo(() => groupSourcesByOrigin(displayedSources), [displayedSources]);
+  const rankOf = useMemo(() => new Map(displayedSources.map((source, index) => [source, index])), [displayedSources]);
+  const [collapsedOrigins, setCollapsedOrigins] = useState<Set<string>>(() => new Set());
+  const foldedFor = React.useRef<string | null>(null);
+  useEffect(() => {
+    const signature = groups.map((g) => g.origin).join('|');
+    if (foldedFor.current === signature) return;
+    foldedFor.current = signature;
+    setCollapsedOrigins(displayedSources.length > 30 ? new Set(groups.slice(1).map((g) => g.origin)) : new Set());
+  }, [groups, displayedSources.length]);
+
+  const renderSourceRow = (source: TorrentResult, index: number) => {
+      const isExpanded = expandedHash === source.infoHash;
+      return (
+        <li
+          key={`${source.infoHash}-${source.indexerId}`}
+          className={`source-row${index === 0 ? ' source-row--best' : ''}`}
+        >
+          <div className="source-row__main">
+            <div className="source-row__badges">
+              <span className={`badge badge--res-${source.parsed.resolution}`}>
+                {resolutionLabel(source.parsed.resolution)}
+              </span>
+              {source.parsed.source !== 'Unknown' && (
+                <span className="badge">{source.parsed.source}</span>
+              )}
+              {/* Resolution and language describe the film; the codec
+                  describes the file, and knowing whether it matters
+                  means knowing what this machine can decode. */}
+              {isDeveloper && source.parsed.videoCodec !== 'Unknown' && (
+                <span className="badge badge--muted">{source.parsed.videoCodec}</span>
+              )}
+              {source.parsed.hdr.map((h) => (
+                <span key={h} className="badge badge--hdr">{h}</span>
+              ))}
+              {source.parsed.isSeasonPack && (
+                <span className="badge badge--muted">Season pack</span>
+              )}
+            </div>
+
+            <p className="source-row__title" title={source.title}>{source.title}</p>
+
+            <div className="source-row__meta">
+              <span className={healthClass(source.seeders)}>
+                <Users size={13} /> {source.seeders}
+              </span>
+              <span><HardDrive size={13} /> {formatBytes(source.sizeBytes)}</span>
+              <span className="muted" title="Host or extractor this link points at">
+                {sourceHost(source) ?? source.indexerName}
+              </span>
+              {source.parsed.releaseGroup && (
+                <span className="muted">{source.parsed.releaseGroup}</span>
+              )}
+            </div>
+
+            {/* Repository, extension, provider. `indexerName` above is
+                the extractor an extension picked, not the extension —
+                so without this a failing source cannot be traced to
+                anything the user is able to turn off. */}
+            {/* Standard mode gets the provider alone — where the film
+                is coming from. The repository and extension above it
+                answer a maintenance question, and the full chain is
+                still one toggle away and still in the copied report. */}
+            {(isDeveloper
+              ? provenanceChain(source, provenanceFor(source))
+              : providerLabel(source, provenanceFor(source))) && (
+              <p
+                className="source-row__origin"
+                title={provenanceChain(source, provenanceFor(source))}
+              >
+                {isDeveloper
+                  ? provenanceChain(source, provenanceFor(source))
+                  : providerLabel(source, provenanceFor(source))}
+              </p>
+            )}
+          </div>
+
+          <div className="source-row__actions">
+            <button className="btn btn-primary btn-sm" onClick={() => onPlay(source)}>
+              <Play size={14} /> Play
+            </button>
+            <button
+              className="btn btn-sm"
+              onClick={() => onDownload(source)}
+              title="Download this source"
+            >
+              <Download size={14} />
+            </button>
+            {sourceAddress(source) && (
+              <button
+                className="icon-button"
+                onClick={() => void copyLink(source)}
+                aria-label={`Copy the link for ${source.title}`}
+                title="Copy this source's link"
+              >
+                {copiedLink === source.infoHash ? <Check size={15} /> : <Link2 size={15} />}
+              </button>
+            )}
+            <button
+              className="icon-button"
+              onClick={() => void copyDetails(source)}
+              aria-label={`Copy the details for ${source.title}`}
+              title="Copy this source's details"
+            >
+              {copiedDetails === source.infoHash
+                ? <Check size={15} />
+                : <ClipboardCopy size={15} />}
+            </button>
+            {/* "Score 47" over a list of the rules that produced it is
+                the ranking's own working shown to somebody who asked
+                for a film. It is exactly what a maintainer needs and
+                nothing a viewer can act on. */}
+            {isDeveloper && (
+              <button
+                className="icon-button"
+                onClick={() => setExpandedHash(isExpanded ? null : source.infoHash)}
+                aria-label="Why this ranking?"
+                title="Why this ranking?"
+              >
+                <Info size={15} />
+              </button>
+            )}
+          </div>
+
+          {isExpanded && isDeveloper && (
+            <div className="source-row__why">
+              <strong>Score {source.score}</strong>
+              <ul>
+                {source.scoreReasons.map((reason) => (
+                  <li key={reason}>{reason}</li>
+                ))}
+              </ul>
+            </div>
+          )}
+        </li>
+      );
+  };
 
   if (!isOpen) return null;
 
@@ -457,134 +606,77 @@ export const SourcePicker: React.FC<SourcePickerProps> = ({
               </div>
             )}
 
-            <ul className="source-list">
-              {displayedSources.map((source, index) => {
-                const isExpanded = expandedHash === source.infoHash;
-                return (
-                  <li
-                    key={`${source.infoHash}-${source.indexerId}`}
-                    className={`source-row${index === 0 ? ' source-row--best' : ''}`}
+            {groups.length > 1 && (
+              <nav className="source-picker__groups" aria-label="Jump to a source">
+                {groups.map((group) => (
+                  <button
+                    key={group.origin}
+                    type="button"
+                    className="chip source-picker__group-chip"
+                    onClick={() => {
+                      setCollapsedOrigins((now) => {
+                        const next = new Set(now);
+                        next.delete(group.origin);
+                        return next;
+                      });
+                      requestAnimationFrame(() =>
+                        document
+                          .getElementById(`source-group-${slug(group.origin)}`)
+                          ?.scrollIntoView({ block: 'start', behavior: 'smooth' })
+                      );
+                    }}
                   >
-                    <div className="source-row__main">
-                      <div className="source-row__badges">
-                        <span className={`badge badge--res-${source.parsed.resolution}`}>
-                          {resolutionLabel(source.parsed.resolution)}
-                        </span>
-                        {source.parsed.source !== 'Unknown' && (
-                          <span className="badge">{source.parsed.source}</span>
-                        )}
-                        {/* Resolution and language describe the film; the codec
-                            describes the file, and knowing whether it matters
-                            means knowing what this machine can decode. */}
-                        {isDeveloper && source.parsed.videoCodec !== 'Unknown' && (
-                          <span className="badge badge--muted">{source.parsed.videoCodec}</span>
-                        )}
-                        {source.parsed.hdr.map((h) => (
-                          <span key={h} className="badge badge--hdr">{h}</span>
-                        ))}
-                        {source.parsed.isSeasonPack && (
-                          <span className="badge badge--muted">Season pack</span>
-                        )}
-                      </div>
+                    {group.origin} <span>{group.sources.length}</span>
+                  </button>
+                ))}
+                <button type="button" className="link-button" onClick={() => setCollapsedOrigins(new Set())}>
+                  Expand all
+                </button>
+                <button
+                  type="button"
+                  className="link-button"
+                  onClick={() => setCollapsedOrigins(new Set(groups.map((g) => g.origin)))}
+                >
+                  Collapse all
+                </button>
+              </nav>
+            )}
 
-                      <p className="source-row__title" title={source.title}>{source.title}</p>
-
-                      <div className="source-row__meta">
-                        <span className={healthClass(source.seeders)}>
-                          <Users size={13} /> {source.seeders}
-                        </span>
-                        <span><HardDrive size={13} /> {formatBytes(source.sizeBytes)}</span>
-                        <span className="muted" title="Host or extractor this link points at">
-                          {sourceHost(source) ?? source.indexerName}
-                        </span>
-                        {source.parsed.releaseGroup && (
-                          <span className="muted">{source.parsed.releaseGroup}</span>
-                        )}
-                      </div>
-
-                      {/* Repository, extension, provider. `indexerName` above is
-                          the extractor an extension picked, not the extension —
-                          so without this a failing source cannot be traced to
-                          anything the user is able to turn off. */}
-                      {/* Standard mode gets the provider alone — where the film
-                          is coming from. The repository and extension above it
-                          answer a maintenance question, and the full chain is
-                          still one toggle away and still in the copied report. */}
-                      {(isDeveloper
-                        ? provenanceChain(source, provenanceFor(source))
-                        : providerLabel(source, provenanceFor(source))) && (
-                        <p
-                          className="source-row__origin"
-                          title={provenanceChain(source, provenanceFor(source))}
-                        >
-                          {isDeveloper
-                            ? provenanceChain(source, provenanceFor(source))
-                            : providerLabel(source, provenanceFor(source))}
-                        </p>
-                      )}
-                    </div>
-
-                    <div className="source-row__actions">
-                      <button className="btn btn-primary btn-sm" onClick={() => onPlay(source)}>
-                        <Play size={14} /> Play
-                      </button>
-                      <button
-                        className="btn btn-sm"
-                        onClick={() => onDownload(source)}
-                        title="Download this source"
-                      >
-                        <Download size={14} />
-                      </button>
-                      {sourceAddress(source) && (
-                        <button
-                          className="icon-button"
-                          onClick={() => void copyLink(source)}
-                          aria-label={`Copy the link for ${source.title}`}
-                          title="Copy this source's link"
-                        >
-                          {copiedLink === source.infoHash ? <Check size={15} /> : <Link2 size={15} />}
-                        </button>
-                      )}
-                      <button
-                        className="icon-button"
-                        onClick={() => void copyDetails(source)}
-                        aria-label={`Copy the details for ${source.title}`}
-                        title="Copy this source's details"
-                      >
-                        {copiedDetails === source.infoHash
-                          ? <Check size={15} />
-                          : <ClipboardCopy size={15} />}
-                      </button>
-                      {/* "Score 47" over a list of the rules that produced it is
-                          the ranking's own working shown to somebody who asked
-                          for a film. It is exactly what a maintainer needs and
-                          nothing a viewer can act on. */}
-                      {isDeveloper && (
-                        <button
-                          className="icon-button"
-                          onClick={() => setExpandedHash(isExpanded ? null : source.infoHash)}
-                          aria-label="Why this ranking?"
-                          title="Why this ranking?"
-                        >
-                          <Info size={15} />
-                        </button>
-                      )}
-                    </div>
-
-                    {isExpanded && isDeveloper && (
-                      <div className="source-row__why">
-                        <strong>Score {source.score}</strong>
-                        <ul>
-                          {source.scoreReasons.map((reason) => (
-                            <li key={reason}>{reason}</li>
-                          ))}
-                        </ul>
-                      </div>
+            {groups.length <= 1 ? (
+              <ul className="source-list">{displayedSources.map((source, index) => renderSourceRow(source, index))}</ul>
+            ) : (
+              groups.map((group) => {
+                const folded = collapsedOrigins.has(group.origin);
+                return (
+                  <section key={group.origin} id={`source-group-${slug(group.origin)}`} className="source-group">
+                    <button
+                      type="button"
+                      className="source-group__head"
+                      aria-expanded={!folded}
+                      onClick={() =>
+                        setCollapsedOrigins((now) => {
+                          const next = new Set(now);
+                          if (next.has(group.origin)) next.delete(group.origin);
+                          else next.add(group.origin);
+                          return next;
+                        })
+                      }
+                    >
+                      {folded ? <ChevronRight size={14} /> : <ChevronDown size={14} />}
+                      {group.origin}
+                      <span className="source-group__count">
+                        {group.sources.length} source{group.sources.length === 1 ? '' : 's'}
+                      </span>
+                    </button>
+                    {!folded && (
+                      <ul className="source-list">
+                        {group.sources.map((source) => renderSourceRow(source, rankOf.get(source) ?? 0))}
+                      </ul>
                     )}
-                  </li>
+                  </section>
                 );
-              })}
-            </ul>
+              })
+            )}
             {foldedTorrents > 0 && (
               <button type="button" className="link-button source-picker__more" onClick={() => setShowAllTorrents(true)}>
                 Show {foldedTorrents} more torrent{foldedTorrents === 1 ? '' : 's'}
