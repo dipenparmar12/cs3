@@ -90,9 +90,15 @@ export interface Bookmark {
   /** Saved from the player: the exact playback to come back to. */
   playback?: SavedPlayback;
   savedAt: number;
+  /** Last time it was saved again (a new place, a new source). Orders the list. */
+  updatedAt?: number;
   /** Last time the page was reopened from here, for ordering by usefulness. */
   lastOpenedAt?: number;
   openCount: number;
+}
+
+function lastSaved(bookmark: Bookmark): number {
+  return Math.max(bookmark.savedAt ?? 0, bookmark.updatedAt ?? 0);
 }
 
 /** A row saved before the title rule (empty or a placeholder like "Unknown Title") is repaired as it is read. */
@@ -123,9 +129,9 @@ export class BookmarkStore {
 
   public list(): Bookmark[] {
     // Newest save first, which is what someone looking for "the thing I just
-    // saved" expects. Ordering by last opened would bury it under old
-    // favourites the moment they were reopened.
-    return [...this.bookmarks].sort((a, b) => b.savedAt - a.savedAt).map(withTitle);
+    // saved" expects; saving a page again counts. Ordering by last opened would
+    // bury it under old favourites the moment they were reopened.
+    return [...this.bookmarks].sort((a, b) => lastSaved(b) - lastSaved(a)).map(withTitle);
   }
 
   public get(mediaUrl: string): Bookmark | null {
@@ -166,7 +172,10 @@ export class BookmarkStore {
         posterUrl: input.posterUrl ?? existing.posterUrl,
         plot: input.plot ?? existing.plot,
         genres: input.genres ?? existing.genres,
+        // Saving again is activity: it moves the page to the top of the list.
+        updatedAt: Date.now(),
       });
+      this.bookmarks = [existing, ...this.bookmarks.filter((entry) => entry !== existing)];
       this.persist();
       return existing;
     }
@@ -198,7 +207,7 @@ export class BookmarkStore {
         return true;
       })
       .map((row) => ({ ...row, id: row.id || row.mediaUrl, openCount: row.openCount ?? 0 }))
-      .sort((a, b) => b.savedAt - a.savedAt);
+      .sort((a, b) => lastSaved(b) - lastSaved(a));
     this.persist();
   }
 

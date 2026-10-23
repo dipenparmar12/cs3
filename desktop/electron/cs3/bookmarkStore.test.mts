@@ -30,6 +30,16 @@ const input = (over: Partial<Input> = {}): Input => ({
   ...over,
 });
 
+test('saving a page again moves it to the top of Saved pages', () => {
+  // Office Space saved, then Dune, then Office Space again with a new place.
+  const older = { ...input({ mediaUrl: 'cs3ext://A/office', title: 'Office Space' }), id: 'cs3ext://A/office', savedAt: 1, openCount: 0 } as Bookmark;
+  const newer = { ...input({ mediaUrl: 'cs3ext://A/dune', title: 'Dune' }), id: 'cs3ext://A/dune', savedAt: 2, openCount: 0 } as Bookmark;
+  const store = new BookmarkStore(datastore([newer, older]));
+  assert.equal(store.list()[0].title, 'Dune');
+  store.save(input({ mediaUrl: 'cs3ext://A/office', title: 'Office Space' }));
+  assert.deepEqual(store.list().map((b) => b.title), ['Office Space', 'Dune']);
+});
+
 test('a page saved without a name is named after the search that found it', () => {
   const store = new BookmarkStore(datastore());
   assert.equal(store.save(input()).title, 'The Discovery of India 1988');
