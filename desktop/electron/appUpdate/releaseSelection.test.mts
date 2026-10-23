@@ -85,3 +85,13 @@ test('the file matches the install: Windows installed or portable, macOS, Linux 
   assert.equal(name({ os: 'linux', arch: 'x64', kind: 'other', hasDpkg: true }), 'CS3-1.4.0-linux-x64.deb');
   assert.equal(name({ os: 'linux', arch: 'x64', kind: 'other' }), 'CS3-1.4.0-linux-x64.tar.gz');
 });
+
+test('checksums are read from sha256sum output, binary marker and all; junk is ignored', async () => {
+  const { parseChecksums } = await import('./releaseSelection.ts');
+  const sums = parseChecksums(
+    `${'a'.repeat(64)}  CS3-1.4.0-windows-x64-installer.exe\n${'B'.repeat(64)} *CS3-1.4.0-macos-arm64.dmg\nnot a line\n`
+  );
+  assert.equal(sums.get('CS3-1.4.0-windows-x64-installer.exe'), 'a'.repeat(64));
+  assert.equal(sums.get('CS3-1.4.0-macos-arm64.dmg'), 'b'.repeat(64));
+  assert.equal(sums.size, 2);
+});

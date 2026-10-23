@@ -98,3 +98,61 @@ test('a network failure is reported, never thrown', async () => {
   assert.equal(state.lastResult?.kind, 'error');
   assert.equal(state.checking, false);
 });
+
+const SUM = 'c'.repeat(64);
+const withSums = [
+  {
+    ...releaseList[0],
+    assets: [
+      ...releaseList[0].assets,
+      { name: 'SHA256SUMS.txt', size: 1, browser_download_url: 'https://github.com/dl/SHA256SUMS.txt' },
+    ],
+  },
+];
+
+function downloading(downloadOk: boolean, releases: unknown = withSums) {
+  const asked: Array<{ url: string; sha256: string; targetPath: string }> = [];
+  const launched: string[] = [];
+  const responses = [ok(releases), () => new Response(`${SUM}  CS3-1.4.0-windows-x64-installer.exe\n`, { status: 200 })];
+  const harness = service(responses, {
+    downloadDir: () => 'C:/Users/me/Downloads',
+    downloadVerified: async (input) => {
+      asked.push(input);
+      input.onProgress(45, 90);
+      return downloadOk;
+    },
+    launchInstaller: (path) => void launched.push(path),
+  });
+  return { ...harness, asked, launched };
+}
+
+test('the download is verified against the published checksum, and only then may it run', async () => {
+  const { svc, asked, launched } = downloading(true);
+  await svc.check();
+  assert.equal(await svc.installUpdate(), false, 'nothing to run before a verified download');
+  const state = await svc.downloadUpdate();
+  assert.equal(asked[0].sha256, SUM);
+  assert.equal(asked[0].targetPath, 'C:/Users/me/Downloads/CS3-1.4.0-windows-x64-installer.exe');
+  assert.equal(state.download?.phase, 'verified');
+  assert.equal(await svc.installUpdate(), true);
+  assert.deepEqual(launched, ['C:/Users/me/Downloads/CS3-1.4.0-windows-x64-installer.exe']);
+});
+
+test('a mismatch keeps nothing and opens the release page', async () => {
+  const { svc, opened, launched } = downloading(false);
+  await svc.check();
+  const state = await svc.downloadUpdate();
+  assert.equal(state.download?.phase, 'failed');
+  assert.match(state.download?.message ?? '', /did not match/);
+  assert.deepEqual(opened, ['https://github.com/dipenparmar12/cs3/releases/tag/v1.4.0']);
+  assert.equal(await svc.installUpdate(), false);
+  assert.deepEqual(launched, []);
+});
+
+test('a release without checksums is never downloaded', async () => {
+  const { svc, asked } = downloading(true, releaseList);
+  await svc.check();
+  const state = await svc.downloadUpdate();
+  assert.equal(state.download?.phase, 'failed');
+  assert.equal(asked.length, 0);
+});

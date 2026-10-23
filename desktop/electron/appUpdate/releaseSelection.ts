@@ -178,3 +178,23 @@ export function selectUpdate(input: SelectionInput): Selection {
     },
   };
 }
+
+/**
+ * `SHA256SUMS.txt` as `release.yml` writes it (`sha256sum CS3-*`): one
+ * `<64 hex>  <name>` per line, `*` before the name in binary mode. Anything
+ * else is ignored rather than guessed at.
+ */
+export function parseChecksums(text: string): Map<string, string> {
+  const sums = new Map<string, string>();
+  for (const line of text.split(/\r?\n/)) {
+    const match = /^([a-f0-9]{64})\s+\*?(.+?)\s*$/i.exec(line.trim());
+    if (match) sums.set(match[2], match[1].toLowerCase());
+  }
+  return sums;
+}
+
+/** The checksum file of the release that carries `version`, if it published one. */
+export function checksumsAsset(releases: GithubRelease[], version: string): GithubAsset | null {
+  const release = releases.find((r) => r.tag_name.replace(/^v/, '') === version);
+  return release?.assets?.find((a) => a.name === 'SHA256SUMS.txt') ?? null;
+}

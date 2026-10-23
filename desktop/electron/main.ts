@@ -72,6 +72,8 @@ import { AppUpdateService } from './appUpdate/appUpdateService.ts';
 import { classifyNonMedia, looksLikeHtml, nonMediaReason } from './media/nonMediaResponse.ts';
 import { ResilientFetch, classifyNetworkError } from './networkResilience';
 import { BinaryDownloader } from './binaryDownloader';
+import { FastChunkDownloader, type DownloadProgress } from './fastDownloader';
+import { spawn } from 'child_process';
 import { MpvEngine } from './media/mpvEngine';
 import { TorrentEngine } from './torrent/torrentEngine';
 import { ContentService, type SourceQuery } from './contentService';
@@ -7506,6 +7508,29 @@ const appUpdates = new AppUpdateService({
   enabled: (app.isPackaged || process.env.CS3_FORCE_UPDATE_CHECK === '1') && !process.env.CS3_SMOKE_REPORT,
   openExternal: (url) => shell.openExternal(url),
   log: (event, data) => logger.info('app', event, data),
+  // Phase 3: through FastChunkDownloader with the published digest; a file that
+  // does not match is deleted there and never reaches launchInstaller.
+  downloadVerified: async ({ url, sha256, targetPath, onProgress }) =>
+    FastChunkDownloader.download({
+      mirrors: [{ url, sha256 }],
+      targetPath,
+      onProgress: (progress: DownloadProgress) => onProgress(progress.downloadedBytes, progress.totalBytes),
+    }),
+  downloadDir: () => app.getPath('downloads'),
+  launchInstaller: async (file) => {
+    if (process.platform === 'linux' && file.endsWith('.AppImage')) {
+      // A new AppImage replaces nothing: it is made runnable, started, and this copy quits.
+      fs.chmodSync(file, 0o755);
+      spawn(file, [], { detached: true, stdio: 'ignore' }).on('error', () => undefined).unref();
+      setTimeout(() => app.quit(), 1_000);
+      return;
+    }
+    const error = await shell.openPath(file);
+    if (error) throw new Error(error);
+    // The Windows installer replaces the running program, so this copy steps
+    // aside; a disk image or a package manager is the viewer's to finish.
+    if (process.platform === 'win32' && /-installer\.exe$/i.test(file)) setTimeout(() => app.quit(), 1_500);
+  },
 });
 appUpdates.onChange((state) => {
   BrowserWindow.getAllWindows().forEach((w) => w.webContents.send('appUpdate:changed', state));
@@ -7520,6 +7545,14 @@ ipcMain.handle('appUpdate:setSettings', async (_, patch: Parameters<AppUpdateSer
 ipcMain.handle('appUpdate:skip', async (_, version: string) => appUpdates.skip(String(version)));
 ipcMain.handle('appUpdate:unskip', async () => appUpdates.unskip());
 ipcMain.handle('appUpdate:openDownload', async () => ({ ok: await appUpdates.openDownload() }));
+ipcMain.handle('appUpdate:download', async () => appUpdates.downloadUpdate());
+ipcMain.handle('appUpdate:install', async () => {
+  try {
+    return { ok: await appUpdates.installUpdate() };
+  } catch (error) {
+    return fail(error);
+  }
+});
 
 ipcMain.handle('app:getStartupProfile', async () => {
   try {

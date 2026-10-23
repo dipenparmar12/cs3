@@ -1963,6 +1963,10 @@ export interface CloudStreamElectronAPI {
   skipAppUpdate: (version: string) => Promise<AppUpdateState>;
   unskipAppUpdate: () => Promise<AppUpdateState>;
   openAppUpdateDownload: () => Promise<{ ok: boolean }>;
+  /** Downloads and verifies the offered file (SHA256SUMS.txt); progress arrives on the push. */
+  downloadAppUpdate: () => Promise<AppUpdateState>;
+  /** Runs the verified file; refused for anything not verified this launch. */
+  installAppUpdate: () => Promise<{ ok: boolean; error?: string }>;
   onAppUpdateChanged: (callback: (state: AppUpdateState) => void) => () => void;
   getStartupProfile: () => Promise<
     | { ok: true; profile: StartupProfile; tasks: StartupTaskReport[] }
@@ -2643,6 +2647,8 @@ const api: CloudStreamElectronAPI = {
   skipAppUpdate: (version) => ipcRenderer.invoke('appUpdate:skip', version),
   unskipAppUpdate: () => ipcRenderer.invoke('appUpdate:unskip'),
   openAppUpdateDownload: () => ipcRenderer.invoke('appUpdate:openDownload'),
+  downloadAppUpdate: () => ipcRenderer.invoke('appUpdate:download'),
+  installAppUpdate: () => ipcRenderer.invoke('appUpdate:install'),
   onAppUpdateChanged: (callback) => subscribe('appUpdate:changed', callback),
   getStartupProfile: () => ipcRenderer.invoke('app:getStartupProfile'),
   exportUserData: (only) => ipcRenderer.invoke('backup:export', only),

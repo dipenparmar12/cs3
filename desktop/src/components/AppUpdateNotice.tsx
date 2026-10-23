@@ -9,14 +9,18 @@ import { formatBytes } from '../utils/format';
  *
  * Bottom right, beside the extension notice's place. Held while the player is
  * in front: a film is never interrupted by an update. Later hides it for this
- * launch; Skip this version hides it until a newer one. Download opens the
- * right file for this machine in the browser (Phase 1: the app runs nothing).
+ * launch; Skip this version hides it until a newer one. Download fetches the
+ * right file for this machine and checks it against the release's
+ * SHA256SUMS.txt; only then is Install now offered. Without checksums, or on a
+ * mismatch, nothing is kept and the release page opens.
  */
 export const AppUpdateNotice: React.FC<{ held: boolean }> = ({ held }) => {
   const state = useAppUpdate();
   const [laterFor, setLaterFor] = useState<string | null>(null);
   const [notesOpen, setNotesOpen] = useState(false);
   const offer = state?.available;
+  const download = state?.download && state.download.version === offer?.version ? state.download : undefined;
+  const percent = download?.total ? Math.min(100, Math.round((download.received / download.total) * 100)) : 0;
 
   if (!offer) return null;
   if (notesOpen) {
@@ -57,10 +61,24 @@ export const AppUpdateNotice: React.FC<{ held: boolean }> = ({ held }) => {
         {offer.channel === 'beta' && (
           <span className="app-update-notice__hint">Previews of the next release. May be unstable.</span>
         )}
+        {download?.phase === 'verified' && (
+          <span className="app-update-notice__hint">Downloaded and verified. Installing closes CloudStream.</span>
+        )}
+        {download?.phase === 'failed' && <span className="app-update-notice__hint">{download.message}</span>}
       </span>
-      <Button size="compact" variant="prominent" onClick={() => void window.cloudstream?.openAppUpdateDownload?.()}>
-        Download
-      </Button>
+      {download?.phase === 'verified' ? (
+        <Button size="compact" variant="prominent" onClick={() => void window.cloudstream?.installAppUpdate?.()}>
+          Install now
+        </Button>
+      ) : download?.phase === 'downloading' ? (
+        <span className="app-update-notice__hint" role="progressbar" aria-valuenow={percent} aria-valuemin={0} aria-valuemax={100}>
+          Downloading… {percent}%
+        </span>
+      ) : (
+        <Button size="compact" variant="prominent" onClick={() => void window.cloudstream?.downloadAppUpdate?.()}>
+          Download
+        </Button>
+      )}
       <Button size="compact" variant="ambient" onClick={() => setNotesOpen(true)}>
         What&apos;s new
       </Button>

@@ -1,5 +1,13 @@
 import { automaticCheckDelay } from '../cs3/updateSchedule.ts';
-import { selectUpdate, type GithubRelease, type Platform, type UpdateChannel, type UpdateOffer } from './releaseSelection.ts';
+import {
+  checksumsAsset,
+  parseChecksums,
+  selectUpdate,
+  type GithubRelease,
+  type Platform,
+  type UpdateChannel,
+  type UpdateOffer,
+} from './releaseSelection.ts';
 
 /**
  * Whether a newer CloudStream 3 Desktop is published (App Update PRD, Phase 1).
@@ -45,6 +53,16 @@ export interface AppUpdateState {
   lastResult?: CheckResult;
   available?: UpdateOffer;
   skipped?: string;
+  /** Phase 3: the in-app download of `available`, verified before it can run. */
+  download?: {
+    version: string;
+    phase: 'downloading' | 'verified' | 'failed';
+    received: number;
+    total: number;
+    /** Only once verified: the file that may be run. */
+    path?: string;
+    message?: string;
+  };
 }
 
 interface Stored {
@@ -71,6 +89,21 @@ export interface AppUpdateDeps {
   /** False for a development build or a smoke run. */
   enabled: boolean;
   openExternal: (url: string) => Promise<void> | void;
+  /**
+   * Downloads `url` to `targetPath` and checks its SHA-256 (main:
+   * `FastChunkDownloader`, which deletes a file that does not match). True
+   * only for a verified file (AGENTS §12, SEC-03).
+   */
+  downloadVerified?: (input: {
+    url: string;
+    sha256: string;
+    targetPath: string;
+    onProgress: (received: number, total: number) => void;
+  }) => Promise<boolean>;
+  /** Where an update is saved (the viewer's Downloads folder). */
+  downloadDir?: () => string;
+  /** Runs a verified installer (and, where the installer replaces the app, quits). */
+  launchInstaller?: (path: string) => Promise<void> | void;
   log: (event: string, data?: Record<string, unknown>) => void;
   now?: () => number;
 }
@@ -81,6 +114,7 @@ export class AppUpdateService {
   private timer: ReturnType<typeof setTimeout> | null = null;
   private checking = false;
   private listeners = new Set<(state: AppUpdateState) => void>();
+  private download: AppUpdateState['download'];
 
   constructor(deps: AppUpdateDeps) {
     this.deps = deps;
@@ -139,6 +173,7 @@ export class AppUpdateService {
       lastResult: stored.lastResult,
       available: this.deps.enabled ? this.offer() : undefined,
       skipped,
+      download: this.download,
     };
   }
 
@@ -254,6 +289,66 @@ export class AppUpdateService {
     const url = offer?.asset.url || offer?.pageUrl;
     if (!url || !/^https:\/\//.test(url)) return false;
     await this.deps.openExternal(url);
+    return true;
+  }
+
+  /**
+   * Downloads the offered file and verifies it against the release's
+   * `SHA256SUMS.txt` (decided 2026-10-23). No checksum for the file, or a
+   * mismatch: nothing is kept, and the release page opens instead.
+   */
+  async downloadUpdate(): Promise<AppUpdateState> {
+    const offer = this.offer();
+    if (!offer || !this.deps.downloadVerified || !this.deps.downloadDir) return this.getState();
+    if (this.download?.phase === 'downloading' && this.download.version === offer.version) return this.getState();
+    const fail = async (message: string) => {
+      this.download = { version: offer.version, phase: 'failed', received: 0, total: offer.asset.size, message };
+      this.deps.log('app_update_download_failed', { version: offer.version, reason: message });
+      this.emit();
+      if (offer.pageUrl) await this.deps.openExternal(offer.pageUrl);
+      return this.getState();
+    };
+
+    const releases = this.deps.store.getObject<GithubRelease[]>(KEY.releases, []) ?? [];
+    const sumsAsset = checksumsAsset(releases, offer.version);
+    if (!sumsAsset) return fail('This release publishes no checksums, so it cannot be verified. Its page is open instead.');
+    let expected: string | undefined;
+    try {
+      const response = await this.deps.fetch(sumsAsset.browser_download_url);
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      expected = parseChecksums(await response.text()).get(offer.asset.name);
+    } catch (error) {
+      return fail(`The checksums could not be read (${error instanceof Error ? error.message : String(error)}).`);
+    }
+    if (!expected) return fail('This release lists no checksum for this file, so it cannot be verified.');
+
+    const targetPath = `${this.deps.downloadDir()}/${offer.asset.name}`;
+    this.download = { version: offer.version, phase: 'downloading', received: 0, total: offer.asset.size };
+    this.emit();
+    let lastEmit = 0;
+    const ok = await this.deps.downloadVerified({
+      url: offer.asset.url,
+      sha256: expected,
+      targetPath,
+      onProgress: (received, total) => {
+        this.download = { version: offer.version, phase: 'downloading', received, total: total || offer.asset.size };
+        if (this.now() - lastEmit > 500) {
+          lastEmit = this.now();
+          this.emit();
+        }
+      },
+    }).catch(() => false);
+    if (!ok) return fail('The download did not match its published checksum, so it was deleted.');
+    this.download = { version: offer.version, phase: 'verified', received: offer.asset.size, total: offer.asset.size, path: targetPath };
+    this.deps.log('app_update_downloaded', { version: offer.version, file: offer.asset.name });
+    this.emit();
+    return this.getState();
+  }
+
+  /** Runs only a file this launch downloaded and verified. */
+  async installUpdate(): Promise<boolean> {
+    if (this.download?.phase !== 'verified' || !this.download.path || !this.deps.launchInstaller) return false;
+    await this.deps.launchInstaller(this.download.path);
     return true;
   }
 
