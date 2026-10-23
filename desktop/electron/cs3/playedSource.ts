@@ -39,6 +39,21 @@ export function isLinkUsable(source: StoredSource, now = Date.now()): boolean {
 }
 
 /**
+ * Whether a resume should start the saved link before searching.
+ *
+ * Wider than {@link isLinkUsable}: a link that states no deadline is not known
+ * to be dead, only not known to be alive, and most provider links state none.
+ * Treating those as expired made every resume a fresh search ("Searching for
+ * sources" on a film paused yesterday). Trying costs one request; the session
+ * runs discovery alongside and moves on if the link refuses. A link whose own
+ * deadline has passed is still not tried.
+ */
+export function isWorthTryingFirst(source: StoredSource, now = Date.now()): boolean {
+  if (isLinkUsable(source, now)) return true;
+  return Boolean(source.directUrl) && typeof source.expiresAt !== 'number';
+}
+
+/**
  * Whether a freshly discovered candidate is the release that was saved.
  *
  * Strict on purpose. Returning the wrong release is worse than returning

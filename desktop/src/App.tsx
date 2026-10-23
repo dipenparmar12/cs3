@@ -118,6 +118,9 @@ const DownloadCenter = lazy(() =>
 
 
 /** The year `canonicalKey` appended, for rows (Continue watching) that carry only the key. */
+/** How long a resume waits for the provider page before starting without it. */
+const RESUME_DETAIL_WAIT_MS = 4000;
+
 function yearFromKey(key: string | undefined): number | undefined {
   const match = key?.match(/:(\d{4})$/);
   return match ? Number(match[1]) : undefined;
@@ -1508,7 +1511,15 @@ export const App: React.FC = () => {
 
         // The detail is needed only to choose an episode, and costs a provider
         // round trip — a row that already names its episode skips it.
-        const response = knowsEpisode ? null : await window.cloudstream?.loadMedia(target.mediaUrl);
+        // Bounded: a provider resetting connections held a film's resume for as
+        // long as it took to fail, and without the page the resume still works
+        // (the episode comes from history, the source from the played record).
+        const response = knowsEpisode
+          ? null
+          : await Promise.race([
+              window.cloudstream?.loadMedia(target.mediaUrl),
+              new Promise<null>((resolve) => setTimeout(() => resolve(null), RESUME_DETAIL_WAIT_MS)),
+            ]);
         const detail = response?.ok ? response.detail : null;
         const title = detail?.name ?? target.title;
         const year = detail?.year ?? target.year ?? yearFromKey(target.key);

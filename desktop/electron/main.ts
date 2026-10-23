@@ -148,7 +148,7 @@ import {
   continueWatchingEnabled,
   setContinueWatchingEnabled,
 } from './cs3/continueWatching';
-import { isLinkUsable, pickReplacement, pickSibling } from './cs3/playedSource';
+import { isLinkUsable, isWorthTryingFirst, pickReplacement, pickSibling } from './cs3/playedSource';
 import {
   LibraryStore,
   type WatchStatus,
@@ -6635,7 +6635,8 @@ function resumePreference(key: string, season?: number, episode?: number): Resum
   const record = libraryStore.getPlayedSource(key, season, episode);
   if (record && record.source.status !== 'Unavailable') {
     return {
-      start: isLinkUsable(record.source) ? storedSourceToTorrentResult(record.source) : undefined,
+      // Tried first even without a stated deadline; discovery runs alongside.
+      start: isWorthTryingFirst(record.source) ? storedSourceToTorrentResult(record.source) : undefined,
       match: (candidates) => pickReplacement(record.source, candidates),
     };
   }
