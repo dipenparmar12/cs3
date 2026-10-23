@@ -13,6 +13,7 @@ import {
 import { OFFICIAL_REPOSITORIES, type OfficialRepository } from '../officialRepositories';
 import { describeError } from '../../src/utils/errors.ts';
 import { evaluateAdultSessionState } from '../../src/utils/adultContent.ts';
+import { currentProfileId } from '../profiles/profileContext.ts';
 
 /**
  * Makes a fresh install work without the user configuring anything.
@@ -139,14 +140,31 @@ export class BootstrapService {
    * Starts `'pending'` on every application launch so confirmation is requested
    * unless the user has explicitly selected Do Not Ask Again (§129.1).
    */
-  private sessionDecision: 'pending' | 'enabled' | 'disabled' = 'pending';
+  private sessionDecisions = new Map<string, 'pending' | 'enabled' | 'disabled'>();
 
   /**
    * Session-only visual privacy state, never persisted to disk.
    * Starts `true` (blurred/protected) on every application launch regardless of
    * previous session unblurring or saved availability preferences (§129.3).
    */
-  private sessionBlurred = true;
+  private sessionBlurs = new Map<string, boolean>();
+
+  /** Per viewer profile: one person unlocking or unblurring is not another doing so. */
+  private get sessionDecision(): 'pending' | 'enabled' | 'disabled' {
+    return this.sessionDecisions.get(currentProfileId()) ?? 'pending';
+  }
+
+  private set sessionDecision(next: 'pending' | 'enabled' | 'disabled') {
+    this.sessionDecisions.set(currentProfileId(), next);
+  }
+
+  private get sessionBlurred(): boolean {
+    return this.sessionBlurs.get(currentProfileId()) ?? true;
+  }
+
+  private set sessionBlurred(next: boolean) {
+    this.sessionBlurs.set(currentProfileId(), next);
+  }
 
   /**
    * Everything that shows or hides adult content must hear about a change the

@@ -16,6 +16,8 @@
  * The active flag itself is persisted only when `rememberPreference` is on.
  */
 
+import { currentProfileId } from '../profiles/profileContext.ts';
+
 export interface IncognitoSettings {
   allowDownloads: boolean;
   askBeforeDownload: boolean;
@@ -72,22 +74,48 @@ export function allowsDownloads(): boolean {
 }
 
 export class PrivacyMode {
-  private active: boolean;
-  private settings: IncognitoSettings;
+  /**
+   * Per viewer profile, read on first use in that profile's context: incognito
+   * in one profile is not incognito in the next, and each keeps its own
+   * settings (`profileKeys.ts`).
+   */
+  private states = new Map<string, { active: boolean; settings: IncognitoSettings }>();
   private readonly store: PrivacyBackingStore;
   private readonly listeners = new Set<(state: PrivacyState) => void>();
   private readonly sessionClearers = new Set<() => void>();
 
   constructor(store: PrivacyBackingStore) {
     this.store = store;
-    this.settings = { ...DEFAULT_INCOGNITO_SETTINGS };
-    for (const key of Object.keys(KEYS) as Array<keyof IncognitoSettings>) {
-      this.settings[key] = store.getBool(KEYS[key], DEFAULT_INCOGNITO_SETTINGS[key], true);
-    }
-    // Starts off unless the viewer asked for the choice to be remembered.
-    this.active = this.settings.rememberPreference ? store.getBool(ACTIVE_KEY, false, true) : false;
     // oxlint-disable-next-line no-this-alias
     current = this;
+  }
+
+  private state(): { active: boolean; settings: IncognitoSettings } {
+    const profile = currentProfileId();
+    let state = this.states.get(profile);
+    if (!state) {
+      const settings = { ...DEFAULT_INCOGNITO_SETTINGS };
+      for (const key of Object.keys(KEYS) as Array<keyof IncognitoSettings>) {
+        settings[key] = this.store.getBool(KEYS[key], DEFAULT_INCOGNITO_SETTINGS[key], true);
+      }
+      // Starts off unless the viewer asked for the choice to be remembered.
+      const active = settings.rememberPreference ? this.store.getBool(ACTIVE_KEY, false, true) : false;
+      state = { active, settings };
+      this.states.set(profile, state);
+    }
+    return state;
+  }
+
+  private get active(): boolean {
+    return this.state().active;
+  }
+
+  private set active(next: boolean) {
+    this.state().active = next;
+  }
+
+  private get settings(): IncognitoSettings {
+    return this.state().settings;
   }
 
   isActive(): boolean {
@@ -146,6 +174,11 @@ export class PrivacyMode {
   /** Called on quit: a private session never outlives the process. */
   shutdown(): void {
     if (this.active && this.settings.clearSessionOnExit) this.clearSession();
+  }
+
+  /** Announces this profile's state after a switch; every listener re-reads. */
+  announce(): void {
+    this.emit();
   }
 
   private emit(): void {

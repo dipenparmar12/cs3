@@ -11,6 +11,7 @@ import { SearchHistoryStore } from '../searchHistory.ts';
 import { LibraryStore, WatchStatus } from './libraryStore.ts';
 import { HistoryStore } from './historyStore.ts';
 import { BookmarkStore } from './bookmarkStore.ts';
+import { runAsProfile } from '../profiles/profileContext.ts';
 
 function memoryStore() {
   const bools = new Map<string, boolean>();
@@ -223,4 +224,13 @@ test('bookmarkStore does not track opened counts in private session and respects
   assert.equal(result.saved, false);
   assert.equal(result.bookmark, null);
   assert.equal(bms.isSaved('https://example.com/secret'), false);
+});
+
+test('incognito in one viewer profile is not incognito in another', () => {
+  const privacy = new PrivacyMode(memoryStore());
+  runAsProfile('kids', () => privacy.setActive(true));
+  assert.equal(runAsProfile('kids', () => isPrivateSession()), true);
+  assert.equal(runAsProfile('parent', () => isPrivateSession()), false, 'the other profile is untouched');
+  runAsProfile('parent', () => privacy.updateSettings({ allowDownloads: false }));
+  assert.equal(runAsProfile('kids', () => privacy.getState().settings.allowDownloads), true);
 });

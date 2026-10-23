@@ -11,7 +11,9 @@ import { DEFAULT_PROFILE_ID, LOCKED_PROFILE_ID } from './profileContext.ts';
  * Every other profile stores the same names under `profile:<id>:`.
  *
  * A key not listed here belongs to the installation and is shared: extensions,
- * repositories, network, downloads, the adult gate, caches. Adding a per-person
+ * repositories, network, downloads, caches. The adult gate and incognito are a
+ * person's (2026-10-23): one viewer's "show adult content" must not open it for
+ * another, and a private session in one profile is not one in the next. Adding a per-person
  * value means adding its key to one of these two sets, and nothing else.
  */
 
@@ -26,6 +28,11 @@ export const PERSONAL_KEYS: ReadonlySet<string> = new Set([
   'search_history',
   'cs3_title_outcomes',
   'cs3_title_visits',
+  // Never copied, so a duplicate of an adult profile starts with adult content off.
+  'cs3_adult_content_enabled',
+  'cs3_adult_content_mode',
+  'cs3_adult_do_not_ask_again',
+  'incognito_active',
 ]);
 
 /** How this person likes the app set up. Kept per profile and copied by Duplicate. */
@@ -49,6 +56,11 @@ export const PREFERENCE_KEYS: ReadonlySet<string> = new Set([
   // Which sources a search asks, and the named set-ups behind it.
   'cs3_search_scope',
   'cs3_source_profiles',
+  'incognito_allow_downloads',
+  'incognito_ask_download',
+  'incognito_allow_saves',
+  'incognito_remember',
+  'incognito_clear_on_exit',
 ]);
 
 const PREFIX = 'profile:';

@@ -188,7 +188,7 @@ import {
   type SubtitleBackground,
   type SubtitleWeight,
 } from '../src/utils/subtitleStyle.ts';
-import { activeProfileId, DEFAULT_PROFILE_ID, runAsProfile } from './profiles/profileContext.ts';
+import { activeProfileId, DEFAULT_PROFILE_ID, onActiveProfileChange, runAsProfile } from './profiles/profileContext.ts';
 import { PREFERENCE_KEYS } from './profiles/profileKeys.ts';
 import { perProfile } from './profiles/perProfile.ts';
 import { UserProfileService } from './profiles/userProfiles.ts';
@@ -5467,6 +5467,18 @@ bootstrap.onAdultChange(() => {
   const state = bootstrap.adultState();
   BrowserWindow.getAllWindows().forEach((w) => w.webContents.send('adult:changed', state));
 });
+
+/**
+ * The adult gate and incognito are per viewer profile, and the renderer keeps
+ * one copy of each that outlives the remount a switch causes: both are pushed
+ * again, as the profile now open sees them.
+ */
+onActiveProfileChange((next) =>
+  runAsProfile(next, () => {
+    bootstrap.notifyAdultChange();
+    privacyMode.announce();
+  })
+);
 
 /**
  * Turning adult content off must take effect at once, not at next launch: the
