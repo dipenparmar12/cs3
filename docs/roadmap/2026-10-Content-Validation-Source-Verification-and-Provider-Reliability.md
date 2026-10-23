@@ -1,6 +1,6 @@
 # PRD: Content Validation, Source Verification, and Provider Reliability
 
-**Status (2026-10-23):** Proposed. Phase 0 audit done (§0 below); nothing in Phases 1–6 built yet. The register entry is in `ROADMAP.md`.
+**Status (2026-10-23):** Phase 0 audit done (§0); **Phase 1 built**: `src/utils/contentValidation.ts` (identity and playability as separate answers, §7.2 states, per-kind tolerances, a show average can warn but never confirm, short/trailer/live never judged on length, an identity-gate mismatch confirms; 9 tests). `mediaSanity.looksLikeWrongMedia` now delegates to it with identical thresholds (its 8 tests unchanged). Phases 2–6 not built. The register entry is in `ROADMAP.md`.
 
 **Relationship:** extends the Playback Source Resolution PRD (`2026-10-Playback-Source-Resolution-Priority-Match-Verification-and-Viewer-Feedback-2.md`), whose Part B (identity gates) and Phase 2 (ranked walk, provider attempts) are the base this builds on. It does not replace them.
 

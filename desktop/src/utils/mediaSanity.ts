@@ -1,3 +1,5 @@
+import { validateContent } from './contentValidation.ts';
+
 /**
  * Whether a stream is plainly not the title it was offered as.
  *
@@ -24,19 +26,17 @@ export interface MediaSanityInput {
   isLive?: boolean;
 }
 
-/** Titles shorter than this are not judged at all: shorts and clips vary too much. */
-const MIN_EXPECTED_SECONDS = 20 * 60;
-/** Nothing above this many seconds is called a placeholder, whatever the ratio. */
-const PLACEHOLDER_CEILING_SECONDS = 6 * 60;
-/** The stream must be shorter than this share of the expected length. */
-const MAX_RATIO = 0.15;
-
+/**
+ * The confirmed-mismatch half of `contentValidation.ts`, whose movie row holds
+ * this rule's thresholds (judged from 20 min expected; under 6 min and under
+ * 15%). Kind is always "movie" here so an episode is judged as it always was.
+ */
 export function looksLikeWrongMedia(input: MediaSanityInput): boolean {
-  const { actualSeconds, expectedSeconds, isLive } = input;
-  if (isLive) return false;
-  if (!Number.isFinite(actualSeconds) || actualSeconds <= 0) return false;
-  if (!expectedSeconds || !Number.isFinite(expectedSeconds) || expectedSeconds < MIN_EXPECTED_SECONDS) return false;
-  return actualSeconds < PLACEHOLDER_CEILING_SECONDS && actualSeconds < expectedSeconds * MAX_RATIO;
+  if (input.isLive) return false;
+  return (
+    validateContent({ kind: 'movie', expectedSeconds: input.expectedSeconds, detectedSeconds: input.actualSeconds })
+      .identity === 'confirmed-mismatch'
+  );
 }
 
 /**
