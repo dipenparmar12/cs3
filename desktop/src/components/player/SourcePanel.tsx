@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { useFlash } from '../../utils/useFlash';
-import { CheckCircle2,
+import { CheckCircle2, ChevronDown, ChevronRight,
   X, Play, RefreshCw, Loader2, Users, HardDrive, Radio, Check, AlertTriangle, Download, Filter,
   Square, Globe, Link2, Package,
 } from 'lucide-react';
@@ -14,6 +14,8 @@ import {
   DEFAULT_FILTER_STATE,
   filterAndSortSources,
   foldTorrents,
+  groupSourcesByOrigin,
+  originSlug,
   type SourceFilterState,
 } from '../../utils/sourceFilter';
 import { formatReleaseSize } from '../../utils/format';
@@ -163,6 +165,169 @@ export const SourcePanel: React.FC<SourcePanelProps> = ({
     window.addEventListener('keydown', onKey, true);
     return () => window.removeEventListener('keydown', onKey, true);
   }, [open, onClose]);
+
+  /**
+   * The same provider groups as the detail page's picker (`groupSourcesByOrigin`):
+   * foldable, with jump chips. With more than 30 rows only the best group and
+   * the one playing start open.
+   */
+  const groups = useMemo(() => groupSourcesByOrigin(displayedSources), [displayedSources]);
+  const rankOf = useMemo(() => new Map(displayedSources.map((source, index) => [source, index])), [displayedSources]);
+  const [collapsedOrigins, setCollapsedOrigins] = useState<Set<string>>(() => new Set());
+  const foldedFor = React.useRef<string | null>(null);
+  useEffect(() => {
+    const signature = groups.map((g) => g.origin).join('|');
+    if (foldedFor.current === signature) return;
+    foldedFor.current = signature;
+    if (displayedSources.length <= 30) {
+      setCollapsedOrigins(new Set());
+      return;
+    }
+    const playing = groups.find((g) => g.sources.some((s) => s.infoHash === activeInfoHash))?.origin;
+    setCollapsedOrigins(new Set(groups.slice(1).map((g) => g.origin).filter((origin) => origin !== playing)));
+  }, [groups, displayedSources.length, activeInfoHash]);
+
+  const renderSourceRow = (source: TorrentResult, rowIndex: number) => {
+    /**
+     * Exactly one row may be marked as playing — the invariant, enforced
+     * where it is actually visible rather than assumed upstream.
+     *
+     * `infoHash` is a *synthetic* identity for a provider stream: the
+     * SHA-1 of its URL. Two extensions that scrape the same file host hand
+     * back the same URL and therefore the same identity, so a plain
+     * equality test lit up every copy at once — the reported
+     * "[x] Source A [x] Source B". Matching the first occurrence keeps the
+     * display truthful about the one stream that is really open, and the
+     * key below is disambiguated so React does not collapse the duplicates
+     * into one row either.
+     */
+    const isActive =
+      Boolean(activeInfoHash) &&
+      source.infoHash === activeInfoHash &&
+      displayedSources.findIndex((candidate) => candidate.infoHash === activeInfoHash) ===
+        rowIndex;
+    const isSwitching = switchingTo === source.infoHash;
+    const chain = isDeveloper
+      ? provenanceChain(source, provenanceFor(source))
+      : providerLabel(source, provenanceFor(source));
+    const host = sourceHost(source);
+    const address = sourceAddress(source);
+    /*
+     * What this source has done, said quietly: a small ✓ for one that
+     * played (this session, or last time), a small ⚠ with the reason for
+     * one that was tried and failed. A source the viewer simply chose
+     * — or that was never tried — carries nothing.
+     */
+    const outcome = source.infoHash ? sourceStates?.[source.infoHash] : undefined;
+    const playedBefore = !outcome && rememberedHash !== undefined && source.infoHash === rememberedHash;
+
+    return (
+      <li
+        key={`${source.infoHash}-${rowIndex}`}
+        className={`player-panel__source-row${
+          isActive ? ' player-panel__source-row--current' : ''
+        }${outcome?.state === 'failed' && !isActive ? ' player-panel__source-row--failed' : ''}`}
+      >
+        <button
+          className="player-panel__source-play"
+          onClick={() => onSelect(source)}
+          disabled={isSwitching}
+          aria-current={isActive || undefined}
+          title={isActive ? 'Playing — restart this source' : 'Play this source'}
+          aria-label={`Play ${source.title}`}
+        >
+          {isSwitching ? (
+            <Loader2 className="spin" size={16} />
+          ) : isActive ? (
+            <Check size={16} />
+          ) : (
+            <Play size={16} fill="currentColor" />
+          )}
+        </button>
+
+        {/* The body selects too, so the whole row remains a play target —
+            just not one that overlaps download. */}
+        <button
+          className="player-panel__source-body"
+          onClick={() => onSelect(source)}
+          disabled={isSwitching}
+        >
+          <strong>
+            {outcome?.state === 'failed' && (
+              <AlertTriangle
+                size={12}
+                className="source-outcome source-outcome--failed"
+                aria-label="Did not play"
+              >
+                <title>{`Tried, did not play${outcome.reason ? ` — ${outcome.reason}` : ''}`}</title>
+              </AlertTriangle>
+            )}
+            {(outcome?.state === 'played' || playedBefore) && (
+              <CheckCircle2
+                size={12}
+                className={`source-outcome source-outcome--ok${playedBefore ? ' source-outcome--before' : ''}`}
+                aria-label={playedBefore ? 'Played last time' : 'Played'}
+              >
+                <title>{playedBefore ? 'Played last time' : 'Played in this session'}</title>
+              </CheckCircle2>
+            )}
+            {source.title}
+          </strong>
+          <span>{describe(source, isDeveloper)}</span>
+          <div className="player-panel__source-facts">
+            <span title="Seeders">
+              <Users size={12} /> {source.seeders}
+            </span>
+            <span title="Size">
+              <HardDrive size={12} /> {formatReleaseSize(source.sizeBytes)}
+            </span>
+            <span title="Host or extractor this link points at">
+              <Radio size={12} /> {host ?? source.indexerName}
+            </span>
+            {isActive && <span className="player-panel__now">Playing</span>}
+          </div>
+
+          {/*
+            Where this actually came from.
+
+            `indexerName` above is the *extractor* for an extension link —
+            a file host the provider chose, like "Voe" or "Server 3". It
+            is not the provider, and showing only it means a source that
+            starts failing cannot be traced to whose code or whose
+            repository to turn off. The chain answers that.
+          */}
+          {chain && (
+            <div className="player-panel__source-origin" title={chain}>
+              <Package size={11} />
+              <span>{chain}</span>
+            </div>
+          )}
+        </button>
+
+        {address && (
+          <button
+            className="player-panel__source-link"
+            onClick={() => void copyLink(source)}
+            title={`Copy this link — ${address.slice(0, 120)}`}
+            aria-label={`Copy the link for ${source.title}`}
+          >
+            {copiedLink === source.infoHash ? <Check size={14} /> : <Link2 size={14} />}
+          </button>
+        )}
+
+        {onDownload && (
+          <button
+            className="player-panel__source-download"
+            onClick={() => onDownload(source)}
+            title="Download this release"
+            aria-label={`Download ${source.title}`}
+          >
+            <Download size={15} />
+          </button>
+        )}
+      </li>
+    );
+  };
 
   if (!open) return null;
 
@@ -317,149 +482,69 @@ export const SourcePanel: React.FC<SourcePanelProps> = ({
         the head of the row and download is a distinct button at its tail, with
         the text block between them.
       */}
-      <ul className="player-panel__sources">
-        {displayedSources.map((source, rowIndex) => {
-          /**
-           * Exactly one row may be marked as playing — the invariant, enforced
-           * where it is actually visible rather than assumed upstream.
-           *
-           * `infoHash` is a *synthetic* identity for a provider stream: the
-           * SHA-1 of its URL. Two extensions that scrape the same file host hand
-           * back the same URL and therefore the same identity, so a plain
-           * equality test lit up every copy at once — the reported
-           * "[x] Source A [x] Source B". Matching the first occurrence keeps the
-           * display truthful about the one stream that is really open, and the
-           * key below is disambiguated so React does not collapse the duplicates
-           * into one row either.
-           */
-          const isActive =
-            Boolean(activeInfoHash) &&
-            source.infoHash === activeInfoHash &&
-            displayedSources.findIndex((candidate) => candidate.infoHash === activeInfoHash) ===
-              rowIndex;
-          const isSwitching = switchingTo === source.infoHash;
-          const chain = isDeveloper
-            ? provenanceChain(source, provenanceFor(source))
-            : providerLabel(source, provenanceFor(source));
-          const host = sourceHost(source);
-          const address = sourceAddress(source);
-          /*
-           * What this source has done, said quietly: a small ✓ for one that
-           * played (this session, or last time), a small ⚠ with the reason for
-           * one that was tried and failed. A source the viewer simply chose
-           * — or that was never tried — carries nothing.
-           */
-          const outcome = source.infoHash ? sourceStates?.[source.infoHash] : undefined;
-          const playedBefore = !outcome && rememberedHash !== undefined && source.infoHash === rememberedHash;
-
-          return (
-            <li
-              key={`${source.infoHash}-${rowIndex}`}
-              className={`player-panel__source-row${
-                isActive ? ' player-panel__source-row--current' : ''
-              }${outcome?.state === 'failed' && !isActive ? ' player-panel__source-row--failed' : ''}`}
+      {groups.length > 1 && (
+        <nav className="source-picker__groups player-panel__groups" aria-label="Jump to a source">
+          {groups.map((group) => (
+            <button
+              key={group.origin}
+              type="button"
+              className="chip source-picker__group-chip"
+              onClick={() => {
+                setCollapsedOrigins((now) => {
+                  const next = new Set(now);
+                  next.delete(group.origin);
+                  return next;
+                });
+                requestAnimationFrame(() =>
+                  document.getElementById(`panel-group-${originSlug(group.origin)}`)?.scrollIntoView({ block: 'start' })
+                );
+              }}
             >
+              {group.origin} <span>{group.sources.length}</span>
+            </button>
+          ))}
+          <button type="button" className="link-button" onClick={() => setCollapsedOrigins(new Set())}>
+            Expand all
+          </button>
+          <button type="button" className="link-button" onClick={() => setCollapsedOrigins(new Set(groups.map((g) => g.origin)))}>
+            Collapse all
+          </button>
+        </nav>
+      )}
+
+      {groups.length <= 1 ? (
+        <ul className="player-panel__sources">{displayedSources.map((source, rowIndex) => renderSourceRow(source, rowIndex))}</ul>
+      ) : (
+        groups.map((group) => {
+          const folded = collapsedOrigins.has(group.origin);
+          return (
+            <section key={group.origin} id={`panel-group-${originSlug(group.origin)}`} className="source-group">
               <button
-                className="player-panel__source-play"
-                onClick={() => onSelect(source)}
-                disabled={isSwitching}
-                aria-current={isActive || undefined}
-                title={isActive ? 'Playing — restart this source' : 'Play this source'}
-                aria-label={`Play ${source.title}`}
+                type="button"
+                className="source-group__head"
+                aria-expanded={!folded}
+                onClick={() =>
+                  setCollapsedOrigins((now) => {
+                    const next = new Set(now);
+                    if (next.has(group.origin)) next.delete(group.origin);
+                    else next.add(group.origin);
+                    return next;
+                  })
+                }
               >
-                {isSwitching ? (
-                  <Loader2 className="spin" size={16} />
-                ) : isActive ? (
-                  <Check size={16} />
-                ) : (
-                  <Play size={16} fill="currentColor" />
-                )}
+                {folded ? <ChevronRight size={14} /> : <ChevronDown size={14} />}
+                {group.origin}
+                <span className="source-group__count">{group.sources.length}</span>
               </button>
-
-              {/* The body selects too, so the whole row remains a play target —
-                  just not one that overlaps download. */}
-              <button
-                className="player-panel__source-body"
-                onClick={() => onSelect(source)}
-                disabled={isSwitching}
-              >
-                <strong>
-                  {outcome?.state === 'failed' && (
-                    <AlertTriangle
-                      size={12}
-                      className="source-outcome source-outcome--failed"
-                      aria-label="Did not play"
-                    >
-                      <title>{`Tried, did not play${outcome.reason ? ` — ${outcome.reason}` : ''}`}</title>
-                    </AlertTriangle>
-                  )}
-                  {(outcome?.state === 'played' || playedBefore) && (
-                    <CheckCircle2
-                      size={12}
-                      className={`source-outcome source-outcome--ok${playedBefore ? ' source-outcome--before' : ''}`}
-                      aria-label={playedBefore ? 'Played last time' : 'Played'}
-                    >
-                      <title>{playedBefore ? 'Played last time' : 'Played in this session'}</title>
-                    </CheckCircle2>
-                  )}
-                  {source.title}
-                </strong>
-                <span>{describe(source, isDeveloper)}</span>
-                <div className="player-panel__source-facts">
-                  <span title="Seeders">
-                    <Users size={12} /> {source.seeders}
-                  </span>
-                  <span title="Size">
-                    <HardDrive size={12} /> {formatReleaseSize(source.sizeBytes)}
-                  </span>
-                  <span title="Host or extractor this link points at">
-                    <Radio size={12} /> {host ?? source.indexerName}
-                  </span>
-                  {isActive && <span className="player-panel__now">Playing</span>}
-                </div>
-
-                {/*
-                  Where this actually came from.
-
-                  `indexerName` above is the *extractor* for an extension link —
-                  a file host the provider chose, like "Voe" or "Server 3". It
-                  is not the provider, and showing only it means a source that
-                  starts failing cannot be traced to whose code or whose
-                  repository to turn off. The chain answers that.
-                */}
-                {chain && (
-                  <div className="player-panel__source-origin" title={chain}>
-                    <Package size={11} />
-                    <span>{chain}</span>
-                  </div>
-                )}
-              </button>
-
-              {address && (
-                <button
-                  className="player-panel__source-link"
-                  onClick={() => void copyLink(source)}
-                  title={`Copy this link — ${address.slice(0, 120)}`}
-                  aria-label={`Copy the link for ${source.title}`}
-                >
-                  {copiedLink === source.infoHash ? <Check size={14} /> : <Link2 size={14} />}
-                </button>
+              {!folded && (
+                <ul className="player-panel__sources">
+                  {group.sources.map((source) => renderSourceRow(source, rankOf.get(source) ?? 0))}
+                </ul>
               )}
-
-              {onDownload && (
-                <button
-                  className="player-panel__source-download"
-                  onClick={() => onDownload(source)}
-                  title="Download this release"
-                  aria-label={`Download ${source.title}`}
-                >
-                  <Download size={15} />
-                </button>
-              )}
-            </li>
+            </section>
           );
-        })}
-      </ul>
+        })
+      )}
 
       {foldedTorrents > 0 && (
         <button type="button" className="link-button player-panel__more" onClick={() => setShowAllTorrents(true)}>

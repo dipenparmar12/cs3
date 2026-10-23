@@ -26,12 +26,10 @@ import {
   filterAndSortSources,
   foldTorrents,
   groupSourcesByOrigin,
+  originSlug,
   type SourceFilterState,
 } from '../utils/sourceFilter';
 import { formatBytes } from '../utils/format';
-
-/** A provider name as an element id, for the jump chips. */
-const slug = (value: string) => value.toLowerCase().replace(/[^a-z0-9]+/g, '-');
 
 export interface SourcePickerData {
   sources: TorrentResult[];
@@ -621,7 +619,7 @@ export const SourcePicker: React.FC<SourcePickerProps> = ({
                       });
                       requestAnimationFrame(() =>
                         document
-                          .getElementById(`source-group-${slug(group.origin)}`)
+                          .getElementById(`source-group-${originSlug(group.origin)}`)
                           ?.scrollIntoView({ block: 'start', behavior: 'smooth' })
                       );
                     }}
@@ -648,7 +646,7 @@ export const SourcePicker: React.FC<SourcePickerProps> = ({
               groups.map((group) => {
                 const folded = collapsedOrigins.has(group.origin);
                 return (
-                  <section key={group.origin} id={`source-group-${slug(group.origin)}`} className="source-group">
+                  <section key={group.origin} id={`source-group-${originSlug(group.origin)}`} className="source-group">
                     <button
                       type="button"
                       className="source-group__head"
