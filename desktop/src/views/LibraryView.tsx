@@ -30,7 +30,7 @@ import {
   CheckSquare,
 } from 'lucide-react';
 import type { SearchResponse } from '../types/api';
-import { TvType } from '../types/api';
+import { BUCKET_LABELS, BUCKET_ORDER, TvType } from '../types/api';
 import type { LibraryEntry, WatchProgress, WatchStatus } from '../../electron/cs3/libraryStore';
 import type { Bookmark } from '../../electron/cs3/bookmarkStore';
 import { Poster } from '../components/Poster';
@@ -82,13 +82,10 @@ interface LibraryViewProps {
  */
 type LibraryMode = 'watching' | 'saved' | 'searches';
 
-const BUCKETS: Array<{ status: WatchStatus; label: string }> = [
-  { status: 'Watching', label: 'Watching' },
-  { status: 'Completed', label: 'Completed' },
-  { status: 'OnHold', label: 'On hold' },
-  { status: 'PlanToWatch', label: 'Plan to watch' },
-  { status: 'Dropped', label: 'Dropped' },
-];
+const BUCKETS: Array<{ status: WatchStatus; label: string }> = BUCKET_ORDER.map((status) => ({
+  status,
+  label: BUCKET_LABELS[status],
+}));
 
 /** What a shelf entry is found by: the names it goes by and what it is. */
 const entryMatches = (entry: LibraryEntry, query: string) =>

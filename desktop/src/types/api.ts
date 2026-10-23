@@ -43,6 +43,18 @@ export const BUCKET_LABELS: Record<WatchStatus, string> = {
 };
 
 /**
+ * The order shelves are offered in, everywhere: a title's life from start to
+ * finish (watching, then queued, then done), with the two set-aside states last.
+ */
+export const BUCKET_ORDER: readonly WatchStatus[] = [
+  WatchStatus.Watching,
+  WatchStatus.PlanToWatch,
+  WatchStatus.Completed,
+  WatchStatus.OnHold,
+  WatchStatus.Dropped,
+];
+
+/**
  * One provider's route to a title, kept alongside the merged row that won.
  *
  * Two providers naming the same work produce one row, but the losing row's URL
