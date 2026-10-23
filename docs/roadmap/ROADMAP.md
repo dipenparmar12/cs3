@@ -15,8 +15,8 @@ Requirement: finish the PRDs that are partly built, decide the ones that are not
 | Playback telemetry | [40.1](./40.1-playback-reliability-observability-and-routing-baseline.md) §4.3 | Partial (2026-10-23) | `PlaybackEngine` emits one record per session at its terminal state (`playbackEngine.test.mts`, fails with the supersession rule removed); allow-list entry removed. Runtime fields (first frame, stalls, seeks, lease refreshes) are 0 until the renderer reports them; no IPC exposes the records yet |
 | Lease refresh acceptance | 40.1 §6 DoD | Not measured | `sourceLease.ts` is wired (`playbackEngine.ts`, `mediaProxy.ts`) but has no resolver, so it never refreshes; the 2-hour / zero-403 check cannot pass until Part D of the Playback Source Resolution PRD supplies one |
 | Extension platform standard | [41](./41-desktop-extension-platform-and-community-standard.md) | Pending | Nothing built (§6–23) |
-| Native standards (superseded) | [39](./39-native-extension-and-playback-standards.md) | Superseded by 41 | Header says "Nothing built"; 41 replaces it |
-| Resume continuity | [42](./42-resume-continuity-and-seekable-sources.md) | Partial | `resumePoint.ts`, `playedSource.ts` built. The PRD names `seriesContext.ts`, which does not exist |
+| Native standards (superseded) | [39](./39-native-extension-and-playback-standards.md) | Superseded by 41 | Header and index say so (2026-10-23) |
+| Resume continuity | [42](./42-resume-continuity-and-seekable-sources.md) | Partial | `resumePoint.ts`, `playedSource.ts` built. The PRD now points at `resumePoint.ts` (fixed 2026-10-23) |
 | Source & provider expansion | [43](./43-source-and-provider-expansion.md) | Partial | Items 1–4 built (`nativeProviders/*`); later items not started |
 | UX & developer research | [44](./44-user-and-developer-experience-research-and-roadmap.md) | Partial | Startup profile and inspector built; §6–8 not built |
 | New source integration | [45](./45-new-source-integration-movies-series-documentaries.md) | Partial | §6–7 not built |
@@ -45,20 +45,20 @@ Requirement: finish the PRDs that are partly built, decide the ones that are not
 - Done: `PlaybackEngine` emits one record per session (`fatal-error` on a failed prepare; `user-abort` on `close`; `engine-switch` when the next prepare replaces it, because the renderer never calls `media:closeStream`). The `moduleReachability` allow-list is empty.
 - Open: the runtime half (time to first frame, stalls, seeks, playback seconds, lease refreshes) is measured in the renderer and carried by nothing, so those fields are 0; `completed` is never claimed. Next: a `media:reportPlayback(sessionId, stats)` channel from `VideoPlayer`, then expose `getSummary()` beside `media:getPlaybackDiagnostics`.
 
-**H3. PRD 41 vs 39: two standards, one is already superseded.**
+**H3. Closed 2026-10-23.** 39 carries "Superseded by 41" in its header and in `PRD/00-index.md`. Original finding: **PRD 41 vs 39: two standards, one is already superseded.**
 - What: 39 says "superseded by 41" and 41 is pending. Keeping both invites someone to implement the wrong one.
 - Simpler alternative: keep 41; mark 39 superseded in the file header and in the index; do not delete (both are cited from `AGENTS.md`).
 
 ### Medium
 
-**M1. PRD 42 names a file that does not exist** (`cs3/seriesContext.ts`). The furthest-episode rule is in `resumePoint.ts` (AGENTS §9). Fix the reference in the PRD; no code change.
+**M1. Closed 2026-10-23** (the PRD now names `resumePoint.ts`). **PRD 42 named a file that does not exist** (`cs3/seriesContext.ts`). The furthest-episode rule is in `resumePoint.ts` (AGENTS §9). Fix the reference in the PRD; no code change.
 
 **M2. Status in four places.** The same status is written in the audit, in each PRD's stamp, in the `AGENTS.md` §13 table and in this file. They will drift.
 - Simpler alternative: this file is the status; the audit keeps only the evidence; `AGENTS.md` §13 links here and does not repeat statuses.
 
-**M3. PRD 40 duplicates 37.** Same title and contract. Mark 40 superseded by 37 in its header; do not delete.
+**M3. Closed 2026-10-23** (40 is marked superseded by 37 in its header). **PRD 40 duplicates 37.** Same title and contract. Mark 40 superseded by 37 in its header; do not delete.
 
-**M4. Sidecar test count and indexer count drift.** `AGENTS.md` says 19 indexer adapters; `indexerRegistry.ts` has 20 `case` labels. Measure once and write the number with its date.
+**M4. Closed 2026-10-23:** 56 sidecar `@Test` methods; 20 `case` labels are 19 adapters (`1337x` has an alias). Both recounted in `AGENTS.md`. **Sidecar test count and indexer count drift.** `AGENTS.md` says 19 indexer adapters; `indexerRegistry.ts` has 20 `case` labels. Measure once and write the number with its date.
 
 ### Low
 

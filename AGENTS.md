@@ -58,7 +58,7 @@ Working directory is `desktop/` unless noted.
 | **Ship (Windows)** | `bun run dist:win` → `release/` | Whole chain incl. Maven. `dist:win:fast` reuses jars |
 | Package, low level | `bun run electron:build` | Assumes Maven was run by hand |
 | Sidecar build | `sidecar/`: `mvn package` → `target/cs3-sidecar.jar`, `target/lib/*`, android shim into `runtime/` | |
-| Sidecar tests | `sidecar/`: `mvn test` | 53 `@Test` methods (counted 2026-10-20) |
+| Sidecar tests | `sidecar/`: `mvn test` | 56 `@Test` methods (counted 2026-10-23) |
 | Provider runtime classpath | repo root: `mvn -f sidecar/runtime-deps/pom.xml package` → `sidecar/runtime/` | 56 jars incl. `library-jvm-4.8.0.jar` |
 | Provider bridge | repo root: `mvn -f sidecar/bridge/pom.xml package` → `sidecar/runtime/cs3-provider-bridge.jar`; or `node tools/package/build-bridge.mjs` (no JitPack) | |
 
@@ -269,7 +269,7 @@ Crossing the boundary changes four places together: (1) the service in `electron
 | `torrent/torrentMetadata.ts` | `.torrent` bytes cached by infohash, verified against it. A hit means `add()` has piece hashes synchronously; the swarm is needed only for bytes. Builds the `xs` mirror URLs. |
 | `torrent/torrentContents.ts` | What is in a torrent, as something a person can browse: seasons, episodes, samples, extras. Pure and tested. Extension decides the kind, never the folder; a sample is recognised by size ratio as well as by name. |
 | `torrent/dhtNodeCache.ts` | DHT routing table, node id and port, persisted. Turns a cold bootstrap into a warm one. |
-| `torrent/indexerRegistry.ts`, `indexers/*` | 19 built-in adapters (4 Stremio stream addons, 12 JSON/RSS APIs, 3 HTML scrapers) plus Torznab (Jackett/Prowlarr). Registry switch: 20 `case` labels (2026-10-20). |
+| `torrent/indexerRegistry.ts`, `indexers/*` | 19 built-in adapters (4 Stremio stream addons, 12 JSON/RSS APIs, 3 HTML scrapers) plus Torznab (Jackett/Prowlarr). Registry switch: 20 `case` labels for 19 adapters (`1337x` and `x1337` are one; recounted 2026-10-23). |
 | `torrent/ranker.ts`, `releaseParser.ts` | Release-name parsing (quality, codec, group, season, episode) and result ranking. |
 | `externalPlayerControl.ts` | Two-way control of VLC over its HTTP interface. Capability is declared per player, never assumed (`fn:media`, "External players are driven"). |
 | `media/inspectionStore.ts` | Persists what a probe found, keyed on origin URL. Measurements only; the verdict is recomputed. |
