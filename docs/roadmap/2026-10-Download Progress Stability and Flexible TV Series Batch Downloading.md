@@ -111,4 +111,57 @@ Requirements:
 - Avoid rapid, unnecessary ETA fluctuations by smoothing speed estimates.
 - Handle zero speed, paused downloads, stalled connections, and unknown total size.
 - Clear or update ETA appropriately when a download is paused, completed, failed, or restarted.
-- Avoid displaying stale ETA values after a download state changes
+- Avoid displaying stale ETA values after a download state changes.
+
+### 2.6 Status of §2 (2026-10-23)
+
+- **Root cause found and fixed for torrent downloads:** each task read the stats of the torrent's last-selected file, shared by every episode task of a season pack and by the player, so tasks showed (and could complete on) another file's progress. Tasks now read their own file (`getStats(infoHash, fileIndex)`), and the ETA comes from that file's remaining bytes.
+- Speed is smoothed (exponential average) for aria2, HTTP and torrents, and ETA is shown only with a known size and a moving transfer (`download/progressSmoothing.ts`).
+- aria2's 0 before the server answers no longer erases a known size.
+- HTTP and yt-dlp audited: one attempt runs at a time; yt-dlp fetches one muxed stream, so there is no video-then-audio reset.
+- Not yet: a per-attempt token that drops a late event from a superseded attempt (§2.4), and a run against real downloads.
+
+## 3. TV Series Batch Downloading
+
+*Written 2026-10-23 from the viewer's request; the first version of this PRD ended at §2.5.*
+
+### 3.1 Problem
+
+A series has seasons of many episodes, and some providers split one season over several pages or parts. Downloading episode by episode means one search and one pick each. The viewer wants one click for a season, one click for the whole series, or a hand-picked set of episodes with control over quality, and a list that stays usable at hundreds of episodes.
+
+### 3.2 Requirements
+
+1. **One click for a season and for the whole series**, from the detail page.
+2. **Choose episodes**, across seasons, with:
+   - seasons that fold, each with a select-all (all, some, none);
+   - a filter by number (`3`), season (`s2`), episode (`s2e3`, `2x03`) or name;
+   - Select all and None for what is shown;
+   - Expand all and Collapse all;
+   - sticky season headers inside a bounded scroll, so a long list never pushes the dialog off screen.
+3. **Quality:** one default for the run, and an optional quality per episode. The best source at or below the chosen resolution is taken. An episode with nothing at that quality falls back to its best source instead of being skipped.
+4. **Correct episode, correct provider:**
+   - Each episode resolves its own sources, never another episode's.
+   - The provider being downloaded from is asked first.
+   - A provider that does not list an episode yields no source for it; it is not substituted.
+5. **Skip what is already queued or downloaded.**
+6. **Progress:** resolved of total, queued, skipped and failed, each failure with its reason. Cancel the rest at any time.
+7. **Keeps running when the viewer navigates away** (the run lives in the main process).
+
+### 3.3 Status (2026-10-23)
+
+| Requirement | Status | Where |
+|---|---|---|
+| 1 | Built (before this PRD) | `SeasonDownloadDialog.tsx`, `cs3/batchDownloader.ts` |
+| 2 | Built | `downloads/EpisodePicker.tsx`, `downloads/episodeSelection.ts` (tested) |
+| 3 | Built (per-episode quality is new) | `EpisodeRef.maxResolution`, `pickSource` |
+| 4 | Built | `cs3/episodeMatch.ts` (tested); discovery uses the episode's own handle at `origin` scope |
+| 5–7 | Built (before this PRD) | `batchDownloader.ts` |
+| Parts of one season over several pages | **Open** | Each page is its own list today; a page with no season numbers is matched by episode number alone |
+| Run on a real series | **Not done** | The scratch profile had no series provider |
+
+### 3.4 Acceptance
+
+- Season and series downloads queue every listed episode once, each with its own source.
+- A hand-picked set downloads exactly those episodes, each at its own quality where one was set.
+- A 500-episode series stays navigable: the filter reaches any episode in one step, and the list scrolls within the dialog.
+- No episode downloads another episode's file, and no episode is taken from a provider other than the one asked unless the viewer widens.
