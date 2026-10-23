@@ -12969,3 +12969,10 @@ button.credit-card { border: 0; background: none; padding: 0; font: inherit; col
 .search-other__thumb { position: relative; width: 64px; aspect-ratio: 2 / 3; padding: 0; overflow: hidden; border: 1px solid rgba(255, 255, 255, 0.12); border-radius: 6px; background: rgba(255, 255, 255, 0.05); cursor: pointer; }
 .search-other__thumb img { width: 100%; height: 100%; object-fit: cover; }
 .search-other__thumb:hover, .search-other__thumb:focus-visible { outline: 2px solid var(--accent, #3b82f6); outline-offset: 1px; }
+/* What a card's provider answered last time (attemptMark.ts): a dot, never a badge. */
+.poster-attempt { flex: 0 0 auto; width: 0.55rem; height: 0.55rem; margin-left: auto; margin-right: 0.3rem; border-radius: 50%; cursor: help; }
+.poster-attempt + .poster-source { margin-left: 0; }
+.poster-attempt--found { background: rgba(74, 222, 128, 0.55); }
+.poster-attempt--empty { background: transparent; box-shadow: inset 0 0 0 1.5px rgba(255, 255, 255, 0.45); }
+.poster-attempt--wrong { background: #f59e0b; }
+.poster-attempt--error { background: #f87171; }

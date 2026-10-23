@@ -1,3 +1,4 @@
+import { attemptMark } from '../utils/attemptMark';
 import React, { useRef, useState } from 'react';
 import { Poster } from './Poster';
 import {
@@ -20,6 +21,9 @@ import type { VariantInfo } from '../utils/variantGroups';
 import { VariantChip } from './search/VariantChip';
 import { isAdultMedia } from '../utils/adultContent';
 import { isAdultItemBlurred, useAdultState } from '../utils/useAdultMode';
+
+/** When this window loaded: a "sources found" mark is only for answers since. */
+const LAUNCHED_AT = Date.now() - performance.now();
 
 interface PosterCardProps {
   item: SearchResponse;
@@ -171,6 +175,9 @@ export const PosterCard: React.FC<PosterCardProps> = React.memo(({
   // their own position — and the record's otherwise.
   const bar = progressPercent ?? state.progressPercent;
 
+  // What this card's provider answered last time; never a mark on the work.
+  const mark = item?.apiName ? attemptMark(interaction?.attempt, item.apiName, LAUNCHED_AT) : null;
+
   return (
     <div
       ref={cardRef}
@@ -289,6 +296,14 @@ export const PosterCard: React.FC<PosterCardProps> = React.memo(({
             many other providers had it too, which is otherwise invisible until
             the details page — the tooltip names them.
           */}
+          {mark && (
+            <span
+              className={`poster-attempt poster-attempt--${mark.kind}`}
+              role="img"
+              aria-label={mark.label}
+              title={mark.tooltip}
+            />
+          )}
           {sources.length > 0 && (
             <span
               className="poster-source"

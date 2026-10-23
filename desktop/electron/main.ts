@@ -734,6 +734,7 @@ const titleInteractions = new TitleInteractionStore({
   outcomes: titleOutcomes,
   sourceReadiness: (url) => contentService.peekSourceReadiness(url),
   downloadTasks: () => downloadService.getTasks(),
+  providerAttempts: () => contentService.getProviderAttempts().lookup(),
 });
 const externalPlayers = new ExternalPlayerService();
 externalPlayers.setSnapshotListener((snapshot) =>
@@ -7143,12 +7144,13 @@ const userDataAreas: ResetAreaDefinition[] = [
   {
     id: 'activity',
     label: 'Viewed titles and results',
-    description: 'Which titles you opened, and which had nothing to play.',
+    description: 'Which titles you opened, which had nothing to play, and what each source answered.',
     defaultSelected: true,
-    count: () => Object.keys(titleOutcomes.list()).length,
+    count: () => Object.keys(titleOutcomes.list()).length + contentService.getProviderAttempts().count(),
     clear: () => {
       titleInteractions.clearVisits();
       titleOutcomes.clear();
+      contentService.getProviderAttempts().clear();
     },
   },
   {

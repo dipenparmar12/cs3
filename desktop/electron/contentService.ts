@@ -56,6 +56,8 @@ import { classifyFailure } from './cs3/failureTaxonomy.ts';
 import { planSourceScope, shouldEscalateScope } from './cs3/sourceScope';
 import { judgeProviderHit, type HitVerdict } from './cs3/providerHitMatch.ts';
 import { planDiscoveryWalk, walkDiscovery, type WalkOutcome, type WalkStop } from './cs3/discoveryWalk.ts';
+import { ProviderAttemptStore, type ProviderAttempt } from './cs3/providerAttempts.ts';
+import { canonicalKey } from './cs3/libraryStore.ts';
 
 /**
  * The widened search asks providers in ranked batches (`cs3/discoveryWalk.ts`).
@@ -449,6 +451,7 @@ export class ContentService {
       return new SourceProfileStore(view, new SearchScopeStore(view));
     }).current;
     this.natives = new NativeProviderRegistry(datastore);
+    this.attempts = new ProviderAttemptStore(datastore);
     // One switch per service, whichever side it was flipped on.
     this.natives.setServiceGate(() => this.plugins.switchedOffServices());
     this.plugins.setServiceGate(() => this.natives.switchedOffServices());
@@ -1625,6 +1628,9 @@ export class ContentService {
     /** A widened-search hit judged the same work produced sources: the walk may stop. */
     let verifiedFound = false;
     let walk: WalkOutcome | null = null;
+    /** Every provider's answer, written once when the search settles. */
+    const workKey = canonicalKey(wanted.title, wanted.year);
+    const answered: Array<Omit<ProviderAttempt, 'at'>> = [];
     const walkBatches = needProviderSearch
       ? request.exhaustive
         ? [this.plugins.rankForSearch(targetProviders)]
@@ -1683,8 +1689,19 @@ export class ContentService {
           if (res.sources.length > 0) {
             fromExtensions.push(...res.sources);
           }
-        } catch {
+          const provider = parseExtensionUrl(route)?.provider;
+          if (provider) {
+            answered.push({
+              work: workKey,
+              provider,
+              outcome: res.sources.length > 0 ? 'sources' : 'no-sources',
+              detail: res.sources.length > 0 ? undefined : res.diagnosis?.summary,
+            });
+          }
+        } catch (error) {
           // One provider failing is not a search failure; the rest still answer.
+          const provider = parseExtensionUrl(route)?.provider;
+          if (provider) answered.push({ work: workKey, provider, outcome: 'error', detail: describeError(error) });
         } finally {
           extensionsSettled += 1;
           report(latestIndexerProgress);
@@ -1726,12 +1743,14 @@ export class ContentService {
                         });
                         return false;
                       });
+                      let produced = 0;
                       if (extMatches.length > 0) {
                         for (const match of extMatches.slice(0, 2)) {
                           if (options.signal?.aborted) break;
                           try {
                             const res = await this.extensionSources(match.url, season, episode);
                             if (res.sources.length > 0) {
+                              produced += res.sources.length;
                               fromExtensions.push(...res.sources);
                               // Only a hit judged the same work ends the walk; an
                               // unreadable title (`unknown`) is kept but proves nothing.
@@ -1741,6 +1760,25 @@ export class ContentService {
                           } catch {}
                         }
                       }
+                      const refused = (providerOutcome.results ?? []).filter(
+                        (m) => verdicts.get(m.url) === 'mismatch'
+                      );
+                      answered.push({
+                        work: workKey,
+                        provider: providerOutcome.provider,
+                        outcome: providerOutcome.error
+                          ? 'error'
+                          : produced > 0
+                            ? 'sources'
+                            : extMatches.length === 0 && refused.length > 0
+                              ? 'wrong-match'
+                              : 'no-sources',
+                        detail: providerOutcome.error
+                          ? providerOutcome.error
+                          : produced === 0 && extMatches.length === 0 && refused.length > 0
+                            ? `Answered with “${refused[0].name}”`
+                            : undefined,
+                      });
                     } finally {
                       extensionsSettled += 1;
                       report(latestIndexerProgress);
@@ -1766,6 +1804,7 @@ export class ContentService {
         : []),
     ]);
     const walked = walk as WalkOutcome | null;
+    if (!options.signal?.aborted) this.attempts.record(answered);
 
     /**
      * One row per source, even when two paths found the same one.
@@ -2423,6 +2462,13 @@ export class ContentService {
    * widened search; nothing about them is skipped or trusted beyond the order.
    */
   private playedProviders: ((title: string, year?: number) => string[]) | null = null;
+
+  /** What each provider answered for each work (`cs3/providerAttempts.ts`). */
+  private attempts: ProviderAttemptStore;
+
+  public getProviderAttempts(): ProviderAttemptStore {
+    return this.attempts;
+  }
 
   public setPlayedProviders(lookup: (title: string, year?: number) => string[]): void {
     this.playedProviders = lookup;

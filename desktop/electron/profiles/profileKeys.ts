@@ -28,6 +28,7 @@ export const PERSONAL_KEYS: ReadonlySet<string> = new Set([
   'search_history',
   'cs3_title_outcomes',
   'cs3_title_visits',
+  'cs3_provider_attempts',
   // Never copied, so a duplicate of an adult profile starts with adult content off.
   'cs3_adult_content_enabled',
   'cs3_adult_content_mode',
