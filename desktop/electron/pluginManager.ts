@@ -1,3 +1,4 @@
+import { serviceOf, servicesOff } from './cs3/sharedServices.ts';
 import fs from 'fs';
 // Address helpers live in a pure module so they can be tested; this file
 // imports `electron` and cannot be loaded under Node's type stripping.
@@ -3392,9 +3393,20 @@ export class PluginManager {
   }
 
   private adultGate: (() => boolean) | null = null;
+  /** Services switched off among the built-in providers (`cs3/sharedServices.ts`). */
+  private serviceGate: (() => Set<string>) | null = null;
 
   public setAdultGate(gate: () => boolean): void {
     this.adultGate = gate;
+  }
+
+  public setServiceGate(gate: () => Set<string>): void {
+    this.serviceGate = gate;
+  }
+
+  /** Services an extension provider switch has turned off, for the built-in side. */
+  public switchedOffServices(): Set<string> {
+    return servicesOff(this.getDisabledProviders());
   }
 
   public listAdultOnlyProviderNames(): string[] {
@@ -3461,9 +3473,16 @@ export class PluginManager {
     const disabledExtensions = new Set(this.getDisabledExtensions());
     const disabledRepositories = new Set(this.getDisabledRepositories());
     const allowAdult = this.adultAllowed();
+    // Off anywhere is off everywhere: the built-in Internet Archive switched
+    // off also withdraws an extension's provider of the same service.
+    const offServices = new Set([...servicesOff(disabled), ...(this.serviceGate?.() ?? [])]);
 
     return [...this.providers.values()]
       .filter((provider) => !disabled.has(provider.name))
+      .filter((provider) => {
+        const service = serviceOf(provider.name);
+        return !service || !offServices.has(service);
+      })
       .filter((provider) => !disabledExtensions.has(provider.pluginInternalName))
       .filter((provider) => !disabledRepositories.has(this.repositoryIdOf(provider.pluginInternalName)))
       .filter((provider) => allowAdult || !isAdultOnlyProvider(provider))

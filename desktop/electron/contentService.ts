@@ -428,6 +428,9 @@ export class ContentService {
       return new SourceProfileStore(view, new SearchScopeStore(view));
     }).current;
     this.natives = new NativeProviderRegistry(datastore);
+    // One switch per service, whichever side it was flipped on.
+    this.natives.setServiceGate(() => this.plugins.switchedOffServices());
+    this.plugins.setServiceGate(() => this.natives.switchedOffServices());
     this.searches = new SearchSessionManager({
       plugins: this.plugins,
       registry: this.registry,
