@@ -216,6 +216,8 @@ export interface StreamHandle {
   fileSize: number;
   /** Absolute on-disk location of the selected file, for downloads. */
   diskPath: string;
+  /** The file's index in the torrent, so a download can ask for its own stats. */
+  fileIndex?: number;
   files: TorrentFileEntry[];
   /** Subtitle files found inside the torrent, served from the same loopback origin. */
   subtitleUrls: Array<{ name: string; url: string }>;
@@ -906,6 +908,7 @@ export class TorrentEngine {
 
   private describeHandle(torrent: Torrent, file: TorrentFile, port: number): StreamHandle {
     return {
+      fileIndex: torrent.files.indexOf(file),
       infoHash: torrent.infoHash,
       streamUrl: this.fileUrl(port, torrent.infoHash, file),
       fileName: file.name,
@@ -1224,13 +1227,19 @@ export class TorrentEngine {
     return Math.max(0, Math.min(file.length, contiguous - (offset % pieceLength)));
   }
 
-  public async getStats(infoHash: string): Promise<TorrentStreamStats | null> {
+  /**
+   * `fileIndex` names the file a caller cares about. Without it the stats are
+   * for the file last selected on this torrent, which is shared: a season pack
+   * downloading episodes 3 and 5, or streamed while it downloads, made every
+   * task show (and complete on) whichever file was picked last.
+   */
+  public async getStats(infoHash: string, fileIndex?: number): Promise<TorrentStreamStats | null> {
     if (!this.client) return null;
 
     const torrent = await Promise.resolve(this.client.get(infoHash));
     if (!torrent) return null;
 
-    const index = this.selectedFile.get(infoHash) ?? 0;
+    const index = fileIndex ?? this.selectedFile.get(infoHash) ?? 0;
     const file = torrent.files[index] ?? torrent.files[0];
     if (!file) return null;
 

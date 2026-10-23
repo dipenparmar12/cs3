@@ -1,3 +1,4 @@
+import { etaSeconds, smoothSpeed } from './download/progressSmoothing.ts';
 import fs from 'fs';
 import path from 'path';
 import type { DownloadRequestResult, DownloadTask } from '../src/types/download';
@@ -75,6 +76,8 @@ export class DownloadService {
   private gidToTaskId: Map<string, string> = new Map();
   /** taskId → infoHash, for downloads served by the torrent engine. */
   private torrentTasks: Map<string, string> = new Map();
+  /** Which file of its torrent each task downloads (season packs share a torrent). */
+  private torrentTaskFile: Map<string, number | undefined> = new Map();
   /** taskId → canceller, for the built-in HTTP downloader and yt-dlp. */
   private handles: Map<string, ActiveHandle> = new Map();
   private pollInterval: NodeJS.Timeout | null = null;
@@ -219,16 +222,11 @@ export class DownloadService {
         }
 
         task.bytesDownloaded = status.completedLength;
-        task.totalBytes = status.totalLength;
-        task.downloadSpeed = status.downloadSpeed;
-
-        if (status.downloadSpeed > 0 && status.totalLength > status.completedLength) {
-          task.etaSeconds = Math.ceil(
-            (status.totalLength - status.completedLength) / status.downloadSpeed
-          );
-        } else {
-          task.etaSeconds = 0;
-        }
+        // aria2 reports 0 until the server has answered; an unknown size is
+        // not a reason to forget the one already known.
+        if (status.totalLength > 0) task.totalBytes = status.totalLength;
+        task.downloadSpeed = smoothSpeed(task.downloadSpeed, status.downloadSpeed);
+        task.etaSeconds = etaSeconds(status.completedLength, task.totalBytes, task.downloadSpeed);
 
         if (status.status === 'complete') {
           /**
@@ -282,24 +280,25 @@ export class DownloadService {
     for (const [taskId, infoHash] of this.torrentTasks.entries()) {
       const task = this.queue.get(taskId);
       if (!task) {
-        this.torrentTasks.delete(taskId);
+        this.torrentTasks.delete(taskId); this.torrentTaskFile.delete(taskId);
         continue;
       }
 
-      const stats = await this.torrentEngine.getStats(infoHash);
+      const stats = await this.torrentEngine.getStats(infoHash, this.torrentTaskFile.get(taskId));
       if (!stats) continue;
 
       task.bytesDownloaded = stats.downloaded;
       task.totalBytes = stats.fileSize;
-      task.downloadSpeed = stats.downloadSpeed;
-      task.etaSeconds = Math.round(stats.timeRemainingMs / 1000) || 0;
+      task.downloadSpeed = smoothSpeed(task.downloadSpeed, stats.downloadSpeed);
+      // This file's remaining bytes, not the torrent's `timeRemaining`.
+      task.etaSeconds = etaSeconds(stats.downloaded, stats.fileSize, task.downloadSpeed);
 
       if (stats.error) {
         task.state = DownloadState.Failed;
         task.errorMessage = stats.error;
-        this.torrentTasks.delete(taskId);
+        this.torrentTasks.delete(taskId); this.torrentTaskFile.delete(taskId);
       } else if (stats.progress >= 1) {
-        this.torrentTasks.delete(taskId);
+        this.torrentTasks.delete(taskId); this.torrentTaskFile.delete(taskId);
         this.finalizeCompletion(task, stats.fileSize);
       } else if (stats.isStalled && !stats.isPaused) {
         // Say so rather than showing 0 B/s forever with no explanation.
@@ -605,6 +604,7 @@ export class DownloadService {
       // in which case `add` never ran and the strategy is still sequential.
       await this.torrentEngine.setMode(handle.infoHash, 'download');
       this.torrentTasks.set(task.id, handle.infoHash);
+      this.torrentTaskFile.set(task.id, handle.fileIndex);
       task.totalBytes = handle.fileSize;
       // Multi-file releases nest the episode inside the torrent's own folder,
       // so the real path comes from the engine rather than being guessed.
@@ -655,11 +655,8 @@ export class DownloadService {
 
     task.bytesDownloaded = downloaded;
     if (total > 0) task.totalBytes = total;
-    task.downloadSpeed = speed;
-    task.etaSeconds =
-      speed > 0 && task.totalBytes > downloaded
-        ? Math.ceil((task.totalBytes - downloaded) / speed)
-        : 0;
+    task.downloadSpeed = smoothSpeed(task.downloadSpeed, speed);
+    task.etaSeconds = etaSeconds(downloaded, task.totalBytes, task.downloadSpeed);
     this.saveQueueToStorage();
   }
 
@@ -1382,7 +1379,7 @@ export class DownloadService {
         infoHash,
         task.state === DownloadState.Completed && !deleteFile
       );
-      this.torrentTasks.delete(id);
+      this.torrentTasks.delete(id); this.torrentTaskFile.delete(id);
     }
 
     for (const [gid, taskId] of this.gidToTaskId.entries()) {
