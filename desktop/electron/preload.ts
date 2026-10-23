@@ -10,6 +10,7 @@ import type {
   SuggestionUpdate,
 } from '../src/types/api';
 import type { OttPlatformView } from './cs3/ottPlatforms';
+import type { PlaybackTelemetryRecord, TelemetrySummary } from './media/playbackTelemetry';
 import type { ProfileState, SourceProfile } from './cs3/sourceProfiles.ts';
 import type {
   ProfileActionResult,
@@ -734,7 +735,14 @@ export interface CloudStreamElectronAPI {
   /** Strategy, codecs and encoder timings for every playback attempt. */
   getPlaybackDiagnostics: (
     sessionId?: string
-  ) => Promise<Envelope & { events: PlaybackDiagnosticEvent[] }>;
+  ) => Promise<
+    Envelope & {
+      events: PlaybackDiagnosticEvent[];
+      /** PRD-40.1 records of this launch, oldest first. */
+      telemetry?: PlaybackTelemetryRecord[];
+      summary?: TelemetrySummary;
+    }
+  >;
   /** Codec strings to hand `canPlayType`, keyed by ffprobe's name for each. */
   getCodecProbes: () => Promise<Record<string, string>>;
   /**

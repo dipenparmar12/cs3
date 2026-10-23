@@ -4306,6 +4306,8 @@ ipcMain.handle('media:reportPlayback', async (_, telemetryId: string, report: Pl
 ipcMain.handle('media:getPlaybackDiagnostics', async (_, sessionId?: string) => ({
   ok: true,
   events: playbackEngine.getDiagnostics(sessionId),
+  telemetry: playbackEngine.getTelemetry(),
+  summary: playbackEngine.getTelemetrySummary(),
 }));
 
 // --- native playback engine (mpv) -----------------------------------------

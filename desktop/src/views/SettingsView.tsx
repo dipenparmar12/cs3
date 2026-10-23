@@ -47,6 +47,7 @@ import {
 import { useFlash } from '../utils/useFlash';
 import { DiagnosticsPanel } from '../components/settings/DiagnosticsPanel';
 import { StartupProfilePanel } from '../components/settings/StartupProfilePanel';
+import { PlaybackTelemetryPanel } from '../components/settings/PlaybackTelemetryPanel';
 import { CardStatusLegend } from '../components/settings/CardStatusLegend';
 import { ExtensionIssuesPanel } from '../components/settings/ExtensionIssuesPanel';
 import { AboutPanel } from '../components/settings/AboutPanel';
@@ -869,8 +870,9 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ initialTab }) => {
             first thing to ask for when something goes wrong.
           */}
           {level === 'everything' && (
-            <SettingsSection keywords="diagnostics logs startup profile slow issues errors extension problems report">
+            <SettingsSection keywords="diagnostics logs startup profile slow issues errors extension problems report playback sessions telemetry first frame stalls">
               <StartupProfilePanel />
+              <PlaybackTelemetryPanel />
               <ExtensionIssuesPanel />
               <DiagnosticsPanel />
             </SettingsSection>

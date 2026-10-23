@@ -33,6 +33,7 @@ import {
   withRuntime,
   type PlaybackTelemetryRecord,
   type PlaybackTerminalState,
+  type TelemetrySummary,
 } from './playbackTelemetry.ts';
 
 const log = scopedLogger('playback');
@@ -196,6 +197,10 @@ export class PlaybackEngine {
 
   public getTelemetry(): PlaybackTelemetryRecord[] {
     return this.telemetry.getRecords();
+  }
+
+  public getTelemetrySummary(): TelemetrySummary {
+    return this.telemetry.getSummary();
   }
 
   /** The renderer's measurements for a session, which also end it. */
