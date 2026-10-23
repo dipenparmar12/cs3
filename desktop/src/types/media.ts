@@ -312,6 +312,12 @@ export interface ProbeFailure {
   reason: string;
   /** True when the source is gone rather than merely undecodable. */
   dead: boolean;
+  /**
+   * What answered instead of media, when it was recognised
+   * (`electron/media/nonMediaResponse.ts`): a sign-in page, an "update the
+   * app" notice, another web page, or a rate limit.
+   */
+  kind?: 'login' | 'update-required' | 'html' | 'rate-limited';
 }
 
 /** What the renderer measured about its own decoders. Believed over any table. */

@@ -69,6 +69,7 @@ import {
 } from './networkSettings';
 import { rawFetch, setChallengeSolver, setHttpFetch } from './torrent/http';
 import { AppUpdateService } from './appUpdate/appUpdateService.ts';
+import { classifyNonMedia, looksLikeHtml, nonMediaReason } from './media/nonMediaResponse.ts';
 import { ResilientFetch, classifyNetworkError } from './networkResilience';
 import { BinaryDownloader } from './binaryDownloader';
 import { MpvEngine } from './media/mpvEngine';
@@ -110,6 +111,7 @@ import type {
   PlaybackStreamRequest,
   RendererCapabilities,
   PlaybackRuntimeReport,
+  ProbeFailure,
 } from '../src/types/media';
 import type { MpvOpenRequest } from '../src/types/mpv';
 import { ExtensionUpdater, type UpdateSettings } from './cs3/extensionUpdater';
@@ -4282,6 +4284,27 @@ ipcMain.handle('player:openExternal', async (_, playerId: string, url: string) =
   return result;
 });
 
+/** Up to `limit` bytes of a body as text, then the transfer is cancelled. */
+async function readHead(response: Response, limit: number): Promise<string> {
+  const reader = response.body?.getReader();
+  if (!reader) return '';
+  const chunks: Uint8Array[] = [];
+  let size = 0;
+  try {
+    while (size < limit) {
+      const { done, value } = await reader.read();
+      if (done || !value) break;
+      chunks.push(value);
+      size += value.length;
+    }
+  } catch {
+    // What arrived is enough to classify.
+  } finally {
+    reader.cancel().catch(() => undefined);
+  }
+  return Buffer.concat(chunks.map((c) => Buffer.from(c))).subarray(0, limit).toString('utf8');
+}
+
 /**
  * Asks the source itself why it could not be read.
  *
@@ -4289,11 +4312,7 @@ ipcMain.handle('player:openExternal', async (_, playerId: string, url: string) =
  * link is gone or refused and no decoder would have helped, while a source that
  * answers 200 and still cannot be probed is a real format problem.
  */
-async function describeUnreadableSource(url: string): Promise<{
-  status?: number;
-  reason: string;
-  dead: boolean;
-}> {
+async function describeUnreadableSource(url: string): Promise<ProbeFailure> {
   if (!/^https?:\/\//i.test(url)) {
     return { reason: 'This source could not be read.', dead: false };
   }
@@ -4323,6 +4342,15 @@ async function describeUnreadableSource(url: string): Promise<{
     let proxyReason = '';
     if (response.status === 502 && /^https?:\/\/127\.0\.0\.1[:/]/i.test(url)) {
       proxyReason = (await response.text().catch(() => '')).slice(0, 500);
+    } else if (response.status < 400 && looksLikeHtml(response.headers.get('content-type'), '')) {
+      /*
+       * A page where media was expected: a sign-in page, an "update the app"
+       * notice, a landing page (Content Validation PRD Phase 2). Its first
+       * 16 KB say which; no decoder would help, so the source is moved past.
+       */
+      const head = await readHead(response, 16_384);
+      const kind = classifyNonMedia(response.headers.get('content-type'), head) ?? 'html';
+      return { status: response.status, dead: true, kind, reason: nonMediaReason(kind) };
     } else {
       try {
         await response.body?.cancel();
@@ -4341,6 +4369,15 @@ async function describeUnreadableSource(url: string): Promise<{
         reason: unresolved
           ? "This source's server can't be found any more — its web address no longer exists. Try another source."
           : `This source's server could not be reached (${proxyReason.split('\n')[0]}). Try another source.`,
+      };
+    }
+
+    if (response.status === 429) {
+      return {
+        status: 429,
+        dead: true,
+        kind: 'rate-limited',
+        reason: 'This source is busy and asked to slow down (HTTP 429). Try another source, or this one again shortly.',
       };
     }
 
