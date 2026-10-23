@@ -54,7 +54,17 @@ import { NativeProviderRegistry } from './cs3/nativeProviderRegistry.ts';
 import { parseNativeAddress } from './cs3/nativeProviders/types.ts';
 import { classifyFailure } from './cs3/failureTaxonomy.ts';
 import { planSourceScope, shouldEscalateScope } from './cs3/sourceScope';
-import { judgeProviderHit } from './cs3/providerHitMatch.ts';
+import { judgeProviderHit, type HitVerdict } from './cs3/providerHitMatch.ts';
+import { planDiscoveryWalk, walkDiscovery, type WalkOutcome, type WalkStop } from './cs3/discoveryWalk.ts';
+
+/**
+ * The widened search asks providers in ranked batches (`cs3/discoveryWalk.ts`).
+ * The first batch is small so the likeliest providers answer before anything
+ * else competes with them; 45 s is where the player shows what it has and
+ * offers "Keep looking" (PRD Part C, about five search-stage p50s).
+ */
+const WALK_FIRST_BATCH = 4;
+const WALK_BUDGET_MS = 45_000;
 import { describeError } from '../src/utils/errors.ts';
 import type { PageSnapshotStore } from './cs3/pageSnapshot.ts';
 import { tidyReleaseName } from '../src/utils/releaseName.ts';
@@ -153,6 +163,12 @@ export interface SourceQuery {
   titleOverride?: string;
   /** Defaults to `origin`. See {@link SourceScope}. */
   scope?: SourceScope;
+  /**
+   * At `all` scope, ask every provider: no time budget and no stop at the
+   * first verified source (`cs3/discoveryWalk.ts`). The player's "Keep
+   * looking" after a ranked walk stopped early.
+   */
+  exhaustive?: boolean;
 }
 
 export interface SourceResponse {
@@ -180,8 +196,13 @@ export interface SourceResponse {
    * search that already did.
    */
   scopeUsed: SourceScope;
-  /** True when widening to `all` would ask anything that has not been asked. */
+  /** True when widening would ask anything that has not been asked. */
   canWiden: boolean;
+  /**
+   * How the widened provider search walked the providers, when it ran:
+   * why it stopped and how many were never asked (`cs3/discoveryWalk.ts`).
+   */
+  walk?: { stoppedBy: WalkStop; asked: number; remaining: number };
   /**
    * True when this answer came from an automatic escalation: the providers this
    * row came from had nothing, so everything else was asked without the viewer
@@ -1070,6 +1091,8 @@ export class ContentService {
       // without this it would share a slot with the play that does, and the
       // viewer would be handed the narrow empty answer it settled for.
       autoWiden ? 'widen' : 'narrow',
+      // A ranked walk and an exhaustive one answer differently.
+      request.exhaustive ? 'exhaustive' : 'ranked',
     ].join('|');
   }
 
@@ -1599,6 +1622,19 @@ export class ContentService {
     };
     let extensionsSettled = 0;
     let latestIndexerProgress: SearchProgress | null = null;
+    /** A widened-search hit judged the same work produced sources: the walk may stop. */
+    let verifiedFound = false;
+    let walk: WalkOutcome | null = null;
+    const walkBatches = needProviderSearch
+      ? request.exhaustive
+        ? [this.plugins.rankForSearch(targetProviders)]
+        : planDiscoveryWalk({
+            ranked: this.plugins.rankForSearch(targetProviders),
+            preferred: this.playedProviders?.(wanted.title, wanted.year) ?? [],
+            firstBatch: WALK_FIRST_BATCH,
+            batchSize: this.plugins.searchConcurrency(),
+          })
+      : [];
 
     const report = (progress: SearchProgress | null) => {
       if (!onProgress) return;
@@ -1656,53 +1692,80 @@ export class ContentService {
       }),
       ...(needProviderSearch && providerList.length > 0
         ? [
-            this.plugins.searchEach(
-              wanted.title,
-              targetProviders,
-              async (providerOutcome) => {
-                if (options.signal?.aborted) return;
-                try {
-                  const extMatches = (providerOutcome.results ?? []).filter((m) => {
-                    if (!m.url || !m.url.startsWith('cs3ext://')) return false;
-                    // Already asked through a route; asking again would double
-                    // the work and the results.
-                    const ref = parseExtensionUrl(m.url);
-                    if (ref && routeProviders.has(ref.provider)) return false;
-                    // A provider without the title answers anyway, with a
-                    // sequel, another season or its home page. Judged before
-                    // the first two are taken, so a wrong first hit does not
-                    // push the right second one out (PRD Phase 1).
-                    const verdict = judgeProviderHit(work, m);
-                    if (verdict.kind !== 'mismatch') return true;
-                    refusedHits.push({
-                      title: m.name,
-                      reason: `${providerOutcome.provider}: ${verdict.reason}`,
-                      seeders: 0,
-                    });
-                    return false;
-                  });
-                  if (extMatches.length > 0) {
-                    for (const match of extMatches.slice(0, 2)) {
-                      if (options.signal?.aborted) break;
-                      try {
-                        const res = await this.extensionSources(match.url, season, episode);
-                        if (res.sources.length > 0) {
-                          fromExtensions.push(...res.sources);
-                          report(latestIndexerProgress);
+            walkDiscovery({
+              batches: walkBatches,
+              verifiedFound: () => verifiedFound,
+              budgetMs: request.exhaustive ? Number.POSITIVE_INFINITY : WALK_BUDGET_MS,
+              now: () => Date.now(),
+              signal: options.signal,
+              runBatch: (batch) =>
+                this.plugins.searchEach(
+                  wanted.title,
+                  batch,
+                  async (providerOutcome) => {
+                    if (options.signal?.aborted) return;
+                    try {
+                      const verdicts = new Map<string, HitVerdict['kind']>();
+                      const extMatches = (providerOutcome.results ?? []).filter((m) => {
+                        if (!m.url || !m.url.startsWith('cs3ext://')) return false;
+                        // Already asked through a route; asking again would double
+                        // the work and the results.
+                        const ref = parseExtensionUrl(m.url);
+                        if (ref && routeProviders.has(ref.provider)) return false;
+                        // A provider without the title answers anyway, with a
+                        // sequel, another season or its home page. Judged before
+                        // the first two are taken, so a wrong first hit does not
+                        // push the right second one out (PRD Phase 1).
+                        const verdict = judgeProviderHit(work, m);
+                        verdicts.set(m.url, verdict.kind);
+                        if (verdict.kind !== 'mismatch') return true;
+                        refusedHits.push({
+                          title: m.name,
+                          reason: `${providerOutcome.provider}: ${verdict.reason}`,
+                          seeders: 0,
+                        });
+                        return false;
+                      });
+                      if (extMatches.length > 0) {
+                        for (const match of extMatches.slice(0, 2)) {
+                          if (options.signal?.aborted) break;
+                          try {
+                            const res = await this.extensionSources(match.url, season, episode);
+                            if (res.sources.length > 0) {
+                              fromExtensions.push(...res.sources);
+                              // Only a hit judged the same work ends the walk; an
+                              // unreadable title (`unknown`) is kept but proves nothing.
+                              if (verdicts.get(match.url) === 'match') verifiedFound = true;
+                              report(latestIndexerProgress);
+                            }
+                          } catch {}
                         }
-                      } catch {}
+                      }
+                    } finally {
+                      extensionsSettled += 1;
+                      report(latestIndexerProgress);
                     }
-                  }
-                } finally {
-                  extensionsSettled += 1;
-                  report(latestIndexerProgress);
-                }
-              },
-              options.signal
-            ),
+                  },
+                  options.signal
+                ),
+            }).then((outcome) => {
+              walk = outcome;
+              // Providers the walk never asked still count as settled, or the
+              // progress bar would wait for them forever.
+              extensionsSettled += outcome.remaining.length;
+              report(latestIndexerProgress);
+              log.info('discovery_walk', {
+                title: wanted.title,
+                stoppedBy: outcome.stoppedBy,
+                asked: outcome.asked.length,
+                remaining: outcome.remaining.length,
+                exhaustive: Boolean(request.exhaustive),
+              });
+            }),
           ]
         : []),
     ]);
+    const walked = walk as WalkOutcome | null;
 
     /**
      * One row per source, even when two paths found the same one.
@@ -1732,7 +1795,17 @@ export class ContentService {
       indexerOutcomes: outcome.indexerOutcomes,
       query: { title: wanted.title, season, episode, imdbId: wanted.imdbId },
       scopeUsed,
-      canWiden: plan.canWiden,
+      // A walk that stopped early left providers to ask: "Keep looking" asks them.
+      canWiden: plan.canWiden || (walked?.remaining.length ?? 0) > 0,
+      ...(walked
+        ? {
+            walk: {
+              stoppedBy: walked.stoppedBy,
+              asked: walked.asked.length,
+              remaining: walked.remaining.length,
+            },
+          }
+        : {}),
     };
 
     if (response.sources.length === 0) {
@@ -2343,6 +2416,17 @@ export class ContentService {
    * leak in an app that stays open for days.
    */
   private alternateRoutes = new Map<string, string[]>();
+
+  /**
+   * Which providers a source of this work played from, for this viewer
+   * (`main.ts` reads the played-source records). Those are asked first by the
+   * widened search; nothing about them is skipped or trusted beyond the order.
+   */
+  private playedProviders: ((title: string, year?: number) => string[]) | null = null;
+
+  public setPlayedProviders(lookup: (title: string, year?: number) => string[]): void {
+    this.playedProviders = lookup;
+  }
 
   /**
    * Re-teaches the routes a saved search's rows carry.

@@ -555,6 +555,15 @@ const historyProfiles = perProfile((id) => new HistoryStore(datastore.forProfile
 const bookmarkProfiles = perProfile((id) => new BookmarkStore(datastore.forProfile(id)));
 const savedSearchProfiles = perProfile((id) => new SavedSearchStore(profileDataDir(id)));
 const libraryStore = libraryProfiles.current;
+contentService.setPlayedProviders((title, year) => [
+  ...new Set(
+    libraryStore
+      .getPlayedSourcesForKey(canonicalKey(title, year))
+      .sort((a, b) => b.playedAt - a.playedAt)
+      .map((entry) => entry.origin.provider ?? entry.source.providerName)
+      .filter((name): name is string => Boolean(name))
+  ),
+]);
 const historyStore = historyProfiles.current;
 const bookmarks = bookmarkProfiles.current;
 /**

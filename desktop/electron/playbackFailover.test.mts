@@ -319,6 +319,28 @@ test('a source the viewer picked stays the only one tried, even in standard mode
 
 // --- runner ----------------------------------------------------------------
 
+/**
+ * Phase 2: a widened search is a ranked walk that may stop early, so pressing
+ * "Find more sources" again must ask what the walk left out, not repeat it.
+ */
+test('a second Find more sources asks every provider, without the walk limits', async () => {
+  const { content } = stubContent(new Set());
+  const asked: Array<{ scope?: string; exhaustive?: boolean }> = [];
+  Object.assign(content, {
+    getSources: (request: { scope?: string; exhaustive?: boolean }) => {
+      asked.push({ scope: request.scope, exhaustive: request.exhaustive });
+      return Promise.resolve({ sources: [], canWiden: true });
+    },
+  });
+  const manager = new PlaybackSessionManager(content);
+  const { sessionId } = manager.start({ mediaUrl: 'cs3ext://HDO/abc' } as never, 'Dune');
+  await manager.refresh(sessionId, { widen: true });
+  await manager.refresh(sessionId, { widen: true });
+  const widenings = asked.slice(-2);
+  assert.deepEqual(widenings[0], { scope: 'all', exhaustive: undefined }, 'first: the ranked walk');
+  assert.deepEqual(widenings[1], { scope: 'all', exhaustive: true }, 'second: everyone');
+});
+
 let failed = 0;
 for (const [name, fn] of tests) {
   try {
@@ -332,3 +354,4 @@ for (const [name, fn] of tests) {
 }
 console.log(`\n${tests.length - failed} passed${failed ? `, ${failed} failed` : ''}`);
 if (failed) process.exit(1);
+

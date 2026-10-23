@@ -202,6 +202,16 @@ export interface ResumePreference {
   match?: (candidates: TorrentResult[]) => TorrentResult | null;
 }
 
+/**
+ * One step wider than a query already is: its own providers, then a ranked
+ * walk of every provider (`all`), then every provider with no budget and no
+ * early stop (`exhaustive`, the second "Find more sources"). Each press asks
+ * something the last one did not.
+ */
+function widened(request: SourceQuery): SourceQuery {
+  return request.scope === 'all' ? { ...request, exhaustive: true } : { ...request, scope: 'all' };
+}
+
 export class PlaybackSessionManager {
   private sessions = new Map<string, Session>();
   private content: ContentService;
@@ -429,7 +439,9 @@ export class PlaybackSessionManager {
          * back to the originating provider on the next refresh would discard
          * what they just asked for.
          */
-        options.widen ? { ...session.request, scope: 'all' as const } : session.request,
+        // Callers have already stepped the retained query (`widened`); this only
+        // makes sure the run itself is at `all`, and never steps it again.
+        options.widen && session.request.scope !== 'all' ? { ...session.request, scope: 'all' as const } : session.request,
         (progress) => {
           if (session.disposed || controller.signal.aborted) return;
           session.sources = this.keepPinned(session, progress.results);
@@ -668,7 +680,7 @@ export class PlaybackSessionManager {
   ): Promise<PlaybackSnapshot | null> {
     const session = this.sessions.get(sessionId);
     if (!session) return null;
-    if (options.widen) session.request = { ...session.request, scope: 'all' };
+    if (options.widen) session.request = widened(session.request);
     await this.discover(session, {
       autoStartWhenDone: false,
       bypassCache: true,

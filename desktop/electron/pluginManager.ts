@@ -3602,6 +3602,11 @@ export class PluginManager {
    * A named provider that is disabled is dropped rather than re-enabled, which
    * is what keeps the extensions screen authoritative over the scope picker.
    */
+  /** The enabled providers (narrowed to `only`), best first: the order a search asks them in. */
+  public rankForSearch(only?: string[]): string[] {
+    return applySearchOrder(this.narrowToEnabled(only), this.searchOrder);
+  }
+
   public narrowToEnabled(only?: string[]): string[] {
     const enabled = this.enabledProviderNames();
     if (!only) return enabled;

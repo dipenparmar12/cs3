@@ -1024,6 +1024,8 @@ Use aggregate measurements wherever possible. Do not introduce new transmission 
 
 **Exit criteria:** Users can understand which providers were attempted, what they returned, and which sources remain unverified.
 
+**Status (2026-10-23): first step built.** The widened provider search is a ranked walk (`cs3/discoveryWalk.ts`): providers whose source played for this work first (from the played-source records), then `applySearchOrder`; a first batch of 4, then batches of the search concurrency; a 45 s budget; and a stop before the next batch once a hit judged `match` (not `unknown`) produced sources. The reply carries `walk` (stopped by, asked, remaining), and a walk that left providers unasked sets `canWiden`, so a second Find more sources asks everyone (`SourceQuery.exhaustive`: no budget, no early stop). Both use the same identity gate. Tests: `discoveryWalk.test.mts` (8) and `playbackFailover.test.mts` (a second widen is exhaustive; it caught the old double widen). Checked in the built app against 19 providers (The Batman 9.2 s, Demon Slayer 14.9 s, Inception 14.6 s; each walk finished, logged as `discovery_walk`); the early stop did not fire there, because no extension hit was judged `match` (romaji titles are `unknown`; Inception came from indexers only). Not built: per-card provider statuses, persisted attempt outcomes, retry and inspect actions, and a stored search-mode setting (the second press is the only exhaustive path).
+
 ### Phase 3: Source refresh and recovery
 
 - Classify source and playback failures.
