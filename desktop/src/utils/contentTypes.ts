@@ -1,4 +1,4 @@
-import { TvType, type SearchResponse } from '../types/api';
+import { TvType, type SearchResponse } from '../types/api.ts';
 
 /**
  * Content-type tabs, as CloudStream has on Android.
