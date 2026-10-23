@@ -2,7 +2,7 @@ import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useSta
 import { useTitleInteractions } from '../components/useTitleInteractions';
 import { EmptyState } from '../components/EmptyState';
 import type { SearchHistoryEntry, SearchResponse } from '../types/api';
-import { TYPE_TABS, allCount, liveBelongsInAll, matchesTab, tabsFor } from '../utils/contentTypes';
+import { TYPE_TABS, allCount, ownTabRowsBelongInAll, matchesTab, tabsFor } from '../utils/contentTypes';
 import {
   ResultContextMenuProvider,
   useOpenResultMenu,
@@ -435,7 +435,7 @@ export const SearchView: React.FC<SearchViewProps> = ({
    * that lead to an empty grid is worse than offering none.
    */
   const typeTabs = useMemo(() => tabsFor(results), [results]);
-  const liveInAll = useMemo(() => liveBelongsInAll(results), [results]);
+  const ownTabRowsInAll = useMemo(() => ownTabRowsBelongInAll(results), [results]);
 
   // A tab that stops matching as results stream in must not strand the grid.
   const activeTab = typeTabs.some((tab) => tab.id === typeTab) ? typeTab : 'all';
@@ -460,9 +460,9 @@ export const SearchView: React.FC<SearchViewProps> = ({
     () =>
       results.filter((item) => {
         if (sourceFilter !== 'all' && !sourcesOf(item).includes(sourceFilter)) return false;
-        return matchesTab(item, activeTab, { liveInAll });
+        return matchesTab(item, activeTab, { ownTabRowsInAll });
       }),
-    [results, sourceFilter, activeTab, liveInAll]
+    [results, sourceFilter, activeTab, ownTabRowsInAll]
   );
 
   /**

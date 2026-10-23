@@ -1,5 +1,6 @@
 import type { TorrentResult } from '../types/torrent.ts';
 import { Resolution } from '../types/torrent.ts';
+import { normaliseReleaseName } from './sourceIdentity.ts';
 
 export type KindFilterValue = 'all' | 'direct' | 'torrent';
 export type ResolutionFilterValue = 'all' | '4k' | '1440p' | '1080p' | '720p' | '480p';
@@ -217,39 +218,60 @@ export function filterAndSortSources(
 
 /** How many torrent rows stay visible beside direct streams before the rest fold. */
 export const TORRENTS_SHOWN_BESIDE_STREAMS = 5;
+/** How many stay visible when torrents are all there is, or the kind filter asks for them. */
+export const TORRENTS_SHOWN_ALONE = 8;
 
 /**
- * Keeps a long torrent tail from burying the direct streams.
+ * The same release under another infohash: one name, one resolution, one size.
  *
- * An indexer sweep returns dozens of torrents for a popular title while the
- * providers return three or four streams that start in a second, and a list
- * that is 90% magnets reads as "this is a torrent app". Only the *tail* folds:
- * every direct stream stays, the best-ranked torrents stay in their place, and
- * the rest are one press away — nothing is removed, and the order is the
- * ranking's, untouched.
+ * Several indexers list one encode, sometimes re-packed with a different
+ * tracker list, which gives it a different infohash. As rows they are the same
+ * choice repeated; the best-ranked copy is shown and the others fold behind
+ * it. Size within 1% because indexers round differently. An unknown size never
+ * groups (two "0 B" rows are not known to be the same file).
+ */
+function releaseKey(source: TorrentResult): string | null {
+  const name = normaliseReleaseName(source.title);
+  if (!name || !source.sizeBytes) return null;
+  return `${name}|${source.parsed?.resolution ?? ''}`;
+}
+
+const sameSize = (a: number, b: number) => Math.abs(a - b) <= Math.max(a, b) * 0.01;
+
+/**
+ * Keeps a source list short enough to choose from (shared by the source
+ * picker and the player's source panel).
  *
- * No fold when there is nothing else to show (all torrents), when the viewer
- * asked for torrents with the kind filter, or for a row that must stay visible
- * (the one playing).
+ * Every direct stream stays. The best-ranked torrents stay in their place: 5
+ * beside streams, 8 when torrents are all there is. Copies of a release already
+ * shown fold behind it. The rest are one press away. Nothing is removed (the
+ * session still fails over through every row), and the order is the ranking's,
+ * untouched. A row that must stay visible (the one playing) always does.
  */
 export function foldTorrents(
   sources: TorrentResult[],
   state: Pick<SourceFilterState, 'kind'>,
   keepVisible: (source: TorrentResult) => boolean = () => false,
-  limit = TORRENTS_SHOWN_BESIDE_STREAMS
+  limit?: number
 ): { shown: TorrentResult[]; hidden: number } {
   const hasDirect = sources.some((source) => Boolean(source.directUrl));
-  if (!hasDirect || state.kind === 'torrent') return { shown: sources, hidden: 0 };
+  const cap = limit ?? (hasDirect && state.kind !== 'torrent' ? TORRENTS_SHOWN_BESIDE_STREAMS : TORRENTS_SHOWN_ALONE);
 
   let torrentsShown = 0;
   let hidden = 0;
+  /** Sizes already shown under each name and resolution. */
+  const shownReleases = new Map<string, number[]>();
   const shown = sources.filter((source) => {
     if (source.directUrl) return true;
-    if (torrentsShown < limit) {
+    if (keepVisible(source)) return true;
+    const key = releaseKey(source);
+    const sizes = key !== null ? (shownReleases.get(key) ?? []) : [];
+    const copy = sizes.some((size) => sameSize(size, source.sizeBytes));
+    if (!copy && torrentsShown < cap) {
       torrentsShown++;
+      if (key !== null) shownReleases.set(key, [...sizes, source.sizeBytes]);
       return true;
     }
-    if (keepVisible(source)) return true;
     hidden++;
     return false;
   });

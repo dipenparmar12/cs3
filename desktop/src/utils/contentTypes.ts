@@ -37,32 +37,35 @@ export function typesOf(item: SearchResponse): TvType[] {
   return item.type ? [item.type] : [];
 }
 
-function isLive(item: SearchResponse): boolean {
-  return item.type === TvType.Live;
+/** Rows that only make sense in their own tab: live channels and raw torrents. */
+function hasOwnTab(item: SearchResponse): boolean {
+  return item.type === TvType.Live || item.type === TvType.Torrent;
 }
 
 /**
- * Live channels (IPTV, radio) have their own tab and are left out of All.
+ * Live channels (IPTV, radio) and raw torrent releases have their own tabs and
+ * are left out of All.
  *
- * A search for a film that also matches forty channel names buried the film
- * among them. When live rows are all there is (a search for a channel), All
- * keeps them, or it would be an empty grid beside a tab that has everything.
+ * A search for a film that also matched forty channel names, or returned forty
+ * indexer release names, buried the film among them. When such rows are all
+ * there is (a search for a channel, torrents only), All keeps them, or it would
+ * be an empty grid beside a tab that has everything.
  */
-export function liveBelongsInAll(items: SearchResponse[]): boolean {
-  return items.every(isLive);
+export function ownTabRowsBelongInAll(items: SearchResponse[]): boolean {
+  return items.every(hasOwnTab);
 }
 
-/** What the All tab holds, under {@link liveBelongsInAll}. */
+/** What the All tab holds, under {@link ownTabRowsBelongInAll}. */
 export function allCount(items: SearchResponse[]): number {
-  return liveBelongsInAll(items) ? items.length : items.filter((item) => !isLive(item)).length;
+  return ownTabRowsBelongInAll(items) ? items.length : items.filter((item) => !hasOwnTab(item)).length;
 }
 
 export function matchesTab(
   item: SearchResponse,
   tabId: string,
-  options: { liveInAll?: boolean } = {}
+  options: { ownTabRowsInAll?: boolean } = {}
 ): boolean {
-  if (tabId === 'all') return options.liveInAll === true || !isLive(item);
+  if (tabId === 'all') return options.ownTabRowsInAll === true || !hasOwnTab(item);
   const tab = TYPE_TABS.find((entry) => entry.id === tabId);
   if (!tab) return true;
   return typesOf(item).some((type) => tab.types.includes(type));
