@@ -26,6 +26,12 @@ import { drmFromProvider } from '../cs3/providerLinks.ts';
 import { describeError } from '../../src/utils/errors.ts';
 import type { InspectionStore } from './inspectionStore.ts';
 import { scopedLogger } from '../logging/logger.ts';
+import {
+  PlaybackTelemetryStore,
+  sessionTelemetry,
+  type PlaybackTelemetryRecord,
+  type PlaybackTerminalState,
+} from './playbackTelemetry.ts';
 
 const log = scopedLogger('playback');
 
@@ -95,6 +101,8 @@ export interface PlaybackEngineDeps {
   fetchBytes?: (url: string, bytes: number) => Promise<Uint8Array | null>;
   /** Asks the source itself why it could not be read. See `main.ts`. */
   describeUnreadable: (url: string) => Promise<ProbeFailure>;
+  /** Stamped on every telemetry record; `app.getVersion()` in `main.ts`. */
+  appVersion?: string;
   diagnostics: {
     record(entry: {
       level: 'error' | 'warn' | 'info';
@@ -124,6 +132,17 @@ export class PlaybackEngine {
    */
   private sessionTracks = new Map<string, AudioStreamMetadata[]>();
   private nextSession = 1;
+  /**
+   * PRD-40.1 per-session records (`playback_session_telemetry` in the log).
+   *
+   * A prepare that fails is a session that ended there (`fatal-error`). One that
+   * succeeds stays open until `close`, or until the next prepare replaces it
+   * (`engine-switch`): the renderer never calls `media:closeStream`, so without
+   * that rule no successful session would ever be recorded. Completion is not
+   * claimed, because this engine never learns that a film ended.
+   */
+  private telemetry = new PlaybackTelemetryStore();
+  private openTelemetry = new Map<string, PlaybackTelemetryRecord>();
 
   private deps: PlaybackEngineDeps;
 
@@ -171,6 +190,17 @@ export class PlaybackEngine {
 
   public getDiagnostics(sessionId?: string): PlaybackDiagnosticEvent[] {
     return sessionId ? this.events.filter((e) => e.sessionId === sessionId) : [...this.events];
+  }
+
+  public getTelemetry(): PlaybackTelemetryRecord[] {
+    return this.telemetry.getRecords();
+  }
+
+  private finishTelemetry(key: string, terminal: PlaybackTerminalState): void {
+    const open = this.openTelemetry.get(key);
+    if (!open) return;
+    this.openTelemetry.delete(key);
+    this.telemetry.record({ ...open, terminalState: terminal });
   }
 
   private async hostCapability(): Promise<HostEncodeCapability> {
@@ -709,9 +739,9 @@ export class PlaybackEngine {
       strategy === 'EME_NATIVE' ||
       strategy === 'NATIVE_MPV'
     ) {
-      this.record(request, capability, strategy, startedAt);
       const sessionMatch = capability.resolvedUrl.match(/\/media\/([^/?#]+)/);
       const sessionId = sessionMatch ? sessionMatch[1] : '';
+      this.record(request, capability, strategy, startedAt, undefined, sessionId);
       return {
         ok: true,
         playbackUrl: capability.resolvedUrl,
@@ -763,7 +793,7 @@ export class PlaybackEngine {
 
     const sessionId = streamUrl.split('/').pop() ?? '';
     this.sessionTracks.set(sessionId, capability.metadata?.audio ?? []);
-    this.record(request, capability, strategy, startedAt);
+    this.record(request, capability, strategy, startedAt, undefined, sessionId);
     return {
       ok: true,
       playbackUrl: streamUrl,
@@ -842,6 +872,7 @@ export class PlaybackEngine {
 
   public close(sessionId: string): void {
     if (!sessionId) return;
+    this.finishTelemetry(sessionId, 'user-abort');
     this.sessionTracks.delete(sessionId);
     this.deps.transcoder.closeSession(sessionId);
   }
@@ -853,7 +884,8 @@ export class PlaybackEngine {
     capability: SourceCapabilityModel,
     strategy: PlaybackDiagnosticEvent['selectedStrategy'],
     startedAt: number,
-    error?: { stage: PlaybackDiagnosticEvent['errorStage']; message: string }
+    error?: { stage: PlaybackDiagnosticEvent['errorStage']; message: string },
+    sessionId = ''
   ): void {
     const video = capability.metadata?.video;
     const audio = capability.metadata?.audio.find(
@@ -908,6 +940,23 @@ export class PlaybackEngine {
       errorStage: error?.stage,
       errorMessage: error?.message,
     };
+
+    for (const key of [...this.openTelemetry.keys()]) this.finishTelemetry(key, 'engine-switch');
+    const telemetry = sessionTelemetry({
+      sessionId: sessionId || `prepare-${event.sessionId}`,
+      url: request.url,
+      strategy,
+      transport: capability.transport,
+      container: event.container,
+      probeError: capability.failure?.reason ?? null,
+      probeLatencyMs: capability.probeLatencyMs,
+      totalMs: Date.now() - startedAt,
+      appVersion: this.deps.appVersion ?? 'unknown',
+      hevcSupported: this.capabilities?.video.hevc === true,
+      fatalError: error?.message ?? null,
+    });
+    if (error) this.telemetry.record(telemetry);
+    else this.openTelemetry.set(telemetry.sessionId, telemetry);
 
     // Bounded: this is playback exhaust, and an app left open for days would
     // otherwise accumulate one record per source it ever considered.

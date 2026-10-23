@@ -993,6 +993,7 @@ const inspectionStore = new InspectionStore(datastore);
 privacyMode.onClearSession(() => inspectionStore.clearVolatile());
 
 const playbackEngine = new PlaybackEngine({
+  appVersion: app.getVersion(),
   proxy: contentService.getProxy(),
   transcoder: mediaTranscoder,
   nativeEngine: () => ({ available: mpvEngine.isAvailable(), policy: nativeEnginePolicy() }),

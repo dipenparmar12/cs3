@@ -1,5 +1,6 @@
 import { createHash } from 'crypto';
-import type { PlaybackStrategyType } from '../../src/types/media.ts';
+import { release } from 'os';
+import type { MediaTransport, PlaybackStrategyType } from '../../src/types/media.ts';
 import { scopedLogger } from '../logging/logger.ts';
 
 const log = scopedLogger('playback');
@@ -123,6 +124,82 @@ export function generateCapabilityFingerprint(details: {
   ].join('|');
 
   return createHash('sha256').update(payload).digest('hex').slice(0, 16);
+}
+
+/**
+ * One session's record from what `PlaybackEngine.prepare` knows.
+ *
+ * The runtime half (first frame, stalls, seeks, lease refreshes) is measured in
+ * the renderer and nothing carries it here yet, so it is zero rather than
+ * invented; `summarizeTelemetry` already skips a zero first-frame time.
+ * `engineAttachMs` is the prepare's wall time outside the probe.
+ */
+export function sessionTelemetry(input: {
+  sessionId: string;
+  url: string;
+  strategy: PlaybackStrategyType;
+  transport: MediaTransport;
+  container: string;
+  probeError: string | null;
+  probeLatencyMs: number;
+  totalMs: number;
+  appVersion: string;
+  hevcSupported: boolean;
+  fatalError: string | null;
+}): PlaybackTelemetryRecord {
+  const electronVersion = process.versions.electron ?? 'none';
+  const engine: SelectedPlaybackEngine =
+    input.strategy === 'NATIVE_MPV'
+      ? 'mpv'
+      : input.strategy === 'HLS_NATIVE'
+        ? 'hlsjs'
+        : input.strategy === 'DASH_NATIVE'
+          ? 'shaka'
+          : 'html5';
+  const sourceFingerprint = createHash('sha256').update(input.url).digest('hex').slice(0, 16);
+  return {
+    sessionId: input.sessionId,
+    sourceId: sourceFingerprint,
+    sourceFingerprint,
+    timestamp: Date.now(),
+    appVersion: input.appVersion,
+    electronVersion,
+    decisionPolicyVersion: DECISION_POLICY_VERSION,
+    capabilityFingerprint: generateCapabilityFingerprint({
+      appVersion: input.appVersion,
+      electronVersion,
+      osRelease: release(),
+      hevcSupported: input.hevcSupported,
+    }),
+    selectedEngine: engine,
+    selectedStrategy: input.strategy,
+    renderSurface: engine === 'mpv' ? 'native-window' : 'dom',
+    subtitleMode: 'none',
+    inspectionStrategy:
+      input.transport === 'hls' ? 'manifest-hls' : input.transport === 'dash' ? 'manifest-dash' : 'progressive',
+    container: input.container,
+    probeIncomplete: input.probeError !== null,
+    probeError: input.probeError,
+    probeBytesTransferred: 0,
+    probeNetworkMs: input.probeLatencyMs,
+    probeParseMs: 0,
+    capabilityLookupMs: 0,
+    decisionMs: 0,
+    engineAttachMs: Math.max(0, input.totalMs - input.probeLatencyMs),
+    timeToFirstFrameMs: 0,
+    playbackSeconds: 0,
+    seekCount: 0,
+    seekRestartCount: 0,
+    seekRestartMsSamples: [],
+    stallCount: 0,
+    stallTotalMs: 0,
+    leaseRefreshAttempts: 0,
+    leaseRefreshSuccesses: 0,
+    reconnectCount: 0,
+    terminalState: input.fatalError ? 'fatal-error' : 'user-abort',
+    fatalError: input.fatalError,
+    transitionCount: 0,
+  };
 }
 
 /**

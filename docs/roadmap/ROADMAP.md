@@ -12,7 +12,7 @@ Requirement: finish the PRDs that are partly built, decide the ones that are not
 
 | Item | Source | Status | Evidence |
 |---|---|---|---|
-| Playback telemetry | [40.1](./40.1-playback-reliability-observability-and-routing-baseline.md) §4.3 | Not wired | `media/playbackTelemetry.ts` has no caller outside tests. Allow-listed in `moduleReachability.test.mts` |
+| Playback telemetry | [40.1](./40.1-playback-reliability-observability-and-routing-baseline.md) §4.3 | Partial (2026-10-23) | `PlaybackEngine` emits one record per session at its terminal state (`playbackEngine.test.mts`, fails with the supersession rule removed); allow-list entry removed. Runtime fields (first frame, stalls, seeks, lease refreshes) are 0 until the renderer reports them; no IPC exposes the records yet |
 | Lease refresh acceptance | 40.1 §6 DoD | Not measured | `sourceLease.ts` is wired (`playbackEngine.ts`, `mediaProxy.ts`) but has no resolver, so it never refreshes; the 2-hour / zero-403 check cannot pass until Part D of the Playback Source Resolution PRD supplies one |
 | Extension platform standard | [41](./41-desktop-extension-platform-and-community-standard.md) | Pending | Nothing built (§6–23) |
 | Native standards (superseded) | [39](./39-native-extension-and-playback-standards.md) | Superseded by 41 | Header says "Nothing built"; 41 replaces it |
@@ -41,10 +41,9 @@ Requirement: finish the PRDs that are partly built, decide the ones that are not
 - Fixed 2026-10-21: the chips were rebuilt from the selected providers after every change, so ticking Movies ticked Series and every language, and NSFW ticked a dozen languages. Customize's filter rail also rewrote the selection, presets went dark right after being picked, and a preset picked over a named profile overwrote it. Chips are now stored intent (`languages`/`contentTypes` on the profile or draft), the rail only filters, presets are chip sets, and quick setup shows one line ("Sources in Hindi that carry Movies. Searching 12 of 300."), the option chosen over an Apply step. Pure half tested and mutation-checked (`sourceScopeModel.test.mts`); not yet exercised in the running app.
 - Decision needed: what "set as default" means (launch profile, or the profile new searches start from). The model has no default concept (`electron/cs3/sourceProfiles.ts`).
 
-**H2. PRD 40.1 playback telemetry is unwired.**
-- What: the record, the store and `calculatePercentile` have no caller. `media:getPlaybackDiagnostics` returns the older ring buffer.
-- Simpler alternative: emit one record from `PlaybackEngine` at the terminal state, then drop the allow-list entry. The removal condition is written in `moduleReachability.test.mts`.
-- Risk if left: a green suite over code nothing runs.
+**H2. PRD 40.1 playback telemetry: prepare half wired (2026-10-23).**
+- Done: `PlaybackEngine` emits one record per session (`fatal-error` on a failed prepare; `user-abort` on `close`; `engine-switch` when the next prepare replaces it, because the renderer never calls `media:closeStream`). The `moduleReachability` allow-list is empty.
+- Open: the runtime half (time to first frame, stalls, seeks, playback seconds, lease refreshes) is measured in the renderer and carried by nothing, so those fields are 0; `completed` is never claimed. Next: a `media:reportPlayback(sessionId, stats)` channel from `VideoPlayer`, then expose `getSummary()` beside `media:getPlaybackDiagnostics`.
 
 **H3. PRD 41 vs 39: two standards, one is already superseded.**
 - What: 39 says "superseded by 41" and 41 is pending. Keeping both invites someone to implement the wrong one.

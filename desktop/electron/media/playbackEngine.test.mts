@@ -162,3 +162,25 @@ test('after an unreadable segment, the next ask measures again and finds every l
   assert.equal(measured.capability.transformationPlan.selectedAudioIndex, 1);
   assert.equal(inspections.stored.size, 1, 'a real measurement is stored');
 });
+
+test('a session is recorded once, when the next one replaces it or it is closed', async () => {
+  // PRD-40.1 §4.3: exactly one record per session at its terminal state.
+  const playback = engine();
+  await playback.prepare({ url: URL_, isM3u8: true });
+  assert.equal(playback.getTelemetry().length, 0, 'a session still playing has no terminal state');
+
+  const hindi = await playback.prepare({ url: URL_, isM3u8: true, preferredAudioLanguage: 'hin' });
+  const [first] = playback.getTelemetry();
+  assert.equal(playback.getTelemetry().length, 1);
+  assert.equal(first.terminalState, 'engine-switch');
+  assert.equal(first.selectedEngine, 'hlsjs');
+  assert.equal(first.inspectionStrategy, 'manifest-hls');
+
+  playback.close(hindi.sessionId);
+  playback.close(hindi.sessionId);
+  const records = playback.getTelemetry();
+  assert.equal(records.length, 2, 'closing twice records once');
+  assert.equal(records[1].terminalState, 'user-abort');
+  assert.equal(records[1].selectedStrategy, 'REMUX_CONTAINER');
+  assert.equal(records[1].sessionId, hindi.sessionId);
+});

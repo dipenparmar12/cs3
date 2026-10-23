@@ -51,15 +51,7 @@ const test = (name: string, fn: () => void) => tests.push([name, fn]);
  * Keep this list short. "I'll wire it later" is not a reason; a PRD section that
  * says so is.
  */
-const ALLOWED = new Map<string, string>([
-  [
-    'media/playbackTelemetry.ts',
-    'PRD-40.1 §4.3 Tier 1, same state: the per-session record is defined and tested, ' +
-      'and nothing emits one. `PlaybackEngine` keeps its own diagnostics ring buffer, ' +
-      'which is what `media:getPlaybackDiagnostics` returns. Remove this entry when a ' +
-      'session emits exactly one record on terminal state.',
-  ],
-]);
+const ALLOWED = new Map<string, string>([]);
 
 /** Every `.ts` under `electron/`, relative to it, excluding tests and build output. */
 function moduleFiles(dir: string, base: string): string[] {
@@ -196,12 +188,9 @@ test('a type-only import is recognised as carrying no behaviour', () => {
    */
   const refs = referencesByModule();
   const telem = refs.get('media/playbackTelemetry.ts') ?? [];
-  const production = telem.filter((r) => !isTest(r.from));
-  assert.ok(production.length > 0, 'expected mediaInspector to reference playbackTelemetry');
-  assert.ok(
-    production.every((r) => r.typeOnly),
-    'playbackTelemetry is reached only as a type today; if that changed, the allow-list entry should go'
-  );
+  const from = (name: string) => telem.find((r) => r.from.endsWith(name));
+  assert.equal(from('mediaInspector.ts')?.typeOnly, true, 'mediaInspector imports only a type');
+  assert.equal(from('playbackEngine.ts')?.typeOnly, false, 'playbackEngine constructs the store');
 });
 
 let failed = 0;
