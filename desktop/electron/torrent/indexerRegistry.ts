@@ -298,18 +298,36 @@ export class IndexerRegistry {
     this.saveConfigs(this.configs.filter((c) => c.id !== id));
   }
 
+  /**
+   * The viewer's languages from the first-run region choice (`main.ts`), used
+   * for torrent ranking until languages are set here by hand. `null` (every
+   * language) keeps the built-in default.
+   */
+  private defaultLanguages: (() => string[] | null) | null = null;
+
+  public setDefaultLanguages(source: () => string[] | null): void {
+    this.defaultLanguages = source;
+  }
+
   public getPreferences(): SourcePreferences {
     const stored = this.datastore.getObject<Partial<SourcePreferences>>(
       SETTINGS_KEY_PREFERENCES,
       {}
     );
-    return { ...DEFAULT_SOURCE_PREFERENCES, ...(stored ?? {}) };
+    const regional = stored?.preferredLanguages ? null : this.defaultLanguages?.();
+    return {
+      ...DEFAULT_SOURCE_PREFERENCES,
+      ...(regional && regional.length > 0 ? { preferredLanguages: regional } : {}),
+      ...(stored ?? {}),
+    };
   }
 
   public savePreferences(preferences: Partial<SourcePreferences>): SourcePreferences {
-    const merged = { ...this.getPreferences(), ...preferences };
-    this.datastore.setObject(SETTINGS_KEY_PREFERENCES, merged);
-    return merged;
+    // Merged over what is stored, not over `getPreferences()`: saving another
+    // setting must not freeze the region-derived languages into storage.
+    const stored = this.datastore.getObject<Partial<SourcePreferences>>(SETTINGS_KEY_PREFERENCES, {}) ?? {};
+    this.datastore.setObject(SETTINGS_KEY_PREFERENCES, { ...stored, ...preferences });
+    return this.getPreferences();
   }
 
   // --- adapter construction ------------------------------------------------

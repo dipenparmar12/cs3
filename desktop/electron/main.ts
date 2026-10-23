@@ -136,6 +136,7 @@ import { TorrentImportService, classifyDroppedPath, looksLikeMagnet } from './to
 import { parseReleaseName } from './torrent/releaseParser';
 import { buildDownloadTask } from '../src/utils/downloadIdentity';
 import { BatchDownloader, type BatchDownloadRequest } from './cs3/batchDownloader';
+import { wantedLanguages } from './cs3/regions.ts';
 import { BootstrapService } from './cs3/bootstrap';
 import { TitleOutcomeStore, type TitleOutcomeKind } from './cs3/titleOutcomes';
 import { TitleInteractionStore } from './cs3/titleInteractions';
@@ -776,7 +777,13 @@ providerRanking.setContext({
     const status = record?.meta?.status;
     return typeof status === 'number' ? status : undefined;
   },
+  declaredLanguage: (internalName) =>
+    pluginManager.getInstalledPluginRecords().find((entry) => entry.internalName === internalName)?.meta
+      ?.language,
+  // The first-run region choice orders providers too, not only what is installed.
+  viewerLanguages: () => wantedLanguages(bootstrap.getRegionState().selected),
 });
+contentService.getRegistry().setDefaultLanguages(() => wantedLanguages(bootstrap.getRegionState().selected));
 
 /**
  * The ranking decides who a search asks first.
