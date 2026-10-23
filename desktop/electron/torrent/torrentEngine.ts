@@ -6,6 +6,7 @@ import type { NodeServer, Torrent, TorrentFile } from 'webtorrent';
 
 import type { TorrentFileEntry, TorrentStreamStats } from '../../src/types/torrent';
 import { parseReleaseName } from './releaseParser';
+import { fileFitsEpisode } from '../cs3/episodeMatch.ts';
 import { DEFAULT_TRACKERS, mergeTrackers, trackersFromMagnet } from './indexers/base';
 import {
   censusPeers,
@@ -744,6 +745,15 @@ export class TorrentEngine {
     const nonJunk = allVideos.filter((file) => !isJunkFile(file));
     const videos = nonJunk.length > 0 ? nonJunk : allVideos;
 
+    /**
+     * A name or index the indexer gave describes the episode it was found
+     * for. When the request names another one (the same season pack reached
+     * from a different episode), a file that plainly is another episode is
+     * not taken on trust; a file whose name says nothing is.
+     */
+    const fitsRequest = (file: TorrentFile): boolean =>
+      fileFitsEpisode(file.name, request.season, request.episode);
+
     // 1. Filename the indexer named. Most reliable: it survives the index
     //    drifting, which happens when a torrent is re-created with extra files.
     if (request.expectedFileName) {
@@ -751,13 +761,13 @@ export class TorrentEngine {
       const byName = videos.find(
         (file) => file.name.toLowerCase() === wanted || file.path.toLowerCase().endsWith(wanted)
       );
-      if (byName) return byName;
+      if (byName && fitsRequest(byName)) return byName;
     }
 
     // 2. Explicit index from the indexer.
     if (request.fileIndex !== undefined) {
       const explicit = torrent.files[request.fileIndex];
-      if (explicit && isVideoFile(explicit)) return explicit;
+      if (explicit && isVideoFile(explicit) && fitsRequest(explicit)) return explicit;
     }
 
     if (request.episode !== undefined) {

@@ -58,6 +58,7 @@ import { judgeProviderHit, type HitVerdict } from './cs3/providerHitMatch.ts';
 import { planDiscoveryWalk, walkDiscovery, type WalkOutcome, type WalkStop } from './cs3/discoveryWalk.ts';
 import { ProviderAttemptStore, type ProviderAttempt } from './cs3/providerAttempts.ts';
 import { canonicalKey } from './cs3/libraryStore.ts';
+import { pickEpisodeHandle } from './cs3/episodeMatch.ts';
 
 /**
  * The widened search asks providers in ranked batches (`cs3/discoveryWalk.ts`).
@@ -2077,7 +2078,24 @@ export class ContentService {
     season?: number,
     episode?: number
   ): Promise<{ sources: TorrentResult[]; diagnosis?: SourceDiagnosis }> {
-    const target = await this.resolveExtensionTarget(url, season, episode);
+    const resolved = await this.resolveExtensionTarget(url, season, episode);
+    if (resolved === null) {
+      const provider = parseExtensionUrl(url)?.provider;
+      const which = `${season !== undefined ? `season ${season} ` : ''}episode ${episode}`;
+      return {
+        sources: [],
+        diagnosis: {
+          kind: 'no-links',
+          summary: `${provider ?? 'This provider'} does not list ${which}.`,
+          provider,
+          address: url,
+          stage: 'sources',
+          facts: [{ label: 'Requested', value: which }],
+          at: Date.now(),
+        },
+      };
+    }
+    const target = resolved;
     // `cs3ext://<provider>/<handle>` — the provider is the part worth
     // attributing outcomes to, and the only place it is still available.
     const providerName = target.startsWith('cs3ext://')
@@ -2397,7 +2415,7 @@ export class ContentService {
     url: string,
     season?: number,
     episode?: number
-  ): Promise<string> {
+  ): Promise<string | null> {
     if (episode === undefined) return url;
 
     /**
@@ -2428,17 +2446,14 @@ export class ContentService {
     const episodes = detail?.episodes;
     if (!episodes?.length) return url;
 
-    const match =
-      episodes.find(
-        (e) => e.episode === episode && (season === undefined || e.season === season)
-      ) ??
-      // Providers routinely omit the season on a single-season show; matching
-      // on episode number alone is better than refusing to play it.
-      (season === undefined || season === 1
-        ? episodes.find((e) => e.episode === episode && e.season === undefined)
-        : undefined);
 
-    return match?.url ?? url;
+    /**
+     * The provider lists episodes and this one is not among them: there is
+     * nothing of it to play here. Falling back to the series page asked
+     * `loadLinks` for the page, which most providers answer with their first
+     * episode, so "Episode 2" played Episode 1 (2026-10-23).
+     */
+    return pickEpisodeHandle(episodes, season, episode);
   }
 
   /**
