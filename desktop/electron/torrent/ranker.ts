@@ -68,10 +68,25 @@ interface Contribution {
 }
 
 function scoreSeeders(result: TorrentResult): Contribution {
+  // Scored like one seeder: worth trying, below anything measured healthy.
+  if (result.seedersUnknown) return { points: 42, reason: 'Seeders not reported (+42)' };
   // Logarithmic: the difference between 1 and 20 seeders matters enormously;
   // between 500 and 2000 it barely matters at all.
   const points = Math.min(300, Math.round(Math.log2(result.seeders + 1) * 42));
   return { points, reason: `${result.seeders} seeders (+${points})` };
+}
+
+/**
+ * The title itself, beyond the floor `hardRejectReason` applies: a release
+ * named exactly what was asked for outranks one that merely resembles it
+ * (`Dune` against `Dune Part Two`, a fan edit, a compilation).
+ */
+function scoreTitle(result: TorrentResult, expected: string | undefined): Contribution {
+  if (!expected) return { points: 0, reason: '' };
+  const similarity = titleSimilarity(expected, result.parsed.cleanTitle || result.title);
+  if (similarity >= 0.999) return { points: 80, reason: 'Exact title (+80)' };
+  if (similarity >= 0.8) return { points: 30, reason: 'Close title (+30)' };
+  return { points: 0, reason: '' };
 }
 
 function scoreResolution(result: TorrentResult, prefs: SourcePreferences): Contribution {
@@ -193,7 +208,7 @@ function hardRejectReason(result: TorrentResult, ctx: RankContext): string | nul
   const prefs = ctx.preferences;
   const p = result.parsed;
 
-  if (result.seeders < prefs.minSeeders) {
+  if (!result.seedersUnknown && result.seeders < prefs.minSeeders) {
     return `Below minimum seeders (${result.seeders} < ${prefs.minSeeders})`;
   }
   if (prefs.excludeLowQualitySources && LOW_QUALITY_SOURCES.includes(p.source)) {
@@ -247,6 +262,7 @@ export function rankResults(results: TorrentResult[], ctx: RankContext): RankedR
 
     const contributions: Contribution[] = [
       scoreSeeders(result),
+      scoreTitle(result, ctx.expectedTitle),
       scoreResolution(result, ctx.preferences),
       scoreSource(result),
       scoreCodec(result, ctx.preferences),
@@ -296,7 +312,13 @@ export function dedupeByInfoHash(results: TorrentResult[]): TorrentResult[] {
       continue;
     }
 
-    existing.seeders = Math.max(existing.seeders, result.seeders);
+    // Known if any indexer knew; an unknown count never lowers a known one.
+    if (existing.seedersUnknown && !result.seedersUnknown) {
+      existing.seeders = result.seeders;
+      delete existing.seedersUnknown;
+    } else if (!result.seedersUnknown) {
+      existing.seeders = Math.max(existing.seeders, result.seeders);
+    }
     existing.leechers = Math.max(existing.leechers, result.leechers);
     if (!existing.sizeBytes && result.sizeBytes) existing.sizeBytes = result.sizeBytes;
     if (!existing.torrentUrl && result.torrentUrl) existing.torrentUrl = result.torrentUrl;

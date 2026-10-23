@@ -137,6 +137,11 @@ export interface TorrentResult {
   torrentUrl?: string;
   sizeBytes: number;
   seeders: number;
+  /**
+   * The indexer did not report a swarm count; `seeders` is then 0 by
+   * convention and means nothing. Never rejected for it, ranked as uncertain.
+   */
+  seedersUnknown?: boolean;
   leechers: number;
   indexerId: string;
   indexerName: string;

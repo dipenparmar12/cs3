@@ -208,6 +208,19 @@ export function parseSize(value: string | number | undefined): number {
   return Math.round(amount * (multipliers[unit] ?? 1));
 }
 
+/**
+ * A swarm count as reported, or `undefined` when the indexer did not say.
+ *
+ * Distinct from `parseIntSafe`, whose 0 for "missing" read every unreported
+ * count as a dead torrent: the ranker's `minSeeders` floor then dropped
+ * releases nobody had measured (`TorrentResult.seedersUnknown`).
+ */
+export function parseCount(value: unknown): number | undefined {
+  if (value === null || value === undefined || value === '') return undefined;
+  const n = typeof value === 'number' ? value : parseInt(String(value).replace(/,/g, ''), 10);
+  return Number.isFinite(n) && n >= 0 ? n : undefined;
+}
+
 export function parseIntSafe(value: unknown, fallback = 0): number {
   const n = typeof value === 'number' ? value : parseInt(String(value ?? ''), 10);
   return Number.isFinite(n) && n >= 0 ? n : fallback;
@@ -299,6 +312,7 @@ export function finaliseResult(
       torrentUrl: raw.torrentUrl,
       sizeBytes: raw.sizeBytes ?? 0,
       seeders: raw.seeders ?? 0,
+      ...(raw.seeders === undefined ? { seedersUnknown: true } : {}),
       leechers: raw.leechers ?? 0,
       indexerId: indexer.id,
       indexerName: indexer.name,
@@ -321,6 +335,7 @@ export function finaliseResult(
     torrentUrl: raw.torrentUrl,
     sizeBytes: raw.sizeBytes ?? 0,
     seeders: raw.seeders ?? 0,
+    ...(raw.seeders === undefined ? { seedersUnknown: true } : {}),
     leechers: raw.leechers ?? 0,
     indexerId: indexer.id,
     indexerName: indexer.name,

@@ -3,7 +3,7 @@ import { fetchDocument, fetchJson } from '../http.ts';
 import {
   buildMagnet,
   infoHashFromMagnet,
-  parseIntSafe,
+  parseIntSafe, parseCount,
   parseSize,
   tryMirrors,
   withEpisodeTerms,
@@ -99,7 +99,7 @@ export class X1337Indexer implements TorrentIndexer {
       }
 
       const $ = (await loadCheerio()).load(listing);
-      const rows: Array<{ title: string; detailUrl: string; seeders: number; leechers: number; sizeBytes: number; publishedAt?: number }> = [];
+      const rows: Array<{ title: string; detailUrl: string; seeders?: number; leechers: number; sizeBytes: number; publishedAt?: number }> = [];
 
       $('table.table-list tbody tr').each((_, element) => {
         const row = $(element);
@@ -120,7 +120,7 @@ export class X1337Indexer implements TorrentIndexer {
         rows.push({
           title,
           detailUrl: href.startsWith('http') ? href : `${base}${href}`,
-          seeders: parseIntSafe(row.find('td.coll-2').first().text().trim()),
+          seeders: parseCount(row.find('td.coll-2').first().text().trim()),
           leechers: parseIntSafe(row.find('td.coll-3').first().text().trim()),
           sizeBytes: parseSize(sizeCell.text().trim()),
           publishedAt: Number.isNaN(published) ? undefined : published,
@@ -218,7 +218,7 @@ export class BitSearchIndexer implements TorrentIndexer {
           infoHash: infoHashFromMagnet(magnet),
           magnet,
           sizeBytes: parseSize(stats.find((s) => /\d\s*[KMGT]i?B/i.test(s))),
-          seeders: parseIntSafe(stats[1]),
+          seeders: parseCount(stats[1]),
           leechers: parseIntSafe(stats[2]),
           category: 'BitSearch',
         });
@@ -291,7 +291,7 @@ export class TheRarbgIndexer implements TorrentIndexer {
             infoHash,
             magnet: buildMagnet(infoHash, title),
             sizeBytes: parseSize(item.size),
-            seeders: parseIntSafe(item.seeders),
+            seeders: parseCount(item.seeders),
             leechers: parseIntSafe(item.leechers),
             publishedAt: item.timestamp ? item.timestamp * 1000 : undefined,
             category: item.category_str ?? item.category,
