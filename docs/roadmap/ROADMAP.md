@@ -54,7 +54,7 @@ Requirement: finish the PRDs that are partly built, decide the ones that are not
 
 **M1. Closed 2026-10-23** (the PRD now names `resumePoint.ts`). **PRD 42 named a file that does not exist** (`cs3/seriesContext.ts`). The furthest-episode rule is in `resumePoint.ts` (AGENTS §9). Fix the reference in the PRD; no code change.
 
-**M2. Status in four places.** The same status is written in the audit, in each PRD's stamp, in the `AGENTS.md` §13 table and in this file. They will drift.
+**M2. Partly closed 2026-10-23:** `AGENTS.md` §13 no longer lists PRD statuses and points here. Still repeated: each PRD's own "Filed" stamp and the 2026-10-20 audit. **Status in four places.** The same status is written in the audit, in each PRD's stamp, in the `AGENTS.md` §13 table and in this file. They will drift.
 - Simpler alternative: this file is the status; the audit keeps only the evidence; `AGENTS.md` §13 links here and does not repeat statuses.
 
 **M3. Closed 2026-10-23** (40 is marked superseded by 37 in its header). **PRD 40 duplicates 37.** Same title and contract. Mark 40 superseded by 37 in its header; do not delete.

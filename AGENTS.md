@@ -588,7 +588,7 @@ Moved verbatim out of this file, each with a contents list: `extensions.md`, `me
 | `docs/PRD/31`, `docs/PRD/21` | Drop-in compatibility commitment (ADR-10); the decision record that resolved the Electron host and bundled JVM sidecar, Windows-first (`21` is retained as a decision record). |
 | `docs/done/` | Built PRDs. 31 (drop-in compatibility), 33 (**stale in part**: names `electron/cs3ArchiveLoader.ts` and `jvmProviderBridge.ts`, which do not exist; the role is `cs3/sidecarSupervisor.ts` plus the sidecar; absolute Windows paths), 34 (torrents), 35 (translation spike), 46–51 (metadata, OTT and native providers, downloads, anti-bot, runtime provisioning, push search), 52 (custom repositories; incognito), 54 (regions), 2026-10 notes (Advanced Metadata Search, NSFW privacy, viewer profiles, App updates, Source Profiles, startup, ratings, reviews). |
 | `docs/roadmap/ROADMAP.md` | **The open-work register.** Every unfinished PRD, severity and next step. Status lives here only. |
-| `docs/roadmap/` | Partial or pending PRDs: 39 (superseded by 41), 40.1 (partial), 41 (pending), 42, 43, 44, 45, 53, 55, subtitles requirements, search-sources panel, **High-Performance Search Results** (merged single file). |
+| `docs/roadmap/` | Partial, pending and superseded PRDs. Their status is in `ROADMAP.md` and nowhere else; read it there. |
 | `docs/roadmap/docs-audit-2026-10-20.md` | Evidence for each PRD status; doc/code conflicts; what was verified and what was not. |
 | `docs/roadmap/unverified/` | Notes not yet checked against the code (five files). Treat as proposals. |
 | `docs/agents/*.md`, `field-notes/` | Domain files and dated post-mortems. Same authority as this file. |
