@@ -184,3 +184,29 @@ test('a session is recorded once, when the next one replaces it or it is closed'
   assert.equal(records[1].selectedStrategy, 'REMUX_CONTAINER');
   assert.equal(records[1].sessionId, hindi.sessionId);
 });
+
+const REPORT = { firstFrameMs: 400, playbackSeconds: 90, seekCount: 2, stallCount: 1, stallTotalMs: 1200 };
+
+test('a runtime report ends an open session, and an ended film is completed', async () => {
+  const playback = engine();
+  const first = await playback.prepare({ url: URL_, isM3u8: true });
+  assert.ok(first.telemetryId, 'a playable answer names its telemetry record');
+  playback.reportPlayback(first.telemetryId!, { ...REPORT, ended: true });
+  const [record] = playback.getTelemetry();
+  assert.equal(record.terminalState, 'completed');
+  assert.equal(record.playbackSeconds, 90);
+  assert.equal(record.stallTotalMs, 1200);
+  assert.ok(record.timeToFirstFrameMs >= 400, 'first frame counts the prepare as well');
+});
+
+test('a report arriving after the next source was prepared amends the closed record', async () => {
+  // The player prepares the next source before its old stream's cleanup runs.
+  const playback = engine();
+  const first = await playback.prepare({ url: URL_, isM3u8: true });
+  await playback.prepare({ url: URL_, isM3u8: true, preferredAudioLanguage: 'hin' });
+  playback.reportPlayback(first.telemetryId!, { ...REPORT, ended: false });
+  const records = playback.getTelemetry();
+  assert.equal(records.length, 1, 'amended, not recorded twice');
+  assert.equal(records[0].terminalState, 'engine-switch');
+  assert.equal(records[0].seekCount, 2);
+});

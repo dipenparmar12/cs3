@@ -7,6 +7,7 @@ import Hls from 'hls.js';
 import { NativeEngineStage, trackLabel } from './player/NativeEngineStage';
 import { PlaybackPrivacyOverlay } from './player/PlaybackPrivacyOverlay';
 import { mediaSessionRecord } from './player/playbackPrivacy';
+import { PlaybackStats } from './player/playbackStats';
 import { usePlaybackPrivacy } from './player/usePlaybackPrivacy';
 import {
   Play, Pause, Volume2, VolumeX, Maximize, Minimize, ArrowLeft,
@@ -2293,6 +2294,42 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
       video.removeEventListener('loadstart', syncBuffered);
     };
   }, [setBufferedRanges]);
+
+  /**
+   * PRD-40.1 runtime telemetry: what the element did with one prepared stream.
+   *
+   * Keyed on the telemetry id, not the response: an audio switch or a `?t=`
+   * re-request replaces the response object but not the session. Reported once,
+   * when the stream is left (another source, or the player closing). mpv never
+   * fires these events, so its sessions report a zero first frame.
+   */
+  const telemetryId = prepared?.telemetryId;
+  useEffect(() => {
+    const video = videoRef.current;
+    if (!telemetryId || !video) return;
+    const stats = new PlaybackStats(performance.now());
+    const now = () => performance.now();
+    const onPlaying = () => stats.playing(now());
+    const onPause = () => stats.paused(now());
+    const onWaiting = () => stats.waiting(now());
+    const onSeeking = () => stats.seekStarted(now());
+    const onSeeked = () => stats.seekFinished();
+    video.addEventListener('playing', onPlaying);
+    video.addEventListener('pause', onPause);
+    video.addEventListener('waiting', onWaiting);
+    video.addEventListener('seeking', onSeeking);
+    video.addEventListener('seeked', onSeeked);
+    return () => {
+      video.removeEventListener('playing', onPlaying);
+      video.removeEventListener('pause', onPause);
+      video.removeEventListener('waiting', onWaiting);
+      video.removeEventListener('seeking', onSeeking);
+      video.removeEventListener('seeked', onSeeked);
+      void window.cloudstream
+        ?.reportPlayback(telemetryId, stats.report(now(), video.ended))
+        .catch(() => undefined);
+    };
+  }, [telemetryId]);
 
   // Rolling on to the next episode is the expected behaviour for a series, and
   // it is the one thing a viewer should never have to reach for. Dismissing the

@@ -416,8 +416,21 @@ export interface PlaybackStreamResponse {
   playbackUrl: string;
   /** Token for `closePlaybackStream` / `switchAudioTrack`; empty for DIRECT. */
   sessionId: string;
+  /** This session's PRD-40.1 telemetry record; hand it to `reportPlayback`. */
+  telemetryId?: string;
   capability: SourceCapabilityModel;
   subtitles: EmbeddedSubtitleTrack[];
+}
+
+/** What the element measured for one prepared stream (`player/playbackStats.ts`). */
+export interface PlaybackRuntimeReport {
+  /** From the stream being handed over to the first presented frame; 0 if none. */
+  firstFrameMs: number;
+  playbackSeconds: number;
+  seekCount: number;
+  stallCount: number;
+  stallTotalMs: number;
+  ended: boolean;
 }
 
 export interface PlaybackDiagnosticEvent {

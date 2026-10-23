@@ -143,6 +143,7 @@ import type {
   PlaybackStreamResponse,
   RendererCapabilities,
   SourceCapabilityModel,
+  PlaybackRuntimeReport,
 } from '../src/types/media';
 import type {
   MpvCommandResult,
@@ -728,6 +729,8 @@ export interface CloudStreamElectronAPI {
     positionSeconds: number
   ) => Promise<Envelope & { url?: string }>;
   closePlaybackStream: (sessionId: string) => Promise<Envelope>;
+  /** What the element measured for a prepared stream, sent once when it is left. */
+  reportPlayback: (telemetryId: string, report: PlaybackRuntimeReport) => Promise<Envelope>;
   /** Strategy, codecs and encoder timings for every playback attempt. */
   getPlaybackDiagnostics: (
     sessionId?: string
@@ -2243,6 +2246,7 @@ const api: CloudStreamElectronAPI = {
   switchAudioTrack: (sessionId, audioIndex, positionSeconds) =>
     ipcRenderer.invoke('media:switchAudio', sessionId, audioIndex, positionSeconds),
   closePlaybackStream: (sessionId) => ipcRenderer.invoke('media:closeStream', sessionId),
+  reportPlayback: (telemetryId, report) => ipcRenderer.invoke('media:reportPlayback', telemetryId, report),
   getPlaybackDiagnostics: (sessionId) =>
     ipcRenderer.invoke('media:getPlaybackDiagnostics', sessionId),
   getCodecProbes: () => ipcRenderer.invoke('media:getCodecProbes'),

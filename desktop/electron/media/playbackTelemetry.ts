@@ -1,6 +1,6 @@
 import { createHash } from 'crypto';
 import { release } from 'os';
-import type { MediaTransport, PlaybackStrategyType } from '../../src/types/media.ts';
+import type { MediaTransport, PlaybackRuntimeReport, PlaybackStrategyType } from '../../src/types/media.ts';
 import { scopedLogger } from '../logging/logger.ts';
 
 const log = scopedLogger('playback');
@@ -203,6 +203,31 @@ export function sessionTelemetry(input: {
 }
 
 /**
+ * A session's record with the renderer's runtime report folded in.
+ *
+ * First frame is counted from the start of the prepare, so the prepare's own
+ * time is added back. A session already closed keeps its terminal state unless
+ * the film actually ended: `engine-switch` is usually the renderer's report
+ * arriving after the next source was prepared.
+ */
+export function withRuntime(
+  record: PlaybackTelemetryRecord,
+  report: PlaybackRuntimeReport,
+  open: boolean
+): PlaybackTelemetryRecord {
+  const prepareMs = record.probeNetworkMs + record.engineAttachMs;
+  return {
+    ...record,
+    timeToFirstFrameMs: report.firstFrameMs > 0 ? prepareMs + report.firstFrameMs : 0,
+    playbackSeconds: report.playbackSeconds,
+    seekCount: report.seekCount,
+    stallCount: report.stallCount,
+    stallTotalMs: report.stallTotalMs,
+    terminalState: report.ended ? 'completed' : open ? 'user-abort' : record.terminalState,
+  };
+}
+
+/**
  * Computes percentile values according to PRD-40.1 §34 & §4.3 sample-size conventions.
  */
 export function calculatePercentile(values: number[], p: number): number {
@@ -323,6 +348,26 @@ export class PlaybackTelemetryStore {
       terminalState: telemetry.terminalState,
       fatalError: telemetry.fatalError,
     });
+  }
+
+  /** Replaces the newest record for this session; false when there is none. */
+  public amend(sessionId: string, update: (record: PlaybackTelemetryRecord) => PlaybackTelemetryRecord): boolean {
+    for (let i = this.records.length - 1; i >= 0; i--) {
+      if (this.records[i].sessionId !== sessionId) continue;
+      const next = update(this.records[i]);
+      this.records[i] = next;
+      log.info('playback_session_runtime', {
+        sessionId,
+        firstFrameMs: next.timeToFirstFrameMs,
+        playbackSeconds: next.playbackSeconds,
+        stallCount: next.stallCount,
+        stallTotalMs: next.stallTotalMs,
+        seekCount: next.seekCount,
+        terminalState: next.terminalState,
+      });
+      return true;
+    }
+    return false;
   }
 
   public getRecords(): PlaybackTelemetryRecord[] {

@@ -12,7 +12,7 @@ Requirement: finish the PRDs that are partly built, decide the ones that are not
 
 | Item | Source | Status | Evidence |
 |---|---|---|---|
-| Playback telemetry | [40.1](./40.1-playback-reliability-observability-and-routing-baseline.md) §4.3 | Partial (2026-10-23) | `PlaybackEngine` emits one record per session at its terminal state (`playbackEngine.test.mts`, fails with the supersession rule removed); allow-list entry removed. Runtime fields (first frame, stalls, seeks, lease refreshes) are 0 until the renderer reports them; no IPC exposes the records yet |
+| Playback telemetry | [40.1](./40.1-playback-reliability-observability-and-routing-baseline.md) §4.3 | Built, not run in the app (2026-10-23) | One record per session: opened at prepare, ended by the player's `media:reportPlayback` (first frame, play time, seeks, stalls; `player/playbackStats.ts`), else by `close` or the next prepare. Tests fail with the supersession or the late-report rule removed. Open: lease refreshes and reconnects (needs the Part D resolver), mpv runtime, an IPC reader for `getSummary()` |
 | Lease refresh acceptance | 40.1 §6 DoD | Not measured | `sourceLease.ts` is wired (`playbackEngine.ts`, `mediaProxy.ts`) but has no resolver, so it never refreshes; the 2-hour / zero-403 check cannot pass until Part D of the Playback Source Resolution PRD supplies one |
 | Extension platform standard | [41](./41-desktop-extension-platform-and-community-standard.md) | Pending | Nothing built (§6–23) |
 | Native standards (superseded) | [39](./39-native-extension-and-playback-standards.md) | Superseded by 41 | Header and index say so (2026-10-23) |
@@ -41,9 +41,9 @@ Requirement: finish the PRDs that are partly built, decide the ones that are not
 - Fixed 2026-10-21: the chips were rebuilt from the selected providers after every change, so ticking Movies ticked Series and every language, and NSFW ticked a dozen languages. Customize's filter rail also rewrote the selection, presets went dark right after being picked, and a preset picked over a named profile overwrote it. Chips are now stored intent (`languages`/`contentTypes` on the profile or draft), the rail only filters, presets are chip sets, and quick setup shows one line ("Sources in Hindi that carry Movies. Searching 12 of 300."), the option chosen over an Apply step. Pure half tested and mutation-checked (`sourceScopeModel.test.mts`); not yet exercised in the running app.
 - Decision needed: what "set as default" means (launch profile, or the profile new searches start from). The model has no default concept (`electron/cs3/sourceProfiles.ts`).
 
-**H2. PRD 40.1 playback telemetry: prepare half wired (2026-10-23).**
-- Done: `PlaybackEngine` emits one record per session (`fatal-error` on a failed prepare; `user-abort` on `close`; `engine-switch` when the next prepare replaces it, because the renderer never calls `media:closeStream`). The `moduleReachability` allow-list is empty.
-- Open: the runtime half (time to first frame, stalls, seeks, playback seconds, lease refreshes) is measured in the renderer and carried by nothing, so those fields are 0; `completed` is never claimed. Next: a `media:reportPlayback(sessionId, stats)` channel from `VideoPlayer`, then expose `getSummary()` beside `media:getPlaybackDiagnostics`.
+**H2. PRD 40.1 playback telemetry: wired (2026-10-23), not yet seen in the running app.**
+- Done: `PlaybackEngine` opens one record per session at prepare; `VideoPlayer` reports what the element measured (`media:reportPlayback`) when it leaves the stream, which ends the record (`completed` only when the film ended). Without a report, `close` or the next prepare ends it; a late report amends. The `moduleReachability` allow-list is empty.
+- Open: lease refresh counts (no resolver yet, Part D), mpv runtime (no element events), and a reader (`getSummary()` over IPC, e.g. in the Developer diagnostics panel). Next: launch the app, play two sources, and read `playback_session_runtime` in the log.
 
 **H3. Closed 2026-10-23.** 39 carries "Superseded by 41" in its header and in `PRD/00-index.md`. Original finding: **PRD 41 vs 39: two standards, one is already superseded.**
 - What: 39 says "superseded by 41" and 41 is pending. Keeping both invites someone to implement the wrong one.

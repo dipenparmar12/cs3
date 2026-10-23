@@ -108,6 +108,7 @@ import type {
   NativeEngineCapability,
   PlaybackStreamRequest,
   RendererCapabilities,
+  PlaybackRuntimeReport,
 } from '../src/types/media';
 import type { MpvOpenRequest } from '../src/types/mpv';
 import { ExtensionUpdater, type UpdateSettings } from './cs3/extensionUpdater';
@@ -4294,6 +4295,11 @@ ipcMain.handle(
 
 ipcMain.handle('media:closeStream', async (_, sessionId: string) => {
   playbackEngine.close(sessionId);
+  return { ok: true };
+});
+
+ipcMain.handle('media:reportPlayback', async (_, telemetryId: string, report: PlaybackRuntimeReport) => {
+  playbackEngine.reportPlayback(String(telemetryId), report);
   return { ok: true };
 });
 

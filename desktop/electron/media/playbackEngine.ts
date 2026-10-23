@@ -5,6 +5,7 @@ import type {
   MediaTransport,
   NativeEngineCapability,
   PlaybackDiagnosticEvent,
+  PlaybackRuntimeReport,
   PlaybackStreamRequest,
   PlaybackStreamResponse,
   ProbeFailure,
@@ -29,6 +30,7 @@ import { scopedLogger } from '../logging/logger.ts';
 import {
   PlaybackTelemetryStore,
   sessionTelemetry,
+  withRuntime,
   type PlaybackTelemetryRecord,
   type PlaybackTerminalState,
 } from './playbackTelemetry.ts';
@@ -194,6 +196,17 @@ export class PlaybackEngine {
 
   public getTelemetry(): PlaybackTelemetryRecord[] {
     return this.telemetry.getRecords();
+  }
+
+  /** The renderer's measurements for a session, which also end it. */
+  public reportPlayback(telemetryId: string, report: PlaybackRuntimeReport): void {
+    const open = this.openTelemetry.get(telemetryId);
+    if (open) {
+      this.openTelemetry.delete(telemetryId);
+      this.telemetry.record(withRuntime(open, report, true));
+      return;
+    }
+    this.telemetry.amend(telemetryId, (record) => withRuntime(record, report, false));
   }
 
   private finishTelemetry(key: string, terminal: PlaybackTerminalState): void {
@@ -741,11 +754,12 @@ export class PlaybackEngine {
     ) {
       const sessionMatch = capability.resolvedUrl.match(/\/media\/([^/?#]+)/);
       const sessionId = sessionMatch ? sessionMatch[1] : '';
-      this.record(request, capability, strategy, startedAt, undefined, sessionId);
+      const telemetryId = this.record(request, capability, strategy, startedAt, undefined, sessionId);
       return {
         ok: true,
         playbackUrl: capability.resolvedUrl,
         sessionId,
+        telemetryId,
         capability,
         subtitles: [],
       };
@@ -793,11 +807,12 @@ export class PlaybackEngine {
 
     const sessionId = streamUrl.split('/').pop() ?? '';
     this.sessionTracks.set(sessionId, capability.metadata?.audio ?? []);
-    this.record(request, capability, strategy, startedAt, undefined, sessionId);
+    const telemetryId = this.record(request, capability, strategy, startedAt, undefined, sessionId);
     return {
       ok: true,
       playbackUrl: streamUrl,
       sessionId,
+      telemetryId,
       capability,
       subtitles: this.subtitleTracks(sessionId, capability),
     };
@@ -886,7 +901,7 @@ export class PlaybackEngine {
     startedAt: number,
     error?: { stage: PlaybackDiagnosticEvent['errorStage']; message: string },
     sessionId = ''
-  ): void {
+  ): string {
     const video = capability.metadata?.video;
     const audio = capability.metadata?.audio.find(
       (track) => track.index === capability.transformationPlan.selectedAudioIndex
@@ -957,6 +972,17 @@ export class PlaybackEngine {
     });
     if (error) this.telemetry.record(telemetry);
     else this.openTelemetry.set(telemetry.sessionId, telemetry);
+    this.recordDiagnostics(request, capability, strategy, event, error);
+    return telemetry.sessionId;
+  }
+
+  private recordDiagnostics(
+    request: PlaybackStreamRequest,
+    capability: SourceCapabilityModel,
+    strategy: PlaybackDiagnosticEvent['selectedStrategy'],
+    event: PlaybackDiagnosticEvent,
+    error?: { stage: PlaybackDiagnosticEvent['errorStage']; message: string }
+  ): void {
 
     // Bounded: this is playback exhaust, and an app left open for days would
     // otherwise accumulate one record per source it ever considered.
