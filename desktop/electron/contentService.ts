@@ -1764,7 +1764,8 @@ export class ContentService {
                       const refused = (providerOutcome.results ?? []).filter(
                         (m) => verdicts.get(m.url) === 'mismatch'
                       );
-                      answered.push({
+                      // A paused provider was not asked: it answered nothing.
+                      if (!providerOutcome.cooling) answered.push({
                         work: workKey,
                         provider: providerOutcome.provider,
                         outcome: providerOutcome.error
@@ -1785,7 +1786,8 @@ export class ContentService {
                       report(latestIndexerProgress);
                     }
                   },
-                  options.signal
+                  options.signal,
+                  { ignoreCooldown: Boolean(request.exhaustive) }
                 ),
             }).then((outcome) => {
               walk = outcome;

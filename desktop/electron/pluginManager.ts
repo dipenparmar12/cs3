@@ -1,3 +1,4 @@
+import { ProviderCooldown } from './cs3/providerCooldown.ts';
 import { serviceOf, servicesOff } from './cs3/sharedServices.ts';
 import fs from 'fs';
 // Address helpers live in a pure module so they can be tested; this file
@@ -649,6 +650,8 @@ export interface ProviderSearchOutcome {
   latencyMs: number;
   /** Set when this provider failed; the others are unaffected. */
   error?: string;
+  /** Not asked: paused after repeated transient failures (`cs3/providerCooldown.ts`). */
+  cooling?: boolean;
 }
 
 /**
@@ -3393,6 +3396,8 @@ export class PluginManager {
   }
 
   private adultGate: (() => boolean) | null = null;
+  /** Per-launch backoff for providers that keep answering "not now". */
+  private readonly cooldown = new ProviderCooldown();
   /** Services switched off among the built-in providers (`cs3/sharedServices.ts`). */
   private serviceGate: (() => Set<string>) | null = null;
 
@@ -3634,7 +3639,8 @@ export class PluginManager {
     query: string,
     only: string[] | undefined,
     onProvider: (outcome: ProviderSearchOutcome) => void,
-    signal?: AbortSignal
+    signal?: AbortSignal,
+    options: { ignoreCooldown?: boolean } = {}
   ): Promise<void> {
     await this.ensureProvidersLoaded();
     if (signal?.aborted) return;
@@ -3648,7 +3654,21 @@ export class PluginManager {
      * not spent on one that answers in three hundred milliseconds, and the app
      * has been measuring which is which all along without using it here.
      */
-    const targets = applySearchOrder(this.narrowToEnabled(only), this.searchOrder);
+    const ordered = applySearchOrder(this.narrowToEnabled(only), this.searchOrder);
+    // A provider paused after repeated rate limits or timeouts is reported, not
+    // asked; an exhaustive search (the viewer's "ask everyone") still asks it.
+    const { ask: targets, cooling } = options.ignoreCooldown
+      ? { ask: ordered, cooling: [] }
+      : this.cooldown.partition(ordered);
+    for (const entry of cooling) {
+      onProvider({
+        provider: entry.provider,
+        results: [],
+        latencyMs: 0,
+        cooling: true,
+        error: `Paused after repeated failures; asked again in ${Math.ceil(entry.ms / 60_000)} min.`,
+      });
+    }
     if (targets.length === 0) return;
 
     this.liveSearches += 1;
@@ -3658,6 +3678,7 @@ export class PluginManager {
         if (signal?.aborted) return;
         const name = targets[next++];
         const outcome = await this.searchOne(query, name);
+        this.cooldown.record(name, outcome.error);
         // A cancelled search must not keep mutating the caller's snapshot;
         // the reply that was already in flight is simply dropped.
         if (signal?.aborted) return;
