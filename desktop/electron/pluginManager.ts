@@ -4276,6 +4276,26 @@ export class PluginManager {
     url: string,
     options: { speculative?: boolean } = {}
   ): Promise<{ links: ExtractorLink[]; diagnosis?: SourceDiagnosis }> {
+    // One provider request per handle at a time (Content Validation PRD
+    // Phase 4): the detail page's prefetch and a Play press, or two episodes'
+    // walks, ask for the same links within seconds, and each extra call is one
+    // more chance of a rate limit. Callers get their own copy of the list.
+    const key = `${options.speculative === true ? 's' : 'f'}|${url}`;
+    let pending = this.linksInFlight.get(key);
+    if (!pending) {
+      pending = this.loadLinksOnce(url, options).finally(() => this.linksInFlight.delete(key));
+      this.linksInFlight.set(key, pending);
+    }
+    const result = await pending;
+    return { ...result, links: [...result.links] };
+  }
+
+  private readonly linksInFlight = new Map<string, Promise<{ links: ExtractorLink[]; diagnosis?: SourceDiagnosis }>>();
+
+  private async loadLinksOnce(
+    url: string,
+    options: { speculative?: boolean }
+  ): Promise<{ links: ExtractorLink[]; diagnosis?: SourceDiagnosis }> {
     const ref = parseExtensionUrl(url);
     if (!ref) {
       return {
