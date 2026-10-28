@@ -72,7 +72,7 @@ Requirement: finish the PRDs that are partly built, decide the ones that are not
 
 **L1. Closed 2026-10-23:** all 12 now link to upstream GitHub at the submodule commit (eb962b4f; every target checked to exist there). **Twelve broken links in `docs_cs3/android/08` and `09`.** They point at upstream Android files (gradle, `.github/`, fastlane) not in this repo. Remove them or link to upstream.
 
-**L2. The five unverified notes** (`unverified/`). Checked 2026-10-28; each opens with what was verified and what is still open. Fixed while checking: detail-page recovery no longer accepts a series row for a film (`sameWork.ts`, errors audit Part 2 #1). Decision left: keep them as history or delete the four that are fully superseded.
+**L2. The five unverified notes** (`unverified/`). Checked 2026-10-28; each opens with what was verified and what is still open. Fixed while checking: detail-page recovery no longer accepts a series row for a film (`sameWork.ts`, errors audit Part 2 #1). Decided 2026-10-28: all five are kept as history; their verdict lines say what is still open. Closed.
 
 ## 4. Simplification opportunities
 
