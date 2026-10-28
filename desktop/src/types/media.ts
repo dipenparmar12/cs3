@@ -437,7 +437,14 @@ export interface PlaybackRuntimeReport {
   stallCount: number;
   stallTotalMs: number;
   ended: boolean;
+  /**
+   * What the viewer did with a possible-mismatch warning on this stream
+   * (Content Validation PRD §11); absent when none was shown.
+   */
+  mismatchWarning?: MismatchWarningAnswer;
 }
+
+export type MismatchWarningAnswer = 'kept-watching' | 'chose-another' | 'unanswered';
 
 export interface PlaybackDiagnosticEvent {
   timestamp: string;

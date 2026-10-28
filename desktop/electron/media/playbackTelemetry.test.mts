@@ -11,6 +11,7 @@ import {
   calculatePercentile,
   generateCapabilityFingerprint,
   summarizeTelemetry,
+  withRuntime,
   type PlaybackTelemetryRecord,
 } from './playbackTelemetry.ts';
 
@@ -137,6 +138,14 @@ test('PlaybackTelemetryStore records records in ring buffer', () => {
   assert.equal(records.length, 3);
   assert.equal(records[0].sessionId, 's-2');
   assert.equal(records[2].sessionId, 's-4');
+});
+
+test('the answer to a possible-mismatch warning is kept on the record, and only when one was shown', () => {
+  const report = { firstFrameMs: 400, playbackSeconds: 60, seekCount: 0, stallCount: 0, stallTotalMs: 0, ended: false };
+  const kept = withRuntime(sampleRecord(), { ...report, mismatchWarning: 'kept-watching' }, true);
+  assert.equal(kept.mismatchWarning, 'kept-watching');
+  const none = withRuntime(sampleRecord(), report, true);
+  assert.equal('mismatchWarning' in none, false);
 });
 
 // --- execution -------------------------------------------------------------

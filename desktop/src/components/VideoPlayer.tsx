@@ -44,7 +44,7 @@ import { SourcePanel } from './player/SourcePanel';
 import { SourceResolveOverlay } from './player/SourceResolveOverlay';
 import { SubtitlePanel } from './player/SubtitlePanel';
 import { PlayerDownloadPanel } from './player/PlayerDownloadPanel';
-import type { PlaybackStreamResponse, SourceCapabilityModel } from '../types/media';
+import type { MismatchWarningAnswer, PlaybackStreamResponse, SourceCapabilityModel } from '../types/media';
 import { attachClearKey, type ClearKeyAttachment } from '../utils/clearKeySession';
 import { attachShaka, type ShakaAttachment } from '../utils/shakaSession';
 import type { SeriesContext } from './player/seriesContext';
@@ -528,6 +528,11 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
   /** A possible-mismatch warning for the stream playing now (see the sanity check). */
   const [mismatchWarning, setMismatchWarning] = useState<string | null>(null);
   useEffect(() => setMismatchWarning(null), [streamUrl]);
+  /** What the viewer did with that warning, for this stream's telemetry report. */
+  const warningAnswerRef = useRef<MismatchWarningAnswer | undefined>(undefined);
+  useEffect(() => {
+    if (mismatchWarning) warningAnswerRef.current ??= 'unanswered';
+  }, [mismatchWarning]);
   const [subtitlePanelOpen, setSubtitlePanelOpen] = useState(false);
 
   // `s` in mpv's own window asks for the subtitle search, which lives here.
@@ -2355,6 +2360,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
   useEffect(() => {
     const video = videoRef.current;
     if (!telemetryId || !video) return;
+    warningAnswerRef.current = undefined;
     const stats = new PlaybackStats(performance.now());
     const now = () => performance.now();
     const onPlaying = () => stats.playing(now());
@@ -2374,7 +2380,10 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
       video.removeEventListener('seeking', onSeeking);
       video.removeEventListener('seeked', onSeeked);
       void window.cloudstream
-        ?.reportPlayback(telemetryId, stats.report(now(), video.ended))
+        ?.reportPlayback(telemetryId, {
+          ...stats.report(now(), video.ended),
+          mismatchWarning: warningAnswerRef.current,
+        })
         .catch(() => undefined);
     };
   }, [telemetryId]);
@@ -5209,13 +5218,21 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
               type="button"
               className="btn btn-primary btn-sm"
               onClick={() => {
+                warningAnswerRef.current = 'chose-another';
                 setMismatchWarning(null);
                 setSourcePanelOpen(true);
               }}
             >
               Choose another source
             </button>
-            <button type="button" className="btn btn-sm" onClick={() => setMismatchWarning(null)}>
+            <button
+              type="button"
+              className="btn btn-sm"
+              onClick={() => {
+                warningAnswerRef.current = 'kept-watching';
+                setMismatchWarning(null);
+              }}
+            >
               Keep watching
             </button>
           </div>

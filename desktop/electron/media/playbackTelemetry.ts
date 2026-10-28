@@ -1,6 +1,11 @@
 import { createHash } from 'crypto';
 import { release } from 'os';
-import type { MediaTransport, PlaybackRuntimeReport, PlaybackStrategyType } from '../../src/types/media.ts';
+import type {
+  MediaTransport,
+  MismatchWarningAnswer,
+  PlaybackRuntimeReport,
+  PlaybackStrategyType,
+} from '../../src/types/media.ts';
 import { scopedLogger } from '../logging/logger.ts';
 
 const log = scopedLogger('playback');
@@ -88,6 +93,10 @@ export interface PlaybackTelemetryRecord {
   terminalState: PlaybackTerminalState;
   fatalError: string | null;
   transitionCount: number;
+
+  // ── Validation (Content Validation PRD §11) ──────────────
+  /** A possible-mismatch warning was shown, and what the viewer did with it. */
+  mismatchWarning?: MismatchWarningAnswer;
 }
 
 /**
@@ -224,6 +233,7 @@ export function withRuntime(
     stallCount: report.stallCount,
     stallTotalMs: report.stallTotalMs,
     terminalState: report.ended ? 'completed' : open ? 'user-abort' : record.terminalState,
+    ...(report.mismatchWarning ? { mismatchWarning: report.mismatchWarning } : {}),
   };
 }
 
@@ -364,6 +374,7 @@ export class PlaybackTelemetryStore {
         stallTotalMs: next.stallTotalMs,
         seekCount: next.seekCount,
         terminalState: next.terminalState,
+        mismatchWarning: next.mismatchWarning,
       });
       return true;
     }
