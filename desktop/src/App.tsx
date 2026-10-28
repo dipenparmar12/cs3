@@ -47,6 +47,7 @@ import { episodeKey, loadWatchState } from './components/player/seriesContext';
 import { usePrivacy } from './utils/usePrivacy';
 import { ScrollToTop } from './components/ScrollToTop';
 import { durableAddress } from './utils/durableAddress';
+import { parseTorrentAddress, torrentAddress } from './utils/torrentAddress';
 import { canonicalKey } from '../electron/cs3/libraryStore';
 import { SCREEN_SEARCH_FOCUS_EVENT, screenSearchAvailable } from './utils/screenSearch';
 import { classifyDroppedPaths, droppedLinkKind, isSupportedDrag } from './utils/dropSupport';
@@ -830,6 +831,17 @@ export const App: React.FC = () => {
       return;
     }
     const handle = result.handle;
+    // Resumed from what this file last reached (Torrent PRD §2.6): progress is
+    // kept under the file's torrent address, whichever screen opened it.
+    const address = torrentAddress(request.infoHash, request.fileIndex);
+    const watchState = await loadWatchState(address, { title: request.title }).catch(() => undefined);
+    const knowsEpisode = request.season !== undefined && request.episode !== undefined;
+    const resumeAt = resumeSeconds(
+      watchState,
+      knowsEpisode
+        ? ({ season: request.season, episode: request.episode, name: request.fileName, url: '' } as Episode)
+        : null
+    );
     setPlayerHidden(false);
     setPlayback({
       streamUrl: handle.streamUrl,
@@ -850,9 +862,10 @@ export const App: React.FC = () => {
          * record would miss on every restart while looking as though it should
          * hit — the same trap the probe cache was keyed into.
          */
-        mediaUrl: `torrent://${request.infoHash}/${request.fileIndex}`,
+        mediaUrl: address,
         season: request.season,
         episode: request.episode,
+        resumeAt,
       },
     });
   }, []);
@@ -1642,7 +1655,21 @@ export const App: React.FC = () => {
   );
 
   const handlePlayFromHistory = useCallback(
-    (item: HistoryEvent) =>
+    (item: HistoryEvent) => {
+      // A file inside an imported torrent is reopened as that file (Torrent
+      // PRD §2.6): searching for its name would start some other release. The
+      // player resumes it from the progress kept under the same address.
+      const torrent = parseTorrentAddress(item.mediaUrl);
+      if (torrent) {
+        void handlePlayTorrentFile({
+          ...torrent,
+          fileName: item.episodeTitle || item.title,
+          title: item.parentTitle || item.title,
+          season: item.season,
+          episode: item.episode,
+        });
+        return;
+      }
       handleResume({
         // Rows written before loopback addresses were refused still carry
         // one; the parent page is the durable route back.
@@ -1661,8 +1688,9 @@ export const App: React.FC = () => {
           extensionName: item.source?.extension,
           indexerName: item.source?.indexerName,
         },
-      }),
-    [handleResume]
+      });
+    },
+    [handleResume, handlePlayTorrentFile]
   );
 
   /**
