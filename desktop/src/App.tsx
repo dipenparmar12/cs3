@@ -1661,13 +1661,25 @@ export const App: React.FC = () => {
       // player resumes it from the progress kept under the same address.
       const torrent = parseTorrentAddress(item.mediaUrl);
       if (torrent) {
-        void handlePlayTorrentFile({
+        void (async () => {
+          // A torrent removed from the import list since is imported again
+          // from its magnet (a bare infohash finds it through the DHT), rather
+          // than answering "not imported" (Torrent PRD §2.6).
+          const imports = await window.cloudstream?.listTorrentImports?.();
+          const known = imports?.records?.some((record) => record.infoHash === torrent.infoHash);
+          if (imports?.ok && !known) {
+            await window.cloudstream?.importMagnet?.(
+              item.source?.magnet || `magnet:?xt=urn:btih:${torrent.infoHash}`
+            );
+          }
+          await handlePlayTorrentFile({
           ...torrent,
           fileName: item.episodeTitle || item.title,
           title: item.parentTitle || item.title,
           season: item.season,
           episode: item.episode,
-        });
+          });
+        })();
         return;
       }
       handleResume({
