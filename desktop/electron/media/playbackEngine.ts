@@ -22,7 +22,7 @@ import {
   planForAudioTrack,
 } from './decisionEngine.ts';
 import { MediaInspector, drmRequiresEme, transportFromUrl } from './mediaInspector.ts';
-import { SourceLease } from './sourceLease.ts';
+import { SourceLease, type ResolvedSource } from './sourceLease.ts';
 import { drmFromProvider } from '../cs3/providerLinks.ts';
 import { describeError } from '../../src/utils/errors.ts';
 import type { InspectionStore } from './inspectionStore.ts';
@@ -106,6 +106,12 @@ export interface PlaybackEngineDeps {
   describeUnreadable: (url: string) => Promise<ProbeFailure>;
   /** Stamped on every telemetry record; `app.getVersion()` in `main.ts`. */
   appVersion?: string;
+  /**
+   * How to ask the provider for a fresh copy of an expired link, when one
+   * produced it (`ContentService.linkResolver`). Without it a lease never
+   * refreshes, and a signed link that expires mid-film stops the film.
+   */
+  refreshResolver?: (originUrl: string) => (() => Promise<ResolvedSource>) | undefined;
   diagnostics: {
     record(entry: {
       level: 'error' | 'warn' | 'info';
@@ -286,6 +292,7 @@ export class PlaybackEngine {
         headers: effectiveHeaders,
         provider: request.provider,
       },
+      resolve: this.deps.refreshResolver?.(originUrl),
     });
     const resolvedUrl = await this.deps.proxy.wrapLease(lease, {
       boundedRanges: request.isDash || isYt,

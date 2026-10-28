@@ -13,7 +13,7 @@ Requirement: finish the PRDs that are partly built, decide the ones that are not
 | Item | Source | Status | Evidence |
 |---|---|---|---|
 | Playback telemetry | [40.1](./40.1-playback-reliability-observability-and-routing-baseline.md) §4.3 | Built; checked in the app 2026-10-23 | One record per session: opened at prepare, ended by the player's `media:reportPlayback` (first frame, play time, seeks, stalls; `player/playbackStats.ts`), else by `close` or the next prepare. Tests fail with the supersession or the late-report rule removed. Checked in the built app (scratch profile): a dead link recorded as `fatal-error`, a public test clip as `completed` with first frame 820 ms, both shown in Settings → Playback sessions. Not yet seen from a real film in the player. Open: lease refreshes and reconnects (needs the Part D resolver), mpv runtime |
-| Lease refresh acceptance | 40.1 §6 DoD | Not measured | `sourceLease.ts` is wired (`playbackEngine.ts`, `mediaProxy.ts`) but has no resolver, so it never refreshes; the 2-hour / zero-403 check cannot pass until Part D of the Playback Source Resolution PRD supplies one |
+| Lease refresh acceptance | 40.1 §6 DoD | Not measured | `sourceLease.ts` is wired (`playbackEngine.ts`, `mediaProxy.ts`) and since 2026-10-28 has a resolver for extension links (`ContentService.linkResolver`: same handle, same link only; `cs3/linkOrigins.ts`, tested). Built-in providers and cache hits still have none. Next: the 2-hour / zero-403 run on a signed link |
 | Extension platform standard | [41](./41-desktop-extension-platform-and-community-standard.md) | Pending | Nothing built (§6–23) |
 | Native standards (superseded) | [39](./39-native-extension-and-playback-standards.md) | Superseded by 41 | Header and index say so (2026-10-23) |
 | Resume continuity | [42](./42-resume-continuity-and-seekable-sources.md) | Partial | `resumePoint.ts`, `playedSource.ts` built. The PRD now points at `resumePoint.ts` (fixed 2026-10-23) |
@@ -51,7 +51,7 @@ Requirement: finish the PRDs that are partly built, decide the ones that are not
 **H2. PRD 40.1 playback telemetry: wired and readable (2026-10-23).**
 - Done: `PlaybackEngine` opens one record per session at prepare; `VideoPlayer` reports what the element measured (`media:reportPlayback`) when it leaves the stream, which ends the record (`completed` only when the film ended). Without a report, `close` or the next prepare ends it; a late report amends. The `moduleReachability` allow-list is empty.
 - Readable: `media:getPlaybackDiagnostics` carries `telemetry` and `summary`; Settings → Everything → Playback sessions draws them. Checked in the built app with IPC-driven prepares (dead link → `fatal-error`; test clip → `completed`, 820 ms first frame).
-- Open: lease refresh counts (no resolver yet, Part D) and mpv runtime (no element events). Next: play a real film in the player and check that its row has a first frame and stalls.
+- Open: lease refresh counts on the record (a resolver exists since 2026-10-28) and mpv runtime (no element events). Next: play a real film in the player and check that its row has a first frame and stalls.
 
 **H3. Closed 2026-10-23.** 39 carries "Superseded by 41" in its header and in `PRD/00-index.md`. Original finding: **PRD 41 vs 39: two standards, one is already superseded.**
 - What: 39 says "superseded by 41" and 41 is pending. Keeping both invites someone to implement the wrong one.

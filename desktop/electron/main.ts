@@ -1031,6 +1031,7 @@ privacyMode.onClearSession(() => inspectionStore.clearVolatile());
 
 const playbackEngine = new PlaybackEngine({
   appVersion: app.getVersion(),
+  refreshResolver: (url) => contentService.linkResolver(url),
   proxy: contentService.getProxy(),
   transcoder: mediaTranscoder,
   nativeEngine: () => ({ available: mpvEngine.isAvailable(), policy: nativeEnginePolicy() }),

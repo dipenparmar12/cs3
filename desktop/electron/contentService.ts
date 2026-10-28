@@ -50,6 +50,7 @@ import { SearchSessionManager, type SearchSnapshot } from './searchSession';
 import type { SourceDiagnosis } from '../src/types/diagnostics';
 import { SharedDiscovery } from './sharedDiscovery';
 import { isTorrentLink } from './cs3/providerLinks';
+import { LinkOrigins, pickRefreshedLink } from './cs3/linkOrigins.ts';
 import { NativeProviderRegistry } from './cs3/nativeProviderRegistry.ts';
 import { parseNativeAddress } from './cs3/nativeProviders/types.ts';
 import { classifyFailure } from './cs3/failureTaxonomy.ts';
@@ -532,6 +533,27 @@ export class ContentService {
   }
 
   private transcoder: MediaTranscoder | null = null;
+
+  /** Which provider answer each direct link came from (`cs3/linkOrigins.ts`). */
+  private readonly linkOrigins = new LinkOrigins();
+
+  /**
+   * How to get a fresh copy of a provider's link once it has expired, for the
+   * playback lease (`media/sourceLease.ts`); `undefined` for a link no
+   * provider answer produced this launch. The provider is asked for the same
+   * handle again and only the same link is taken.
+   */
+  public linkResolver(url: string): (() => Promise<{ url: string; headers: Record<string, string> }>) | undefined {
+    const origin = this.linkOrigins.get(url);
+    if (!origin) return undefined;
+    return async () => {
+      const { links } = await this.plugins.loadLinksDetailed(origin.handle);
+      const fresh = pickRefreshedLink(origin, links);
+      if (!fresh) throw new Error('The provider no longer offers this link.');
+      this.linkOrigins.remember(fresh.url, origin);
+      return fresh;
+    };
+  }
 
   public getProxy(): MediaProxy {
     return this.proxy;
@@ -2125,6 +2147,8 @@ export class ContentService {
       target.startsWith('cs3ext://') ? parseExtensionUrl(target)?.target ?? '' : target
     );
     let attempt = await this.plugins.loadLinksDetailed(target, { speculative });
+    // The handle that produced `links`, kept so an expired link can be asked for again.
+    let linksHandle = target;
     let links = attempt.links;
     let diagnosis = attempt.diagnosis;
 
@@ -2156,6 +2180,7 @@ export class ContentService {
           // The retry's verdict replaces the first one: the first address was
           // never the playable handle, so its failure describes the wrong thing.
           attempt = await this.plugins.loadLinksDetailed(detail.dataUrl);
+          linksHandle = detail.dataUrl;
           links = attempt.links;
           diagnosis = attempt.diagnosis;
         }
@@ -2232,6 +2257,15 @@ export class ContentService {
               directUrl: address,
               directHeaders: link.headers,
             };
+        if (!torrent) {
+          this.linkOrigins.remember(address, {
+            handle: linksHandle,
+            source: link.source,
+            name: link.name,
+            quality: link.quality,
+            part: parts > 1 ? part : 0,
+          });
+        }
 
         return {
           infoHash: identity,
