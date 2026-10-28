@@ -1,4 +1,4 @@
-> **Filed 2026-10-20: Unverified.** Not yet checked against the code. Treat as a proposal until it is.
+> **Checked 2026-10-28: superseded in substance by the Playback Source Resolution PRD (v2) and the Content Validation PRD.** Built: RPC lanes put Play work ahead of background work (`RpcLanes.java`, §128.1, 128.10); the ranked, budgeted discovery walk with early stop (`cs3/discoveryWalk.ts`, §128.2, 128.5); hit judging (`cs3/providerHitMatch.ts`, §128.3–128.4); per-source cache expiry (`sourceCache.ts`, §128.7); played-source resume and same-provider replacement (`cs3/playedSource.ts`, §128.9); provider back-off (`cs3/providerCooldown.ts`). Not built: automatic link refresh on 401/403 (§128.8, needs the `SourceLease` resolver, Part D).
 
 ### 128. Intelligent Source Discovery, Search Prioritization, Content Matching, and Automatic Source Refresh
 

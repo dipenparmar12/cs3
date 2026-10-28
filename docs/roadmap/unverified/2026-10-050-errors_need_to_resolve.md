@@ -1,4 +1,4 @@
-> **Filed 2026-10-20: Unverified.** Not yet checked against the code. Treat as a proposal until it is.
+> **Checked 2026-10-28: mostly resolved.** Part 2 fault points: #3 and #4 fixed (a widened search is offered, never auto-started, and each hit is judged by `cs3/providerHitMatch.ts`; AGENTS §7–8); #5 fixed (`src/utils/durableAddress.ts`); #2 addressed by provenance rules (`src/utils/originName.ts`). #1 is narrowed, not removed: `DetailView` still searches elsewhere when every route fails, but `sameWorkMatches` needs the exact folded title and a year within one (and, from 2026-10-28, an agreeing movie/series type). Part 1 Cat.1 #4–6 are extension-side; count before acting. Part 4 §1 (A/V sync) verified intact in the handoff note.
 
 # Comprehensive Error, Exception, and Cross-Sourcing Audit Report
 

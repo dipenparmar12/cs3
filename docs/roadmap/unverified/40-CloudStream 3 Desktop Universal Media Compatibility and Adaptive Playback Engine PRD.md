@@ -1,6 +1,6 @@
 > **Superseded by [37](../../done/37-universal-media-compatibility-and-adaptive-playback-engine.md) (2026-10-23):** same title and contract. Kept for its citations; read 37.
 >
-> **Filed 2026-10-20: Unverified.** Not yet checked against the code. Treat as a proposal until it is.
+> **Checked 2026-10-28: superseded by 37** (see the line above). Nothing to verify separately.
 
 # CloudStream 3 Desktop Universal Media Compatibility and Adaptive Playback Engine
 
