@@ -8,7 +8,7 @@ import { NativeEngineStage, trackLabel } from './player/NativeEngineStage';
 import { PlaybackPrivacyOverlay } from './player/PlaybackPrivacyOverlay';
 import { mediaSessionRecord } from './player/playbackPrivacy';
 import { PlaybackStats } from './player/playbackStats';
-import { shouldSkipStalledTorrent } from './player/torrentStall';
+import { shouldSkipStalledTorrent, startOfFilePercent } from './player/torrentStall';
 import { usePlaybackPrivacy } from './player/usePlaybackPrivacy';
 import {
   Play, Pause, Volume2, VolumeX, Maximize, Minimize, ArrowLeft,
@@ -5122,6 +5122,11 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
               learn — so the peer count and the swarm go together, behind the
               mode, and standard mode gets the one fact that is always true. */}
           <p>{isDeveloper ? 'Buffering from peers…' : 'Buffering…'}</p>
+          {/* Connected, and the opening of the file is still on its way: said
+              in both modes, because "Buffering…" alone at 0:00 reads as stuck. */}
+          {stats && !hasStartedPlayback && startOfFilePercent(stats) !== null && (
+            <span className="muted">Getting the start of the file · {startOfFilePercent(stats)}%</span>
+          )}
           {stats && isDeveloper && (
             <span className="muted">
               {formatTransferRate(stats.downloadSpeed)} · {stats.peers} peer

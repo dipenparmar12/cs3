@@ -14,6 +14,8 @@ export type TorrentFailureKind =
   | 'metadata-timeout'
   | 'no-peers'
   | 'no-media'
+  /** Peers answered, but the start of the chosen file never arrived in time. */
+  | 'file-not-ready'
   | 'stream-failed';
 
 export type TorrentFailureStage = 'input' | 'engine' | 'metadata' | 'peers' | 'files' | 'playback';
@@ -30,6 +32,7 @@ const RULES: Array<[RegExp, TorrentFailure]> = [
   [/timed out fetching torrent metadata/i, { kind: 'metadata-timeout', stage: 'metadata' }],
   [/no peers/i, { kind: 'no-peers', stage: 'peers' }],
   [/does not contain/i, { kind: 'no-media', stage: 'files' }],
+  [/waiting for enough data/i, { kind: 'file-not-ready', stage: 'files' }],
 ];
 
 export function classifyTorrentFailure(message: string): TorrentFailure {

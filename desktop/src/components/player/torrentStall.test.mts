@@ -1,7 +1,23 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { shouldSkipStalledTorrent } from './torrentStall.ts';
+import { shouldSkipStalledTorrent, startOfFilePercent } from './torrentStall.ts';
+
+const waiting = { readyBytes: 1_000_000, readyTargetBytes: 4_000_000, peers: 3, isPlayable: false, isStalled: false };
+
+test('peers connected and the start of the file still arriving is its own state, with progress', () => {
+  assert.equal(startOfFilePercent(waiting), 25);
+  assert.equal(startOfFilePercent({ ...waiting, readyBytes: 4_000_000 }), 99);
+  assert.equal(startOfFilePercent({ ...waiting, readyBytes: 0 }), 0);
+});
+
+test('not that state: no peers, stalled, playable, or no target', () => {
+  assert.equal(startOfFilePercent({ ...waiting, peers: 0 }), null);
+  assert.equal(startOfFilePercent({ ...waiting, isStalled: true }), null);
+  assert.equal(startOfFilePercent({ ...waiting, isPlayable: true }), null);
+  assert.equal(startOfFilePercent({ ...waiting, readyTargetBytes: undefined }), null);
+  assert.equal(startOfFilePercent({ ...waiting, readyTargetBytes: 0 }), null);
+});
 
 test('a swarm with nobody in it is left after 20 s, before anything played', () => {
   assert.equal(shouldSkipStalledTorrent({ startedPlayback: false, stalledMs: 19_000, peers: 0, isStalled: false }), null);

@@ -9,6 +9,25 @@
  * "Choose another source"): switching mid-film restarts the stream.
  */
 
+/**
+ * "The selected file is not ready" (Torrent PRD §2.3), as how far along its
+ * start is: peers are connected and the leading bytes playback waits for have
+ * not all arrived. `null` when that is not the state (no peers, stalled,
+ * already playable, or the engine did not say how much it waits for). Never
+ * 100 until the engine says the file is playable.
+ */
+export function startOfFilePercent(stats: {
+  readyBytes: number;
+  readyTargetBytes?: number;
+  peers: number;
+  isPlayable: boolean;
+  isStalled: boolean;
+}): number | null {
+  if (stats.isPlayable || stats.isStalled || stats.peers === 0) return null;
+  if (!stats.readyTargetBytes || stats.readyTargetBytes <= 0) return null;
+  return Math.min(99, Math.max(0, Math.floor((stats.readyBytes / stats.readyTargetBytes) * 100)));
+}
+
 /** No bytes and nobody connected, before anything played. */
 export const STARTUP_DEAD_SWARM_MS = 20_000;
 

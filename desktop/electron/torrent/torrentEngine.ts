@@ -1244,6 +1244,7 @@ export class TorrentEngine {
     if (!file) return null;
 
     const readyBytes = this.computeReadyBytes(torrent, file);
+    const readyTargetBytes = Math.min(PLAYABLE_THRESHOLD_BYTES, file.length * 0.02);
     const stalledMs = this.updateWatch(infoHash, file);
 
     return {
@@ -1260,7 +1261,8 @@ export class TorrentEngine {
       // webtorrent does not separate seeds from peers; report the swarm size.
       seeds: torrent.numPeers,
       readyBytes,
-      isPlayable: readyBytes >= Math.min(PLAYABLE_THRESHOLD_BYTES, file.length * 0.02),
+      isPlayable: readyBytes >= readyTargetBytes,
+      readyTargetBytes,
       timeRemainingMs: Number.isFinite(torrent.timeRemaining) ? torrent.timeRemaining : 0,
       isPaused: torrent.paused,
       stalledMs,

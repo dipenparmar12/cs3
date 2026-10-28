@@ -17,6 +17,8 @@ test("the engine's own messages map to their kind and stage", () => {
     ['No peers answered for this torrent — the swarm looks dead.', 'no-peers', 'peers'],
     ['This torrent does not contain episode S1E3.', 'no-media', 'files'],
     ['This torrent does not contain a playable video file.', 'no-media', 'files'],
+    ['Timed out waiting for enough data to start playback.', 'file-not-ready', 'files'],
+    ['No peers responded — the swarm looks dead.', 'no-peers', 'peers'],
   ];
   for (const [message, kind, stage] of cases) {
     assert.deepEqual(classifyTorrentFailure(message), { kind, stage }, message);
