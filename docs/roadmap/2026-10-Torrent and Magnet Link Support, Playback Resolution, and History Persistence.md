@@ -132,15 +132,15 @@ Read from the code, not run in the app.
 
 | Requirement | Status | Where |
 |---|---|---|
-| 2.1 Magnets, local  files, multi-file and nested torrents, metadata from peers | Built |  (, , ), , ; a magnet import opens at once as  and its metadata arrives through the engine () |
-| 2.2 Pipeline: parse, contents, choose a file, stream | Built |  lists the contents;  streams the chosen file over loopback; an imported  is written into , so Play skips the BEP-9 fetch |
-| 2.3 Actionable errors per stage | Partial | Dead swarm is named (, "No peers answered"); import failures carry their reason. No closed set of torrent error states with a stage (invalid input, metadata timeout, no media files, file not ready) |
-| 2.4 Torrent history | **Gap** | Playing an imported file records progress under  (), and downloads keep the magnet and file index, but no History entry leads back to the torrent: nothing reads that key to reopen it |
-| 2.5 Metadata, reference, data and playback state kept apart | Built in part | Metadata in  (verified against the infohash), references in the import list (, ), pieces in the engine's cache (); cleanup of imports is by hand only |
+| 2.1 Magnets, local `.torrent` files, multi-file and nested torrents, metadata from peers | Built | `torrent/torrentImport.ts` (`torrent:importFiles`, `pickFiles`, `importMagnet`), `torrentFile.ts`, `torrentContents.ts`; a magnet import opens at once as `pending` and its metadata arrives through the engine (`torrent:resolveMagnet`) |
+| 2.2 Pipeline: parse, contents, choose a file, stream | Built | `TorrentView.tsx` lists the contents; `torrent:playFile` streams the chosen file over loopback; an imported `.torrent` is written into `TorrentMetadataCache`, so Play skips the BEP-9 fetch |
+| 2.3 Actionable errors per stage | Partial | Dead swarm is named (`torrentEngine.ts`, "No peers answered"); import failures carry their reason. No closed set of torrent error states with a stage (invalid input, metadata timeout, no media files, file not ready) |
+| 2.4 Torrent history | **Gap** | Playing an imported file records progress under `torrent://<infohash>/<fileIndex>` (`App.tsx`), and downloads keep the magnet and file index, but no History entry leads back to the torrent: nothing reads that key to reopen it |
+| 2.5 Metadata, reference, data and playback state kept apart | Built in part | Metadata in `TorrentMetadataCache` (verified against the infohash), references in the import list (`torrent:listImports`, `removeImport`), pieces in the engine's cache (`torrent:clearCache`); cleanup of imports is by hand only |
 | 2.6 Reopen and resume from history | **Gap** | Follows from 2.4. Reopening an import from the Torrent screen works; resuming its position from History does not exist |
-| 2.7 One session per infohash, cancellation | Built |  reuses an active torrent with the same infohash;  |
+| 2.7 One session per infohash, cancellation | Built | `startStream` reuses an active torrent with the same infohash; `torrent:stopStream` |
 
-Next: write a History record for an imported torrent's file (infohash, magnet, file index, name) and route its Resume to  with the stored position (2.4, 2.6); then a closed set of torrent error states (2.3).
+Next: write a History record for an imported torrent's file (infohash, magnet, file index, name) and route its Resume to `torrent:playFile` with the stored position (2.4, 2.6); then a closed set of torrent error states (2.3).
 
 ## 3. Acceptance Criteria
 
