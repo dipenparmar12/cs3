@@ -138,6 +138,7 @@ import { mediaRatingService } from './metadata/ratings/mediaRatingService.ts';
 import type { CanonicalMediaIdentity } from '../src/types/ratings.ts';
 import { OttCatalogService } from './cs3/ottCatalog';
 import { TorrentImportService, classifyDroppedPath, looksLikeMagnet } from './torrent/torrentImport';
+import { classifyTorrentFailure } from './torrent/torrentFailure.ts';
 import { parseReleaseName } from './torrent/releaseParser';
 import { buildDownloadTask } from '../src/utils/downloadIdentity';
 import { BatchDownloader, type BatchDownloadRequest } from './cs3/batchDownloader';
@@ -4991,7 +4992,12 @@ ipcMain.handle('torrent:playFile', async (_, infoHash: string, fileIndex: number
     torrentImports.touch(hash);
     return { ok: true, handle };
   } catch (error) {
-    return fail(error);
+    // Counted by kind and stage (Torrent PRD §2.3); the hash identifies the
+    // torrent without its name or trackers.
+    const message = describeError(error);
+    const failure = classifyTorrentFailure(message);
+    logger.warn('torrent', 'torrent_play_failed', { ...failure, infoHash: String(infoHash ?? '').toLowerCase(), fileIndex });
+    return { ...fail(error), failure };
   }
 });
 
