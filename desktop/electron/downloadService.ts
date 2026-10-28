@@ -1,4 +1,5 @@
 import { etaSeconds, smoothSpeed } from './download/progressSmoothing.ts';
+import { AttemptTokens } from './download/attemptTokens.ts';
 import fs from 'fs';
 import path from 'path';
 import type { DownloadRequestResult, DownloadTask } from '../src/types/download';
@@ -615,28 +616,37 @@ export class DownloadService {
     }
   }
 
+  /** Which transfer of a task may still report (`download/attemptTokens.ts`). */
+  private readonly attempts = new AttemptTokens();
+
   private startSegmentedTask(task: DownloadTask): void {
+    const attempt = this.attempts.begin(task.id);
     const handle = this.ytdlp.download({
       url: task.link.url,
       targetPath: task.targetFilePath,
       headers: task.headers,
       referer: task.link.referer,
-      onProgress: (downloaded, total, speed) => this.applyProgress(task, downloaded, total, speed),
-      onComplete: (total) => this.markCompleted(task, total),
-      onError: (message) => this.markFailed(task, message),
+      onProgress: this.attempts.guard(task.id, attempt, (downloaded: number, total: number, speed: number) =>
+        this.applyProgress(task, downloaded, total, speed)
+      ),
+      onComplete: this.attempts.guard(task.id, attempt, (total: number) => this.markCompleted(task, total)),
+      onError: this.attempts.guard(task.id, attempt, (message: string) => void this.markFailed(task, message)),
     });
     this.handles.set(task.id, handle);
   }
 
   private startHttpTask(task: DownloadTask): void {
+    const attempt = this.attempts.begin(task.id);
     const handle = startHttpDownload({
       url: task.link.url,
       targetPath: task.targetFilePath,
       headers: task.headers,
       referer: task.link.referer,
-      onProgress: (downloaded, total, speed) => this.applyProgress(task, downloaded, total, speed),
-      onComplete: (total) => this.markCompleted(task, total),
-      onError: (message) => this.markFailed(task, message),
+      onProgress: this.attempts.guard(task.id, attempt, (downloaded: number, total: number, speed: number) =>
+        this.applyProgress(task, downloaded, total, speed)
+      ),
+      onComplete: this.attempts.guard(task.id, attempt, (total: number) => this.markCompleted(task, total)),
+      onError: this.attempts.guard(task.id, attempt, (message: string) => void this.markFailed(task, message)),
     });
     this.handles.set(task.id, handle);
   }
@@ -1301,6 +1311,7 @@ export class DownloadService {
     }
 
     // The `.part` file stays on disk; resuming continues from it.
+    this.attempts.withdraw(id);
     this.handles.get(id)?.cancel();
     this.handles.delete(id);
 
@@ -1389,6 +1400,7 @@ export class DownloadService {
       }
     }
 
+    this.attempts.withdraw(id);
     this.handles.get(id)?.cancel();
     this.handles.delete(id);
 

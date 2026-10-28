@@ -119,7 +119,8 @@ Requirements:
 - Speed is smoothed (exponential average) for aria2, HTTP and torrents, and ETA is shown only with a known size and a moving transfer (`download/progressSmoothing.ts`).
 - aria2's 0 before the server answers no longer erases a known size.
 - HTTP and yt-dlp audited: one attempt runs at a time; yt-dlp fetches one muxed stream, so there is no video-then-audio reset.
-- Not yet: a per-attempt token that drops a late event from a superseded attempt (§2.4), and a run against real downloads.
+- Per-attempt token built 2026-10-28 (`download/attemptTokens.ts`, tested and mutation-checked): every HTTP and yt-dlp start takes a token, pause and cancel withdraw it, and a replaced transfer's late progress, error or success is dropped, so a paused task can no longer be failed (and sent into source refresh) by the transfer it stopped. aria2 is keyed by gid and torrents are polled, so neither needs it.
+- Not yet: a run against real downloads.
 
 ## 3. TV Series Batch Downloading
 
