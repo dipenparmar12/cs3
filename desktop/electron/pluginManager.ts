@@ -1,4 +1,5 @@
 import { ProviderCooldown } from './cs3/providerCooldown.ts';
+import { ProviderSlots } from './cs3/providerSlots.ts';
 import { serviceOf, servicesOff } from './cs3/sharedServices.ts';
 import fs from 'fs';
 // Address helpers live in a pure module so they can be tested; this file
@@ -28,7 +29,7 @@ import { fetchBuffer, fetchJson } from './torrent/http';
 import type { DatastoreManager } from './datastore';
 import { DisabledSet } from './util/disabledSet';
 import { SidecarSupervisor } from './cs3/sidecarSupervisor';
-import { isTransportFailure, providerLatencyMs } from './cs3/rpcResult.ts';
+import { isTransportFailure, providerLatencyMs, type RpcResult } from './cs3/rpcResult.ts';
 import { OFFICIAL_REPOSITORIES, type OfficialRepository } from './officialRepositories';
 import { getIssueLog } from './cs3/extensionIssues';
 import { scopedLogger } from './logging/logger';
@@ -3745,11 +3746,7 @@ export class PluginManager {
      * `false` here would replace that explanation with silence.
      */
     await this.ensureProviderActive(name);
-    const response = await this.sidecar.call(
-      'providerSearch',
-      { query, providers: [name] },
-      PROVIDER_CALL_TIMEOUT_MS
-    );
+    const response = await this.providerCall(name, 'providerSearch', { query, providers: [name] });
     const latencyMs = providerLatencyMs(started, response);
 
     if (!response.ok) {
@@ -3863,11 +3860,7 @@ export class PluginManager {
     }
 
     await this.ensureProviderActive(providerName);
-    const response = await this.sidecar.call(
-      'providerMainPageSections',
-      { provider: providerName },
-      PROVIDER_CALL_TIMEOUT_MS
-    );
+    const response = await this.providerCall(providerName, 'providerMainPageSections', { provider: providerName });
 
     if (!response.ok) {
       const reason =
@@ -3939,17 +3932,13 @@ export class PluginManager {
 
     await this.ensureProviderActive(providerName);
     const started = Date.now();
-    const response = await this.sidecar.call(
-      'providerMainPage',
-      {
-        provider: providerName,
-        section: section.name,
-        data: section.data,
-        page: requested,
-        horizontalImages: section.horizontalImages === true,
-      },
-      PROVIDER_CALL_TIMEOUT_MS
-    );
+    const response = await this.providerCall(providerName, 'providerMainPage', {
+      provider: providerName,
+      section: section.name,
+      data: section.data,
+      page: requested,
+      horizontalImages: section.horizontalImages === true,
+    });
     const latencyMs = providerLatencyMs(started, response);
 
     const fail = (message: string): ProviderCatalogPage => {
@@ -4083,10 +4072,11 @@ export class PluginManager {
     await this.ensureProviderActive(ref.provider);
 
     const startedAt = Date.now();
-    const response = await this.sidecar.call(
+    const response = await this.providerCall(
+      ref.provider,
       'providerLoad',
       { provider: ref.provider, url: ref.target },
-      PROVIDER_CALL_TIMEOUT_MS
+      { urgent: true }
     );
     const latencyMs = providerLatencyMs(startedAt, response);
 
@@ -4292,6 +4282,32 @@ export class PluginManager {
 
   private readonly linksInFlight = new Map<string, Promise<{ links: ExtractorLink[]; diagnosis?: SourceDiagnosis }>>();
 
+  /** At most a few background requests per provider at once (`cs3/providerSlots.ts`). */
+  private readonly providerSlots = new ProviderSlots();
+
+  /**
+   * One provider request, through that provider's slots. The wait for a slot
+   * is added to `queuedMs`, so `providerLatencyMs` never scores a provider
+   * for the app's own queue, as it already does for the JVM's.
+   */
+  private providerCall(
+    provider: string,
+    method: string,
+    params: Record<string, unknown>,
+    options: { urgent?: boolean } = {}
+  ): Promise<RpcResult> {
+    const asked = Date.now();
+    return this.providerSlots.run(
+      provider,
+      async () => {
+        const waited = Date.now() - asked;
+        const response = await this.sidecar.call(method, params, PROVIDER_CALL_TIMEOUT_MS);
+        return waited > 0 ? { ...response, queuedMs: (response.queuedMs ?? 0) + waited } : response;
+      },
+      options
+    );
+  }
+
   private async loadLinksOnce(
     url: string,
     options: { speculative?: boolean }
@@ -4314,10 +4330,11 @@ export class PluginManager {
     const speculative = options.speculative === true;
 
     const startedAt = Date.now();
-    const response = await this.sidecar.call(
+    const response = await this.providerCall(
+      ref.provider,
       'providerLoadLinks',
       { provider: ref.provider, data: ref.target },
-      PROVIDER_CALL_TIMEOUT_MS
+      { urgent: !speculative }
     );
     const latencyMs = providerLatencyMs(startedAt, response);
 
