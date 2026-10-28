@@ -57,6 +57,7 @@ import { planSourceScope, shouldEscalateScope } from './cs3/sourceScope';
 import { judgeProviderHit, type HitVerdict } from './cs3/providerHitMatch.ts';
 import { planDiscoveryWalk, walkDiscovery, type WalkOutcome, type WalkStop } from './cs3/discoveryWalk.ts';
 import { ProviderAttemptStore, type ProviderAttempt } from './cs3/providerAttempts.ts';
+import { classifyTorrentFailure } from './torrent/torrentFailure.ts';
 
 /** The stored search mode: `ranked` (default) or `all`. In the backup's source preferences. */
 export const DISCOVERY_MODE_KEY = 'cs3_discovery_mode';
@@ -2750,7 +2751,12 @@ export class ContentService {
       try {
         handle = await this.startStream(source, season, episode);
       } catch (error) {
-        failed(source, describeError(error));
+        const message = describeError(error);
+        // Counted by kind and stage, as imported torrents are (Torrent PRD §2.3).
+        if (!source.directUrl) {
+          log.warn('torrent_start_failed', { ...classifyTorrentFailure(message), infoHash: source.infoHash });
+        }
+        failed(source, message);
         continue;
       }
 

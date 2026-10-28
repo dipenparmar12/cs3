@@ -134,13 +134,13 @@ Read from the code, not run in the app.
 |---|---|---|
 | 2.1 Magnets, local `.torrent` files, multi-file and nested torrents, metadata from peers | Built | `torrent/torrentImport.ts` (`torrent:importFiles`, `pickFiles`, `importMagnet`), `torrentFile.ts`, `torrentContents.ts`; a magnet import opens at once as `pending` and its metadata arrives through the engine (`torrent:resolveMagnet`) |
 | 2.2 Pipeline: parse, contents, choose a file, stream | Built | `TorrentView.tsx` lists the contents; `torrent:playFile` streams the chosen file over loopback; an imported `.torrent` is written into `TorrentMetadataCache`, so Play skips the BEP-9 fetch |
-| 2.3 Actionable errors per stage | Built in part 2026-10-28 | The engine names each cause (metadata timeout, dead swarm, no playable file or episode, port binding); `torrent/torrentFailure.ts` (tested) gives it a kind and a stage from a closed set, and `torrent:playFile` logs `torrent_play_failed` with both and returns `failure`. Not yet: "file not ready" as its own state, and the same classification on the provider-torrent path (`playbackSession`) |
+| 2.3 Actionable errors per stage | Built in part 2026-10-28 | The engine names each cause (metadata timeout, dead swarm, no playable file or episode, port binding); `torrent/torrentFailure.ts` (tested) gives it a kind and a stage from a closed set, and `torrent:playFile` logs `torrent_play_failed` with both and returns `failure`. Provider torrents too: a failed start in `ContentService`'s source walk logs `torrent_start_failed` with kind and stage. Not yet: "file not ready" as its own state |
 | 2.4 Torrent history | Built 2026-10-28 | Playing an imported file writes its History row under `torrent://<infohash>/<fileIndex>` (`src/utils/torrentAddress.ts`, tested); History → Play reads that address back and reopens the same file through `torrent:playFile` instead of searching for its name. The infohash is the identity (lower-cased). Not run in the app |
 | 2.5 Metadata, reference, data and playback state kept apart | Built in part | Metadata in `TorrentMetadataCache` (verified against the infohash), references in the import list (`torrent:listImports`, `removeImport`), pieces in the engine's cache (`torrent:clearCache`); cleanup of imports is by hand only |
 | 2.6 Reopen and resume from history | Built 2026-10-28 | The file resumes from the progress kept under its address, from History and from the Torrent screen alike. A torrent no longer imported answers "That torrent is not imported." rather than starting another session. Not run in the app |
 | 2.7 One session per infohash, cancellation | Built | `startStream` reuses an active torrent with the same infohash; `torrent:stopStream` |
 
-Next: classify provider-torrent failures in `playbackSession` with the same set (2.3); offer to import again when a History row names a torrent that was removed (2.6).
+Next: offer to import again when a History row names a torrent that was removed (2.6).
 
 ## 3. Acceptance Criteria
 
