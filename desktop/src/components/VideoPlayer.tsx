@@ -51,6 +51,7 @@ import type { SeriesContext } from './player/seriesContext';
 import type { PlaybackPreferences, StoredSource } from '../types/library';
 import { matchesRelease } from '../../electron/cs3/playedSource';
 import { judgeableDuration, looksLikeWrongMedia, wrongMediaBeforePlay, wrongMediaReason } from '../utils/mediaSanity';
+import { verdictForProbeFailure, type SourceVerdict } from '../utils/sourceVerdict';
 import { validateContent } from '../utils/contentValidation';
 import { torrentResultToStoredSource } from '../../electron/cs3/libraryStore';
 import { isPlaceholderOrigin } from '../utils/originName';
@@ -203,7 +204,7 @@ interface VideoPlayerProps {
     error?: string;
     attempts: Array<{ title: string; indexerName: string; error: string }>;
     /** Played / failed per source in this session — the source list's ✓ and ⚠. */
-    sourceStates?: Record<string, { state: 'played' | 'failed'; reason?: string }>;
+    sourceStates?: Record<string, { state: 'played' | 'failed'; reason?: string; verdict?: SourceVerdict }>;
     onPlayNow: () => void;
     onSelectSource: (source: TorrentResult) => void;
     /**
@@ -213,7 +214,7 @@ interface VideoPlayerProps {
      * stream will not *start*, but one that starts fine and then cannot be
      * decoded looks like success from the main process.
      */
-    onSourceUnplayable?: (reason: string) => void;
+    onSourceUnplayable?: (reason: string, verdict?: SourceVerdict) => void;
     onRefresh: () => void;
     /**
      * Look beyond the providers this title was found on — every other
@@ -1116,7 +1117,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
     const reason = wrongMediaReason(actual, expected!);
     if (sourceSession?.onSourceUnplayable) {
       notify('That source was not the title — trying the next one', 'info');
-      sourceSession.onSourceUnplayable(reason);
+      sourceSession.onSourceUnplayable(reason, 'confirmed-mismatch');
     } else {
       notify(reason, 'bad');
     }
@@ -1142,7 +1143,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
     if (!reason) return;
     stallSkippedFor.current = streamUrl;
     notify('That torrent is not delivering — trying the next source', 'info');
-    sourceSession.onSourceUnplayable(reason);
+    sourceSession.onSourceUnplayable(reason, 'temporarily-unavailable');
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [stats, streamUrl, hasStartedPlayback, isDeveloper]);
 
@@ -1512,7 +1513,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
    * element can fire `error` repeatedly, and each one would burn another
    * candidate off a list that is not long.
    */
-  const skipRef = useRef<((reason: string) => void) | null>(null);
+  const skipRef = useRef<((reason: string, verdict?: SourceVerdict) => void) | null>(null);
   const skippedFor = useRef<string | null>(null);
   /**
    * Forces a remux of the current URL, once, before giving up on it.
@@ -3460,7 +3461,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
        * a live mirror one row down.
        */
       if (response.capability?.failure?.dead) {
-        skipRef.current?.(response.capability.failure.reason);
+        skipRef.current?.(response.capability.failure.reason, verdictForProbeFailure(response.capability.failure));
         return;
       }
 
@@ -3478,7 +3479,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
       if (clip) {
         sanityCheckedFor.current = streamUrl;
         notify('That source was not the title — trying the next one', 'info');
-        skipRef.current?.(clip);
+        skipRef.current?.(clip, 'confirmed-mismatch');
       }
     })();
 
@@ -3583,10 +3584,10 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
   useEffect(() => {
     const skip = sourceSession?.onSourceUnplayable;
     skipRef.current = skip
-      ? (reason: string) => {
+      ? (reason: string, verdict?: SourceVerdict) => {
           if (skippedFor.current === streamUrl) return;
           skippedFor.current = streamUrl;
-          skip(reason);
+          skip(reason, verdict);
         }
       : null;
   }, [sourceSession?.onSourceUnplayable, streamUrl]);
@@ -3611,7 +3612,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
       const failure = probeFailureRef.current;
       if (failure) {
         setError(failure.reason);
-        skipRef.current?.(failure.reason);
+        skipRef.current?.(failure.reason, verdictForProbeFailure(failure));
         return;
       }
 

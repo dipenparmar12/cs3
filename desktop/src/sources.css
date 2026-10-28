@@ -12865,6 +12865,8 @@ button.credit-card { border: 0; background: none; padding: 0; font: inherit; col
 .source-outcome--ok { color: #4ade80; }
 .source-outcome--before { color: rgba(74, 222, 128, 0.65); }
 .source-outcome--failed { color: #fbbf24; }
+/* Why a source was left (sourceVerdict.ts), under its description. */
+.source-outcome-label { color: #fbbf24; font-size: 0.75rem; }
 .player-panel__source-row--failed .player-panel__source-body { opacity: 0.72; }
 .player-panel__source-row--failed:hover .player-panel__source-body { opacity: 1; }
 

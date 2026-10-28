@@ -43,6 +43,7 @@ import type { NativeProviderSummary } from './cs3/nativeProviderRegistry';
 import type { DownloadRequestResult, DownloadTask } from '../src/types/download';
 import type { BackupAnalysis, RestorePlan, RestoreSummary } from '../src/types/backup';
 import type { SwarmReport } from '../src/types/torrent';
+import type { SourceVerdict } from '../src/utils/sourceVerdict';
 import type { TorrentContents } from './torrent/torrentContents';
 import type { TorrentImportRecord } from './torrent/torrentImport';
 import type { StorageReport } from './storage/appStorage.ts';
@@ -470,7 +471,8 @@ export interface CloudStreamElectronAPI {
   /** Abandons a source that started but will not play, and tries the next. */
   skipPlaybackSource: (
     sessionId: string,
-    reason: string
+    reason: string,
+    verdict?: SourceVerdict
   ) => Promise<Envelope & { snapshot: PlaybackSnapshot | null }>;
   playbackPlayNow: (
     sessionId: string
@@ -2213,8 +2215,8 @@ const api: CloudStreamElectronAPI = {
   startPlayback: (request, title, episodeTitle, options) =>
     ipcRenderer.invoke('playback:start', request, title, episodeTitle, options),
   playbackPlayNow: (sessionId) => ipcRenderer.invoke('playback:playNow', sessionId),
-  skipPlaybackSource: (sessionId, reason) =>
-    ipcRenderer.invoke('playback:skipSource', sessionId, reason),
+  skipPlaybackSource: (sessionId, reason, verdict) =>
+    ipcRenderer.invoke('playback:skipSource', sessionId, reason, verdict),
   playbackSelectSource: (sessionId, infoHash) =>
     ipcRenderer.invoke('playback:selectSource', sessionId, infoHash),
   playbackRefreshSources: (sessionId, widen) =>

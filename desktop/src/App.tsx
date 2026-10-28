@@ -47,6 +47,7 @@ import { episodeKey, loadWatchState } from './components/player/seriesContext';
 import { usePrivacy } from './utils/usePrivacy';
 import { ScrollToTop } from './components/ScrollToTop';
 import { durableAddress } from './utils/durableAddress';
+import type { SourceVerdict } from './utils/sourceVerdict';
 import { parseTorrentAddress, torrentAddress } from './utils/torrentAddress';
 import { canonicalKey } from '../electron/cs3/libraryStore';
 import { SCREEN_SEARCH_FOCUS_EVENT, screenSearchAvailable } from './utils/screenSearch';
@@ -1744,10 +1745,10 @@ export const App: React.FC = () => {
    * behave differently.
    */
   const handleSourceUnplayable = useCallback(
-    async (reason: string) => {
+    async (reason: string, verdict?: SourceVerdict) => {
       const id = sessionRef.current?.id;
       if (!id) return;
-      const response = await window.cloudstream?.skipPlaybackSource?.(id, reason);
+      const response = await window.cloudstream?.skipPlaybackSource?.(id, reason, verdict);
       if (response?.snapshot) {
         setSession((current) =>
           current && current.id === response.snapshot!.sessionId

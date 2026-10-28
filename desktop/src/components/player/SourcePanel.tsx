@@ -19,6 +19,7 @@ import {
   type SourceFilterState,
 } from '../../utils/sourceFilter';
 import { formatReleaseSize } from '../../utils/format';
+import { verdictLabel, type SourceVerdict } from '../../utils/sourceVerdict';
 
 /**
  * In-player source switcher.
@@ -71,7 +72,7 @@ interface SourcePanelProps {
   /** Offered per source, so a viewer can grab the release they are watching. */
   onDownload?: (source: TorrentResult) => void;
   /** Played / failed per source in this session. */
-  sourceStates?: Record<string, { state: 'played' | 'failed'; reason?: string }>;
+  sourceStates?: Record<string, { state: 'played' | 'failed'; reason?: string; verdict?: SourceVerdict }>;
   /** The row that is the release that played last time. */
   rememberedHash?: string;
 }
@@ -257,9 +258,9 @@ export const SourcePanel: React.FC<SourcePanelProps> = ({
               <AlertTriangle
                 size={12}
                 className="source-outcome source-outcome--failed"
-                aria-label="Did not play"
+                aria-label={verdictLabel(outcome.verdict)}
               >
-                <title>{`Tried, did not play${outcome.reason ? ` — ${outcome.reason}` : ''}`}</title>
+                <title>{`${verdictLabel(outcome.verdict)}${outcome.reason ? ` — ${outcome.reason}` : ''}`}</title>
               </AlertTriangle>
             )}
             {(outcome?.state === 'played' || playedBefore) && (
@@ -274,6 +275,9 @@ export const SourcePanel: React.FC<SourcePanelProps> = ({
             {source.title}
           </strong>
           <span>{describe(source, isDeveloper)}</span>
+          {outcome?.state === 'failed' && outcome.verdict && outcome.verdict !== 'unplayable' && (
+            <span className="source-outcome-label">{verdictLabel(outcome.verdict)}</span>
+          )}
           <div className="player-panel__source-facts">
             <span title="Seeders">
               <Users size={12} /> {source.seeders}

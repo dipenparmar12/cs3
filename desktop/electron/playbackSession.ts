@@ -5,6 +5,7 @@ import type { StreamHandle } from './torrent/torrentEngine';
 import type { SourceDiagnosis } from '../src/types/diagnostics';
 import type { BufferHealthMetrics } from '../src/types/media';
 import { describeError } from '../src/utils/errors.ts';
+import type { SourceVerdict } from '../src/utils/sourceVerdict.ts';
 
 /**
  * Owns one "the user pressed play" interaction, from the first click to the
@@ -110,7 +111,7 @@ export interface PlaybackSnapshot {
   title: string;
   episodeTitle?: string;
   /** Per source (by infoHash): played or failed in this session. */
-  sourceStates?: Record<string, { state: 'played' | 'failed'; reason?: string }>;
+  sourceStates?: Record<string, { state: 'played' | 'failed'; reason?: string; verdict?: SourceVerdict }>;
 }
 
 interface Session {
@@ -187,6 +188,8 @@ interface Session {
 export interface SourceState {
   state: 'played' | 'failed';
   reason?: string;
+  /** Why it was left, when the player knew (`sourceVerdict.ts`). */
+  verdict?: SourceVerdict;
 }
 
 /**
@@ -578,7 +581,8 @@ export class PlaybackSessionManager {
    */
   public async skipCurrentSource(
     sessionId: string,
-    reason: string
+    reason: string,
+    verdict?: SourceVerdict
   ): Promise<PlaybackSnapshot | null> {
     const session = this.sessions.get(sessionId);
     if (!session) return null;
@@ -594,7 +598,7 @@ export class PlaybackSessionManager {
     const current = session.activeInfoHash;
     if (current) {
       session.unplayable.add(current);
-      session.sourceStates.set(current, { state: 'failed', reason });
+      session.sourceStates.set(current, { state: 'failed', reason, verdict });
       const source = session.sources.find((s) => s.infoHash === current);
       if (source) {
         session.attempts.push({

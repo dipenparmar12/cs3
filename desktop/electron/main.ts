@@ -194,6 +194,7 @@ import type {
 import type { ExternalPlaybackSnapshot } from '../src/types/player';
 import type { MpvSnapshot } from '../src/types/mpv';
 import { describeError } from '../src/utils/errors.ts';
+import { asSourceVerdict } from '../src/utils/sourceVerdict.ts';
 import type { TitleInteractionQuery } from '../src/types/interactions';
 import { SHARE_SCHEME } from '../src/utils/shareLink.ts';
 import {
@@ -3891,7 +3892,7 @@ ipcMain.handle(
  * over. This is the opposite: the viewer chose nothing and the app owes them
  * the next candidate.
  */
-ipcMain.handle('playback:skipSource', async (_, sessionId: string, reason: string) => {
+ipcMain.handle('playback:skipSource', async (_, sessionId: string, reason: string, verdict?: unknown) => {
   try {
     diagnostics.record({
       level: 'warn',
@@ -3899,7 +3900,7 @@ ipcMain.handle('playback:skipSource', async (_, sessionId: string, reason: strin
       message: reason,
       detail: 'Source could not be played; advancing to the next.',
     });
-    return { ok: true, snapshot: await playbackSessions.skipCurrentSource(sessionId, reason) };
+    return { ok: true, snapshot: await playbackSessions.skipCurrentSource(sessionId, reason, asSourceVerdict(verdict)) };
   } catch (error) {
     return { ...fail(error), snapshot: null };
   }
