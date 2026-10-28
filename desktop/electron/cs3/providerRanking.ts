@@ -7,6 +7,7 @@ import type {
 } from '../../src/types/analytics';
 import { PRIOR_RATE, PRIOR_WEIGHT, ProviderAnalytics } from './providerAnalytics';
 import { languageScore } from './languageMatch.ts';
+import { rightContentRate } from './validationCounts.ts';
 
 /**
  * Turns measured behaviour into an order.
@@ -220,6 +221,28 @@ const CRITERIA: CriterionDefinition[] = [
         score: rate,
         samples,
         detail: `${record.stages.playback.successes} of ${samples} playback attempts started (${pct(rate)}).`,
+      };
+    },
+  },
+  {
+    id: 'right-content',
+    label: 'Right content',
+    description:
+      'Whether what this provider played was the title asked for, rather than an advert or a notice ' +
+      'the player recognised by its length and skipped.',
+    defaultWeight: 1,
+    minSamples: 2,
+    available: true,
+    evaluate(record) {
+      const { rate, samples, mismatches } = rightContentRate(record, PRIOR_WEIGHT, PRIOR_RATE);
+      if (rate === null) return { score: null, samples: 0, detail: 'Nothing played from this provider yet.' };
+      return {
+        score: rate,
+        samples,
+        detail:
+          mismatches === 0
+            ? `None of ${samples} plays was skipped as the wrong content.`
+            : `${mismatches} of ${samples} plays were not the title.`,
       };
     },
   },

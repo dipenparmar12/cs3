@@ -2011,6 +2011,7 @@ app.whenReady().then(async () => {
 
   // The player renders from these snapshots, so they must keep flowing for the
   // whole life of a session — source discovery, failover and switching alike.
+  playbackSessions.onVerdict((provider, verdict) => providerAnalytics.observeValidation(provider, verdict));
   playbackSessions.setNotifier((snapshot) => {
     if (mainWindow && !mainWindow.isDestroyed()) {
       mainWindow.webContents.send('playback:update', snapshot);

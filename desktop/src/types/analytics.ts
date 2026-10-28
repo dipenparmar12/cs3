@@ -75,6 +75,11 @@ export interface ProviderAnalyticsRecord {
   stages: Record<AnalyticsStage, StageCounters>;
   /** Failure categories and their counts. Categories, never raw messages. */
   failureKinds: Record<string, number>;
+  /**
+   * Why sources from this provider were left, by state (not the title,
+   * restricted, unavailable for now, invalid), counted (`cs3/validationCounts.ts`).
+   */
+  validation?: Record<string, number>;
 }
 
 /**

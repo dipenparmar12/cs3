@@ -228,6 +228,12 @@ export class PlaybackSessionManager {
     this.notify = notify;
   }
 
+  /** Told the provider and the verdict when a source is left for a known reason. */
+  private verdictListener: (provider: string, verdict: SourceVerdict) => void = () => {};
+  public onVerdict(listener: (provider: string, verdict: SourceVerdict) => void): void {
+    this.verdictListener = listener;
+  }
+
   private snapshot(session: Session): PlaybackSnapshot {
     return {
       sessionId: session.id,
@@ -606,6 +612,7 @@ export class PlaybackSessionManager {
           indexerName: source.indexerName,
           error: reason,
         });
+        if (verdict && source.providerName) this.verdictListener(source.providerName, verdict);
       }
 
       /**
