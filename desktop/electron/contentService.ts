@@ -57,6 +57,9 @@ import { planSourceScope, shouldEscalateScope } from './cs3/sourceScope';
 import { judgeProviderHit, type HitVerdict } from './cs3/providerHitMatch.ts';
 import { planDiscoveryWalk, walkDiscovery, type WalkOutcome, type WalkStop } from './cs3/discoveryWalk.ts';
 import { ProviderAttemptStore, type ProviderAttempt } from './cs3/providerAttempts.ts';
+
+/** The stored search mode: `ranked` (default) or `all`. In the backup's source preferences. */
+export const DISCOVERY_MODE_KEY = 'cs3_discovery_mode';
 import { canonicalKey } from './cs3/libraryStore.ts';
 import { pickEpisodeHandle } from './cs3/episodeMatch.ts';
 
@@ -431,6 +434,7 @@ export class ContentService {
   }
 
   constructor(datastore: DatastoreManager, plugins: PluginManager, engine: TorrentEngine) {
+    this.settings = datastore;
     this.registry = new IndexerRegistry(datastore);
     this.plugins = plugins;
     this.engine = engine;
@@ -1141,6 +1145,8 @@ export class ContentService {
       escalated?: boolean;
     } = {}
   ): Promise<SourceResponse> {
+    // Search all providers is the exhaustive walk, chosen once in Settings.
+    if (!request.exhaustive && this.discoveryMode() === 'all') request = { ...request, exhaustive: true };
     const bypass = Boolean(options.bypassCache);
     const autoWiden = options.autoWiden ?? true;
     return this.inFlightSources.run(
@@ -2482,6 +2488,17 @@ export class ContentService {
 
   /** What each provider answered for each work (`cs3/providerAttempts.ts`). */
   private attempts: ProviderAttemptStore;
+  private readonly settings: DatastoreManager;
+
+  /**
+   * Search mode (Playback Source Resolution PRD §4.4): `ranked` walks providers
+   * in ranked batches inside a budget and stops at the first verified source;
+   * `all` asks every provider every time, as a second Find more sources does.
+   * A fallback strategy, separate from "Providers searched at once".
+   */
+  private discoveryMode(): 'ranked' | 'all' {
+    return this.settings.getString(DISCOVERY_MODE_KEY, 'ranked', true) === 'all' ? 'all' : 'ranked';
+  }
 
   public getProviderAttempts(): ProviderAttemptStore {
     return this.attempts;

@@ -56,7 +56,7 @@ import { StoragePanel } from '../components/settings/StoragePanel';
 import { BackupPanel } from '../components/settings/BackupPanel';
 import { DeveloperPanel, SupportCard, SupportSettings } from '../components/settings/SupportPanels';
 import { useSupportCardDismissed } from '../components/settings/useSupportCard';
-import { Button, SearchInput, Switch } from '../components/ui';
+import { Button, SearchInput, Select, Switch } from '../components/ui';
 
 /**
  * `all` is a view, not a category.
@@ -161,6 +161,13 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ initialTab }) => {
     def: number;
   } | null>(null);
   const [prefetchSources, setPrefetchSources] = useState(true);
+  const [discoveryMode, setDiscoveryMode] = useState<'ranked' | 'all'>('ranked');
+
+  useEffect(() => {
+    void window.cloudstream?.getSetting?.('cs3_discovery_mode', 'ranked').then((value) => {
+      setDiscoveryMode(value === 'all' ? 'all' : 'ranked');
+    });
+  }, []);
 
   useEffect(() => {
     void window.cloudstream?.getSourcePrefetchSetting?.().then((response) => {
@@ -522,6 +529,35 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ initialTab }) => {
                   <span>{concurrency.value}</span>
                 </div>
               )}
+            </SettingRow>
+
+            <SettingRow
+              label="Search mode"
+              note={discoveryMode === 'all' ? 'Search all providers' : 'Best providers first'}
+              keywords="discovery find more sources fallback sequential all providers"
+              hint={
+                <>
+                  When a title’s own source does not play, CloudStream looks for it on other
+                  providers. Best providers first asks them in ranked batches and stops once a
+                  verified source is found, which is usually much faster. Search all providers
+                  asks every one, every time. Nothing found this way plays by itself either way.
+                </>
+              }
+            >
+              <Select
+                size="compact"
+                aria-label="Search mode"
+                value={discoveryMode}
+                onChange={(event) => {
+                  const next = event.target.value === 'all' ? 'all' : 'ranked';
+                  setDiscoveryMode(next);
+                  void window.cloudstream?.setSetting?.('cs3_discovery_mode', next);
+                }}
+                options={[
+                  { value: 'ranked', label: 'Best providers first' },
+                  { value: 'all', label: 'Search all providers' },
+                ]}
+              />
             </SettingRow>
 
             {/*

@@ -123,7 +123,7 @@ export const DATASTORE_CATEGORIES: DatastoreCategory[] = [
     label: 'Source preferences',
     description: 'How sources are found and ranked.',
     group: 'sources',
-    keys: ['torrent_source_preferences', 'prefetch_sources_on_detail', 'cs3_provider_search_concurrency'],
+    keys: ['torrent_source_preferences', 'prefetch_sources_on_detail', 'cs3_provider_search_concurrency', 'cs3_discovery_mode'],
   },
   {
     id: 'extensionPrefs',
@@ -263,6 +263,7 @@ const KEY_LABELS: Record<string, string> = {
   torrent_source_preferences: 'Torrent source preferences',
   prefetch_sources_on_detail: 'Load sources while you read',
   cs3_provider_search_concurrency: 'Providers searched at once',
+  cs3_discovery_mode: 'Search mode',
   extension_update_settings: 'Extension updates',
   cs3_adult_content_mode: 'Adult content',
   cs3_adult_content_enabled: 'Adult content (older setting)',
