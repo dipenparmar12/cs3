@@ -1541,3 +1541,26 @@ over the scratch profile's 17 archives, 19 providers: **391 s**. 12 reached link
 The most common failure (6 providers) is S4: a search for a title the provider itself listed on
 its home page finds nothing. That is the round trip the PRD asks for (H-05), and it is a
 provider-side finding, not an app one.
+
+**With the network worker (S0–S9), same profile, later that day:** 19 providers in **524 s**;
+compatible 11 · walled 3 · extraction-only 2 · plugin-broken 2 · site-down 1. 29 sources reached,
+inspected and routed. Each one got the same strategy on all 8 machine profiles: `HLS_NATIVE` 25,
+`DIRECT` 4, and no AC-3/DTS or DRM rule broken. The probes read 8.6 MB in all, at most 2.0 MB per
+source. Grepping the run for tokens and signatures found nothing.
+- **Electron's main process has no usable stdin on Windows.** The worker
+  (`tools/audit/net-worker.cjs`) is driven over a loopback port guarded by a token. It quits
+  when its parent's pid dies. `ELECTRON_RUN_AS_NODE`, if present at all (even empty), starts it
+  as plain Node with no `net`, so the variable is deleted, not blanked.
+- **`session.fetch` refuses `redirect: 'manual'`** ("Redirect was cancelled"), and its
+  `response.url` stays the URL that was asked for. Redirects are followed, and their chain is
+  read from `webRequest.onBeforeRedirect`.
+- **Probe slices decide what an inspection costs.** With 4 MB per open range, one MP4 probe read
+  8.8 MB (the head, then the moov at the tail). With 1 MB it read 2.7 MB, because ffprobe asks
+  again only where it needs more.
+- **Two verdict rules came from live data.** CineStream's `mainUrl` front page
+  (cinemeta-catalogs.strem.io) answers 404 while every later stage passes; it was called
+  `site-down`. Now a failed S2 is `site-down` only when no content stage passed. Anichi declares
+  `mainUrl = "NONE"`, so S2 is `skipped: not-offered`, not a dead site.
+- AniStream's HLS needs its Referer and ignores Range. AllWish's MegaPlay playlist fails with
+  `net::ERR_FAILED` on 3 of 3 tries; this was not investigated. CineTmdb's MovieBox CDN answers
+  429 (`inconclusive: rate-limited`).

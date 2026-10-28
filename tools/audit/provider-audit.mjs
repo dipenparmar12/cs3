@@ -10,11 +10,15 @@
  * the same JSON-RPC the app uses, writes one journal line per stage, and
  * reduces the journal into reports.
  *
- * Built so far: S0 discover, S1 load, S2 declaration, S3 catalogue, S4 search
- * (round trip on a title the provider listed), S5 detail, S6 links. S2's site
- * check and S7–S10 need the headless Electron network worker (PRD §5.1, M3),
- * which does not exist yet; they are written as `skipped: stage-filter`, never
- * as a pass and never as a failure.
+ * Stages: S0 discover, S1 load, S2 site (declaration, and one GET of its front
+ * page), S3 catalogue, S4 search (round trip on a title the provider listed),
+ * S5 detail, S6 links, then for up to three links S7 reach (HEAD, a one-byte
+ * range probe, a 64 KB read, and a header differential on a 401/403), S8
+ * inspect (the shipping `MediaProxy` and `MediaInspector`, under a 16 MB cap)
+ * and S9 route (`decideStrategy` on eight machine profiles). Every source byte
+ * goes through the headless Electron worker (`net-worker.cjs`), so Chromium's
+ * network judges the source as the app's would. S10 (playback) is not built
+ * and is written `skipped: stage-filter`, never as a pass or a failure.
  *
  * Usage (from the repo root; Java 21 and sidecar/target/cs3-sidecar.jar needed):
  *   node --experimental-strip-types tools/audit/provider-audit.mjs list --profile <userData dir>
@@ -25,7 +29,8 @@
  *   node --experimental-strip-types tools/audit/provider-audit.mjs diff <runIdA> <runIdB>
  *
  * Options: --archive <file.cs3> (repeatable) · --include-adult · --rows 2 ·
- * --out <dir> (default tools/audit/runs) · --java <path> · --verbose
+ * --offline (S0–S6 only, no network worker) · --out <dir> (default
+ * tools/audit/runs) · --java <path> · --verbose
  *
  * A maintainer tool: it contacts third-party sites, one request at a time per
  * provider. Exit code: 0 ran to completion (even with failures) · 1 diff found
@@ -41,7 +46,12 @@ import { fileURLToPath } from 'node:url';
 
 import { Sidecar, resolveJava } from '../e2e/catalogue-e2e.mjs';
 import { attribute } from '../../desktop/electron/cs3/audit/attribution.ts';
-import { HostLimiter } from '../../desktop/electron/cs3/audit/budget.ts';
+import { BYTE_CAPS, ByteMeter, HostLimiter } from '../../desktop/electron/cs3/audit/budget.ts';
+import { judgeInspection, judgeRoute } from '../../desktop/electron/cs3/audit/mediaEvidence.ts';
+import { judgeReach, judgeSite } from '../../desktop/electron/cs3/audit/networkEvidence.ts';
+import { MediaInspector } from '../../desktop/electron/media/mediaInspector.ts';
+import { MediaProxy } from '../../desktop/electron/mediaProxy.ts';
+import { NetWorker, meteredFetch } from './net-client.mjs';
 import { diffRuns, hasRegressions } from '../../desktop/electron/cs3/audit/diff.ts';
 import {
   AUDIT_SCHEMA_VERSION,
@@ -67,8 +77,15 @@ const REPO_ROOT = path.resolve(HERE, '..', '..');
 const DEFAULT_OUT = path.join(HERE, 'runs');
 const RPC_TIMEOUT_MS = 90_000;
 const LOAD_TIMEOUT_MS = 180_000;
-/** Stages this version can run; the rest need the network worker. */
-const RUNNABLE = new Set(['S0', 'S1', 'S2', 'S3', 'S4', 'S5', 'S6']);
+/** The ffprobe the app ships (`build-media-runtime.mjs`), else one on PATH. */
+const FFPROBE = (() => {
+  const exe = process.platform === 'win32' ? 'ffprobe.exe' : 'ffprobe';
+  const candidates = [
+    path.join(REPO_ROOT, 'desktop', 'media-runtime', exe),
+    ...(process.env.PATH ?? '').split(path.delimiter).map((dir) => path.join(dir, exe)),
+  ];
+  return candidates.find((file) => file && fs.existsSync(file)) ?? null;
+})();
 
 // --- arguments ----------------------------------------------------------------
 
@@ -84,6 +101,7 @@ function parseArgs(argv) {
     else if (arg === '--out') args.out = path.resolve(next());
     else if (arg === '--java') args.java = next();
     else if (arg === '--include-adult') args.includeAdult = true;
+    else if (arg === '--offline') args.offline = true;
     else if (arg === '--verbose') args.verbose = true;
     else if (arg.startsWith('--')) throw new Error(`Unknown option ${arg}`);
     else args.positional.push(arg);
@@ -202,12 +220,20 @@ class Journal {
       const message = printable(String(record.message), 400);
       record.cause = classifyFailure(message);
       record.groupingForm = printable(groupingForm(message));
-      record.owner = attribute({ stage: record.stage, cause: record.cause, reason: record.reason });
+      record.owner = attribute({
+        stage: record.stage,
+        cause: record.cause,
+        reason: record.reason,
+        siteAlive: record.siteAlive,
+        sourceValid: record.sourceValid,
+      });
     } else if (record.outcome === 'inconclusive') {
       record.owner = attribute({ stage: record.stage, reason: record.reason });
     }
     // The provider's message is kept as its grouping form only: it can carry URLs.
     delete record.message;
+    delete record.siteAlive;
+    delete record.sourceValid;
     fs.writeSync(this.fd, `${JSON.stringify(record)}\n`);
     fs.fsyncSync(this.fd);
     return record;
@@ -271,14 +297,15 @@ async function politely(host, work) {
 }
 
 /** S2–S6 for one provider of a loaded archive. */
-async function auditProvider(sidecar, journal, base, descriptor, args) {
+async function auditProvider(sidecar, net, journal, base, descriptor, args) {
   const decl = declaration(descriptor);
   const providerId = `${base.internalName}/${decl.name}`;
+  let siteAlive;
   const common = { ...base, providerId };
   const written = new Set();
   const write = (fields) => {
     written.add(fields.stage);
-    return journal.write({ ...common, ...fields });
+    return journal.write({ siteAlive, ...common, ...fields });
   };
   const host = hostOf(decl.mainUrl) ?? decl.name;
   const ask = (method, params) => politely(host, () => sidecar.call(method, params, RPC_TIMEOUT_MS));
@@ -290,17 +317,26 @@ async function auditProvider(sidecar, journal, base, descriptor, args) {
     return { providerId, line: 'skipped (adult-only)' };
   }
   write({ stage: 'S1', outcome: 'pass', evidence: { tier: base.tier } });
-  // The declaration half of S2; the site check needs the network worker.
-  write({
-    stage: 'S2',
-    outcome: 'skipped',
-    reason: 'stage-filter',
-    evidence: { mainUrlHost: hostOf(decl.mainUrl), hasMainPage: decl.hasMainPage, types: decl.types },
-  });
+  // S2: the declaration, and one GET of the site's front page.
+  const declared = { mainUrlHost: hostOf(decl.mainUrl), hasMainPage: decl.hasMainPage, types: decl.types };
+  // Some providers declare `mainUrl = "NONE"` (Anichi): there is no site to ask.
+  if (!net || !/^https?:\/\//i.test(decl.mainUrl ?? '')) {
+    write({ stage: 'S2', outcome: 'skipped', reason: net ? 'not-offered' : 'stage-filter', evidence: declared });
+  } else {
+    try {
+      const site = await siteCheck(net, decl.mainUrl);
+      siteAlive = site.judged.outcome === 'pass';
+      write({ stage: 'S2', ...site.judged, evidence: { ...declared, ...site.judged.evidence }, ms: site.ms, bytes: site.bytes });
+    } catch (error) {
+      if (!(error instanceof HostCooling)) throw error;
+      write({ stage: 'S2', outcome: 'inconclusive', reason: 'rate-limited', evidence: declared });
+    }
+  }
 
   let catalogueItems = [];
   let searchHits = [];
   let linked = 0;
+  let sourceLinks = [];
   try {
     // S3: a couple of catalogue rows.
     {
@@ -365,6 +401,7 @@ async function auditProvider(sidecar, journal, base, descriptor, args) {
       write({ stage: 'S6', candidate, ...links, links: undefined, quirks: undefined, ms: linksMs });
       if (links.outcome === 'pass') {
         linked = links.links.length;
+        sourceLinks = links.links;
         break;
       }
     }
@@ -380,14 +417,179 @@ async function auditProvider(sidecar, journal, base, descriptor, args) {
     }
   }
 
-  for (const stage of STAGES.filter((s) => !RUNNABLE.has(s))) {
-    write({ stage, outcome: 'skipped', reason: 'stage-filter' });
+  // S7–S9 on up to three of the links S6 found.
+  let reached = 0;
+  let inspected = 0;
+  if (!net) {
+    for (const stage of ['S7', 'S8', 'S9']) write({ stage, outcome: 'skipped', reason: 'stage-filter' });
+  } else if (sourceLinks.length === 0) {
+    for (const stage of ['S7', 'S8', 'S9']) write({ stage, outcome: 'blocked', reason: 'earlier-stage-failed' });
+  } else {
+    let providerBytes = 0;
+    for (const link of sourceLinks.slice(0, SOURCES_PER_PROVIDER)) {
+      const candidate = `${String(link.source ?? 'link').slice(0, 40)} ${link.quality ?? '?'}p #${sourceLinks.indexOf(link) + 1}`;
+      let result;
+      try {
+        result = await auditSource(net, decl, link, args);
+      } catch (error) {
+        if (!(error instanceof HostCooling)) throw error;
+        write({ stage: 'S7', candidate, outcome: 'inconclusive', reason: 'rate-limited', evidence: { host: hostOf(link.url) } });
+        write({ stage: 'S8', candidate, outcome: 'blocked', reason: 'earlier-stage-failed' });
+        write({ stage: 'S9', candidate, outcome: 'blocked', reason: 'earlier-stage-failed' });
+        continue;
+      }
+      providerBytes += result.bytes;
+      write({ stage: 'S7', candidate, ...result.reach, sniff: undefined, quirks: undefined, range: undefined, ms: result.reachMs, bytes: result.reachBytes });
+      if (result.reach.outcome === 'pass') reached++;
+      if (result.inspect) {
+        write({ stage: 'S8', candidate, ...result.inspect, sourceValid: true, ms: result.inspectMs, bytes: result.inspectBytes });
+        if (result.inspect.outcome === 'pass') inspected++;
+      } else {
+        write({ stage: 'S8', candidate, outcome: 'blocked', reason: 'earlier-stage-failed' });
+      }
+      if (result.route) write({ stage: 'S9', candidate, ...result.route, sourceValid: true });
+      else write({ stage: 'S9', candidate, outcome: 'blocked', reason: 'earlier-stage-failed' });
+      if (providerBytes >= BYTE_CAPS.provider) break;
+    }
   }
-  return { providerId, line: `${catalogueItems.length} catalogue items · ${searchHits.length} hits · ${linked} links` };
+
+  // S10 (does it play?) is opt-in in the PRD and not built.
+  write({ stage: 'S10', outcome: 'skipped', reason: 'stage-filter' });
+  return {
+    providerId,
+    line: `${catalogueItems.length} catalogue items · ${searchHits.length} hits · ${linked} links · ${reached} reached · ${inspected} inspected`,
+  };
+}
+
+const SOURCES_PER_PROVIDER = 3;
+/** One S2 answer per host per run: providers sharing a site share its evidence (§6.6). */
+const siteCache = new Map();
+
+async function siteCheck(net, mainUrl) {
+  const host = hostOf(mainUrl) ?? mainUrl;
+  if (!siteCache.has(host)) {
+    siteCache.set(
+      host,
+      (async () => {
+        const started = Date.now();
+        const answer = await politely(host, () => net.fetch({ url: mainUrl, cap: 16 * 1024, timeoutMs: 15_000 }));
+        return { judged: judgeSite(answer), ms: Date.now() - started, bytes: answer.bytes ?? 0 };
+      })()
+    );
+  }
+  return siteCache.get(host);
+}
+
+/** The request headers a provider gave a link: its own, plus its Referer. */
+function linkHeaders(link) {
+  const headers = { ...(link.headers ?? {}) };
+  if (link.referer && !Object.keys(headers).some((k) => k.toLowerCase() === 'referer')) headers.Referer = link.referer;
+  return headers;
+}
+
+const isOk = (answer) => answer?.ok && (answer.status === 200 || answer.status === 206);
+
+/** S7's request ladder (§6.5), then S8 and S9 if the body is media. */
+async function auditSource(net, decl, link, args) {
+  const url = String(link.url);
+  const type = String(link.linkType ?? link.type ?? '');
+  const declared = { isM3u8: link.isM3u8 === true, isDash: link.isDash === true, torrent: type === 'TORRENT' || type === 'MAGNET', drm: Boolean(link.drm) };
+  const host = hostOf(url) ?? 'unknown';
+  const out = { reachBytes: 0, inspectBytes: 0, bytes: 0 };
+  const started = Date.now();
+  const ask = (request) =>
+    politely(host, async () => {
+      const answer = await net.fetch({ timeoutMs: 15_000, ...request, url });
+      out.reachBytes += answer.bytes ?? 0;
+      return answer;
+    });
+
+  let steps = { url, declared };
+  if (!declared.torrent && /^https?:/i.test(url)) {
+    let headers = linkHeaders(link);
+    const head = await ask({ method: 'HEAD', headers });
+    let probe = await ask({ headers: { ...headers, Range: 'bytes=0-0' }, cap: 1 });
+    const requires = [];
+    if (probe.ok && (probe.status === 401 || probe.status === 403)) {
+      // The differential test: what does the source want that it was not given?
+      const variants = [];
+      if (decl.mainUrl && !headers.Referer) variants.push({ add: 'Referer', headers: { ...headers, Referer: decl.mainUrl } });
+      variants.push({ add: 'no User-Agent override', headers, noUserAgent: true });
+      for (const variant of variants) {
+        const retry = await ask({ headers: { ...variant.headers, Range: 'bytes=0-0' }, cap: 1, noUserAgent: variant.noUserAgent });
+        if (isOk(retry)) {
+          headers = variant.headers;
+          probe = retry;
+          requires.push(variant.add);
+          break;
+        }
+      }
+    } else if (isOk(probe) && headers.Referer) {
+      // It worked with the provider's Referer; is that Referer what made it work?
+      const { Referer: _dropped, ...without } = headers;
+      const bare = await ask({ headers: { ...without, Range: 'bytes=0-0' }, cap: 1 });
+      if (bare.ok && (bare.status === 401 || bare.status === 403)) requires.push('Referer');
+    }
+    const read = await ask({ headers: { ...headers, Range: `bytes=0-${BYTE_CAPS.sniff - 1}` }, cap: BYTE_CAPS.sniff });
+    steps = { url, declared, head, probe, read, requires };
+    out.headers = headers;
+  }
+  out.reach = judgeReach(steps);
+  out.reachMs = Date.now() - started;
+  out.bytes = out.reachBytes;
+  if (out.reach.outcome !== 'pass') return out;
+
+  // S8: the shipping proxy and inspector, over the worker, under the source's byte cap.
+  if (!FFPROBE) {
+    out.inspect = { outcome: 'inconclusive', reason: 'host-capability-absent', evidence: { missing: 'ffprobe' } };
+    return out;
+  }
+  const meter = new ByteMeter(BYTE_CAPS.inspect);
+  const proxy = new MediaProxy(meteredFetch(net, meter));
+  const inspectStarted = Date.now();
+  try {
+    const loop = await proxy.wrap(url, out.headers ?? linkHeaders(link), { boundedRanges: out.reach.range === 'refused' });
+    const inspector = new MediaInspector(
+      () => FFPROBE,
+      (target) => loopbackText(target, 64 * 1024),
+      (target, bytes) => loopbackBytes(target, bytes)
+    );
+    const inspection = await inspector.inspect(loop, declared.isM3u8);
+    out.inspect = judgeInspection(inspection, meter.exhausted);
+    if (out.inspect.outcome === 'pass' && inspection.metadata) {
+      out.route = judgeRoute(inspection.metadata, inspection.transport, inspection.drm);
+    }
+  } catch (error) {
+    out.inspect = meter.exhausted
+      ? { outcome: 'inconclusive', reason: 'budget-exhausted', evidence: {} }
+      : { outcome: 'fail', message: String(error?.message ?? error), evidence: {} };
+  } finally {
+    proxy.shutdown();
+  }
+  out.inspectMs = Date.now() - inspectStarted;
+  out.inspectBytes = meter.bytes;
+  out.bytes += meter.bytes;
+  return out;
+}
+
+/** Reads from the audit's own loopback proxy, which is metered; Node's fetch never leaves 127.0.0.1 here. */
+async function loopbackText(url, bytes) {
+  const body = await loopbackBytes(url, bytes);
+  return body ? new TextDecoder().decode(body) : null;
+}
+
+async function loopbackBytes(url, bytes) {
+  try {
+    const response = await fetch(url, { headers: { Range: `bytes=0-${bytes - 1}` }, signal: AbortSignal.timeout(20_000) });
+    if (!response.ok && response.status !== 206) return null;
+    return new Uint8Array(await response.arrayBuffer()).subarray(0, bytes);
+  } catch {
+    return null;
+  }
 }
 
 /** One archive: copy, load, audit each provider, unload. */
-async function auditArchive(sidecar, journal, archive, workDir, args, done) {
+async function auditArchive(sidecar, net, journal, archive, workDir, args, done) {
   if (!archive.file) {
     for (const name of archive.providers.filter((n) => matchesProvider(args, n))) {
       const providerId = `${archive.internalName}/${name}`;
@@ -423,7 +625,7 @@ async function auditArchive(sidecar, journal, archive, workDir, args, done) {
       const providerId = `${archive.internalName}/${name}`;
       if (!matchesProvider(args, name) || done.has(providerId)) continue;
       try {
-        lines.push(await auditProvider(sidecar, journal, base, descriptor, args));
+        lines.push(await auditProvider(sidecar, net, journal, base, descriptor, args));
       } catch (error) {
         journal.write({ ...base, providerId, stage: 'S3', outcome: 'fail', message: String(error?.message ?? error) });
         lines.push({ providerId, line: `audit error: ${error?.message ?? error}` });
@@ -508,7 +710,7 @@ function writeReports(runDir, discoveredIds) {
       .sort((a, b) => a.providerId.localeCompare(b.providerId))
       .map((r) => `| ${r.providerId} | ${r.deepest ? `${r.deepest} ${STAGE_LABELS[r.deepest]}` : '—'} | ${r.verdict} |`),
     '',
-    'S2 site checks and S7–S10 need the network worker and were not run.',
+    'S10 (playback) is not built and was not run.',
     '',
   ].join('\n');
   fs.writeFileSync(path.join(runDir, 'summary.md'), md);
@@ -620,6 +822,8 @@ async function main() {
   const workDir = path.join(runDir, 'work');
   // The app's heap, not a tool's: a smaller one fails translations the app completes.
   const sidecar = new Sidecar(java, path.join(workDir, 'runtime'), { heapMb: jvmHeapMb(os.totalmem()) });
+  // Every source byte through Chromium's network; `--offline` runs S0–S6 only.
+  const net = args.offline ? null : new NetWorker(path.join(workDir, 'net-worker'));
   const journal = new Journal(path.join(runDir, 'journal.ndjson'), manifest.runId);
   let cancelled = false;
   process.once('SIGINT', () => {
@@ -630,6 +834,10 @@ async function main() {
   console.log(`Run ${manifest.runId}: ${selected.length} archive(s)${done.size ? `, ${done.size} provider(s) already done` : ''}`);
   try {
     sidecar.start();
+    if (net) {
+      await net.start();
+      console.log(`Network worker: Electron ${net.electron}; ffprobe: ${FFPROBE ?? 'missing (S8 will be inconclusive)'}`);
+    }
     const status = await sidecar.call('status', {}, 30_000);
     if (!status.ok || !status.result?.canExecute) {
       throw new Error(`The sidecar cannot run providers: ${status.error ?? status.result?.reason ?? 'no reason given'}`);
@@ -637,7 +845,7 @@ async function main() {
     for (const archive of selected) {
       if (cancelled) break;
       const started = Date.now();
-      const lines = await auditArchive(sidecar, journal, archive, workDir, args, done);
+      const lines = await auditArchive(sidecar, net, journal, archive, workDir, args, done);
       for (const { providerId, line } of lines) {
         console.log(`  ${providerId.padEnd(40)} ${line}  (${((Date.now() - started) / 1000).toFixed(1)} s)`);
       }
@@ -650,6 +858,7 @@ async function main() {
   } finally {
     journal.close();
     await sidecar.stop();
+    await net?.stop();
     manifest.endedAt = new Date().toISOString();
     writeManifest();
     // The JVM held the copied archives; it has exited, so the work files can go.

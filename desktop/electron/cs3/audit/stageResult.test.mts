@@ -61,6 +61,13 @@ test('a provider that needs the viewer to sign in is skipped, unless it gave con
   assert.equal(verdict(r('S1', 'pass'), r('S3', 'skipped', { reason: 'needs-credentials' }), r('S4', 'pass')), 'browse-only');
 });
 
+test('a dead front page does not outrank a catalogue that answers', () => {
+  const site = r('S2', 'fail', { owner: 'site' });
+  assert.equal(verdict(r('S1', 'pass'), site, r('S3', 'fail', { owner: 'site' })), 'site-down');
+  assert.equal(verdict(r('S1', 'pass'), site, r('S3', 'pass'), r('S6', 'pass'), r('S7', 'pass'), r('S8', 'pass'), r('S9', 'pass')), 'compatible');
+  assert.equal(verdict(r('S1', 'pass'), site, r('S3', 'pass'), r('S6', 'fail', { owner: 'provider-plugin' })), 'plugin-broken');
+});
+
 test('a failure the environment caused does not make a plugin broken', () => {
   assert.equal(verdict(r('S3', 'pass'), r('S4', 'fail', { owner: 'environment' })), 'browse-only');
 });

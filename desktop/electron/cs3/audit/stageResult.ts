@@ -70,12 +70,13 @@ export function deriveVerdict(stages: Map<Stage, StageSummary>): ProviderVerdict
   if (present.length === 0 || present.every((s) => s.outcome === 'skipped')) return 'skipped';
   if (passed('S10')) return 'verified-playback';
   if (is('S1', 'fail')) return 'plugin-broken';
-  if (is('S2', 'fail')) return 'site-down';
+  const content: Stage[] = ['S3', 'S4', 'S5', 'S6'];
+  // A dead front page with a working catalogue is an API host, not a dead site (CineStream's 404s, measured).
+  if (is('S2', 'fail') && !content.some(passed)) return 'site-down';
   if (passed('S8')) return is('S9', 'fail') ? 'app-gap' : 'compatible';
   if (passed('S7')) return is('S8', 'fail') && owners('S8').has('app-media') ? 'app-gap' : 'reachable-only';
   if (walledAt('S2') || walledAt('S3') || walledAt('S7')) return 'walled';
   // Wants the viewer's account and gave nothing without it: not testable, not broken.
-  const content: Stage[] = ['S3', 'S4', 'S5', 'S6'];
   if (
     !content.some(passed) &&
     present.some((s) => s.outcome === 'skipped' && s.records.some((r) => r.reason === 'needs-credentials'))
