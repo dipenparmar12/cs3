@@ -733,7 +733,7 @@ export const DetailView: React.FC<DetailViewProps> = ({
             ]);
             if (cancelled) return;
             setRecovering(null);
-            for (const match of sameWorkMatches(reply?.results ?? [], wanted, mediaItem.year)) {
+            for (const match of sameWorkMatches(reply?.results ?? [], wanted, mediaItem.year, mediaItem.type)) {
               if (routes.includes(match.url)) continue;
               routes.push(match.url);
               recoveredNames.set(match.url, match.apiName);

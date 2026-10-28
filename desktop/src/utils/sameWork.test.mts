@@ -36,3 +36,12 @@ test('rows without an address are skipped and the list is capped', () => {
   assert.equal(sameWorkMatches(many, 'Kill').length, 4);
   assert.deepEqual(sameWorkMatches([{ ...row('Kill', 'A'), url: '' }], 'Kill'), []);
 });
+
+test('a film and a series of the same name never match; an unsettled type does not block', () => {
+  const film = { ...row('Fargo', 'A', 1996), type: 'Movie' };
+  const show = { ...row('Fargo', 'B', 2014), type: 'TvSeries' };
+  const unknown = { ...row('Fargo', 'C'), type: 'Documentary' };
+  assert.deepEqual(sameWorkMatches([film, show, unknown], 'Fargo', undefined, 'TvSeries').map((r) => r.apiName), ['B', 'C']);
+  assert.deepEqual(sameWorkMatches([film, show], 'Fargo', undefined, 'AnimeMovie').map((r) => r.apiName), ['A']);
+  assert.equal(sameWorkMatches([film, show], 'Fargo').length, 2, 'no wanted type: both kept');
+});
