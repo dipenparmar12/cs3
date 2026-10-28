@@ -395,6 +395,10 @@ export const SearchView: React.FC<SearchViewProps> = ({
         });
         setMenuNotice(`Saved “${item.name}” to Plan to watch.`);
       },
+      async askAgain(item, provider) {
+        await window.cloudstream?.forgetProviderAttempt?.(item.name, item.year, provider);
+        onSelectMedia(item);
+      },
       hideProvider(provider) {
         setHiddenProviders((current) => new Set([...current, provider]));
         setMenuNotice(`Hiding results from ${provider} in this search.`);
@@ -424,7 +428,7 @@ export const SearchView: React.FC<SearchViewProps> = ({
         setMenuNotice(`${provider} is turned off. Turn it back on in Extensions.`);
       },
     }),
-    [setMenuNotice]
+    [setMenuNotice, onSelectMedia]
   );
 
   /**

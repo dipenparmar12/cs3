@@ -79,6 +79,18 @@ export class ProviderAttemptStore {
     return (work, provider) => (provider ? index.get(`${work}\u0000${provider}`) : undefined);
   }
 
+  /**
+   * Drops one provider's answer for one work, so the card stops saying what it
+   * said and the next look asks it fresh (the card's "Ask again", PRD §7.6).
+   */
+  public forget(work: string, provider: string): boolean {
+    const stored = this.live();
+    const kept = stored.filter((a) => !(a.work === work && a.provider === provider));
+    if (kept.length === stored.length) return false;
+    this.backing.setObject(KEY, kept);
+    return true;
+  }
+
   public count(): number {
     return this.live().length;
   }

@@ -2379,6 +2379,17 @@ ipcMain.handle('interactions:visit', async (_, title: string, year?: number) => 
 });
 
 /** Forgets which titles have been opened. The only control over this ledger. */
+ipcMain.handle('interactions:forgetAttempt', async (_, title: string, year: number | undefined, provider: string) => {
+  try {
+    const forgotten = contentService
+      .getProviderAttempts()
+      .forget(canonicalKey(String(title ?? ''), typeof year === 'number' ? year : undefined), String(provider ?? ''));
+    return { ok: true, forgotten };
+  } catch (error) {
+    return { ...fail(error), forgotten: false };
+  }
+});
+
 ipcMain.handle('interactions:clearVisits', async () => {
   try {
     return { ok: true, cleared: titleInteractions.clearVisits() };

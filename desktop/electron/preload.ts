@@ -304,6 +304,8 @@ export interface CloudStreamElectronAPI {
   ) => Promise<Envelope & { visit: VisitRecord | null }>;
   /** Forgets which titles have been opened. Returns how many there were. */
   clearTitleVisits: () => Promise<Envelope & { cleared: number }>;
+  /** Forgets what one provider answered for one work (the card's mark), so it is asked fresh. */
+  forgetProviderAttempt: (title: string, year: number | undefined, provider: string) => Promise<Envelope & { forgotten: boolean }>;
   /** Drops every cached record. Returns how many there were. */
   clearExtendedMetadata: () => Promise<Envelope & { cleared: number }>;
   /** Searches public repositories (YouTube) keylessly for trailers and promos of any content. */
@@ -2168,6 +2170,7 @@ const api: CloudStreamElectronAPI = {
   summariseInteractions: (queries) => ipcRenderer.invoke('interactions:summarise', queries),
   recordTitleVisit: (title, year) => ipcRenderer.invoke('interactions:visit', title, year),
   clearTitleVisits: () => ipcRenderer.invoke('interactions:clearVisits'),
+  forgetProviderAttempt: (title, year, provider) => ipcRenderer.invoke('interactions:forgetAttempt', title, year, provider),
   clearExtendedMetadata: () => ipcRenderer.invoke('metadata:clearCache'),
   findTrailers: (title, year) => ipcRenderer.invoke('metadata:findTrailers', title, year),
   findRelatedMedia: (request) => ipcRenderer.invoke('metadata:findRelatedMedia', request),

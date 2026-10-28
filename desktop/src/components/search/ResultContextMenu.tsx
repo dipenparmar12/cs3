@@ -1,5 +1,5 @@
 import React, { createContext, useContext, useEffect, useLayoutEffect, useRef, useState } from 'react';
-import { BookmarkPlus, EyeOff, Filter, PowerOff } from 'lucide-react';
+import { BookmarkPlus, EyeOff, Filter, PowerOff, RotateCcw } from 'lucide-react';
 import type { SearchResponse } from '../../types/api';
 import { useDismissable } from '../../utils/useDismissable';
 import { isPlaceholderOrigin } from '../../utils/originName';
@@ -16,6 +16,8 @@ import { isPlaceholderOrigin } from '../../utils/originName';
 
 export interface ResultMenuActions {
   save(item: SearchResponse): void | Promise<void>;
+  /** Forget what this row's provider answered for the work, and open it to ask again. */
+  askAgain(item: SearchResponse, provider: string): void | Promise<void>;
   hideProvider(provider: string): void;
   excludeProvider(provider: string): void | Promise<void>;
   disableProvider(provider: string): void | Promise<void>;
@@ -105,6 +107,12 @@ const ResultMenu: React.FC<{
       />
       {provider && (
         <>
+          <MenuItem
+            icon={<RotateCcw size={14} />}
+            label={`Ask ${provider} again`}
+            description="Forgets its last answer and opens the title"
+            onClick={run(() => actions.askAgain(item, provider))}
+          />
           <div className="ui-menu__separator" role="separator" />
           <MenuItem
             icon={<EyeOff size={14} />}

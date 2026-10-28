@@ -65,3 +65,17 @@ test('clear erases everything', () => {
   store.clear();
   assert.equal(store.count(), 0);
 });
+
+test('forget drops one provider answer for one work and leaves the rest', () => {
+  const backing = memory();
+  const store = new ProviderAttemptStore(backing, () => 1_000);
+  store.record([
+    { work: 'dune|2021', provider: 'A', outcome: 'no-sources' },
+    { work: 'dune|2021', provider: 'B', outcome: 'error' },
+  ]);
+  assert.equal(store.forget('dune|2021', 'A'), true);
+  assert.equal(store.forget('dune|2021', 'A'), false, 'nothing left to forget');
+  const lookup = store.lookup();
+  assert.equal(lookup('dune|2021', 'A'), undefined);
+  assert.equal(lookup('dune|2021', 'B')?.outcome, 'error');
+});
