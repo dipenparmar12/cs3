@@ -50,7 +50,7 @@ import { attachShaka, type ShakaAttachment } from '../utils/shakaSession';
 import type { SeriesContext } from './player/seriesContext';
 import type { PlaybackPreferences, StoredSource } from '../types/library';
 import { matchesRelease } from '../../electron/cs3/playedSource';
-import { judgeableDuration, looksLikeWrongMedia, wrongMediaReason } from '../utils/mediaSanity';
+import { judgeableDuration, looksLikeWrongMedia, wrongMediaBeforePlay, wrongMediaReason } from '../utils/mediaSanity';
 import { validateContent } from '../utils/contentValidation';
 import { torrentResultToStoredSource } from '../../electron/cs3/libraryStore';
 import { isPlaceholderOrigin } from '../utils/originName';
@@ -1075,6 +1075,9 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
    * duration, so it never delays a working source (`mediaSanity.ts`).
    */
   const sanityCheckedFor = useRef<string | null>(null);
+  /** Read by the prepare effect, which runs per stream and must not re-run per progress tick. */
+  const expectedSecondsRef = useRef<number | undefined>(undefined);
+  expectedSecondsRef.current = progress?.expectedDurationSeconds;
   /** hls.js says the playlist is live: its duration is a window, not a length. */
   const hlsLiveRef = useRef(false);
   /** The stream the element was last given, and the stream whose metadata it has loaded. */
@@ -3458,6 +3461,24 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
        */
       if (response.capability?.failure?.dead) {
         skipRef.current?.(response.capability.failure.reason);
+        return;
+      }
+
+      /*
+       * A clip the probe already measured is skipped before it is attached, as
+       * the after-start check below would skip it a few seconds in. Only where
+       * a skip goes somewhere: without a session the after-start check says so.
+       */
+      const clip = skipRef.current
+        ? wrongMediaBeforePlay({
+            sourceSeconds: response.capability?.metadata?.durationSeconds,
+            expectedSeconds: expectedSecondsRef.current,
+          })
+        : null;
+      if (clip) {
+        sanityCheckedFor.current = streamUrl;
+        notify('That source was not the title — trying the next one', 'info');
+        skipRef.current?.(clip);
       }
     })();
 
