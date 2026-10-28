@@ -181,6 +181,21 @@ function segmentShape(segment: string): string {
   return shape + extension.toLowerCase();
 }
 
+/**
+ * A provider's message as the journal may keep it: printable, one line, short,
+ * and with any URL reduced to its audit shape. Providers quote the body they
+ * choked on, and that can be binary (a PNG where a page was expected) or carry
+ * a signed link.
+ */
+export function printable(text: string, max = 200): string {
+  const oneLine = text
+    .replace(/https?:\/\/[^\s"'<>)\]}]+/g, (url) => auditUrl(url).shape)
+    .replace(/[^\x20-\x7e -ɏ]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+  return oneLine.length > max ? `${oneLine.slice(0, max - 1)}…` : oneLine;
+}
+
 /** Header names only; a `Referer` or `Origin` keeps its host (§9). */
 export function auditHeaders(headers: Record<string, string> | undefined): Record<string, string> {
   const out: Record<string, string> = {};

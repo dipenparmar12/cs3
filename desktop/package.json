@@ -11,6 +11,7 @@
     "postinstall": "node --experimental-require-module node_modules/electron/install.js",
     "setup": "node ../tools/package/doctor.mjs --fix",
     "doctor": "node ../tools/package/doctor.mjs",
+    "audit:providers": "node --experimental-strip-types ../tools/audit/provider-audit.mjs",
     "predev": "node ../tools/package/doctor.mjs --dev",
     "dev": "vite",
     "prebuild": "node ../tools/package/doctor.mjs --build",

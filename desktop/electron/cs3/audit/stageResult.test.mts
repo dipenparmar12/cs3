@@ -56,6 +56,11 @@ test('each verdict from its own evidence', () => {
   assert.equal(verdict(), 'skipped');
 });
 
+test('a provider that needs the viewer to sign in is skipped, unless it gave content anyway', () => {
+  assert.equal(verdict(r('S1', 'pass'), r('S3', 'skipped', { reason: 'needs-credentials' }), r('S4', 'skipped', { reason: 'needs-credentials' })), 'skipped');
+  assert.equal(verdict(r('S1', 'pass'), r('S3', 'skipped', { reason: 'needs-credentials' }), r('S4', 'pass')), 'browse-only');
+});
+
 test('a failure the environment caused does not make a plugin broken', () => {
   assert.equal(verdict(r('S3', 'pass'), r('S4', 'fail', { owner: 'environment' })), 'browse-only');
 });

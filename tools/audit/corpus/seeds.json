@@ -1,0 +1,14 @@
+{
+  "_note": "Fallback titles per declared type, used only when a provider's own catalogue gives none (Provider Compatibility Audit PRD §5.3). A provider's own listing is always tried first: the round trip tests search against something the provider is known to have.",
+  "Movie": ["The Matrix", "Dune", "Inception"],
+  "TvSeries": ["Breaking Bad", "Friends"],
+  "Anime": ["One Piece", "Naruto"],
+  "AnimeMovie": ["Spirited Away", "Your Name"],
+  "OVA": ["Hellsing Ultimate"],
+  "AsianDrama": ["Crash Landing on You", "Squid Game"],
+  "Cartoon": ["Avatar The Last Airbender"],
+  "Documentary": ["Planet Earth"],
+  "Torrent": ["Dune"],
+  "Live": [],
+  "default": ["Dune", "One Piece"]
+}

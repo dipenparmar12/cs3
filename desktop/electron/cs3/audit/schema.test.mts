@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { AUDIT_SCHEMA_VERSION, auditHeaders, auditUrl, parseJournalLine, shapeFingerprint } from './schema.ts';
+import { AUDIT_SCHEMA_VERSION, auditHeaders, auditUrl, parseJournalLine, printable, shapeFingerprint } from './schema.ts';
 
 const record = {
   schema: AUDIT_SCHEMA_VERSION,
@@ -35,6 +35,13 @@ test('a stored URL keeps its shape and parameter names, never the values', () =>
   assert.equal(fingerprint, auditUrl(raw).fingerprint);
   assert.notEqual(fingerprint, auditUrl(raw.replace('SECRET', 'OTHER')).fingerprint);
   assert.equal(auditUrl('not a url').shape, '<unparseable>');
+});
+
+test('a provider message is kept printable, short, and without link secrets', () => {
+  const png = 'Marker not found in response: \u0089PNG\r\n\u001a\n\u0000\u0000\u0000\rIHDR\u0000\u0000';
+  assert.equal(printable(png), 'Marker not found in response: PNG IHDR');
+  assert.equal(printable('x'.repeat(500)).length, 200);
+  assert.equal(printable('HTTP 403 at https://cdn.x/v/1080.mp4?sig=SECRET'), 'HTTP 403 at https://cdn.x/a/n.mp4?sig');
 });
 
 test('headers keep names only; Referer and Origin keep their host', () => {

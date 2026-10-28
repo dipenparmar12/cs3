@@ -74,6 +74,14 @@ export function deriveVerdict(stages: Map<Stage, StageSummary>): ProviderVerdict
   if (passed('S8')) return is('S9', 'fail') ? 'app-gap' : 'compatible';
   if (passed('S7')) return is('S8', 'fail') && owners('S8').has('app-media') ? 'app-gap' : 'reachable-only';
   if (walledAt('S2') || walledAt('S3') || walledAt('S7')) return 'walled';
+  // Wants the viewer's account and gave nothing without it: not testable, not broken.
+  const content: Stage[] = ['S3', 'S4', 'S5', 'S6'];
+  if (
+    !content.some(passed) &&
+    present.some((s) => s.outcome === 'skipped' && s.records.some((r) => r.reason === 'needs-credentials'))
+  ) {
+    return 'skipped';
+  }
   if (passed('S6')) return 'extraction-only';
   const contentStages: Stage[] = ['S3', 'S4', 'S5', 'S6'];
   if (

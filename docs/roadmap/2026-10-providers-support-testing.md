@@ -1,10 +1,10 @@
-> **Filed 2026-10-20: Partial / pending.** Some code this PRD names exists; the rest is not verified.
+> **Filed 2026-10-20: Partial / pending.** **Updated 2026-10-28: M1–M2 built, M3–M4 pure halves built.** The seven pure modules of §5.3 (plus `stageEvidence.ts`) are in `desktop/electron/cs3/audit/` with tests; `tools/audit/provider-audit.mjs` runs S0–S6 against a profile's installed archives (copied, never touched), journals each stage, resumes, reports and diffs. S2's site check and S7–S10 wait on the net-worker (M0/M3), and are written `skipped: stage-filter`. Status is in `ROADMAP.md`.
 
 # PRD: Provider Compatibility Audit — a repeatable, evidence-based validation of every community provider
 
 | | |
 |---|---|
-| **Status** | Proposed. **Nothing in this document is built.** No source file was changed while writing it. |
+| **Status** | Partial (2026-10-28): see the note above. |
 | **Number** | Unassigned (filename-dated; next free PRD number is 56) |
 | **Date** | 2026-10-16 |
 | **Audience** | The engineer (or agent) who will implement it. Written to be executed without further questions; open decisions are in §16 with a recommended default. |

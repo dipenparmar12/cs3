@@ -57,3 +57,6 @@ desktop/release
 
 .claude/launch.json
 .freebuff/project-id
+
+# Provider audit runs: journals and reports from live sites, never committed (anchored).
+/tools/audit/runs/

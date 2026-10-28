@@ -40,6 +40,19 @@ test('the same stage with a worse verdict is a regression; a flaky one is not', 
   assert.equal(hasRegressions(diffRuns([entry()], [entry({ verdict: 'app-gap', flaky: true })])), false);
 });
 
+test('a provider skipped on either side is not compared (measured: Cinemacity, needs sign-in)', () => {
+  const change = only([entry({ deepest: 'S1', verdict: 'plugin-broken' })], [entry({ deepest: 'S1', verdict: 'skipped' })]);
+  assert.equal(change.change, 'NOT_COMPARED');
+  assert.equal(only([entry({ verdict: 'skipped', deepest: null })], [entry()]).change, 'NOT_COMPARED');
+});
+
+test('could-not-tell with nothing moved is flaky; with the plugin changed it is a regression', () => {
+  // Measured: AniZone gave a link, then timed out 13 minutes later.
+  assert.equal(only([entry({ deepest: 'S6', verdict: 'extraction-only' })], [entry({ deepest: 'S1', verdict: 'unverifiable' })]).change, 'FLAKY');
+  const rebuilt = entry({ deepest: 'S1', verdict: 'unverifiable', blame: { ...entry().blame, archiveSha256: 'a2' } });
+  assert.equal(only([entry({ deepest: 'S6', verdict: 'extraction-only' })], [rebuilt]).change, 'REGRESSED');
+});
+
 test('two empty runs differ in nothing', () => {
   assert.deepEqual(diffRuns([], []), []);
 });

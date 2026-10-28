@@ -32,6 +32,7 @@ Dated post-mortems and measurements moved verbatim out of `AGENTS.md` (nothing r
 - CloudStream X (CSX), and two shim gaps it found (2026-08-27)
 - `InvalidHeader` was every unclassified record (2026-08-27)
 - Extensions: browse opens where you asked (2026-08-27)
+- The provider audit's first live runs (2026-10-28)
 
 ---
 
@@ -1517,3 +1518,26 @@ have found nothing, even with the repository carrying it on screen. It now also 
 installed extensions and providers underneath, and the card says *why* it matched: a result
 with no visible reason reads as a broken filter.
 
+### The provider audit's first live runs (2026-10-28)
+
+`tools/audit/provider-audit.mjs` (Provider Compatibility Audit PRD; S0–S6 only, no network worker yet)
+over the scratch profile's 17 archives, 19 providers: **391 s**. 12 reached links (S6), 5 broken,
+1 needs sign-in, 1 unverifiable. Three things the first runs taught, each now a rule in the code:
+
+- **Run the JVM with the app's heap.** The borrowed `catalogue-e2e.mjs` client starts it at
+  768 MB; AniSnatch's DEX translation then fails with `OutOfMemoryError` and the audit called
+  the extension broken. The app gives 2–4 GB by machine memory. The rule is now one function
+  (`cs3/jvmHeap.ts`) used by `sidecarSupervisor.ts` and the audit. At the app's heap AniSnatch
+  loads; its real failure is the site answering a PNG where the provider expects a page.
+- **"Not logged in" is not broken.** Cinemacity's catalogue answers `ErrorLoadingException: Not
+  logged in. Open Cinemacity addon settings and login.` The audit never signs in (PRD §9), so
+  that is `skipped: needs-credentials`, and a run where it changes is `NOT_COMPARED`, not a
+  regression.
+- **One run cannot tell flaky from broken.** AniZone gave a link at 16:31 and timed out twice at
+  16:45 (`SocketTimeoutException`, attributed to the environment). With nothing in the blame
+  dimensions moved, the diff calls that `FLAKY`; only a moved plugin, runtime or app build makes
+  it a regression.
+
+The most common failure (6 providers) is S4: a search for a title the provider itself listed on
+its home page finds nothing. That is the round trip the PRD asks for (H-05), and it is a
+provider-side finding, not an app one.

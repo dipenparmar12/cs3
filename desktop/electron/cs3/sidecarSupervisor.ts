@@ -9,6 +9,7 @@ import { SidecarStderrReader } from './sidecarStderr';
 import { getIssueLog } from './extensionIssues';
 import { describeError } from '../../src/utils/errors.ts';
 import type { RpcResult } from './rpcResult.ts';
+import { jvmHeapMb } from './jvmHeap.ts';
 import { appStorage } from '../storage/appStorage.ts';
 import { sweepTemp } from '../storage/storageCleanup.ts';
 
@@ -220,13 +221,7 @@ export class SidecarSupervisor {
       // A failed tidy never stops the runtime from starting.
     }
 
-    const totalMem = os.totalmem();
-    const maxHeapMb =
-      totalMem >= 16 * 1024 * 1024 * 1024
-        ? 4096
-        : totalMem >= 8 * 1024 * 1024 * 1024
-          ? 3072
-          : 2048;
+    const maxHeapMb = jvmHeapMb(os.totalmem());
 
     try {
       this.proc = spawn(

@@ -30,6 +30,8 @@ export type ChangeClass =
   | 'FLAKY'
   | 'SHAPE_DRIFT'
   | 'GONE'
+  /** One side was skipped (adult gate, needs sign-in…): nothing to compare. */
+  | 'NOT_COMPARED'
   | 'UNCHANGED';
 
 export type BlameDimension = 'plugin' | 'runtime' | 'app' | 'site';
@@ -108,7 +110,12 @@ export function diffRuns(previous: RunEntry[], current: RunEntry[]): Change[] {
     const base = { providerId: now.providerId, from: summary(was), to: summary(now), moved, owner: ownerOf(moved) };
     const order = compare(was, now);
     const gained = (now.capabilities ?? []).filter((c) => !(was.capabilities ?? []).includes(c));
-    if (order !== 0 && now.flaky) changes.push({ ...base, change: 'FLAKY' });
+    if (order !== 0 && (was.verdict === 'skipped' || now.verdict === 'skipped')) {
+      changes.push({ ...base, change: 'NOT_COMPARED' });
+    } else if (order !== 0 && (now.flaky || (order < 0 && now.verdict === 'unverifiable' && moved.length === 0))) {
+      // Could not tell this time, and nothing that would explain a change moved.
+      changes.push({ ...base, change: 'FLAKY' });
+    }
     else if (order < 0) changes.push({ ...base, change: 'REGRESSED' });
     else if (order > 0) changes.push({ ...base, change: 'IMPROVED' });
     else if (gained.length > 0) changes.push({ ...base, change: 'NEW_SUPPORT', gained });

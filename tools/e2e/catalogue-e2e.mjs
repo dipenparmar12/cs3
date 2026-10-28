@@ -77,9 +77,11 @@ function resolveJava(explicit) {
 
 /** Line-delimited JSON-RPC over the sidecar's stdio. Same protocol as the app. */
 class Sidecar {
-  constructor(java, dataDir) {
+  /** `heapMb`: the provider audit passes the app's own (`cs3/jvmHeap.ts`). */
+  constructor(java, dataDir, { heapMb = 768 } = {}) {
     this.java = java;
     this.dataDir = dataDir;
+    this.heapMb = heapMb;
     this.pending = new Map();
     this.nextId = 1;
     this.buffer = '';
@@ -93,7 +95,7 @@ class Sidecar {
     this.proc = spawn(
       this.java,
       [
-        '-Xmx768m',
+        `-Xmx${this.heapMb}m`,
         '-Djava.library.path=',
         '-Dfile.encoding=UTF-8',
         '-cp',
