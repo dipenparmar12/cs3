@@ -44,9 +44,9 @@ Requirement: finish the PRDs that are partly built, decide the ones that are not
 
 **H0. Wrong content plays automatically in standard mode.** After a source fails, the session widens to every provider and starts what it finds; the widened search takes each provider first two hits without checking they are the requested work. See the Playback Source Resolution PRD (v2), Phase 1; its section 1.1 lists 19 claims checked against the code. It needs no scheduler change to fix.
 
-**H1. Search sources panel: one decision left.**
+**H1. Search sources panel: closed 2026-10-23.**
 - Fixed 2026-10-21: the chips were rebuilt from the selected providers after every change, so ticking Movies ticked Series and every language, and NSFW ticked a dozen languages. Customize's filter rail also rewrote the selection, presets went dark right after being picked, and a preset picked over a named profile overwrote it. Chips are now stored intent (`languages`/`contentTypes` on the profile or draft), the rail only filters, presets are chip sets, and quick setup shows one line ("Sources in Hindi that carry Movies. Searching 12 of 300."), the option chosen over an Apply step. Pure half tested and mutation-checked (`sourceScopeModel.test.mts`); not yet exercised in the running app.
-- Decision needed: what "set as default" means (launch profile, or the profile new searches start from). The model has no default concept (`electron/cs3/sourceProfiles.ts`).
+- Decided 2026-10-23: the default is the profile new searches start from. `defaultId` on the profile state (`setDefault`, `atLaunch` in `sourceProfiles.ts`), `profiles:setDefault`, and Set as default / Stop using as default in each profile's menu with a Default marker. A launch opens with it active; a profile picked in the menu stays until the next launch; deleting it or choosing All sources clears it. Tested (`sourceProfiles.test.mts`); not exercised in the running app.
 
 **H2. PRD 40.1 playback telemetry: wired and readable (2026-10-23).**
 - Done: `PlaybackEngine` opens one record per session at prepare; `VideoPlayer` reports what the element measured (`media:reportPlayback`) when it leaves the stream, which ends the record (`completed` only when the film ended). Without a report, `close` or the next prepare ends it; a late report amends. The `moduleReachability` allow-list is empty.
