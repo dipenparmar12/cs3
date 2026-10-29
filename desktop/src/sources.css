@@ -3038,6 +3038,17 @@
   font-weight: 700;
 }
 
+/* People and companies: round, so a face never reads as a poster. */
+.search-suggest__entity { align-items: center; }
+.search-suggest__entity img,
+.search-suggest__entity .search-suggest__poster-empty {
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  object-fit: cover;
+  flex-shrink: 0;
+}
+
 .search-suggest__body { min-width: 0; flex: 1; }
 .search-suggest__line { display: flex; align-items: baseline; gap: 0.4rem; min-width: 0; }
 .search-suggest__line strong {

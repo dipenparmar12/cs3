@@ -1,5 +1,15 @@
 # PRD: Metadata-Aware Search, People Discovery, and Intelligent Autocomplete
 
+> **Status (2026-10-29): Partial.** Phases 0–3 built; criterion 7 only inside the person view. See "Built" below.
+>
+> **Phase 0 findings.** Title autocomplete (`electron/searchSuggestions.ts`: Cinemeta, TVmaze, AniList, push-shaped, cached, aborted per keystroke) and person/studio discovery (`metadata/filmography.ts` + `FilmographyDialog`, opened from a detail page's cast and studios) already existed; nothing connected them. TMDB needs a key, against the app's keyless rule, so people come from **Wikidata**: `wbsearchentities` (name, description) then one SPARQL check that each hit is a human credited (cast, voice, director, writer, producer, composer, cinematographer, editor, creator) on a work with an IMDb id, or a non-human that produced one. Measured live: "John Cena" 745 ms search + 809 ms check, offers only Q44437 (not Cenatiempo); "Christopher Nolan" only Q25191; "Yash Raj Films" the studio; "Inception" nobody; a bare "Nolan" check 2.4 s.
+>
+> **Built.** A fourth suggestion source (`metadata/entitySearch.ts`, ≥ 3 characters, at most 3 people or companies, an exact name pushes out near names of its kind) travels on `api:suggest` / `search:suggestUpdate` as `entities`, narrowed from cache like titles. The dropdown draws **People and companies** (round photo, Person/Company, one-line description); they lead only when the query *is* the name and no title is called that (`src/utils/suggestionLayout.ts`), so "Inception" keeps the film first. Arrow keys and the drawn order come from one function. Picking one opens the existing filmography (role and type filters; each card names the role or character). Enter without a highlight is the ordinary search. A failed or slow lookup holds back no title row.
+>
+> **Checked** in the built app on the scratch profile: the four queries above; Arrow Down + Enter on John Cena opened 46 titles (Acting 38, Voice 8) in 2 s; clicking Yash Raj Films opened 66 titles; plain Enter ran the normal search (146 titles, 9 sources). Tests: `entitySearch.test.mts` (8), `suggestionLayout.test.mts` (4), each rule mutation-checked; `bun run test --fast` 200 suites pass.
+>
+> **Not built.** Match reasons on the main results grid ("Cast: John Cena" on a title found by pressing Enter); people in the Search screen itself; TVmaze or AniList people in autocomplete (Wikidata only). Not checked: screen reader, a Wikidata outage in the app (the source's failure path is the existing `.catch`).
+
 ## 1. Objective
 
 Enhance CS3 search so users can discover movies and TV shows through titles, actors, directors, writers, producers, production companies, and other available metadata relationships.

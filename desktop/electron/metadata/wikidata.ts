@@ -77,7 +77,7 @@ const ENDPOINT = 'https://query.wikidata.org/sparql';
  * A generic browser string here would be both a lie and the kind of traffic
  * their operators block wholesale.
  */
-const USER_AGENT =
+export const USER_AGENT =
   'CloudStreamDesktop/1.0 (https://github.com/recloudstream/cloudstream; metadata enrichment)';
 
 /** Headshots are rendered at ~96px; three times that covers a HiDPI panel. */

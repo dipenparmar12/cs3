@@ -145,9 +145,28 @@ export interface SearchSuggestion {
  * `query` is echoed because a reply can outlive the keystroke that asked for
  * it; the renderer drops anything that no longer names what is in the box.
  */
+/**
+ * A person or company the query names, offered beside the title rows.
+ * Found by name on Wikidata and kept only with credits on record
+ * (`metadata/entitySearch.ts`); picking one opens their work.
+ */
+export interface EntitySuggestion {
+  kind: 'person' | 'company';
+  /** Wikidata QID. */
+  id: string;
+  name: string;
+  /** Wikidata's one-line description: "American actor and professional wrestler (born 1977)". */
+  description?: string;
+  imageUrl?: string;
+  /** The Wikidata page; `metadata:filmography` resolves the person from it. */
+  profileUrl: string;
+}
+
 export interface SuggestionUpdate {
   query: string;
   suggestions: SearchSuggestion[];
+  /** People and companies the query names; absent while none are known. */
+  entities?: EntitySuggestion[];
   /** False while a catalogue is still expected. */
   done: boolean;
 }

@@ -1,7 +1,8 @@
 import React from 'react';
 import { Poster } from './Poster';
-import { BookmarkCheck, Clock, Loader2, Search, Trash2, X } from 'lucide-react';
-import type { SearchHistoryEntry, SearchSuggestion } from '../types/api';
+import { BookmarkCheck, Building2, Clock, Loader2, Search, Trash2, User, X } from 'lucide-react';
+import type { EntitySuggestion, SearchHistoryEntry, SearchSuggestion } from '../types/api';
+import { rowPosition, suggestionRows, type SuggestionRowKind } from '../utils/suggestionLayout';
 import type { SavedSearchSummary } from '../../electron/savedSearches';
 import { isAdultMedia } from '../utils/adultContent';
 import { useAdultMode } from '../utils/useAdultMode';
@@ -20,14 +21,18 @@ import { useAdultMode } from '../utils/useAdultMode';
 
 interface SearchSuggestionsProps {
   open: boolean;
-  query: string;
   suggestions: SearchSuggestion[];
+  /** People and companies the query names. */
+  entities: EntitySuggestion[];
   history: SearchHistoryEntry[];
+  /** Block order (`utils/suggestionLayout.ts`); the navbar's arrow keys walk the same one. */
+  order: SuggestionRowKind[];
   loading: boolean;
-  /** Index into the combined list, driven by arrow keys. */
+  /** Index into `rows`, driven by arrow keys. */
   highlightedIndex: number;
   onHighlight: (index: number) => void;
   onPickSuggestion: (suggestion: SearchSuggestion) => void;
+  onPickEntity: (entity: EntitySuggestion) => void;
   onPickHistory: (entry: SearchHistoryEntry) => void;
   onRemoveHistory: (entry: SearchHistoryEntry) => void;
   onClearHistory: () => void;
@@ -52,13 +57,15 @@ function relativeTime(at: number): string {
 
 export const SearchSuggestions: React.FC<SearchSuggestionsProps> = ({
   open,
-  query,
   suggestions,
+  entities,
   history,
+  order,
   loading,
   highlightedIndex,
   onHighlight,
   onPickSuggestion,
+  onPickEntity,
   onPickHistory,
   onRemoveHistory,
   onClearHistory,
@@ -67,14 +74,15 @@ export const SearchSuggestions: React.FC<SearchSuggestionsProps> = ({
   const { adultProviders } = useAdultMode();
   if (!open) return null;
 
-  const hasQuery = query.trim().length >= 2;
   const showHistory = history.length > 0;
 
-  if (!loading && suggestions.length === 0 && !showHistory) return null;
+  if (!loading && suggestions.length === 0 && entities.length === 0 && !showHistory) return null;
 
-  // History is offered first while the box is empty and demoted once the user
-  // is typing, because at that point they are naming something new.
-  const historyFirst = !hasQuery;
+  const rows = suggestionRows(order, {
+    history: history.length,
+    entity: entities.length,
+    suggestion: suggestions.length,
+  });
 
   const historyBlock = showHistory && (
     <div className="search-suggest__group">
@@ -93,7 +101,7 @@ export const SearchSuggestions: React.FC<SearchSuggestionsProps> = ({
       </div>
 
       {history.map((entry, index) => {
-        const combinedIndex = historyFirst ? index : suggestions.length + index;
+        const combinedIndex = rowPosition(rows, 'history', index);
         const isSaved = Boolean(entry.isSaved);
         const isActive = combinedIndex === highlightedIndex;
         const rowClass = `search-suggest__row search-suggest__row--history${
@@ -181,7 +189,7 @@ export const SearchSuggestions: React.FC<SearchSuggestionsProps> = ({
       </div>
 
       {suggestions.map((suggestion, index) => {
-        const combinedIndex = historyFirst ? history.length + index : index;
+        const combinedIndex = rowPosition(rows, 'suggestion', index);
         const isAdult = isAdultMedia(
           {
             adult: suggestion.adult,
@@ -270,19 +278,62 @@ export const SearchSuggestions: React.FC<SearchSuggestionsProps> = ({
     </div>
   );
 
+  // Picking one opens their films and series; Enter on the box still searches.
+  const entityBlock = entities.length > 0 && (
+    <div className="search-suggest__group">
+      <div className="search-suggest__heading">
+        <span>
+          <User size={12} /> People and companies
+        </span>
+      </div>
+
+      {entities.map((entity, index) => {
+        const combinedIndex = rowPosition(rows, 'entity', index);
+        const Icon = entity.kind === 'company' ? Building2 : User;
+        return (
+          <button
+            key={entity.id}
+            type="button"
+            className={`search-suggest__row search-suggest__entity${
+              combinedIndex === highlightedIndex ? ' search-suggest__row--active' : ''
+            }`}
+            title={`Films and series ${entity.kind === 'company' ? 'from' : 'with'} ${entity.name}`}
+            onMouseEnter={() => onHighlight(combinedIndex)}
+            onMouseDown={(e) => {
+              e.preventDefault();
+              onPickEntity(entity);
+            }}
+          >
+            <Poster
+              src={entity.imageUrl}
+              title={entity.name}
+              decorative
+              itemKey={entity.id}
+              fallback={
+                <div className="search-suggest__poster-empty">
+                  <Icon size={16} />
+                </div>
+              }
+            />
+            <div className="search-suggest__body">
+              <div className="search-suggest__line">
+                <strong>{entity.name}</strong>
+                <span className="search-suggest__type">{entity.kind === 'company' ? 'Company' : 'Person'}</span>
+              </div>
+              {entity.description && <div className="search-suggest__genres">{entity.description}</div>}
+            </div>
+          </button>
+        );
+      })}
+    </div>
+  );
+
+  const blocks = { history: historyBlock, entity: entityBlock, suggestion: suggestionBlock };
   return (
     <div className="search-suggest" role="listbox" aria-label="Search suggestions">
-      {historyFirst ? (
-        <>
-          {historyBlock}
-          {suggestionBlock}
-        </>
-      ) : (
-        <>
-          {suggestionBlock}
-          {historyBlock}
-        </>
-      )}
+      {order.map((kind) => (
+        <React.Fragment key={kind}>{blocks[kind]}</React.Fragment>
+      ))}
     </div>
   );
 };

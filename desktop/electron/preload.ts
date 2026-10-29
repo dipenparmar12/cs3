@@ -8,6 +8,7 @@ import type {
   SearchResponse,
   SearchSuggestion,
   SuggestionUpdate,
+  EntitySuggestion,
 } from '../src/types/api';
 import type { OttPlatformView } from './cs3/ottPlatforms';
 import type { AppUpdateState } from './appUpdate/appUpdateService';
@@ -360,7 +361,7 @@ export interface CloudStreamElectronAPI {
    */
   suggestTitles: (
     query: string
-  ) => Promise<Envelope & { suggestions: SearchSuggestion[]; done: boolean }>;
+  ) => Promise<Envelope & { suggestions: SearchSuggestion[]; done: boolean; entities?: EntitySuggestion[] }>;
   /**
    * Fuller suggestion lists, as each catalogue answers.
    *

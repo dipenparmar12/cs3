@@ -7,12 +7,14 @@ import { setAdultVisualBlurred, useAdultMode } from '../utils/useAdultMode';
 import { useIsDeveloper } from '../utils/ExperienceModeContext';
 import { SearchScopePicker } from './SearchScopePicker';
 import type {
+  EntitySuggestion,
   ExactMedia,
   SearchHistoryEntry,
   SearchOptions,
   SearchSuggestion,
 } from '../types/api';
 import { SearchSuggestions } from './SearchSuggestions';
+import { blockOrder, entitiesFirst, suggestionRows } from '../utils/suggestionLayout';
 import type { SavedSearchSummary } from '../../electron/savedSearches';
 import { mergeHistoryAndSaved } from '../utils/searchHistoryMerge';
 import { ProfileMenu } from './profiles/ProfileMenu';
@@ -60,6 +62,8 @@ interface NavbarProps {
   onOpenSavedSearch?: (id: string) => void;
   /** Whether the current screen is a content-browsing context where the adult blur toggle is relevant. */
   contentContext?: boolean;
+  /** A person or company picked from the dropdown: show their films and series. */
+  onOpenEntity?: (entity: EntitySuggestion) => void;
 }
 
 /**
@@ -98,6 +102,7 @@ export const Navbar: React.FC<NavbarProps> = ({
   externalQuery,
   onOpenSavedSearch,
   contentContext = true,
+  onOpenEntity,
 }) => {
   const isDeveloper = useIsDeveloper();
   const [query, setQuery] = useState('');
@@ -138,6 +143,7 @@ export const Navbar: React.FC<NavbarProps> = ({
   }, [externalQuery]);
 
   const [suggestions, setSuggestions] = useState<SearchSuggestion[]>([]);
+  const [entities, setEntities] = useState<EntitySuggestion[]>([]);
   const [history, setHistory] = useState<SearchHistoryEntry[]>([]);
   const [suggestOpen, setSuggestOpen] = useState(false);
   const [suggestLoading, setSuggestLoading] = useState(false);
@@ -221,6 +227,7 @@ export const Navbar: React.FC<NavbarProps> = ({
 
     if (trimmed.length < SUGGEST_MIN_LENGTH) {
       setSuggestions([]);
+      setEntities([]);
       setSuggestLoading(false);
       return;
     }
@@ -241,6 +248,8 @@ export const Navbar: React.FC<NavbarProps> = ({
        * until the catalogues answer with better ones.
        */
       if (response?.suggestions?.length) setSuggestions(response.suggestions);
+      // People are replaced outright: a name that stopped matching must go.
+      setEntities(response?.entities ?? []);
       // Only claim to be finished when the main process says it is. An empty
       // instant answer with `done: false` is work in progress, not a result.
       setSuggestLoading(!response?.done);
@@ -260,6 +269,7 @@ export const Navbar: React.FC<NavbarProps> = ({
     const dispose = window.cloudstream?.onSuggestionUpdate?.((update) => {
       if (update.query !== activeQuery.current) return;
       setSuggestions(update.suggestions);
+      setEntities(update.entities ?? []);
       if (update.done) setSuggestLoading(false);
     });
     return () => dispose?.();
@@ -322,16 +332,25 @@ export const Navbar: React.FC<NavbarProps> = ({
     [runSearch]
   );
 
-  const historyFirst = query.trim().length < SUGGEST_MIN_LENGTH;
-  const orderedRows: Array<{ kind: 'suggestion' | 'history'; index: number }> = historyFirst
-    ? [
-        ...displayHistory.map((_, index) => ({ kind: 'history' as const, index })),
-        ...visibleSuggestions.map((_, index) => ({ kind: 'suggestion' as const, index })),
-      ]
-    : [
-        ...visibleSuggestions.map((_, index) => ({ kind: 'suggestion' as const, index })),
-        ...displayHistory.map((_, index) => ({ kind: 'history' as const, index })),
-      ];
+  const pickEntity = useCallback(
+    (entity: EntitySuggestion) => {
+      setSuggestOpen(false);
+      setHighlightedIndex(-1);
+      inputRef.current?.blur();
+      onOpenEntity?.(entity);
+    },
+    [onOpenEntity]
+  );
+
+  // Without a handler there is nowhere to open a person, so none are offered.
+  const visibleEntities = onOpenEntity ? entities : [];
+  const historyFirst = trimmedQuery.length < SUGGEST_MIN_LENGTH;
+  const order = blockOrder(historyFirst, entitiesFirst(trimmedQuery, visibleSuggestions, visibleEntities));
+  const orderedRows = suggestionRows(order, {
+    history: displayHistory.length,
+    entity: visibleEntities.length,
+    suggestion: visibleSuggestions.length,
+  });
 
   const handleClear = useCallback(() => {
     setQuery('');
@@ -379,6 +398,8 @@ export const Navbar: React.FC<NavbarProps> = ({
         // it carries the same identity rather than degrading to a text search.
         if (row.kind === 'suggestion') {
           pickSuggestion(visibleSuggestions[row.index]);
+        } else if (row.kind === 'entity') {
+          pickEntity(visibleEntities[row.index]);
         } else {
           const entry = displayHistory[row.index];
           if (entry?.isSaved && entry.savedId && onOpenSavedSearch) {
@@ -514,13 +535,15 @@ export const Navbar: React.FC<NavbarProps> = ({
 
         <SearchSuggestions
           open={suggestOpen}
-          query={query}
           suggestions={visibleSuggestions}
+          entities={visibleEntities}
           history={displayHistory}
+          order={order}
           loading={suggestLoading}
           highlightedIndex={highlightedIndex}
           onHighlight={setHighlightedIndex}
           onPickSuggestion={pickSuggestion}
+          onPickEntity={pickEntity}
           onPickHistory={(entry) => {
             if (entry.isSaved && entry.savedId && onOpenSavedSearch) {
               setSuggestOpen(false);

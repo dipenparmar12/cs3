@@ -30,7 +30,7 @@ import { ExtensionUpdateNotice } from './components/extensions/ExtensionUpdateNo
 import { AppUpdateNotice } from './components/AppUpdateNotice';
 import type { ExtensionsTab } from './components/extensions/ExtensionsScreen';
 
-import { TvType, type Episode, type SearchOptions, type SearchResponse } from './types/api';
+import { TvType, type EntitySuggestion, type Episode, type SearchOptions, type SearchResponse } from './types/api';
 import type { HistoryEvent } from './types/history';
 import type { DownloadRequestResult, DownloadTask } from './types/download';
 import { buildDownloadTask } from './utils/downloadIdentity';
@@ -81,6 +81,10 @@ import {
  * imports above stay static and cost nothing — types are erased, and a
  * `import type` does not pull the module in.
  */
+/** A person or company picked in the search box: their films and series. */
+const FilmographyDialog = lazy(() =>
+  import('./components/detail/FilmographyDialog').then((m) => ({ default: m.FilmographyDialog }))
+);
 const TrailerPopup = lazy(() =>
   import('./components/detail/TrailerPopup').then((m) => ({ default: m.TrailerPopup }))
 );
@@ -458,6 +462,7 @@ export const App: React.FC = () => {
   }, []);
 
   const [isInspectorOpen, setIsInspectorOpen] = useState(false);
+  const [openEntity, setOpenEntity] = useState<EntitySuggestion | null>(null);
   /** Which Settings pane to open on, when something deep-links into it. */
   const [settingsTab, setSettingsTab] = useState<'general' | 'about'>('general');
   /** Which Extensions tab opens next — Updates when the update notice is followed. */
@@ -2160,6 +2165,7 @@ export const App: React.FC = () => {
           isSearching={Boolean(search && !search.done)}
           onScopeChange={handleScopeChange}
           onOpenInspector={() => setIsInspectorOpen(true)}
+          onOpenEntity={setOpenEntity}
           // So a search started from the details page shows in the bar that
           // claims to say what is being searched.
           externalQuery={searchQuery}
@@ -2723,6 +2729,24 @@ export const App: React.FC = () => {
         >
           {actionNotice}
         </div>
+      )}
+
+      {openEntity && (
+        <Suspense fallback={null}>
+          <FilmographyDialog
+            key={openEntity.id}
+            request={{
+              kind: openEntity.kind === 'company' ? 'studio' : 'person',
+              name: openEntity.name,
+              profileUrl: openEntity.profileUrl,
+            }}
+            hint={{ imageUrl: openEntity.imageUrl, subtitle: openEntity.description }}
+            onClose={() => setOpenEntity(null)}
+            onSelectMedia={handleSelectMedia}
+            onPlayDirectly={handleQuickPlay}
+            onSearch={handleSearchFromDetail}
+          />
+        </Suspense>
       )}
 
       {trailer && (

@@ -2492,12 +2492,12 @@ ipcMain.handle('api:suggest', async (event, query: string) => {
     // The asking window, not `mainWindow`: an update belongs to whoever typed.
     const webContents = event.sender;
     void searchSuggestions
-      .suggest(trimmed, run.signal, (suggestions, done) => {
+      .suggest(trimmed, run.signal, (suggestions, done, entities) => {
         // The query travels with the rows: this outlives the keystroke that
         // asked for it, and a reply landing on a box that now says something
         // else must be dropped rather than rendered.
         if (run.signal.aborted || webContents.isDestroyed()) return;
-        webContents.send('search:suggestUpdate', { query: trimmed, suggestions, done });
+        webContents.send('search:suggestUpdate', { query: trimmed, suggestions, done, entities });
       })
       .catch(() => {
         // A catalogue outage is not an error for a search box, and there is no
@@ -2505,7 +2505,7 @@ ipcMain.handle('api:suggest', async (event, query: string) => {
       });
   }
 
-  return { ok: true, suggestions: instant.suggestions, done: instant.done };
+  return { ok: true, suggestions: instant.suggestions, done: instant.done, entities: instant.entities };
 });
 
 /**
