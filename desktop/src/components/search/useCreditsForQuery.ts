@@ -12,7 +12,7 @@ import { foldName } from '../../utils/suggestionLayout';
  * a query that names nobody beyond the suggestion lookup itself, and a failure
  * leaves the results as they are.
  */
-export function useCreditsForQuery(query: string | undefined): Filmography | null {
+export function useCreditsForQuery(query: string | undefined): { entity: EntitySuggestion; credits: Filmography } | null {
   const [entity, setEntity] = useState<EntitySuggestion | null>(null);
   const [credits, setCredits] = useState<Filmography | null>(null);
   const trimmed = query?.trim() ?? '';
@@ -57,5 +57,5 @@ export function useCreditsForQuery(query: string | undefined): Filmography | nul
     };
   }, [entity]);
 
-  return credits;
+  return entity && credits ? { entity, credits } : null;
 }

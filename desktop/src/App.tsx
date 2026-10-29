@@ -2556,6 +2556,7 @@ export const App: React.FC = () => {
                     onSaveResults={handleSaveSearch}
                     onClearResults={handleClearSearchResults}
                     onSearch={(query) => void handleSearch(query)}
+                    onOpenEntity={setOpenEntity}
                   />
                 </ErrorBoundary>
               )}

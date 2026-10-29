@@ -1,6 +1,6 @@
 # PRD: Metadata-Aware Search, People Discovery, and Intelligent Autocomplete
 
-> **Status (2026-10-29): Partial.** Phases 0–3 built; match reasons on result cards built, but a person's own work rarely reaches the results grid (see "Not built").
+> **Status (2026-10-29): Built** (phases 0–4), checked in the built app; remaining gaps under "Not built".
 >
 > **Phase 0 findings.** Title autocomplete (`electron/searchSuggestions.ts`: Cinemeta, TVmaze, AniList, push-shaped, cached, aborted per keystroke) and person/studio discovery (`metadata/filmography.ts` + `FilmographyDialog`, opened from a detail page's cast and studios) already existed; nothing connected them. TMDB needs a key, against the app's keyless rule, so people come from **Wikidata**: `wbsearchentities` (name, description) then one SPARQL check that each hit is a human credited (cast, voice, director, writer, producer, composer, cinematographer, editor, creator) on a work with an IMDb id, or a non-human that produced one. Measured live: "John Cena" 745 ms search + 809 ms check, offers only Q44437 (not Cenatiempo); "Christopher Nolan" only Q25191; "Yash Raj Films" the studio; "Inception" nobody; a bare "Nolan" check 2.4 s.
 >
@@ -10,7 +10,9 @@
 >
 > **Match reasons.** When a search's query is exactly a person's or company's name, each result card they are credited on says which credit, top-left on the poster ("Cast: Pelé", "Directed by …", "Produced by …"; every credit in the tooltip) (`src/utils/matchReasons.ts`, `components/search/useCreditsForQuery.ts`). An IMDb id decides; without one the folded title must match with years within one. A title merely *named* after them says nothing. Checked in the built app: "Pelé" marked 3 cards "Cast: Pelé" about 2 s after Enter.
 >
-> **Not built.** The search itself matches titles only, so a person's own work rarely reaches the grid: "John Cena" returned 30 cards named after him and none he is credited on; "Christopher Nolan" returned documentaries about him, not *Interstellar*. A "With <name>" section of their credited work on the results page (§4.2) would close that; not started. Also not built: TVmaze or AniList people in autocomplete (Wikidata only). Not checked: screen reader, a Wikidata outage in the app (the source's failure path is the existing `.catch`).
+> **"With <name>" row (§4.2).** Title search matches titles only, so a person's own work rarely reaches the grid ("John Cena": 30 cards named after him, none he is credited on; "Christopher Nolan": documentaries about him, not *Interstellar*). The results page therefore opens with a rail of their credited work (`CreditedRow` in `SearchView.tsx`, the Home rail), following the type tab, each card naming only the credit ("Director", "Cast") since the heading names them; Show all (past 20) opens the filmography. Checked: Nolan's row lists *Oppenheimer*, *Tenet*, *Dunkirk*, *Interstellar* as Director; clicking *Oppenheimer* opened its page; John Cena's Show all opened 46 titles; "Inception" shows no row.
+>
+> **Not built.** TVmaze or AniList people in autocomplete (Wikidata only); the same work appearing in both the row and the grid is not merged (it carries its credit in both). Not checked: screen reader, a Wikidata outage in the app (the source's failure path is the existing `.catch`).
 
 ## 1. Objective
 

@@ -3,9 +3,10 @@ import { Building2, ExternalLink, Loader2, User } from 'lucide-react';
 import { Dialog } from '../ui';
 import { Poster } from '../Poster';
 import { PosterCard } from '../PosterCard';
-import type { SearchResponse, TvType } from '../../types/api';
+import type { SearchResponse } from '../../types/api';
 import type { Filmography, FilmographyRequest, FilmographyRole, FilmographyWork } from '../../types/filmography';
 import { describeError } from '../../utils/errors';
+import { workAsItem as asItem } from '../../utils/matchReasons';
 
 /**
  * "More from …" — a person's or studio's other work, browsable in place.
@@ -63,18 +64,6 @@ export const FilmographyDialog: React.FC<{
   const shown = works.filter(
     (work) => (role === 'all' || work.roles.includes(role)) && (type === 'all' || work.type === type)
   );
-
-  const asItem = (work: FilmographyWork): SearchResponse => ({
-    name: work.title,
-    url: work.imdbId
-      ? `cs3meta://cinemeta/${work.type === 'series' ? 'series' : 'movie'}/${work.imdbId}`
-      : `search://${encodeURIComponent(work.title)}`,
-    apiName: 'Cinemeta',
-    type: (work.type === 'series' ? 'TvSeries' : 'Movie') as TvType,
-    year: work.year,
-    posterUrl: work.posterUrl,
-    imdbId: work.imdbId,
-  });
 
   const open = (work: FilmographyWork) => {
     onClose();

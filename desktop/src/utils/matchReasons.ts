@@ -5,13 +5,15 @@
  * guessed from the title, so a documentary *about* John Cena that does not
  * credit him says nothing. Pure.
  */
-import type { SearchResponse } from '../types/api';
+import type { SearchResponse, TvType } from '../types/api';
 import type { Filmography, FilmographyRole, FilmographyWork } from '../types/filmography';
 import { foldName } from './suggestionLayout.ts';
 
 export interface MatchReason {
   /** One short line for the card. */
   label: string;
+  /** The credit alone ("Cast", "Director"), where a heading already names them. */
+  role: string;
   /** Every credit on that title, for the tooltip. */
   detail: string;
 }
@@ -29,6 +31,19 @@ const ROLE_ORDER: FilmographyRole[] = [
   'Cinematography',
   'Editing',
 ];
+
+const NOUN: Record<FilmographyRole, string> = {
+  Directing: 'Director',
+  Creator: 'Creator',
+  Acting: 'Cast',
+  Voice: 'Voice',
+  Writing: 'Writer',
+  Producing: 'Producer',
+  Production: 'Producer',
+  Music: 'Music',
+  Cinematography: 'Cinematography',
+  Editing: 'Editor',
+};
 
 const PHRASE: Record<FilmographyRole, (name: string) => string> = {
   Directing: (name) => `Directed by ${name}`,
@@ -49,7 +64,25 @@ export function reasonFor(name: string, work: FilmographyWork): MatchReason | nu
   const detail = roles
     .map((role) => (role === 'Acting' && work.character ? `Acting as ${work.character}` : role))
     .join(' · ');
-  return { label: PHRASE[roles[0]](name), detail };
+  return { label: PHRASE[roles[0]](name), role: NOUN[roles[0]], detail };
+}
+
+/**
+ * A credited work as a card. With an IMDb id it opens like any catalogue title;
+ * without one its address is `search://<title>`, which callers turn into a search.
+ */
+export function workAsItem(work: FilmographyWork): SearchResponse {
+  return {
+    name: work.title,
+    url: work.imdbId
+      ? `cs3meta://cinemeta/${work.type === 'series' ? 'series' : 'movie'}/${work.imdbId}`
+      : `search://${encodeURIComponent(work.title)}`,
+    apiName: 'Cinemeta',
+    type: (work.type === 'series' ? 'TvSeries' : 'Movie') as TvType,
+    year: work.year,
+    posterUrl: work.posterUrl,
+    imdbId: work.imdbId,
+  };
 }
 
 /** Catalogues disagree on a film's year by one often enough; more is another work. */

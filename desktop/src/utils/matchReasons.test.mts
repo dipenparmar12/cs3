@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { matchReasons, reasonFor } from './matchReasons.ts';
+import { matchReasons, reasonFor, workAsItem } from './matchReasons.ts';
 import type { SearchResponse } from '../types/api.ts';
 import type { Filmography } from '../types/filmography.ts';
 
@@ -25,6 +25,7 @@ const row = (name: string, extra: Partial<SearchResponse> = {}): SearchResponse 
 test('the headline credit names the card; every credit is in the detail', () => {
   assert.deepEqual(reasonFor('John Cena', cena.works[0]), {
     label: 'Cast: John Cena',
+    role: 'Cast',
     detail: 'Acting as Christopher Smith · Producing',
   });
   assert.equal(
@@ -36,6 +37,8 @@ test('the headline credit names the card; every credit is in the detail', () => 
     reasonFor('Clint Eastwood', { title: 'Gran Torino', type: 'movie', roles: ['Acting', 'Directing'] })?.label,
     'Directed by Clint Eastwood'
   );
+  assert.equal(reasonFor('Clint Eastwood', { title: 'Gran Torino', type: 'movie', roles: ['Acting', 'Directing'] })?.role, 'Director');
+  assert.equal(reasonFor('Yash Raj Films', { title: 'Pathaan', type: 'movie', roles: ['Production'] })?.role, 'Producer');
   assert.equal(reasonFor('Yash Raj Films', { title: 'Pathaan', type: 'movie', roles: ['Production'] })?.label, 'Produced by Yash Raj Films');
   assert.equal(reasonFor('Nobody', { title: 'X', type: 'movie', roles: [] }), null);
 });
@@ -71,4 +74,10 @@ test('without an id, the folded title must match and the years must not disagree
 test('no works, or rows with no address, give no reasons', () => {
   assert.equal(matchReasons([row('Blockers')], { ...cena, works: [] }).size, 0);
   assert.equal(matchReasons([{ name: 'Blockers', url: '', apiName: 'P' }], cena).size, 0);
+});
+
+test('a credited work becomes a card: a page with an IMDb id, a search without one', () => {
+  assert.equal(workAsItem(cena.works[0]).url, 'cs3meta://cinemeta/series/tt13146488');
+  assert.equal(workAsItem(cena.works[0]).type, 'TvSeries');
+  assert.equal(workAsItem(cena.works[1]).url, 'search://Blockers');
 });

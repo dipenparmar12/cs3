@@ -217,7 +217,7 @@ export const PosterCard: React.FC<PosterCardProps> = React.memo(({
           showRevealControl={isAdult}
         />
         {matchReason && (
-          <span className="poster-reason" title={matchReason.detail}>
+          <span className="poster-reason" title={`${matchReason.label} (${matchReason.detail})`}>
             {matchReason.label}
           </span>
         )}

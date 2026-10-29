@@ -1,7 +1,7 @@
 import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { useTitleInteractions } from '../components/useTitleInteractions';
 import { EmptyState } from '../components/EmptyState';
-import type { SearchHistoryEntry, SearchResponse } from '../types/api';
+import type { EntitySuggestion, SearchHistoryEntry, SearchResponse } from '../types/api';
 import { TYPE_TABS, allCount, ownTabRowsBelongInAll, matchesTab, tabsFor } from '../utils/contentTypes';
 import {
   ResultContextMenuProvider,
@@ -28,7 +28,8 @@ import { Button, Menu } from '../components/ui';
 import { filterAdultItems, isSensitiveTitle } from '../utils/adultContent';
 import { useAdultMode } from '../utils/useAdultMode';
 import { useCreditsForQuery } from '../components/search/useCreditsForQuery';
-import { matchReasons } from '../utils/matchReasons';
+import { matchReasons, reasonFor, workAsItem } from '../utils/matchReasons';
+import { HomeRow } from '../components/home/HomeRow';
 import type { Filmography } from '../types/filmography';
 
 /** The credited work of the person or company the query names; cards say which credit put them here. */
@@ -86,6 +87,8 @@ interface SearchViewProps {
   onClearResults?: () => void;
   /** Runs a query; the idle screen's recent searches use it. */
   onSearch?: (query: string) => void;
+  /** Opens a person's or company's whole filmography (the "With <name>" row's Show all). */
+  onOpenEntity?: (entity: EntitySuggestion) => void;
 }
 
 /** "3 Sep 2026, 14:05" — a date a person reads, not a relative age that drifts. */
@@ -343,10 +346,12 @@ export const SearchView: React.FC<SearchViewProps> = ({
   onSaveResults,
   onClearResults,
   onSearch,
+  onOpenEntity,
 }) => {
   const { sourceFilter, typeTab, openGroups } = ui;
   const adult = useAdultMode();
-  const credits = useCreditsForQuery(search?.query ?? query);
+  const named = useCreditsForQuery(search?.query ?? query);
+  const credits = named?.credits ?? null;
   /** The provider names the fix modal is open for, or null when it is closed. */
   const [fixing, setFixing] = useState<string[] | null>(null);
   const missingCount =
@@ -691,6 +696,18 @@ export const SearchView: React.FC<SearchViewProps> = ({
         />
       )}
 
+      {named && (
+        <CreditedRow
+          entity={named.entity}
+          credits={named.credits}
+          tab={activeTab}
+          onSelectMedia={onSelectMedia}
+          onPlayDirectly={onPlayDirectly}
+          onSearch={onSearch}
+          onOpenEntity={onOpenEntity}
+        />
+      )}
+
       {filtered.length === 0 ? (
         <div className="search-empty">
           {sourceFilter !== 'all' || activeTab !== 'all' ? (
@@ -883,6 +900,58 @@ function useTitleOutcomes(): Record<string, { kind: 'played' | 'no-sources' | 'a
   }, []);
   return outcomes;
 }
+
+/**
+ * "With John Cena": the credited work of the person or company the query names.
+ *
+ * Title search finds what is *called* the name, so a person's own films rarely
+ * reach the grid below ("John Cena" gave 30 titles named after him and none he
+ * is in). This row is where they are, each card saying which credit, and Show
+ * all opens the whole filmography with its role filters.
+ */
+const CreditedRow: React.FC<{
+  entity: EntitySuggestion;
+  credits: Filmography;
+  tab: string;
+  onSelectMedia: (item: SearchResponse) => void;
+  onPlayDirectly?: (item: SearchResponse) => void;
+  onSearch?: (query: string) => void;
+  onOpenEntity?: (entity: EntitySuggestion) => void;
+}> = ({ entity, credits, tab, onSelectMedia, onPlayDirectly, onSearch, onOpenEntity }) => {
+  const cards = useMemo(
+    () =>
+      credits.works
+        .map((work) => {
+          const reason = reasonFor(credits.name, work);
+          // The heading names them, so each card names only the credit.
+          return { item: workAsItem(work), reason: reason ? { ...reason, label: reason.role } : undefined };
+        })
+        .filter(({ item }) => matchesTab(item, tab)),
+    [credits, tab]
+  );
+  if (cards.length === 0) return null;
+  // A work with no IMDb id has no page to open; searching its title is the next best thing.
+  const open = (item: SearchResponse) =>
+    item.url.startsWith('search://') ? onSearch?.(item.name) : onSelectMedia(item);
+  return (
+    <HomeRow
+      title={`With ${credits.name}`}
+      subtitle={entity.kind === 'company' ? 'Produced films and series' : 'Credited films and series'}
+      items={cards.map(({ item }) => item)}
+      hasMore={false}
+      onShowAll={() => onOpenEntity?.(entity)}
+      renderCard={(item, index) => (
+        <PosterCard
+          key={`${item.url}-${index}`}
+          item={item}
+          onSelectMedia={open}
+          onPlayDirectly={item.url.startsWith('search://') ? undefined : onPlayDirectly}
+          matchReason={cards[index].reason}
+        />
+      )}
+    />
+  );
+};
 
 /**
  * Renders the visible window of cards based on container scroll and responsive column metrics.
