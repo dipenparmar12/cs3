@@ -1,16 +1,10 @@
 import React, { useEffect, useRef, useState } from 'react';
 import {
   AlertTriangle,
-  Check,
-  Clapperboard,
   Copy,
-  Globe,
-  Languages,
   MoreHorizontal,
   Pencil,
   Save,
-  ShieldAlert,
-  Sparkles,
   Star,
   Trash2,
 } from 'lucide-react';
@@ -57,21 +51,6 @@ export interface SourceProfileBarProps {
   defaultId?: string;
   /** `all` clears the default. */
   onSetDefault?: (id: string) => void;
-}
-
-function builtInIcon(icon?: BuiltInProfileDef['icon']) {
-  switch (icon) {
-    case 'languages':
-      return <Languages size={13} aria-hidden />;
-    case 'sparkles':
-      return <Sparkles size={13} aria-hidden />;
-    case 'clapperboard':
-      return <Clapperboard size={13} aria-hidden />;
-    case 'shield':
-      return <ShieldAlert size={13} aria-hidden />;
-    default:
-      return <Globe size={13} aria-hidden />;
-  }
 }
 
 const count = (n: number) => `${n} ${n === 1 ? 'source' : 'sources'}`;
@@ -226,7 +205,7 @@ export const SourceProfileBar: React.FC<SourceProfileBarProps> = ({
         title={options.title}
         onClick={() => onActivate(id)}
       >
-        {active ? <Check size={13} aria-hidden className="profile-choice__check" /> : null}
+        <span className={`profile-choice__radio${active ? ' profile-choice__radio--on' : ''}`} aria-hidden />
         <span className="profile-choice__name">{label}</span>
         <span className="profile-choice__detail">{detail}</span>
       </button>
@@ -238,19 +217,33 @@ export const SourceProfileBar: React.FC<SourceProfileBarProps> = ({
   return (
     <section className="profile-chooser" aria-labelledby="profile-chooser-title" ref={section}>
       <div className="profile-chooser__head">
-        <h3 id="profile-chooser-title" className="scope-guided__section-title">
-          Profile
+        <h3 id="profile-chooser-title" className="profile-chooser__title">
+          Start from
         </h3>
-        <InfoHint label="About search profiles">
-          A profile is a saved set of sources. <strong>All sources</strong> searches everything you have
-          installed. While one of your profiles is selected, every change you make is saved to it. Changes
-          made from All sources or a preset become an unsaved selection: <strong>Save as profile</strong> keeps
-          it under a name. Switching never throws a selection away.
+        <InfoHint label="About source sets">
+          Pick one starting point; the filters below narrow it. A <strong>source set</strong> is a named list of
+          sources you saved. While one of yours is picked, changes are saved to it. Changes made from All
+          sources or a built-in set stay unsaved until you use <strong>Save as source set</strong>. Switching
+          never throws a selection away.
         </InfoHint>
+        {canSave && naming !== 'new' ? (
+          <Button
+            className="profile-chooser__save"
+            size="compact"
+            icon={Save}
+            onClick={() => {
+              setDeleting(null);
+              setNaming('new');
+              setName('');
+            }}
+          >
+            Save as source set
+          </Button>
+        ) : null}
       </div>
 
-      <div className="profile-chooser__row" role="group" aria-label="Your profiles">
-        {pill('all', <>{builtInIcon(all.icon)} {all.name}</>, all.count > 0 ? `${all.count}` : 'All', {
+      <div className="profile-chooser__row" role="group" aria-label="Your source sets">
+        {pill('all', all.name, all.count > 0 ? `${all.count}` : 'All', {
           title: all.description,
         })}
         {sorted.map((profile) => (
@@ -260,7 +253,7 @@ export const SourceProfileBar: React.FC<SourceProfileBarProps> = ({
               <>
                 {profile.name}
                 {defaultId === profile.id ? (
-                  <span className="profile-choice__default" title="New searches start from this profile">
+                  <span className="profile-choice__default" title="New searches start from this source set">
                     <Star size={11} aria-hidden /> Default
                   </span>
                 ) : null}
@@ -288,23 +281,10 @@ export const SourceProfileBar: React.FC<SourceProfileBarProps> = ({
         ))}
         {showDraft
           ? pill('', 'Unsaved selection', `${draftSize}`, {
-              title: `Your current selection, ${count(draftSize)}, not saved as a profile`,
+              title: `Your current selection, ${count(draftSize)}, not saved as a source set`,
               tone: 'draft',
             })
           : null}
-        {canSave && naming !== 'new' ? (
-          <Button
-            size="compact"
-            icon={Save}
-            onClick={() => {
-              setDeleting(null);
-              setNaming('new');
-              setName('');
-            }}
-          >
-            Save as profile
-          </Button>
-        ) : null}
       </div>
 
       {naming !== null ? (
@@ -328,8 +308,8 @@ export const SourceProfileBar: React.FC<SourceProfileBarProps> = ({
                 stopNaming();
               }
             }}
-            placeholder={naming === 'new' ? 'Profile name' : 'New name'}
-            aria-label={naming === 'new' ? 'Name for the new profile' : `New name for ${renaming?.name ?? 'this profile'}`}
+            placeholder={naming === 'new' ? 'Source set name' : 'New name'}
+            aria-label={naming === 'new' ? 'Name for the new source set' : `New name for ${renaming?.name ?? 'this source set'}`}
             aria-invalid={problem ? true : undefined}
             aria-describedby={problem ? 'profile-name-problem' : undefined}
           />
@@ -384,10 +364,10 @@ export const SourceProfileBar: React.FC<SourceProfileBarProps> = ({
       ) : null}
 
       {presets.length > 0 ? (
-        <div className="profile-chooser__row" role="group" aria-label="Presets">
-          <span className="profile-chooser__label">Presets</span>
+        <div className="profile-chooser__row" role="group" aria-label="Built-in source sets">
+          <span className="profile-chooser__label">Built-in</span>
           {presets.map((preset) =>
-            pill(preset.id, <>{builtInIcon(preset.icon)} {preset.name}</>, preset.count > 0 ? `${preset.count}` : '0', {
+            pill(preset.id, preset.name, preset.count > 0 ? `${preset.count}` : '0', {
               title: preset.disabled ? preset.disabledReason : `${preset.description} (${count(preset.count)})`,
               disabled: preset.disabled,
             })

@@ -473,6 +473,8 @@ export interface SourceScopeDialogProps {
   onReset: () => void;
   onClose: () => void;
   profileBar?: React.ReactNode;
+  /** What a tick in the filters changes: the source set picked above, or an unsaved selection. */
+  editNote?: string;
   healthFor?: (provider: string) => ProviderHealth | undefined;
 
   pendingImpact?: PendingImpactConfirmation | null;
@@ -527,6 +529,7 @@ export const SourceScopeDialog: React.FC<SourceScopeDialogProps> = ({
   onReset,
   onClose,
   profileBar,
+  editNote,
   healthFor,
   pendingImpact,
   onConfirmImpact,
@@ -762,8 +765,8 @@ export const SourceScopeDialog: React.FC<SourceScopeDialogProps> = ({
                 type="button"
                 className="scope-modal__back-btn"
                 onClick={() => setViewMode('guided')}
-                title="Back to search profiles and filters"
-                aria-label="Back to search profiles"
+                title="Back to source sets and filters"
+                aria-label="Back to source sets"
               >
                 <ArrowLeft size={16} />
               </button>
@@ -810,6 +813,12 @@ export const SourceScopeDialog: React.FC<SourceScopeDialogProps> = ({
 
             <div className="scope-guided__body">
 
+              {/* Filters: many at once, ticked like checkboxes; the band above is one choice. */}
+              <div className="scope-filters__head">
+                <h3 className="scope-filters__title">Narrow down</h3>
+                {editNote ? <span className="scope-filters__note">{editNote}</span> : null}
+              </div>
+
               {/* Content */}
               {available.types.length > 0 && (
                 <div className="scope-guided__section" role="group" aria-labelledby="scope-content-title">
@@ -834,7 +843,8 @@ export const SourceScopeDialog: React.FC<SourceScopeDialogProps> = ({
                           onClick={() => onToggleIntent('types', type)}
                           title={count !== undefined ? `${prettyType(type)}: ${count} sources` : prettyType(type)}
                         >
-                          {active ? <Check size={13} aria-hidden /> : getContentTypeIcon(type)}
+                          <Box state={active ? 'on' : 'off'} />
+                          {getContentTypeIcon(type)}
                           <span className="scope-guided__chip-label">{prettyType(type)}</span>
                           {count !== undefined && <span className="scope-guided__chip-count">{count}</span>}
                         </button>
@@ -870,11 +880,8 @@ export const SourceScopeDialog: React.FC<SourceScopeDialogProps> = ({
                         onClick={() => onToggleIntent('languages', lang)}
                         title={count !== undefined ? `${name}: ${count} sources` : name}
                       >
-                        {active ? (
-                          <Check size={13} aria-hidden />
-                        ) : (
-                          <FlagIcon flag={flag} size={14} fallback={code.slice(0, 2)} />
-                        )}
+                        <Box state={active ? 'on' : 'off'} />
+                        <FlagIcon flag={flag} size={14} fallback={code.slice(0, 2)} />
                         <span className="scope-guided__chip-label">{fullName || code}</span>
                         {count !== undefined && <span className="scope-guided__chip-count">{count}</span>}
                       </button>

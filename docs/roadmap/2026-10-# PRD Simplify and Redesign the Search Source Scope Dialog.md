@@ -1,4 +1,4 @@
-> **Built 2026-10-29.** `SourceProfileBar.tsx` (profiles as visible choices, Save as profile, name checks in `profileNaming.ts`, Replace), `SourceScopeDialog.tsx` (all chips, ⓘ help, one footer summary), `SearchScopePicker.tsx` (`onReplace`, save feedback), styles in `sources.css`. Checked in the built app on a copy of the scratch profile. Status lives in `ROADMAP.md`.
+> **Built 2026-10-29.** On screen, search profiles are **source sets**, and **Start from** (one set, radio marks) is drawn unlike **Narrow down** (filters, checkbox pills). `SourceProfileBar.tsx` (sets as visible choices, Save as source set, name checks in `profileNaming.ts`, Replace), `SourceScopeDialog.tsx` (all chips, ⓘ help, one footer summary), `SearchScopePicker.tsx` (`onReplace`, save feedback), styles in `sources.css`. Checked in the built app on a copy of the scratch profile. Status lives in `ROADMAP.md`.
 
 # PRD: Simplify and Redesign the Search Source Scope Dialog
 

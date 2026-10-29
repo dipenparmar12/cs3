@@ -1054,7 +1054,7 @@ export const SearchScopePicker: React.FC<SearchScopePickerProps> = ({
         const preset = id.slice('builtin:'.length) as BuiltInPreset;
         const nextIntent = presetIntent(preset, available);
         const target = providersForIntent(repositories, nextIntent, isSelectable);
-        const name = builtInProfiles.find((b) => b.id === id)?.name ?? 'Built-in profile';
+        const name = builtInProfiles.find((b) => b.id === id)?.name ?? 'Built-in source set';
         if (target.size === 0) {
           triggerFeedback(`No installed source matches “${name}”.`);
           return;
@@ -1095,18 +1095,18 @@ export const SearchScopePicker: React.FC<SearchScopePickerProps> = ({
 
       if (hasUnsavedDraft) {
         applyWithImpactCheck(
-          `Switch to profile “${custom?.name ?? 'profile'}”`,
+          `Switch to “${custom?.name ?? 'the source set'}”`,
           `This will replace your current unsaved selection with “${custom?.name}”.`,
           targetProv,
           targetIdx,
           () => {
             void window.cloudstream?.activateSourceProfile?.(id).then(applyProfiles);
           },
-          `Switched to profile “${custom?.name}”.`
+          `Switched to “${custom?.name}”.`
         );
       } else {
         void window.cloudstream?.activateSourceProfile?.(id).then(applyProfiles);
-        triggerFeedback(`Switched to profile “${custom?.name}”.`);
+        triggerFeedback(`Switched to “${custom?.name}”.`);
       }
     },
     [
@@ -1132,7 +1132,7 @@ export const SearchScopePicker: React.FC<SearchScopePickerProps> = ({
   const handleReplaceProfile = useCallback(
     (id: string) => {
       const keep = { providers: new Set(providers), indexers: new Set(chosenIndexers), intent };
-      const name = profiles.find((p) => p.id === id)?.name ?? 'the profile';
+      const name = profiles.find((p) => p.id === id)?.name ?? 'the source set';
       void window.cloudstream?.activateSourceProfile?.(id).then(() => {
         persist(keep.providers, keep.indexers, keep.intent);
         triggerFeedback(`Saved to “${name}”.`);
@@ -1140,6 +1140,12 @@ export const SearchScopePicker: React.FC<SearchScopePickerProps> = ({
     },
     [providers, chosenIndexers, intent, profiles, persist, triggerFeedback]
   );
+
+  /** What ticking a filter changes, said once beside the filters (`sourceProfiles.edit`). */
+  const activeSet = profiles.find((p) => p.id === activeProfile);
+  const editNote = activeSet
+    ? `Changes are saved to “${activeSet.name}”.`
+    : 'Changes stay unsaved until you save them as a source set.';
 
   const label =
     totalChosen === 0
@@ -1222,6 +1228,7 @@ export const SearchScopePicker: React.FC<SearchScopePickerProps> = ({
           onCancelImpact={handleCancelImpact}
           feedbackToast={feedbackToast}
           onDismissFeedback={handleDismissFeedback}
+          editNote={editNote}
           profileBar={
             <SourceProfileBar
               profiles={profiles}

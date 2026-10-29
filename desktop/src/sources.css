@@ -9248,8 +9248,17 @@ video::cue {
 /* --- Search profiles: every choice visible, saved with one button ---------
    Replaces a hero card whose choices sat behind a "Change" dropdown. Theme
    tokens only: the app has one (dark) theme, and a light one would inherit. */
-.profile-chooser { display: flex; flex-direction: column; gap: 0.6rem; padding: 1.1rem 1.4rem 0; }
+.profile-chooser {
+  display: flex; flex-direction: column; gap: 0.6rem;
+  padding: 1rem 1.4rem 1.1rem;
+  background: rgba(255, 255, 255, 0.035);
+  border-bottom: 1px solid var(--border-color);
+}
 .profile-chooser__head { display: flex; align-items: center; gap: 0.4rem; }
+/* The two steps of the dialog share one heading style: Start from, Narrow down. */
+.profile-chooser__title,
+.scope-filters__title { margin: 0; font-size: 0.95rem; font-weight: 700; color: var(--text-main); }
+.profile-chooser__save { margin-left: auto; }
 .profile-chooser__row { display: flex; flex-wrap: wrap; align-items: center; gap: 0.45rem; }
 .profile-chooser__label { margin-right: 0.15rem; font-size: 0.75rem; color: var(--text-subtle); }
 .profile-chooser__form { display: flex; flex-wrap: wrap; align-items: center; gap: 0.5rem; }
@@ -9262,9 +9271,9 @@ video::cue {
 .profile-chooser__confirm { font-size: 0.82rem; color: var(--text-main); }
 
 .profile-choice {
-  display: inline-flex; align-items: center; gap: 0.4rem;
-  min-height: 32px; padding: 0.3rem 0.7rem;
-  border: 1px solid var(--border-color); border-radius: 8px;
+  display: inline-flex; align-items: center; gap: 0.45rem;
+  min-height: 32px; padding: 0.3rem 0.75rem 0.3rem 0.6rem;
+  border: 1px solid var(--border-color); border-radius: 6px;
   background: transparent; color: var(--text-main);
   font-size: 0.8rem; cursor: pointer;
 }
@@ -9274,7 +9283,12 @@ video::cue {
 /* Selected: border, fill, weight and a check mark, never colour alone. */
 .profile-choice--active { border-color: var(--accent-light); background: rgba(96, 165, 250, 0.16); font-weight: 600; }
 .profile-choice--draft { border-style: dashed; }
-.profile-choice__check { color: var(--accent-light); }
+/* A radio mark: exactly one starting point is picked. */
+.profile-choice__radio {
+  flex: 0 0 auto; width: 13px; height: 13px; border-radius: 50%;
+  border: 1.5px solid var(--text-subtle);
+}
+.profile-choice__radio--on { border-color: var(--accent-light); background: var(--accent-light); box-shadow: inset 0 0 0 2.5px var(--bg-card); }
 .profile-choice__name { display: inline-flex; align-items: center; gap: 0.35rem; }
 .profile-choice__detail { font-size: 0.72rem; font-variant-numeric: tabular-nums; color: var(--text-muted); }
 .profile-choice__default { display: inline-flex; align-items: center; gap: 0.2rem; font-size: 0.68rem; font-weight: 500; color: var(--text-muted); }
@@ -9283,7 +9297,7 @@ video::cue {
 .profile-choice__wrap .profile-choice { border-top-right-radius: 0; border-bottom-right-radius: 0; }
 .profile-choice__wrap .profile-choice__more {
   min-height: 32px; border: 1px solid var(--border-color); border-left: 0;
-  border-radius: 0 8px 8px 0;
+  border-radius: 0 6px 6px 0;
 }
 
 /* --- Level 1: Quick Setup Body ---------------------------------------------- */
@@ -9309,12 +9323,15 @@ video::cue {
   gap: 0.6rem;
 }
 
+/* Content and Languages are parts of Narrow down, so they sit a level below it. */
 .scope-guided__section-title {
   margin: 0;
-  font-size: 0.88rem;
-  font-weight: 700;
-  color: var(--text-main);
+  font-size: 0.78rem;
+  font-weight: 600;
+  color: var(--text-muted);
 }
+.scope-filters__head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 0.6rem; margin-bottom: -0.4rem; }
+.scope-filters__note { font-size: 0.78rem; color: var(--text-muted); }
 
 .scope-guided__chips-grid {
   display: flex;
@@ -9326,8 +9343,8 @@ video::cue {
   display: inline-flex;
   align-items: center;
   gap: 0.45rem;
-  padding: 0.42rem 0.75rem;
-  border-radius: 8px;
+  padding: 0.38rem 0.8rem 0.38rem 0.55rem;
+  border-radius: 999px;
   border: 1px solid var(--border-color);
   background: rgba(255, 255, 255, 0.03);
   color: var(--text-main);
