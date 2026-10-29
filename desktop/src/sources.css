@@ -3646,6 +3646,25 @@
   opacity: 1;
 }
 
+/* Top-left, opposite the type badge: the corner nothing else uses. */
+.poster-reason {
+  position: absolute;
+  top: 8px;
+  left: 8px;
+  z-index: 2;
+  max-width: calc(100% - 5.5rem);
+  padding: 3px 7px;
+  border-radius: var(--radius-sm);
+  background: rgba(0, 0, 0, 0.75);
+  backdrop-filter: blur(4px);
+  color: #fff;
+  font-size: 0.7rem;
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
 .poster-state {
   position: absolute;
   left: 0.4rem;

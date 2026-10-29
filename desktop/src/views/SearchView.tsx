@@ -27,6 +27,12 @@ import { type SearchUiState } from './searchUiState';
 import { Button, Menu } from '../components/ui';
 import { filterAdultItems, isSensitiveTitle } from '../utils/adultContent';
 import { useAdultMode } from '../utils/useAdultMode';
+import { useCreditsForQuery } from '../components/search/useCreditsForQuery';
+import { matchReasons } from '../utils/matchReasons';
+import type { Filmography } from '../types/filmography';
+
+/** The credited work of the person or company the query names; cards say which credit put them here. */
+const CreditsContext = React.createContext<Filmography | null>(null);
 
 interface SearchViewProps {
   query: string;
@@ -340,6 +346,7 @@ export const SearchView: React.FC<SearchViewProps> = ({
 }) => {
   const { sourceFilter, typeTab, openGroups } = ui;
   const adult = useAdultMode();
+  const credits = useCreditsForQuery(search?.query ?? query);
   /** The provider names the fix modal is open for, or null when it is closed. */
   const [fixing, setFixing] = useState<string[] | null>(null);
   const missingCount =
@@ -527,6 +534,7 @@ export const SearchView: React.FC<SearchViewProps> = ({
   }
 
   return (
+    <CreditsContext.Provider value={credits}>
     <ResultContextMenuProvider actions={menuActions}>
     <div style={{ display: 'flex', flexDirection: 'column', gap: '0.85rem' }}>
       {menuNotice && (
@@ -749,6 +757,7 @@ export const SearchView: React.FC<SearchViewProps> = ({
       )}
     </div>
     </ResultContextMenuProvider>
+    </CreditsContext.Provider>
   );
 };
 
@@ -901,6 +910,8 @@ const VirtualCardGrid: React.FC<VirtualCardGridProps> = ({
   const [viewportHeight, setViewportHeight] = useState(0);
   const [focusedUrl, setFocusedUrl] = useState<string | null>(null);
   const openMenu = useOpenResultMenu();
+  const credits = React.useContext(CreditsContext);
+  const reasons = useMemo(() => (credits ? matchReasons(items, credits) : null), [items, credits]);
 
   // Layout effect measures container metrics and grid offset once on mount,
   // and updates when container resizes or item count changes.
@@ -1037,6 +1048,7 @@ const VirtualCardGrid: React.FC<VirtualCardGridProps> = ({
                 onSelectMedia={onSelectMedia}
                 onPlayDirectly={onPlayDirectly}
                 interaction={interactionFor(item)}
+                matchReason={item.url ? reasons?.get(item.url) : undefined}
               />
             </div>
           </div>

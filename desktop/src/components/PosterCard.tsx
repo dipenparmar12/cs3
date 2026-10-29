@@ -12,6 +12,7 @@ import {
   Zap,
 } from 'lucide-react';
 import type { SearchResponse } from '../types/api';
+import type { MatchReason } from '../utils/matchReasons';
 import type { TitleInteraction } from '../types/interactions';
 import { CardBadge, badgeLabel, badgeTooltip, cardStateFor, primaryBadge } from '../utils/cardState';
 import { ContentHoverCard } from './ContentHoverCard';
@@ -63,6 +64,8 @@ interface PosterCardProps {
   variantsIdentical?: boolean;
   /** The caption to show instead of `item.name` — the title without file tags. */
   displayName?: string;
+  /** Why a person's or company's search found this title ("Cast: John Cena"). */
+  matchReason?: MatchReason;
 }
 
 /** The glyph for each state. Small, monochrome, and never a colour on its own. */
@@ -92,6 +95,7 @@ export const PosterCard: React.FC<PosterCardProps> = React.memo(({
   variantSummary,
   variantsIdentical = false,
   displayName,
+  matchReason,
 }) => {
   const cardRef = useRef<HTMLDivElement | null>(null);
   const [hoverCardOpen, setHoverCardOpen] = useState(false);
@@ -212,6 +216,11 @@ export const PosterCard: React.FC<PosterCardProps> = React.memo(({
           itemKey={item?.url || item?.name}
           showRevealControl={isAdult}
         />
+        {matchReason && (
+          <span className="poster-reason" title={matchReason.detail}>
+            {matchReason.label}
+          </span>
+        )}
         {item?.isExactMatch ? (
           <span className="poster-badge poster-badge--match">
             <Target size={11} aria-hidden /> Best match

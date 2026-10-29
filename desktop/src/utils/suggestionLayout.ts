@@ -12,11 +12,14 @@ export interface SuggestionRow {
   index: number;
 }
 
-function fold(value: string): string {
+/** Case, accents and punctuation folded: how a typed name is compared with a catalogue's. */
+export function foldName(value: string): string {
   return value
     .normalize('NFKD')
     .replace(/\p{M}/gu, '')
     .toLowerCase()
+    // "Surf’s Up" is "Surfs Up", not "Surf s Up".
+    .replace(/['’]/g, '')
     .replace(/[^\p{L}\p{N}]+/gu, ' ')
     .trim();
 }
@@ -32,9 +35,9 @@ export function entitiesFirst(
   titles: ReadonlyArray<{ title: string; originalTitle?: string }>,
   entities: ReadonlyArray<{ name: string }>
 ): boolean {
-  const wanted = fold(query);
-  if (!wanted || !entities.some((entity) => fold(entity.name) === wanted)) return false;
-  return !titles.some((title) => fold(title.title) === wanted || (title.originalTitle && fold(title.originalTitle) === wanted));
+  const wanted = foldName(query);
+  if (!wanted || !entities.some((entity) => foldName(entity.name) === wanted)) return false;
+  return !titles.some((title) => foldName(title.title) === wanted || (title.originalTitle && foldName(title.originalTitle) === wanted));
 }
 
 /** The order of the three blocks. History leads only while the box is empty. */
