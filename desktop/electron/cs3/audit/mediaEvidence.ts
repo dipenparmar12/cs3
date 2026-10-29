@@ -35,7 +35,9 @@ export function judgeInspection(inspection: InspectionLike, budgetSpent: boolean
     transport: inspection.transport,
     drm: inspection.drm.type,
     probeIncomplete: inspection.probeIncomplete,
-    probeBytes: inspection.probeBytesTransferred,
+    // The inspector's `probeBytesTransferred` is the probe size it asked ffprobe for, not bytes read;
+    // the bytes the source cost are the record's own `bytes`, counted by the meter.
+    probeSize: inspection.probeBytesTransferred,
   };
   if (!meta) {
     if (budgetSpent) return { outcome: 'inconclusive', reason: 'budget-exhausted', evidence };
@@ -66,7 +68,7 @@ export interface RouteProfile {
   native: NativeEngineCapability;
 }
 
-const PLAIN: RendererCapabilities = { video: { h264: true, vp8: true, vp9: true, av1: true, hevc: false, hevc10: false } };
+export const PLAIN: RendererCapabilities = { video: { h264: true, vp8: true, vp9: true, av1: true, hevc: false, hevc10: false } };
 const HEVC: RendererCapabilities = { video: { h264: true, vp8: true, vp9: true, av1: true, hevc: true, hevc10: true } };
 const SOFTWARE: HostEncodeCapability = { hardware: false, accelerator: 'cpu', logicalCores: 8 };
 const QSV: HostEncodeCapability = { hardware: true, accelerator: 'qsv', logicalCores: 8 };
@@ -83,7 +85,7 @@ export const ROUTE_PROFILES: RouteProfile[] = [PLAIN, HEVC].flatMap((renderer, r
   )
 );
 
-const FFMPEG_STRATEGIES: ReadonlySet<PlaybackStrategyType> = new Set<PlaybackStrategyType>([
+export const FFMPEG_STRATEGIES: ReadonlySet<PlaybackStrategyType> = new Set<PlaybackStrategyType>([
   'REMUX_CONTAINER',
   'AUDIO_TRANSCODE',
   'VIDEO_TRANSCODE',

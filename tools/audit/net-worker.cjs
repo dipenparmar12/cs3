@@ -4,8 +4,9 @@
  * Compatibility Audit PRD §5.1, G-03). Node's `fetch` honours neither the
  * system proxy nor the app's DNS, and judges some hosts differently.
  *
- * Headless Electron, no window, its own throwaway userData (the first
- * argument) and an in-memory session: nothing it does touches a real profile.
+ * Headless Electron (S10 opens one hidden window per playback), its own
+ * throwaway userData (the first argument) and an in-memory session: nothing
+ * it does touches a real profile.
  * It prints one ready line on stdout, `{"id":"ready","port":…,"token":…}`,
  * and then takes requests as JSON POSTs to that loopback port carrying the
  * token in `X-Audit-Token` (Electron's main process gets no usable stdin on
@@ -14,6 +15,14 @@
  *   → {"op":"fetch","url":"…","method":"GET","headers":{…},"cap":65536,"timeoutMs":20000}
  *   ← {"ok":true,"status":206,"headers":{…},"url":"…","redirects":["host",…],
  *      "body":"<base64>","bytes":65536,"truncated":true,"ms":412}
+ *   → {"op":"stream","url":"…","method":"GET","headers":{…},"cap":33554432,"timeoutMs":20000}
+ *   ← the upstream body itself, as it arrives; status, headers, final URL and
+ *     redirects in `x-audit-status`, `x-audit-headers` (base64 JSON),
+ *     `x-audit-url`, `x-audit-redirects`. The socket is destroyed, never
+ *     ended, when the cap is reached or upstream fails mid-body, so a cut body
+ *     never reads as the end of the file; hanging up aborts the upstream.
+ *   → {"op":"play","src":"http://127.0.0.1:…","kind":"hls"|"file","wallMs":12000,"enoughSeconds":5}
+ *   ← {"ok":true,"playedSeconds":5.1,"startMs":880,"width":1280,…,"error":null,"wallMs":6400}
  *   → {"op":"quit"}
  *
  * It quits when the runner's process (`CS3_AUDIT_PARENT_PID`) is gone.
@@ -26,9 +35,10 @@
  *
  *   desktop/node_modules/electron/dist/electron tools/audit/net-worker.cjs <userDataDir>
  */
-const { app, session } = require('electron');
+const { app, BrowserWindow, session } = require('electron');
 const crypto = require('node:crypto');
 const http = require('node:http');
+const path = require('node:path');
 
 const CHROME_USER_AGENT =
   'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36';
@@ -37,6 +47,11 @@ const MAX_REDIRECTS = 8;
 const userData = process.argv.find((arg, i) => i > 1 && !arg.startsWith('-') && !arg.endsWith('.cjs'));
 if (userData) app.setPath('userData', userData);
 app.disableHardwareAcceleration();
+// S10 plays in a window nobody sees: it must start unprompted and keep playing while hidden.
+app.commandLine.appendSwitch('autoplay-policy', 'no-user-gesture-required');
+app.commandLine.appendSwitch('disable-renderer-backgrounding');
+app.commandLine.appendSwitch('disable-background-media-suspend');
+app.commandLine.appendSwitch('disable-backgrounding-occluded-windows');
 app.on('window-all-closed', () => {});
 
 function send(frame) {
@@ -152,6 +167,109 @@ async function fetchOnce(ses, request) {
   }
 }
 
+/** Fetch, but hand the body through as it arrives (the app's proxy streams; a slice that must fill first does not). */
+async function stream(ses, request, res) {
+  const controller = new AbortController();
+  const headersTimer = setTimeout(() => controller.abort(), request.timeoutMs ?? 20_000);
+  let idle;
+  const stall = () => {
+    clearTimeout(idle);
+    idle = setTimeout(() => controller.abort(), request.timeoutMs ?? 20_000);
+  };
+  // The consumer hung up: stop the transfer, do not finish it (AGENTS §9).
+  res.on('close', () => {
+    if (!res.writableFinished) controller.abort();
+  });
+  const headers = { ...(request.headers ?? {}) };
+  const hasUa = Object.keys(headers).some((k) => k.toLowerCase() === 'user-agent');
+  if (!hasUa && !request.noUserAgent) headers['User-Agent'] = CHROME_USER_AGENT;
+  let response;
+  try {
+    response = await ses.fetch(request.url, {
+      method: request.method ?? 'GET',
+      headers,
+      redirect: 'follow',
+      referrerPolicy: 'unsafe-url',
+      signal: controller.signal,
+      bypassCustomProtocolHandlers: true,
+    });
+  } catch (error) {
+    clearTimeout(headersTimer);
+    const message = controller.signal.aborted ? 'timed out' : String(error?.message ?? error);
+    res.writeHead(502, { 'content-type': 'application/json' }).end(JSON.stringify({ ok: false, error: message }));
+    return;
+  }
+  clearTimeout(headersTimer);
+  const { hosts, finalUrl } = walkRedirects(request.url);
+  res.writeHead(200, {
+    'content-type': 'application/octet-stream',
+    'x-audit-status': String(response.status),
+    'x-audit-headers': Buffer.from(JSON.stringify(headersOf(response))).toString('base64'),
+    'x-audit-url': encodeURI(finalUrl),
+    'x-audit-redirects': hosts.join(','),
+  });
+  if (!response.body || request.method === 'HEAD') {
+    res.end();
+    return;
+  }
+  const reader = response.body.getReader();
+  const cap = request.cap ?? 65536;
+  let bytes = 0;
+  try {
+    stall();
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      stall();
+      const room = cap - bytes;
+      const chunk = value.byteLength > room ? value.subarray(0, room) : value;
+      bytes += chunk.byteLength;
+      if (!res.write(Buffer.from(chunk.buffer, chunk.byteOffset, chunk.byteLength))) {
+        await new Promise((resolve) => res.once('drain', resolve).once('close', resolve));
+      }
+      if (bytes >= cap) throw new Error('cap reached');
+    }
+    res.end();
+  } catch {
+    await reader.cancel().catch(() => {});
+    controller.abort();
+    res.destroy();
+  } finally {
+    clearTimeout(idle);
+  }
+}
+
+/**
+ * S10's element tier: `play.html` in a hidden window, read every 250 ms
+ * until the playhead has moved `enoughSeconds`, the element reports an
+ * error, or `wallMs` runs out. The window is destroyed either way.
+ */
+async function play(ses, request) {
+  const started = Date.now();
+  const window = new BrowserWindow({
+    show: false,
+    width: 640,
+    height: 360,
+    webPreferences: { session: ses, backgroundThrottling: false, contextIsolation: true, sandbox: true },
+  });
+  let last = null;
+  try {
+    const page = path.join(__dirname, 'play.html');
+    const hash = encodeURIComponent(JSON.stringify({ src: request.src, kind: request.kind }));
+    await window.loadFile(page, { hash });
+    while (Date.now() - started < request.wallMs) {
+      await new Promise((resolve) => setTimeout(resolve, 250));
+      last = await window.webContents.executeJavaScript('window.__auditRead()');
+      if (last.error || last.playedSeconds >= request.enoughSeconds) break;
+    }
+    return { ok: true, ...last, wallMs: Date.now() - started };
+  } catch (error) {
+    return { ok: false, error: String(error?.message ?? error), wallMs: Date.now() - started, ...(last ? { last } : {}) };
+  } finally {
+    window.destroy();
+  }
+}
+
 app.whenReady().then(() => {
   const ses = session.fromPartition(`audit-${process.pid}`);
   ses.webRequest.onBeforeRedirect((details) => noteRedirect(details.url, details.redirectURL));
@@ -175,6 +293,10 @@ app.whenReady().then(() => {
       if (request.op === 'quit') {
         reply({ ok: true });
         setImmediate(() => app.quit());
+      } else if (request.op === 'stream') {
+        void stream(ses, request, res);
+      } else if (request.op === 'play') {
+        void play(ses, request).then(reply);
       } else if (request.op === 'fetch') {
         void fetchOnce(ses, request).then(reply);
       } else {

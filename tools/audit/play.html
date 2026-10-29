@@ -1,0 +1,70 @@
+<!doctype html>
+<!--
+  S10's element tier (Provider Compatibility Audit PRD §6.1): one source in a
+  muted <video>, through hls.js for HLS with the player's own configuration
+  (VideoPlayer.tsx). Loaded by net-worker.cjs in a hidden window, which reads
+  window.__audit until the playhead has moved far enough or the wall runs out.
+  The source is a loopback address of the runner's MediaProxy.
+-->
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <script src="../../desktop/node_modules/hls.js/dist/hls.min.js"></script>
+  </head>
+  <body>
+    <video muted playsinline></video>
+    <script>
+      const params = JSON.parse(decodeURIComponent(location.hash.slice(1)));
+      const video = document.querySelector('video');
+      const started = performance.now();
+      const audit = (window.__audit = { startMs: null, stalls: 0, error: null, firstTime: null, fragments: 0, issue: null });
+
+      const fail = (kind, message) => {
+        if (!audit.error) audit.error = { kind, message };
+      };
+      video.addEventListener('playing', () => {
+        if (audit.startMs === null) audit.startMs = Math.round(performance.now() - started);
+      });
+      video.addEventListener('timeupdate', () => {
+        if (audit.firstTime === null && video.currentTime > 0) audit.firstTime = video.currentTime;
+      });
+      video.addEventListener('waiting', () => {
+        if (audit.startMs !== null) audit.stalls++;
+      });
+      video.addEventListener('error', () => {
+        const error = video.error;
+        // MEDIA_ERR_NETWORK is the source going away, not the element failing to decode.
+        fail(error && error.code === 2 ? 'network' : 'decode', `MediaError ${error && error.code}: ${(error && error.message) || ''}`);
+      });
+
+      if (params.kind === 'hls' && window.Hls && Hls.isSupported()) {
+        const hls = new Hls({ enableWorker: true, lowLatencyMode: true });
+        hls.on(Hls.Events.FRAG_LOADED, () => audit.fragments++);
+        hls.on(Hls.Events.ERROR, (_event, data) => {
+          // Kept for the record: a stream that never starts says why.
+          audit.issue = `${data.type}: ${data.details}${data.response ? ` (HTTP ${data.response.code})` : ''}`;
+          if (!data.fatal) return;
+          fail(data.type === 'networkError' ? 'network' : 'decode', `hls.js ${data.type}: ${data.details}`);
+        });
+        hls.loadSource(params.src);
+        hls.attachMedia(video);
+      } else {
+        video.src = params.src;
+      }
+      video.play().catch((error) => fail('other', `play() refused: ${error && error.message}`));
+
+      window.__auditRead = () => {
+        const quality = video.getVideoPlaybackQuality ? video.getVideoPlaybackQuality() : {};
+        return {
+          ...audit,
+          // From the first moment it moved, so a resumed start position is not counted as played.
+          playedSeconds: audit.firstTime === null ? 0 : Math.max(0, video.currentTime - audit.firstTime),
+          width: video.videoWidth,
+          height: video.videoHeight,
+          decodedFrames: quality.totalVideoFrames,
+          droppedFrames: quality.droppedVideoFrames,
+        };
+      };
+    </script>
+  </body>
+</html>

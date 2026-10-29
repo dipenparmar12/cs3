@@ -47,6 +47,8 @@ test('each verdict from its own evidence', () => {
   assert.equal(verdict(r('S7', 'pass'), r('S8', 'pass'), r('S9', 'pass')), 'compatible');
   assert.equal(verdict(r('S7', 'pass'), r('S8', 'pass'), r('S9', 'fail', { owner: 'app-media' })), 'app-gap');
   assert.equal(verdict(r('S7', 'pass'), r('S8', 'fail', { owner: 'app-media' })), 'app-gap');
+  assert.equal(verdict(r('S8', 'pass'), r('S9', 'pass'), r('S10', 'fail', { owner: 'app-media' })), 'app-gap');
+  assert.equal(verdict(r('S8', 'pass'), r('S9', 'pass'), r('S10', 'inconclusive', { reason: 'network-flaky' })), 'compatible');
   assert.equal(verdict(r('S7', 'pass'), r('S8', 'inconclusive', { reason: 'probe-incomplete' })), 'reachable-only');
   assert.equal(verdict(r('S3', 'inconclusive', { reason: 'challenge' })), 'walled');
   assert.equal(verdict(r('S3', 'pass'), r('S4', 'fail', { owner: 'provider-plugin' })), 'plugin-broken');

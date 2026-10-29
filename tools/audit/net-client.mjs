@@ -111,41 +111,55 @@ export class NetWorker {
 }
 
 const NO_BODY = new Set([101, 204, 205, 304]);
-/**
- * One request's slice when the proxy asks for an open range: enough for a
- * probe, never a film. At 4 MB an MP4 probe cost 8.8 MB (head, then the
- * tail); at 1 MB ffprobe asks again where it needs more, and stops sooner.
- */
-const SLICE = 1024 * 1024;
+
+const SPENT = 'The audit byte budget for this source is spent.';
 
 /**
- * A `fetch` for `MediaProxy`, over the worker, drawing on `meter`. Once the
- * meter is spent every further request fails, which the inspector reports as
- * an incomplete probe: the source is `inconclusive: budget-exhausted`, never
- * read further.
+ * A `fetch` for `MediaProxy`, over the worker's `stream` op, drawing on
+ * `meter`: the body arrives as upstream sends it, counted chunk by chunk,
+ * and stops when the meter is spent (an error, never a clean end) or when
+ * the proxy's consumer hangs up (the abort reaches the worker, which aborts
+ * the upstream).
+ *
+ * Slicing came first and was wrong twice. A body cut at the slice read as
+ * the end of the file (ffprobe: "error reading header … End of file" on MP4s
+ * indexed at the end; HLS segments over 1 MB arrived short). Read on demand
+ * in slices, each slice still had to fill before anything moved: on a
+ * 330 KB/s CDN a 4 MB slice is 12 s, the whole S10 wall, before one frame.
  */
 export function meteredFetch(worker, meter) {
   return async (input, init = {}) => {
-    if (meter.exhausted) throw new Error('The audit byte budget for this source is spent.');
+    if (meter.exhausted) throw new Error(SPENT);
+    const method = init.method ?? 'GET';
     const headers = {};
     new Headers(init.headers ?? {}).forEach((value, key) => {
       headers[key] = value;
     });
-    const result = await worker.fetch({
-      url: String(input),
-      method: init.method ?? 'GET',
-      headers,
-      cap: Math.min(SLICE, meter.remaining),
-      timeoutMs: 20_000,
+    const control = await fetch(worker.control, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'x-audit-token': worker.token },
+      body: JSON.stringify({ op: 'stream', url: String(input), method, headers, cap: meter.remaining, timeoutMs: 20_000 }),
+      signal: init.signal,
     });
-    if (!result.ok) throw new Error(result.error ?? 'network worker failed');
-    meter.add(result.bytes);
-    const responseHeaders = new Headers(result.headers ?? {});
-    // The body may be cut short; a length the proxy would trust must not survive that.
-    if (result.truncated) responseHeaders.delete('content-length');
-    return new Response(NO_BODY.has(result.status) ? null : result.body, {
-      status: result.status,
-      headers: responseHeaders,
-    });
+    if (control.status !== 200) {
+      const answer = await control.json().catch(() => ({}));
+      throw new Error(answer.error ?? `network worker answered HTTP ${control.status}`);
+    }
+    const status = Number(control.headers.get('x-audit-status'));
+    const upstreamHeaders = new Headers(JSON.parse(Buffer.from(control.headers.get('x-audit-headers') ?? '', 'base64').toString('utf8') || '{}'));
+    if (NO_BODY.has(status) || method === 'HEAD' || !control.body) {
+      await control.body?.cancel().catch(() => {});
+      return new Response(null, { status, headers: upstreamHeaders });
+    }
+    const counted = control.body.pipeThrough(
+      new TransformStream({
+        transform(chunk, controller) {
+          meter.add(chunk.byteLength);
+          controller.enqueue(chunk);
+          if (meter.exhausted) controller.error(new Error(SPENT));
+        },
+      })
+    );
+    return new Response(counted, { status, headers: upstreamHeaders });
   };
 }

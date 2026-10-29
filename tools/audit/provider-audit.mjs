@@ -17,8 +17,11 @@
  * inspect (the shipping `MediaProxy` and `MediaInspector`, under a 16 MB cap)
  * and S9 route (`decideStrategy` on eight machine profiles). Every source byte
  * goes through the headless Electron worker (`net-worker.cjs`), so Chromium's
- * network judges the source as the app's would. S10 (playback) is not built
- * and is written `skipped: stage-filter`, never as a pass or a failure.
+ * network judges the source as the app's would. S10 (play) is opt-in
+ * (`--verify element|ffmpeg|mpv|all`): the first routed source per provider
+ * plays on the tier its route on this machine names, `<video>`/hls.js in the
+ * worker's hidden window, the shipping `MediaTranscoder`, or mpv, each capped
+ * at 32 MB and 12 s. Without it S10 is `skipped: stage-filter`.
  *
  * Usage (from the repo root; Java 21 and sidecar/target/cs3-sidecar.jar needed):
  *   node --experimental-strip-types tools/audit/provider-audit.mjs list --profile <userData dir>
@@ -29,7 +32,8 @@
  *   node --experimental-strip-types tools/audit/provider-audit.mjs diff <runIdA> <runIdB>
  *
  * Options: --archive <file.cs3> (repeatable) · --include-adult · --rows 2 ·
- * --offline (S0–S6 only, no network worker) · --out <dir> (default
+ * --offline (S0–S6 only, no network worker) · --verify none|element|ffmpeg|mpv|all
+ * (S10, default none) · --out <dir> (default
  * tools/audit/runs) · --java <path> · --verbose
  *
  * A maintainer tool: it contacts third-party sites, one request at a time per
@@ -37,7 +41,7 @@
  * regressions · 2 could not run.
  */
 
-import { execFileSync } from 'node:child_process';
+import { execFile, execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import fs from 'node:fs';
 import os from 'node:os';
@@ -49,9 +53,12 @@ import { attribute } from '../../desktop/electron/cs3/audit/attribution.ts';
 import { BYTE_CAPS, ByteMeter, HostLimiter } from '../../desktop/electron/cs3/audit/budget.ts';
 import { judgeInspection, judgeRoute } from '../../desktop/electron/cs3/audit/mediaEvidence.ts';
 import { judgeReach, judgeSite } from '../../desktop/electron/cs3/audit/networkEvidence.ts';
-import { MediaInspector } from '../../desktop/electron/media/mediaInspector.ts';
+import { detectExtensionPicky, detectToneMapSupport, MediaInspector } from '../../desktop/electron/media/mediaInspector.ts';
 import { MediaProxy } from '../../desktop/electron/mediaProxy.ts';
 import { NetWorker, meteredFetch } from './net-client.mjs';
+import { playConversion, playElement, playMpv } from './players.mjs';
+import { judgePlayback, playbackTiers, VERIFY_CAPS, VERIFY_REQUESTS } from '../../desktop/electron/cs3/audit/playbackEvidence.ts';
+import { MediaTranscoder } from '../../desktop/electron/mediaTranscoder.ts';
 import { diffRuns, hasRegressions } from '../../desktop/electron/cs3/audit/diff.ts';
 import {
   AUDIT_SCHEMA_VERSION,
@@ -78,19 +85,24 @@ const DEFAULT_OUT = path.join(HERE, 'runs');
 const RPC_TIMEOUT_MS = 90_000;
 const LOAD_TIMEOUT_MS = 180_000;
 /** The ffprobe the app ships (`build-media-runtime.mjs`), else one on PATH. */
-const FFPROBE = (() => {
-  const exe = process.platform === 'win32' ? 'ffprobe.exe' : 'ffprobe';
+/** The bundled media runtime first, as the app resolves it, then PATH. */
+function mediaTool(name, windowsName = `${name}.exe`) {
+  const exe = process.platform === 'win32' ? windowsName : name;
   const candidates = [
     path.join(REPO_ROOT, 'desktop', 'media-runtime', exe),
     ...(process.env.PATH ?? '').split(path.delimiter).map((dir) => path.join(dir, exe)),
   ];
   return candidates.find((file) => file && fs.existsSync(file)) ?? null;
-})();
+}
+const FFPROBE = mediaTool('ffprobe');
+const FFMPEG = mediaTool('ffmpeg');
+// mpv.com, not mpv.exe: the console build is the one the app drives (AGENTS §6).
+const MPV = mediaTool('mpv', 'mpv.com');
 
 // --- arguments ----------------------------------------------------------------
 
 function parseArgs(argv) {
-  const args = { mode: argv[0], positional: [], archives: [], providers: null, rows: 2, out: DEFAULT_OUT };
+  const args = { mode: argv[0], positional: [], archives: [], providers: null, rows: 2, out: DEFAULT_OUT, verify: 'none' };
   for (let i = 1; i < argv.length; i++) {
     const arg = argv[i];
     const next = () => argv[++i];
@@ -102,6 +114,10 @@ function parseArgs(argv) {
     else if (arg === '--java') args.java = next();
     else if (arg === '--include-adult') args.includeAdult = true;
     else if (arg === '--offline') args.offline = true;
+    else if (arg === '--verify') {
+      args.verify = next();
+      if (!VERIFY_REQUESTS.includes(args.verify)) throw new Error(`--verify takes ${VERIFY_REQUESTS.join('|')}`);
+    }
     else if (arg === '--verbose') args.verbose = true;
     else if (arg.startsWith('--')) throw new Error(`Unknown option ${arg}`);
     else args.positional.push(arg);
@@ -420,6 +436,8 @@ async function auditProvider(sidecar, net, journal, base, descriptor, args) {
   // S7–S9 on up to three of the links S6 found.
   let reached = 0;
   let inspected = 0;
+  /** The first source S9 routed: the one S10 plays (§6.5, one per provider). */
+  let playable = null;
   if (!net) {
     for (const stage of ['S7', 'S8', 'S9']) write({ stage, outcome: 'skipped', reason: 'stage-filter' });
   } else if (sourceLinks.length === 0) {
@@ -449,15 +467,39 @@ async function auditProvider(sidecar, net, journal, base, descriptor, args) {
       }
       if (result.route) write({ stage: 'S9', candidate, ...result.route, sourceValid: true });
       else write({ stage: 'S9', candidate, outcome: 'blocked', reason: 'earlier-stage-failed' });
+      if (!playable && result.route?.outcome === 'pass') playable = { candidate, link, result };
       if (providerBytes >= BYTE_CAPS.provider) break;
     }
   }
 
-  // S10 (does it play?) is opt-in in the PRD and not built.
-  write({ stage: 'S10', outcome: 'skipped', reason: 'stage-filter' });
+  // S10: does it play? Opt-in (§16 Q5), one source, never for adult content (§9).
+  let playedTiers = '';
+  if (args.verify === 'none' || !net) write({ stage: 'S10', outcome: 'skipped', reason: 'stage-filter' });
+  else if (decl.adultOnly) write({ stage: 'S10', outcome: 'skipped', reason: 'adult-gate' });
+  else if (!playable) write({ stage: 'S10', outcome: 'blocked', reason: 'earlier-stage-failed' });
+  else {
+    const verified = await verifySource(net, playable.link, playable.result, args);
+    if (verified.unrun) {
+      const { strategy, reason } = verified.unrun;
+      const outcome = reason === 'stage-filter' ? 'skipped' : 'inconclusive';
+      write({ stage: 'S10', candidate: playable.candidate, outcome, reason, evidence: { strategy } });
+    }
+    for (const tier of verified.tiers ?? []) {
+      write({
+        stage: 'S10',
+        candidate: `${playable.candidate} ${tier.tier}`,
+        ...tier.judged,
+        evidence: { strategy: tier.strategy, ...tier.judged.evidence },
+        sourceValid: true,
+        ms: tier.ms,
+        bytes: tier.bytes,
+      });
+    }
+    playedTiers = (verified.tiers ?? []).map((t) => ` · ${t.tier} ${t.judged.outcome}`).join('');
+  }
   return {
     providerId,
-    line: `${catalogueItems.length} catalogue items · ${searchHits.length} hits · ${linked} links · ${reached} reached · ${inspected} inspected`,
+    line: `${catalogueItems.length} catalogue items · ${searchHits.length} hits · ${linked} links · ${reached} reached · ${inspected} inspected${playedTiers}`,
   };
 }
 
@@ -558,6 +600,7 @@ async function auditSource(net, decl, link, args) {
     out.inspect = judgeInspection(inspection, meter.exhausted);
     if (out.inspect.outcome === 'pass' && inspection.metadata) {
       out.route = judgeRoute(inspection.metadata, inspection.transport, inspection.drm);
+      out.inspection = { metadata: inspection.metadata, transport: inspection.transport, drm: inspection.drm };
     }
   } catch (error) {
     out.inspect = meter.exhausted
@@ -586,6 +629,74 @@ async function loopbackBytes(url, bytes) {
   } catch {
     return null;
   }
+}
+
+let transcoder;
+let hostEncoder;
+
+/**
+ * What this ffmpeg build understands, asked as the app asks it at launch
+ * (`refreshFfmpegOptionSupport` in main.ts). Skipped, every HLS conversion
+ * failed on extensionless segment URLs (`not in allowed_segment_extensions`,
+ * WatchDrama, 2026-10-29): the app turns `-extension_picky` off, and the
+ * audit had not.
+ */
+async function askMediaTools() {
+  const run = (file, args, timeoutMs) =>
+    new Promise((resolve) => {
+      execFile(file, args, { timeout: timeoutMs, windowsHide: true, maxBuffer: 8 * 1024 * 1024 }, (_error, stdout, stderr) =>
+        resolve({ stdout: String(stdout ?? ''), stderr: String(stderr ?? '') })
+      );
+    });
+  if (FFPROBE) await detectExtensionPicky(FFPROBE, run);
+  if (FFMPEG) await detectToneMapSupport(FFMPEG, run);
+}
+
+/** The shipping converter, with the media runtime the audit found. */
+function conversions() {
+  transcoder ??= new MediaTranscoder({ resolveBinary: (name) => (name === 'ffmpeg' ? FFMPEG : name === 'ffprobe' ? FFPROBE : null) });
+  return transcoder;
+}
+
+/**
+ * S10 for one source: the tiers its route on this machine names, each through
+ * a fresh metered proxy capped at 32 MB and 12 s (§6.5, L3).
+ */
+async function verifySource(net, link, result, args) {
+  const { metadata, transport, drm } = result.inspection;
+  // The real encoder decides whether a conversion keeps its resolution, so it is measured, once.
+  hostEncoder ??= FFMPEG
+    ? await conversions().hostCapability()
+    : { hardware: false, accelerator: 'cpu', logicalCores: os.cpus().length };
+  const choice = playbackTiers(metadata, transport, drm, hostEncoder, args.verify, Boolean(MPV));
+  if (choice.run.length === 0) return { unrun: choice.unrun };
+  const tiers = [];
+  for (const planned of choice.run) {
+    if (planned.tier === 'ffmpeg' && !FFMPEG) {
+      const judged = { outcome: 'inconclusive', reason: 'host-capability-absent', evidence: { missing: 'ffmpeg' } };
+      tiers.push({ ...planned, judged, bytes: 0, ms: 0 });
+      continue;
+    }
+    const meter = new ByteMeter(VERIFY_CAPS.bytes);
+    const proxy = new MediaProxy(meteredFetch(net, meter));
+    const started = Date.now();
+    try {
+      const loop = await proxy.wrap(String(link.url), result.headers ?? linkHeaders(link), {
+        boundedRanges: result.reach.range === 'refused',
+      });
+      const measured =
+        planned.tier === 'element'
+          ? await playElement(net, loop, transport)
+          : planned.tier === 'ffmpeg'
+            ? await playConversion(conversions(), loop, planned.plan, transport, result.reach.range === 'ignored')
+            : await playMpv(MPV, loop);
+      const judged = judgePlayback({ ...measured, tier: planned.tier, budgetSpent: meter.exhausted, expectVideo: Boolean(metadata.video) });
+      tiers.push({ ...planned, judged, bytes: meter.bytes, ms: Date.now() - started });
+    } finally {
+      proxy.shutdown();
+    }
+  }
+  return { tiers };
 }
 
 /** One archive: copy, load, audit each provider, unload. */
@@ -710,7 +821,9 @@ function writeReports(runDir, discoveredIds) {
       .sort((a, b) => a.providerId.localeCompare(b.providerId))
       .map((r) => `| ${r.providerId} | ${r.deepest ? `${r.deepest} ${STAGE_LABELS[r.deepest]}` : '—'} | ${r.verdict} |`),
     '',
-    'S10 (playback) is not built and was not run.',
+    results.some((r) => r.stages.S10 && r.stages.S10 !== 'skipped')
+      ? 'S10 played one source per provider; see providers/*.json for the tier and measurements.'
+      : 'S10 (playback) was not asked for (`--verify`).',
     '',
   ].join('\n');
   fs.writeFileSync(path.join(runDir, 'summary.md'), md);
@@ -837,6 +950,7 @@ async function main() {
     if (net) {
       await net.start();
       console.log(`Network worker: Electron ${net.electron}; ffprobe: ${FFPROBE ?? 'missing (S8 will be inconclusive)'}`);
+      await askMediaTools();
     }
     const status = await sidecar.call('status', {}, 30_000);
     if (!status.ok || !status.result?.canExecute) {
@@ -859,6 +973,7 @@ async function main() {
     journal.close();
     await sidecar.stop();
     await net?.stop();
+    transcoder?.shutdown();
     manifest.endedAt = new Date().toISOString();
     writeManifest();
     // The JVM held the copied archives; it has exited, so the work files can go.

@@ -1545,8 +1545,10 @@ provider-side finding, not an app one.
 **With the network worker (S0–S9), same profile, later that day:** 19 providers in **524 s**;
 compatible 11 · walled 3 · extraction-only 2 · plugin-broken 2 · site-down 1. 29 sources reached,
 inspected and routed. Each one got the same strategy on all 8 machine profiles: `HLS_NATIVE` 25,
-`DIRECT` 4, and no AC-3/DTS or DRM rule broken. The probes read 8.6 MB in all, at most 2.0 MB per
-source. Grepping the run for tokens and signatures found nothing.
+`DIRECT` 4, and no AC-3/DTS or DRM rule broken. The probes read 15.5 MB in all, at most 2.8 MB per
+source. Grepping the run for tokens and signatures found nothing. (Corrected 2026-10-29: the
+8.6 MB first written here summed `probeBytesTransferred`, which is the probe size the inspector
+asks ffprobe for, not bytes read. The evidence now calls it `probeSize`.)
 - **Electron's main process has no usable stdin on Windows.** The worker
   (`tools/audit/net-worker.cjs`) is driven over a loopback port guarded by a token. It quits
   when its parent's pid dies. `ELECTRON_RUN_AS_NODE`, if present at all (even empty), starts it
@@ -1554,9 +1556,51 @@ source. Grepping the run for tokens and signatures found nothing.
 - **`session.fetch` refuses `redirect: 'manual'`** ("Redirect was cancelled"), and its
   `response.url` stays the URL that was asked for. Redirects are followed, and their chain is
   read from `webRequest.onBeforeRedirect`.
-- **Probe slices decide what an inspection costs.** With 4 MB per open range, one MP4 probe read
-  8.8 MB (the head, then the moov at the tail). With 1 MB it read 2.7 MB, because ffprobe asks
-  again only where it needs more.
+- **A capped read must stream, and must never end like a file.** The first metered fetch read
+  each request whole, up to a slice (4 MB, then 1 MB), and handed the proxy a body cut there.
+  - At 4 MB, one MP4 probe read 8.8 MB.
+  - At 1 MB, an MP4 indexed at the end failed with "error reading header … End of file"
+    (2026-10-29: Animegg, called `app-gap`), because the cut read as the end of the file. HLS
+    segments over 1 MB arrived short.
+  - Reading on demand in bounded slices fixed the ends, but each slice still had to fill before
+    anything moved. On Animegg's CDN (about 330 KB/s) a 4 MB slice takes 12 s, the whole S10 wall.
+
+  The worker now streams (`op: stream`). The body arrives as upstream sends it and is counted per
+  chunk. At the cap the socket is destroyed, never ended, and a consumer that hangs up aborts the
+  upstream. A public MP4 now starts in 0.5 s instead of 1.1 s.
+
+**S10, playback (2026-10-29), same profile, `--verify all`:** 19 providers in **551 s**:
+
+| Verdict | Providers |
+|---|---|
+| verified-playback | 11 |
+| walled | 3 |
+| plugin-broken | 2 |
+| extraction-only | 1 |
+| site-down | 1 |
+| compatible | 1 (Animexin) |
+
+The 12 played sources read 99.5 MB in all, at most 15.1 MB each. Grepping the run for secrets
+found nothing.
+- **Tiers seen:**
+  - **Element:** 10 HLS sources through hls.js, mostly 1080p, 129–166 frames decoded in about
+    5 s. Animegg's MP4 is indexed at the end and starts after 7.7 s from its slow CDN, yet still
+    plays 4.2 s inside the 12 s wall.
+  - **ffmpeg:** WatchDrama's HLS is HEVC, routed `VIDEO_TRANSCODE`; QSV re-encodes it at 3.06×
+    realtime.
+  - **mpv:** WatchDrama again, on `NATIVE_MPV` with `d3d11va-copy`.
+- **The audit must set up ffmpeg the way the app does.** The app asks ffprobe whether it has
+  `-extension_picky` (FFmpeg 7.1+) and turns it off (`refreshFfmpegOptionSupport` in `main.ts`).
+  Without that, every HLS conversion through the proxy failed with "… is not in
+  allowed_segment_extensions" (WatchDrama's ffmpeg tier). The runner now asks the same
+  questions (`askMediaTools`).
+- **An HLS S8 pass can be manifest-only.** Animexin's S8 read 3 KB, the master playlist alone.
+  hls.js then stopped at `levelParsingError` (HTTP 200), and mpv read 4 MB without starting in
+  12 s. That is `inconclusive`, not a verdict on the app; not investigated further.
+- **A hidden window plays.** `show: false`, `backgroundThrottling: false`,
+  `autoplay-policy=no-user-gesture-required` and `disable-background-media-suspend`, with
+  software decoding (the worker disables the GPU). `getVideoPlaybackQuality` counts decoded
+  frames there.
 - **Two verdict rules came from live data.** CineStream's `mainUrl` front page
   (cinemeta-catalogs.strem.io) answers 404 while every later stage passes; it was called
   `site-down`. Now a failed S2 is `site-down` only when no content stage passed. Anichi declares
