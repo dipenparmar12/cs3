@@ -473,7 +473,7 @@ export interface SourceScopeDialogProps {
   onReset: () => void;
   onClose: () => void;
   profileBar?: React.ReactNode;
-  /** What a tick in the filters changes: the source set picked above, or an unsaved selection. */
+  /** What a tick in the filters changes: the source list picked above, or an unsaved selection. */
   editNote?: string;
   healthFor?: (provider: string) => ProviderHealth | undefined;
 
@@ -765,8 +765,8 @@ export const SourceScopeDialog: React.FC<SourceScopeDialogProps> = ({
                 type="button"
                 className="scope-modal__back-btn"
                 onClick={() => setViewMode('guided')}
-                title="Back to source sets and filters"
-                aria-label="Back to source sets"
+                title="Back to source lists and filters"
+                aria-label="Back to source lists"
               >
                 <ArrowLeft size={16} />
               </button>

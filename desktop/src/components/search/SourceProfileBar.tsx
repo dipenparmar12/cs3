@@ -220,10 +220,10 @@ export const SourceProfileBar: React.FC<SourceProfileBarProps> = ({
         <h3 id="profile-chooser-title" className="profile-chooser__title">
           Start from
         </h3>
-        <InfoHint label="About source sets">
-          Pick one starting point; the filters below narrow it. A <strong>source set</strong> is a named list of
-          sources you saved. While one of yours is picked, changes are saved to it. Changes made from All
-          sources or a built-in set stay unsaved until you use <strong>Save as source set</strong>. Switching
+        <InfoHint label="About source lists">
+          Pick one starting point; the filters below narrow it. A <strong>source list</strong> is the sources
+          you saved under a name. While one of yours is picked, changes are saved to it. Changes made from All
+          sources or a built-in list stay unsaved until you use <strong>Save as source list</strong>. Switching
           never throws a selection away.
         </InfoHint>
         {canSave && naming !== 'new' ? (
@@ -237,12 +237,12 @@ export const SourceProfileBar: React.FC<SourceProfileBarProps> = ({
               setName('');
             }}
           >
-            Save as source set
+            Save as source list
           </Button>
         ) : null}
       </div>
 
-      <div className="profile-chooser__row" role="group" aria-label="Your source sets">
+      <div className="profile-chooser__row" role="group" aria-label="Your source lists">
         {pill('all', all.name, all.count > 0 ? `${all.count}` : 'All', {
           title: all.description,
         })}
@@ -253,7 +253,7 @@ export const SourceProfileBar: React.FC<SourceProfileBarProps> = ({
               <>
                 {profile.name}
                 {defaultId === profile.id ? (
-                  <span className="profile-choice__default" title="New searches start from this source set">
+                  <span className="profile-choice__default" title="New searches start from this source list">
                     <Star size={11} aria-hidden /> Default
                   </span>
                 ) : null}
@@ -281,7 +281,7 @@ export const SourceProfileBar: React.FC<SourceProfileBarProps> = ({
         ))}
         {showDraft
           ? pill('', 'Unsaved selection', `${draftSize}`, {
-              title: `Your current selection, ${count(draftSize)}, not saved as a source set`,
+              title: `Your current selection, ${count(draftSize)}, not saved as a source list`,
               tone: 'draft',
             })
           : null}
@@ -308,8 +308,8 @@ export const SourceProfileBar: React.FC<SourceProfileBarProps> = ({
                 stopNaming();
               }
             }}
-            placeholder={naming === 'new' ? 'Source set name' : 'New name'}
-            aria-label={naming === 'new' ? 'Name for the new source set' : `New name for ${renaming?.name ?? 'this source set'}`}
+            placeholder={naming === 'new' ? 'Source list name' : 'New name'}
+            aria-label={naming === 'new' ? 'Name for the new source list' : `New name for ${renaming?.name ?? 'this source list'}`}
             aria-invalid={problem ? true : undefined}
             aria-describedby={problem ? 'profile-name-problem' : undefined}
           />
@@ -364,7 +364,7 @@ export const SourceProfileBar: React.FC<SourceProfileBarProps> = ({
       ) : null}
 
       {presets.length > 0 ? (
-        <div className="profile-chooser__row" role="group" aria-label="Built-in source sets">
+        <div className="profile-chooser__row" role="group" aria-label="Built-in source lists">
           <span className="profile-chooser__label">Built-in</span>
           {presets.map((preset) =>
             pill(preset.id, preset.name, preset.count > 0 ? `${preset.count}` : '0', {
