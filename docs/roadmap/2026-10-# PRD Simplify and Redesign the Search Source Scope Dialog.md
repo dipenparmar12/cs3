@@ -1,3 +1,5 @@
+> **Built 2026-10-29.** `SourceProfileBar.tsx` (profiles as visible choices, Save as profile, name checks in `profileNaming.ts`, Replace), `SourceScopeDialog.tsx` (all chips, ⓘ help, one footer summary), `SearchScopePicker.tsx` (`onReplace`, save feedback), styles in `sources.css`. Checked in the built app on a copy of the scratch profile. Status lives in `ROADMAP.md`.
+
 # PRD: Simplify and Redesign the Search Source Scope Dialog
 
 ## 1. Objective

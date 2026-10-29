@@ -35,6 +35,7 @@ import {
 } from 'lucide-react';
 import type { ProviderLoadProgress } from '../../../electron/pluginManager';
 import { FlagIcon } from '../FlagIcon';
+import { InfoHint } from '../settings/InfoHint';
 import { getLanguageFlag, getLanguageName } from '../../utils/languageFlag';
 import { isWorthShowing, type ProviderHealth } from './providerHealth';
 import {
@@ -684,38 +685,6 @@ export const SourceScopeDialog: React.FC<SourceScopeDialogProps> = ({
 
   const [viewMode, setViewMode] = useState<'guided' | 'explorer'>('guided');
   const [explorerTab, setExplorerTab] = useState<'all' | 'selected' | 'excluded' | 'attention'>('all');
-  const [showAllLanguages, setShowAllLanguages] = useState(false);
-  const [showAllTypes, setShowAllTypes] = useState(false);
-
-  const displayedLanguages = useMemo(() => {
-    if (showAllLanguages || available.languages.length <= 8) return available.languages;
-    const top = available.languages.slice(0, 8);
-    const extraSelected = available.languages.filter(
-      (lang, idx) => idx >= 8 && intent.languages.has(lang)
-    );
-    return [...top, ...extraSelected];
-  }, [available.languages, showAllLanguages, intent.languages]);
-
-  const displayedTypes = useMemo(() => {
-    if (showAllTypes || available.types.length <= 6) return available.types;
-    const top = available.types.slice(0, 6);
-    const extraSelected = available.types.filter(
-      (type, idx) => idx >= 6 && intent.types.has(type)
-    );
-    return [...top, ...extraSelected];
-  }, [available.types, showAllTypes, intent.types]);
-
-  /** The chips, read back as one sentence: what is being searched. */
-  const intentSummary = useMemo(() => {
-    const either = (words: string[]) =>
-      words.length <= 1 ? words.join('') : `${words.slice(0, -1).join(', ')} or ${words[words.length - 1]}`;
-    const languages = [...intent.languages].map((lang) => getLanguageName(lang) || lang.toUpperCase());
-    const types = [...intent.types].map(prettyType);
-    if (languages.length === 0 && types.length === 0) return null;
-    const inLanguage = languages.length > 0 ? ` in ${either(languages)}` : '';
-    const carrying = types.length > 0 ? ` that carry ${either(types)}` : '';
-    return `Sources${inLanguage}${carrying}.`;
-  }, [intent]);
 
   // Filter rows based on explorerTab when in explorer mode
   const displayedRows = useMemo(() => {
@@ -799,15 +768,24 @@ export const SourceScopeDialog: React.FC<SourceScopeDialogProps> = ({
                 <ArrowLeft size={16} />
               </button>
             )}
-            <div>
+            <div className="scope-modal__title-row">
               <h2 id="scope-modal-title">
-                {viewMode === 'guided' ? 'Search sources' : 'Customize sources'}
+                {viewMode === 'guided' ? 'Search sources' : 'Choose sources one by one'}
               </h2>
-              <p className="scope-modal__subtitle">
-                {totalChosen === 0
-                  ? `Searching all ${totalAvailable} sources`
-                  : `Searching ${totalChosen} of ${totalAvailable} sources`}
-              </p>
+              <InfoHint label="How search sources work">
+                {viewMode === 'guided' ? (
+                  <>
+                    Pick what a search asks. Nothing ticked searches every installed source. Ticking
+                    content or languages searches only the sources that carry them. To pick sources by
+                    name, use <strong>Choose sources one by one</strong>.
+                  </>
+                ) : (
+                  <>
+                    Tick the sources to search. The filters on the left only narrow this list; they
+                    select nothing. Use <strong>Select filtered</strong> to tick everything they show.
+                  </>
+                )}
+              </InfoHint>
             </div>
           </div>
 
@@ -832,30 +810,19 @@ export const SourceScopeDialog: React.FC<SourceScopeDialogProps> = ({
 
             <div className="scope-guided__body">
 
-              {/* What the chips add up to, or why none are lit. */}
-              {handPicked ? (
-                <p className="scope-guided__note" role="status">
-                  You picked {totalChosen} source{totalChosen === 1 ? '' : 's'} by hand in Customize
-                  sources. Choosing a chip below starts a new selection from it.
-                </p>
-              ) : (
-                <p className="scope-guided__note" role="status">
-                  {intentSummary
-                    ? `${intentSummary} Searching ${totalChosen} of ${totalAvailable}.`
-                    : 'Choose a content type or language to narrow the search, or leave all clear to search everything.'}
-                </p>
-              )}
-
               {/* Content */}
               {available.types.length > 0 && (
-                <div className="scope-guided__section">
+                <div className="scope-guided__section" role="group" aria-labelledby="scope-content-title">
                   <div className="scope-guided__section-header">
-                    <h4 className="scope-guided__section-title">Content</h4>
-                    <span className="scope-guided__section-hint">Any of these</span>
+                    <h4 id="scope-content-title" className="scope-guided__section-title">Content</h4>
+                    <InfoHint label="About content">
+                      Searches the sources that carry <strong>any</strong> of the ticked kinds. With
+                      languages ticked too, a source must match both. Nothing ticked: no narrowing.
+                    </InfoHint>
                   </div>
 
                   <div className="scope-guided__chips-grid">
-                    {displayedTypes.map((type) => {
+                    {available.types.map((type) => {
                       const active = intent.types.has(type);
                       const count = available.typeCounts?.[type];
                       return (
@@ -867,37 +834,27 @@ export const SourceScopeDialog: React.FC<SourceScopeDialogProps> = ({
                           onClick={() => onToggleIntent('types', type)}
                           title={count !== undefined ? `${prettyType(type)}: ${count} sources` : prettyType(type)}
                         >
-                          {getContentTypeIcon(type)}
+                          {active ? <Check size={13} aria-hidden /> : getContentTypeIcon(type)}
                           <span className="scope-guided__chip-label">{prettyType(type)}</span>
                           {count !== undefined && <span className="scope-guided__chip-count">{count}</span>}
                         </button>
                       );
                     })}
-                    {available.types.length > 6 && (
-                      <button
-                        type="button"
-                        className="scope-guided__chip scope-guided__chip--expand"
-                        onClick={() => setShowAllTypes((prev) => !prev)}
-                      >
-                        <span>
-                          {showAllTypes ? 'Fewer' : `+ More (${available.types.length - 6})`}
-                        </span>
-                      </button>
-                    )}
                   </div>
                 </div>
               )}
               {/* Languages */}
-              <div className="scope-guided__section">
+              <div className="scope-guided__section" role="group" aria-labelledby="scope-languages-title">
                 <div className="scope-guided__section-header">
-                  <h4 className="scope-guided__section-title">Languages</h4>
-                  <span className="scope-guided__section-hint">
-                    Any of these{intent.types.size > 0 ? ', and the content above' : ''}
-                  </span>
+                  <h4 id="scope-languages-title" className="scope-guided__section-title">Languages</h4>
+                  <InfoHint label="About languages">
+                    Searches the sources in <strong>any</strong> of the ticked languages. With content
+                    ticked too, a source must match both. The number is how many sources each covers.
+                  </InfoHint>
                 </div>
 
                 <div className="scope-guided__chips-grid">
-                  {displayedLanguages.map((lang) => {
+                  {available.languages.map((lang) => {
                     const code = lang.toUpperCase();
                     const flag = getLanguageFlag(lang);
                     const fullName = getLanguageName(lang);
@@ -913,45 +870,48 @@ export const SourceScopeDialog: React.FC<SourceScopeDialogProps> = ({
                         onClick={() => onToggleIntent('languages', lang)}
                         title={count !== undefined ? `${name}: ${count} sources` : name}
                       >
-                        <FlagIcon flag={flag} size={14} fallback={code.slice(0, 2)} />
+                        {active ? (
+                          <Check size={13} aria-hidden />
+                        ) : (
+                          <FlagIcon flag={flag} size={14} fallback={code.slice(0, 2)} />
+                        )}
                         <span className="scope-guided__chip-label">{fullName || code}</span>
                         {count !== undefined && <span className="scope-guided__chip-count">{count}</span>}
                       </button>
                     );
                   })}
-                  {available.languages.length > 8 && (
-                    <button
-                      type="button"
-                      className="scope-guided__chip scope-guided__chip--expand"
-                      onClick={() => setShowAllLanguages((prev) => !prev)}
-                    >
-                      <span>
-                        {showAllLanguages ? 'Fewer' : `+ Add (${available.languages.length - 8})`}
-                      </span>
-                    </button>
-                  )}
                 </div>
-              </div>
-              {/* Actions: quiet, always in the same place */}
-              <div className="scope-guided__actions">
-                <button type="button" className="scope-guided__action" onClick={onSelectAll}>Select all</button>
-                <button type="button" className="scope-guided__action" onClick={onReset}>Reset</button>
               </div>
 
-              {/* Customize sources */}
-              <button
-                type="button"
-                className="scope-guided__customize-action"
-                onClick={() => setViewMode('explorer')}
-              >
-                <div className="scope-guided__customize-info">
-                  <span className="scope-guided__customize-title">Customize sources</span>
-                  <span className="scope-guided__customize-sub">
-                    Individual providers and advanced controls
-                  </span>
-                </div>
-                <ChevronRight size={18} className="scope-guided__customize-arrow" />
-              </button>
+              {/* Secondary: quiet, always in the same place. */}
+              <div className="scope-guided__actions">
+                <button
+                  type="button"
+                  className="scope-guided__customize-link"
+                  onClick={() => setViewMode('explorer')}
+                >
+                  Choose sources one by one <ChevronRight size={14} aria-hidden />
+                </button>
+                <span className="scope-guided__actions-end">
+                  <button
+                    type="button"
+                    className="scope-guided__action"
+                    onClick={onSelectAll}
+                    title="Tick every installed source by name"
+                  >
+                    Select all
+                  </button>
+                  <button
+                    type="button"
+                    className="scope-guided__action"
+                    onClick={onReset}
+                    disabled={totalChosen === 0}
+                    title="Go back to searching all sources"
+                  >
+                    Reset
+                  </button>
+                </span>
+              </div>
             </div>
           </div>
         ) : (
@@ -960,10 +920,13 @@ export const SourceScopeDialog: React.FC<SourceScopeDialogProps> = ({
           /* ========================================================================= */
           <div className="scope-modal__body">
             <aside className="scope-modal__rail" aria-label="Filters">
-              <p className="scope-modal__rail-note">
-                Show only: these narrow the list, not the search. Tick sources in the list,
-                or use “Select filtered”, to search them.
-              </p>
+              <div className="scope-modal__rail-head">
+                <span>Show only</span>
+                <InfoHint label="About these filters">
+                  These narrow the list, not the search. Tick sources in the list, or use{' '}
+                  <strong>Select filtered</strong>, to search them.
+                </InfoHint>
+              </div>
 
               {hasExtensions && hasIndexers && (
                 <FacetGroup
@@ -1235,10 +1198,10 @@ export const SourceScopeDialog: React.FC<SourceScopeDialogProps> = ({
         )}
 
         <footer className="scope-modal__foot">
-          <p id="scope-modal-summary" className="scope-modal__summary">
+          <p id="scope-modal-summary" className="scope-modal__summary" role="status">
             {totalChosen === 0
-              ? `All ${totalAvailable} sources selected`
-              : `${totalChosen} sources selected`}
+              ? `Searching all ${totalAvailable} sources`
+              : `Searching ${totalChosen} of ${totalAvailable} sources${handPicked ? ', picked one by one' : ''}`}
           </p>
           <div className="scope-modal__actions">
             {viewMode === 'explorer' && onInvert && (

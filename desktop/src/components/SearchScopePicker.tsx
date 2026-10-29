@@ -243,6 +243,11 @@ export const SearchScopePicker: React.FC<SearchScopePickerProps> = ({
   const [activeProfile, setActiveProfile] = useState<string>('all');
   const [defaultProfile, setDefaultProfile] = useState<string | undefined>();
   const [draftCount, setDraftCount] = useState(0);
+  /** The unnamed selection itself: the profile bar offers to save it only when no profile holds it already. */
+  const [draftSelection, setDraftSelection] = useState<{ providers: string[]; indexers: string[] }>({
+    providers: [],
+    indexers: [],
+  });
 
   const [pendingImpact, setPendingImpact] = useState<PendingImpactConfirmation | null>(null);
   const pendingCommitRef = useRef<(() => void) | null>(null);
@@ -301,6 +306,7 @@ export const SearchScopePicker: React.FC<SearchScopePickerProps> = ({
       setDefaultProfile(snapshot.defaultId);
       const draft = snapshot.draft ?? {};
       setDraftCount((draft.providers?.length ?? 0) + (draft.indexers?.length ?? 0));
+      setDraftSelection({ providers: draft.providers ?? [], indexers: draft.indexers ?? [] });
 
       const active = (snapshot.profiles ?? []).find((p) => p.id === snapshot.activeId);
       const scoped =
@@ -1118,6 +1124,23 @@ export const SearchScopePicker: React.FC<SearchScopePickerProps> = ({
     ]
   );
 
+  /**
+   * Writes the selection on screen into an existing profile: the viewer chose
+   * Replace after naming a new profile with that profile's name. Activated
+   * first, because an edit lands in whatever is active (`sourceProfiles.edit`).
+   */
+  const handleReplaceProfile = useCallback(
+    (id: string) => {
+      const keep = { providers: new Set(providers), indexers: new Set(chosenIndexers), intent };
+      const name = profiles.find((p) => p.id === id)?.name ?? 'the profile';
+      void window.cloudstream?.activateSourceProfile?.(id).then(() => {
+        persist(keep.providers, keep.indexers, keep.intent);
+        triggerFeedback(`Saved to “${name}”.`);
+      });
+    },
+    [providers, chosenIndexers, intent, profiles, persist, triggerFeedback]
+  );
+
   const label =
     totalChosen === 0
       ? 'All sources'
@@ -1204,12 +1227,15 @@ export const SearchScopePicker: React.FC<SearchScopePickerProps> = ({
               profiles={profiles}
               builtInProfiles={builtInProfiles}
               activeId={activePreset ? `builtin:${activePreset}` : activeProfile}
-              hasDraft={draftCount > 0 && !activePreset}
-              draftCount={draftCount}
+              draft={draftSelection}
               onActivate={handleActivateProfile}
               onCreate={(name) =>
-                void window.cloudstream?.createSourceProfile?.(name).then(applyProfiles)
+                void window.cloudstream?.createSourceProfile?.(name).then((snapshot) => {
+                  applyProfiles(snapshot);
+                  if (snapshot?.ok) triggerFeedback(`Saved as “${name}”.`);
+                })
               }
+              onReplace={handleReplaceProfile}
               onRename={(id, name) =>
                 void window.cloudstream?.renameSourceProfile?.(id, name).then(applyProfiles)
               }
