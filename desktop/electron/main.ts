@@ -79,6 +79,7 @@ import { TorrentEngine } from './torrent/torrentEngine';
 import { ContentService, type SourceQuery } from './contentService';
 import { PlaybackSessionManager, type ResumePreference } from './playbackSession';
 import { SearchSuggestionService } from './searchSuggestions';
+import { categoryScope } from '../src/utils/searchCategories';
 import { SearchHistoryStore } from './searchHistory';
 import { SavedSearchStore, type SaveSearchInput } from './savedSearches';
 import { SubtitleService, languageName, type SubtitleQuery, type SubtitleSearchResult } from './subtitleService';
@@ -185,7 +186,7 @@ import type { DownloadTask } from '../src/types/download';
 import { DownloadState } from '../src/types/download';
 import type { SitePlugin } from '../src/types/plugin';
 import type { IndexerConfig, SourcePreferences, TorrentResult } from '../src/types/torrent';
-import type { SearchOptions } from '../src/types/api';
+import type { SearchCategory, SearchOptions } from '../src/types/api';
 import type { HistoryEvent, HistoryFilter } from '../src/types/history';
 import type {
   StoredSource,
@@ -2480,25 +2481,32 @@ let suggestRun: AbortController | null = null;
  * three catalogues answer 170–935 ms apart, so a reply that waited for all of
  * them would spend the fastest two on the slowest — see `searchSuggestions.ts`.
  */
-ipcMain.handle('api:suggest', async (event, query: string) => {
+const SEARCH_CATEGORIES: ReadonlySet<string> = new Set<SearchCategory>(['title', 'cast', 'director', 'writer', 'producer', 'composer', 'studio']);
+
+ipcMain.handle('api:suggest', async (event, query: string, requested?: unknown) => {
   suggestRun?.abort();
   const run = new AbortController();
   suggestRun = run;
 
   const trimmed = (query ?? '').trim();
-  const instant = searchSuggestions.instant(trimmed);
+  // Only names this process knows: an unknown one would quietly become a filter that matches nothing.
+  const categories = (Array.isArray(requested) ? requested : []).filter(
+    (value): value is SearchCategory => typeof value === 'string' && SEARCH_CATEGORIES.has(value)
+  );
+  const scope = categoryScope(categories);
+  const instant = searchSuggestions.instant(trimmed, categories);
 
   if (!instant.done) {
     // The asking window, not `mainWindow`: an update belongs to whoever typed.
     const webContents = event.sender;
     void searchSuggestions
-      .suggest(trimmed, run.signal, (suggestions, done, entities) => {
+      .suggest(trimmed, run.signal, (suggestions, done, entities, entitiesFailed) => {
         // The query travels with the rows: this outlives the keystroke that
         // asked for it, and a reply landing on a box that now says something
         // else must be dropped rather than rendered.
         if (run.signal.aborted || webContents.isDestroyed()) return;
-        webContents.send('search:suggestUpdate', { query: trimmed, suggestions, done, entities });
-      })
+        webContents.send('search:suggestUpdate', { query: trimmed, suggestions, done, entities, scope, entitiesFailed });
+      }, categories)
       .catch(() => {
         // A catalogue outage is not an error for a search box, and there is no
         // longer a caller waiting on this promise to reject to.

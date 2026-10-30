@@ -9,6 +9,7 @@ import type {
   SearchSuggestion,
   SuggestionUpdate,
   EntitySuggestion,
+  SearchCategory,
 } from '../src/types/api';
 import type { OttPlatformView } from './cs3/ottPlatforms';
 import type { AppUpdateState } from './appUpdate/appUpdateService';
@@ -360,7 +361,9 @@ export interface CloudStreamElectronAPI {
    * carries each catalogue as it lands.
    */
   suggestTitles: (
-    query: string
+    query: string,
+    /** What to look for; empty or omitted is everything. */
+    categories?: SearchCategory[]
   ) => Promise<Envelope & { suggestions: SearchSuggestion[]; done: boolean; entities?: EntitySuggestion[] }>;
   /**
    * Fuller suggestion lists, as each catalogue answers.
@@ -2193,7 +2196,7 @@ const api: CloudStreamElectronAPI = {
   getSources: (request) => ipcRenderer.invoke('api:getSources', request),
   getPluginRuntimeStatus: () => ipcRenderer.invoke('api:getPluginRuntimeStatus'),
 
-  suggestTitles: (query) => ipcRenderer.invoke('api:suggest', query),
+  suggestTitles: (query, categories) => ipcRenderer.invoke('api:suggest', query, categories),
   onSuggestionUpdate: (callback) => subscribe('search:suggestUpdate', callback),
   findSubtitles: (query) => ipcRenderer.invoke('subtitles:find', query),
   fetchSubtitle: (url) => ipcRenderer.invoke('subtitles:fetch', url),

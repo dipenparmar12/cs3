@@ -1,45 +1,16 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import type { EntitySuggestion } from '../../types/api';
 import type { Filmography } from '../../types/filmography';
 import { foldName } from '../../utils/suggestionLayout';
+import { useEntitySearch } from './useEntitySearch';
 
-/**
- * The credited work of the person or company a search query *is*, or null.
- *
- * Asks the suggestion service (`api:suggest`), which usually answers from the
- * cache the search box just filled, for an entity named exactly the query, then
- * that entity's filmography (cached per session in main). Nothing is asked of
- * a query that names nobody beyond the suggestion lookup itself, and a failure
- * leaves the results as they are.
- */
-export function useCreditsForQuery(query: string | undefined): { entity: EntitySuggestion; credits: Filmography } | null {
-  const [entity, setEntity] = useState<EntitySuggestion | null>(null);
-  const [credits, setCredits] = useState<Filmography | null>(null);
-  const trimmed = query?.trim() ?? '';
+const ALL: [] = [];
 
+/** One entity's filmography (cached per session in main), or null while unknown. */
+export function useFilmography(entity: EntitySuggestion | null): { credits: Filmography | null; failed: boolean } {
+  const [state, setState] = useState<{ credits: Filmography | null; failed: boolean }>({ credits: null, failed: false });
   useEffect(() => {
-    setEntity(null);
-    if (!trimmed) return;
-    const wanted = foldName(trimmed);
-    let active = true;
-    const take = (entities: EntitySuggestion[] | undefined) => {
-      const named = entities?.find((candidate) => foldName(candidate.name) === wanted);
-      // Kept by id: every push brings a fresh copy of the same entity.
-      if (active && named) setEntity((current) => (current?.id === named.id ? current : named));
-    };
-    // The lookup can still be running when the search starts; its push says when it lands.
-    const dispose = window.cloudstream?.onSuggestionUpdate?.((update) => {
-      if (update.query === trimmed) take(update.entities);
-    });
-    void window.cloudstream?.suggestTitles(trimmed).then((response) => take(response?.entities)).catch(() => {});
-    return () => {
-      active = false;
-      dispose?.();
-    };
-  }, [trimmed]);
-
-  useEffect(() => {
-    setCredits(null);
+    setState({ credits: null, failed: false });
     if (!entity) return;
     let active = true;
     void window.cloudstream
@@ -49,13 +20,34 @@ export function useCreditsForQuery(query: string | undefined): { entity: EntityS
         profileUrl: entity.profileUrl,
       })
       .then((response) => {
-        if (active && response?.ok && response.filmography?.works.length) setCredits(response.filmography);
+        if (!active) return;
+        if (response?.ok) setState({ credits: response.filmography?.works.length ? response.filmography : null, failed: false });
+        else setState({ credits: null, failed: true });
       })
-      .catch(() => {});
+      .catch(() => active && setState({ credits: null, failed: true }));
     return () => {
       active = false;
     };
-  }, [entity]);
+    // Keyed on the id: each push brings a fresh copy of the same entity.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [entity?.id]);
+  return state;
+}
 
+/**
+ * The credited work of the person or company a search query *is*, or null.
+ *
+ * Only an entity named exactly the query: "John Cena" is John Cena's work,
+ * "John" is nobody's. Nothing is asked of a query that names nobody beyond
+ * the lookup itself, and a failure leaves the results as they are.
+ */
+export function useCreditsForQuery(query: string | undefined): { entity: EntitySuggestion; credits: Filmography } | null {
+  const { entities } = useEntitySearch(query, ALL);
+  const wanted = foldName(query ?? '');
+  const entity = useMemo(
+    () => (wanted ? entities.find((candidate) => foldName(candidate.name) === wanted) ?? null : null),
+    [entities, wanted]
+  );
+  const { credits } = useFilmography(entity);
   return entity && credits ? { entity, credits } : null;
 }

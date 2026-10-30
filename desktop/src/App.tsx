@@ -30,7 +30,8 @@ import { ExtensionUpdateNotice } from './components/extensions/ExtensionUpdateNo
 import { AppUpdateNotice } from './components/AppUpdateNotice';
 import type { ExtensionsTab } from './components/extensions/ExtensionsScreen';
 
-import { TvType, type EntitySuggestion, type Episode, type SearchOptions, type SearchResponse } from './types/api';
+import { TvType, type EntitySuggestion, type Episode, type SearchCategory, type SearchOptions, type SearchResponse } from './types/api';
+import { filmographyRoles } from './utils/searchCategories';
 import type { HistoryEvent } from './types/history';
 import type { DownloadRequestResult, DownloadTask } from './types/download';
 import { buildDownloadTask } from './utils/downloadIdentity';
@@ -84,6 +85,10 @@ import {
 /** A person or company picked in the search box: their films and series. */
 const FilmographyDialog = lazy(() =>
   import('./components/detail/FilmographyDialog').then((m) => ({ default: m.FilmographyDialog }))
+);
+/** A search for people or studios only: who matches, and their work in that credit. */
+const PeopleResults = lazy(() =>
+  import('./components/search/PeopleResults').then((m) => ({ default: m.PeopleResults }))
 );
 const TrailerPopup = lazy(() =>
   import('./components/detail/TrailerPopup').then((m) => ({ default: m.TrailerPopup }))
@@ -462,7 +467,10 @@ export const App: React.FC = () => {
   }, []);
 
   const [isInspectorOpen, setIsInspectorOpen] = useState(false);
-  const [openEntity, setOpenEntity] = useState<EntitySuggestion | null>(null);
+  /** A person or studio picked from the search box, with the chips in force when it was picked. */
+  const [openEntity, setOpenEntity] = useState<{ entity: EntitySuggestion; categories: SearchCategory[] } | null>(null);
+  /** The last search was for people or studios only (no Titles chip): shown by PeopleResults, not SearchView. */
+  const [peopleSearch, setPeopleSearch] = useState<{ query: string; categories: SearchCategory[] } | null>(null);
   /** Which Settings pane to open on, when something deep-links into it. */
   const [settingsTab, setSettingsTab] = useState<'general' | 'about'>('general');
   /** Which Extensions tab opens next — Updates when the update notice is followed. */
@@ -1097,6 +1105,7 @@ export const App: React.FC = () => {
       return;
     }
     lastQuery.current = { query, options };
+    setPeopleSearch(null);
     setSavedView(null);
     setSearchQuery(query);
     setSearch(null); // Instantly clear old search results
@@ -1150,9 +1159,26 @@ export const App: React.FC = () => {
     setSavedView(null);
     setSearchError(null);
     setSearchUi(EMPTY_SEARCH_UI);
+    setPeopleSearch(null);
   }, [search]);
 
-  const hasSearchResults = Boolean(search && (search.results.length > 0 || !search.done));
+  /** Enter with only people or studio chips: no provider search runs, only the lookup. */
+  const handleSearchPeople = useCallback(
+    async (query: string, categories: SearchCategory[]) => {
+      if (search && !search.done) await window.cloudstream?.cancelSearch(search.id);
+      setSearch(null);
+      setSavedView(null);
+      setSearchError(null);
+      setSearchQuery(query);
+      setPeopleSearch({ query, categories });
+      resetScreen('search');
+      switchTab('search');
+      scrollAfterPaint(0);
+    },
+    [search, resetScreen, switchTab, scrollAfterPaint]
+  );
+
+  const hasSearchResults = Boolean((search && (search.results.length > 0 || !search.done)) || peopleSearch);
 
   /**
    * Opens a saved search as it was saved.
@@ -2165,7 +2191,8 @@ export const App: React.FC = () => {
           isSearching={Boolean(search && !search.done)}
           onScopeChange={handleScopeChange}
           onOpenInspector={() => setIsInspectorOpen(true)}
-          onOpenEntity={setOpenEntity}
+          onOpenEntity={(entity, categories) => setOpenEntity({ entity, categories })}
+          onSearchPeople={(query, categories) => void handleSearchPeople(query, categories)}
           // So a search started from the details page shows in the bar that
           // claims to say what is being searched.
           externalQuery={searchQuery}
@@ -2539,7 +2566,21 @@ export const App: React.FC = () => {
                   })()}
                 </ErrorBoundary>
               )}
-              {!openTorrent && activeTab === 'search' && (
+              {!openTorrent && activeTab === 'search' && peopleSearch && (
+                <ErrorBoundary>
+                  <Suspense fallback={null}>
+                    <PeopleResults
+                      key={`${peopleSearch.query}|${peopleSearch.categories.join(',')}`}
+                      query={peopleSearch.query}
+                      categories={peopleSearch.categories}
+                      onSelectMedia={handleSelectMedia}
+                      onPlayDirectly={handleQuickPlay}
+                      onSearchTitles={(query) => void handleSearch(query)}
+                    />
+                  </Suspense>
+                </ErrorBoundary>
+              )}
+              {!openTorrent && activeTab === 'search' && !peopleSearch && (
                 <ErrorBoundary>
                   <SearchView
                     query={searchQuery}
@@ -2556,7 +2597,7 @@ export const App: React.FC = () => {
                     onSaveResults={handleSaveSearch}
                     onClearResults={handleClearSearchResults}
                     onSearch={(query) => void handleSearch(query)}
-                    onOpenEntity={setOpenEntity}
+                    onOpenEntity={(entity) => setOpenEntity({ entity, categories: [] })}
                   />
                 </ErrorBoundary>
               )}
@@ -2735,13 +2776,14 @@ export const App: React.FC = () => {
       {openEntity && (
         <Suspense fallback={null}>
           <FilmographyDialog
-            key={openEntity.id}
+            key={openEntity.entity.id}
             request={{
-              kind: openEntity.kind === 'company' ? 'studio' : 'person',
-              name: openEntity.name,
-              profileUrl: openEntity.profileUrl,
+              kind: openEntity.entity.kind === 'company' ? 'studio' : 'person',
+              name: openEntity.entity.name,
+              profileUrl: openEntity.entity.profileUrl,
             }}
-            hint={{ imageUrl: openEntity.imageUrl, subtitle: openEntity.description }}
+            hint={{ imageUrl: openEntity.entity.imageUrl, subtitle: openEntity.entity.description }}
+            initialRole={filmographyRoles(openEntity.categories)?.[0]}
             onClose={() => setOpenEntity(null)}
             onSelectMedia={handleSelectMedia}
             onPlayDirectly={handleQuickPlay}

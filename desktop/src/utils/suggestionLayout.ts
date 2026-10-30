@@ -25,25 +25,17 @@ export function foldName(value: string): string {
 }
 
 /**
- * People go above titles only when the query *is* a person's or company's
- * name and no title is called exactly that. "John Cena" leads with John Cena;
- * "Inception" keeps the film on top; and an ambiguous query keeps titles
- * first, since a title search is what the box was for.
+ * The order of the three blocks. History leads only while the box is empty.
+ *
+ * While typing, people and studios always sit above titles, at most three
+ * rows. They used to go first only when the query was exactly a name, but
+ * that was decided again on every answer, so a person landing a moment after
+ * the titles moved the list under the pointer (measured 2026-10-30: "Tom
+ * Hanks" settled through four layouts). A fixed slot moves things at most
+ * once.
  */
-export function entitiesFirst(
-  query: string,
-  titles: ReadonlyArray<{ title: string; originalTitle?: string }>,
-  entities: ReadonlyArray<{ name: string }>
-): boolean {
-  const wanted = foldName(query);
-  if (!wanted || !entities.some((entity) => foldName(entity.name) === wanted)) return false;
-  return !titles.some((title) => foldName(title.title) === wanted || (title.originalTitle && foldName(title.originalTitle) === wanted));
-}
-
-/** The order of the three blocks. History leads only while the box is empty. */
-export function blockOrder(historyFirst: boolean, peopleFirst: boolean): SuggestionRowKind[] {
-  if (historyFirst) return ['history', 'entity', 'suggestion'];
-  return peopleFirst ? ['entity', 'suggestion', 'history'] : ['suggestion', 'entity', 'history'];
+export function blockOrder(historyFirst: boolean): SuggestionRowKind[] {
+  return historyFirst ? ['history', 'entity', 'suggestion'] : ['entity', 'suggestion', 'history'];
 }
 
 export function suggestionRows(

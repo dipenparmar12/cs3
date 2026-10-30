@@ -3038,6 +3038,86 @@
   font-weight: 700;
 }
 
+/* Category chips: one quiet row at the top of the panel; smaller and fainter than the rows. */
+.search-suggest__chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.3rem;
+  padding: 0.25rem 0.35rem 0.45rem;
+  border-bottom: 1px solid var(--border-color);
+  margin-bottom: 0.2rem;
+}
+.search-suggest__chip {
+  padding: 0.15rem 0.6rem;
+  border: 1px solid transparent;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.04);
+  color: var(--text-subtle);
+  font-size: 0.72rem;
+  font-weight: 600;
+  cursor: pointer;
+}
+.search-suggest__chip:hover { color: var(--text-main); background: rgba(255, 255, 255, 0.08); }
+.search-suggest__chip--on {
+  border-color: var(--accent-primary);
+  background: rgba(59, 130, 246, 0.16);
+  color: #fff;
+}
+
+/* People arrive a moment after titles; a short fade makes that one change read as arrival, not a jump. */
+.search-suggest__group--entities { animation: search-suggest-in 140ms ease-out; }
+@keyframes search-suggest-in { from { opacity: 0; } to { opacity: 1; } }
+@media (prefers-reduced-motion: reduce) { .search-suggest__group--entities { animation: none; } }
+
+/* The chips in force, inside the search bar, so a filter is never invisible once the panel closes. */
+.search-bar__scope {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  flex: none;
+  max-width: 40%;
+  padding: 0.12rem 0.5rem;
+  border: 1px solid var(--accent-primary);
+  border-radius: 999px;
+  background: rgba(59, 130, 246, 0.16);
+  color: #fff;
+  font-size: 0.72rem;
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  cursor: pointer;
+}
+
+/* A search for people or studios only. */
+.people-results { display: flex; flex-direction: column; gap: 1rem; }
+.people-results__head { display: flex; align-items: baseline; gap: 0.75rem; flex-wrap: wrap; }
+.people-results__head h2 { margin: 0; font-size: 1.15rem; }
+.people-results__loading { display: inline-flex; align-items: center; gap: 0.4rem; margin: 0; color: var(--text-subtle); font-size: 0.85rem; }
+.people-results__people { display: flex; gap: 0.6rem; overflow-x: auto; padding-bottom: 0.25rem; }
+.people-results__person {
+  display: grid;
+  grid-template-columns: 40px minmax(0, 1fr);
+  grid-template-rows: auto auto;
+  column-gap: 0.6rem;
+  align-items: center;
+  flex: 0 0 auto;
+  width: 260px;
+  padding: 0.5rem 0.7rem;
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-md);
+  background: var(--bg-card);
+  color: var(--text-main);
+  text-align: left;
+  cursor: pointer;
+}
+.people-results__person--on { border-color: var(--accent-primary); background: rgba(59, 130, 246, 0.12); }
+.people-results__person img,
+.people-results__person .search-suggest__poster-empty { grid-row: 1 / span 2; width: 40px; height: 40px; border-radius: 50%; object-fit: cover; }
+.people-results__name { font-weight: 700; font-size: 0.85rem; }
+.people-results__about { font-size: 0.72rem; color: var(--text-subtle); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.people-results__grid { display: grid; gap: 1.25rem; grid-template-columns: repeat(auto-fill, minmax(170px, 1fr)); }
+
 /* People and companies: round, so a face never reads as a poster. */
 .search-suggest__entity { align-items: center; }
 .search-suggest__entity img,
