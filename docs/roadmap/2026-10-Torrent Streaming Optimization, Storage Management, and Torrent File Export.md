@@ -1,5 +1,43 @@
 # PRD: Torrent Streaming Optimization, Storage Management, and Torrent File Export
 
+## 0. Status and Phase 1 findings (2026-10-30)
+
+**Status: Partial.** Phases 1–4 built and measured in the built app; a read-ahead cap (§0.3) and an OS share sheet are not. Rules in `docs/agents/torrents-and-search.md` §7.1a.
+
+### 0.1 Causes found
+
+| # | Cause | Where | Effect |
+|---|---|---|---|
+| 1 | WebTorrent's store (`fs-chunk-store`) opens plain files; NTFS zero-fills a plain file up to the furthest write | `fs-chunk-store` → `random-access-file` without `sparse` | The first tail-window or seek write allocates the whole file. Raw store, 2 GB file, head then tail piece: **2,048 MB, 1.3 s**; sparse: **8 MB, 5 ms**. An 18 GB film on a disk with less than 18 GB free fails that write (`ENOSPC`) |
+| 2 | A failed write destroys the torrent, and the engine's only `error` listener was removed at `ready` | `awaitReady` | The error went to a log line; the player saw "The stream was closed before it started" |
+| 3 | Listing an imported magnet's files called `startStream` in download mode | `torrent:resolveMagnet` | Looking at a torrent selected its largest file and downloaded it, rarest first, for the rest of the session |
+| 4 | Head (10) and tail (9) windows were layered over a whole-file `select(1)`; WebTorrent 3 merges overlapping non-stream selections into one at the highest priority | `focusOn` | The whole file at priority 10, walked from byte 0, ahead of every player read: the tail was not fetched early, and a seek's read shared every peer with that walk |
+| 5 | A kept store re-added without a bitfield is re-hashed before `ready` | WebTorrent `_verifyPieces` | **~2.5 s/GB** (raw store, measured): an 18 GB film reopened after Stop overran the 25 s metadata timeout and read as a dead swarm |
+| 6 | Stop released the torrent whatever else held it; a second download in a pack deselected the first | `stopStream`, `focusOn` | Closing the player stopped a download of the same torrent; batch downloads from one pack fetched only the last file |
+| 7 | The storage report and the 20 GB cache cap counted file length | `storageCleanup.measure` | Sparse files would read as their full size |
+
+### 0.2 Measured in the built app
+
+`vite build` of HEAD (`f11facd`) and of this change, run with a scratch `--user-data-dir`, driven over CDP: `window.cloudstream` imports the magnet, lists files, plays the file through the real loopback server into a `<video>`, watches, seeks to 70%, stops (keeping pieces, as the player does), quits and reopens. Disk is the cache folder's allocated bytes (`stat.blocks × 512`). Web-seeded Blender films; one run each, so times are indicative.
+
+| Step | Cosmos Laundromat (MP4, 210 MB) before → after | Tears of Steel (WebM, 545 MB), stream only, before → after |
+|---|---|---|
+| File list fetched, then 30 s | **210 MB → 0 MB** | — |
+| Engine says playable | 210 MB → 11.7 MB (stream only, before: 210 MB) | **545 MB → 1.1 MB** |
+| Watched (120 s / 15 s) | 210 → 192 MB | 545 → 34 MB |
+| Seek to 70%: media resumes after | 2.3 s → 2.3 s (file already local) | **8.8 s → 5.0 s** |
+| Stopped, pieces kept | 210 → 210 MB | 545 → 83 MB |
+| Reopened after restart: handle after | 1.8 s → 1.8 s | 2.4 s → 0.85 s |
+
+The exported metainfo (`torrent-state/metadata/<hash>.torrent`, what `torrent:exportFile` writes when the torrent is not live) opened in aria2c 1.37 (`--show-files`): same info hash, file list and 23 trackers.
+
+### 0.3 Not done or not verified
+
+- **No read-ahead cap.** The player's read selects to the end of the file, so a fast source downloads ahead of the playhead (Cosmos: 192 MB of 210 MB after 2 minutes). Disk now grows with what arrives, not with the file, but a film can still fill a small disk while it plays. Capping it needs the engine to move a bounded window with the reader.
+- **No OS share sheet.** Electron offers one on macOS only; Save `.torrent` writes the file where the viewer chooses.
+- The save dialog itself was not clicked through; the bytes it writes were checked as above. Not run: a full disk (`ENOSPC` path), an 18 GB torrent, a season pack with two downloads, a packaged build (`fs-native-extensions` is a native addon; `**/*.node` is unpacked, not checked).
+- A download started while its torrent was streaming stays in the streaming cache (WebTorrent cannot move a live store). Cleanup skips it while it is listed; removed from the list with "keep file", it ages out with the cache.
+
 ## 1. Objective
 
 Review and improve CS3's internal torrent streaming and storage mechanisms to ensure that torrent content starts playing as quickly as possible, stores only the data required for streaming, and does not consume unnecessary disk space.

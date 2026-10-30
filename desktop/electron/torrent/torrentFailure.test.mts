@@ -19,6 +19,7 @@ test("the engine's own messages map to their kind and stage", () => {
     ['This torrent does not contain a playable video file.', 'no-media', 'files'],
     ['Timed out waiting for enough data to start playback.', 'file-not-ready', 'files'],
     ['No peers responded — the swarm looks dead.', 'no-peers', 'peers'],
+    ['The disk holding the torrent cache is full (D:/cache). Free some space or choose another cache folder in Settings.', 'disk-full', 'storage'],
   ];
   for (const [message, kind, stage] of cases) {
     assert.deepEqual(classifyTorrentFailure(message), { kind, stage }, message);

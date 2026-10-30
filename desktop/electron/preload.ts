@@ -1025,6 +1025,14 @@ export interface CloudStreamElectronAPI {
   clearTorrentCache: () => Promise<Envelope & { removed: number }>;
   getTorrentCachePath: () => Promise<string>;
   /**
+   * Saves the torrent's original `.torrent` through a save dialog.
+   * `unavailable` when its metadata was never fetched (copy the magnet instead).
+   */
+  exportTorrentFile: (
+    infoHash: string,
+    name?: string
+  ) => Promise<Envelope & { path?: string; unavailable?: boolean; cancelled?: boolean }>;
+  /**
    * Why this torrent is as fast or as slow as it is, including the part no
    * setting can change. See `torrent/swarmHealth.ts`.
    */
@@ -2378,6 +2386,7 @@ const api: CloudStreamElectronAPI = {
   getActiveStreams: () => ipcRenderer.invoke('torrent:getActiveStreams'),
   clearTorrentCache: () => ipcRenderer.invoke('torrent:clearCache'),
   getTorrentCachePath: () => ipcRenderer.invoke('torrent:getCachePath'),
+  exportTorrentFile: (infoHash, name) => ipcRenderer.invoke('torrent:exportFile', infoHash, name),
   getSwarmReport: (infoHash) => ipcRenderer.invoke('torrent:getSwarmReport', infoHash),
 
   getIndexerConfigs: () => ipcRenderer.invoke('indexer:getConfigs'),

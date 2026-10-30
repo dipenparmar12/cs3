@@ -3,7 +3,7 @@ import { useFlash } from '../utils/useFlash';
 import {
   X, Users, HardDrive, Loader2, AlertTriangle, Filter, ChevronDown,
   ChevronRight, Play, Download, Info, Zap, ShieldAlert, Square, Link2, Check,
-  ClipboardCopy, Globe, RefreshCw, Eraser,
+  ClipboardCopy, Globe, RefreshCw, Eraser, FileDown,
 } from 'lucide-react';
 import type { TorrentResult } from '../types/torrent';
 import type { SourceDiagnosis } from '../types/diagnostics';
@@ -179,6 +179,21 @@ export const SourcePicker: React.FC<SourcePickerProps> = ({
     [provenanceFor, setCopiedDetails]
   );
 
+  /** The torrent's own `.torrent`, for another client or another person. */
+  const { message: exportNotice, flash: setExportNotice } = useFlash<string>(5000);
+  const saveTorrentFile = useCallback(
+    async (source: TorrentResult) => {
+      const result = await window.cloudstream?.exportTorrentFile(source.infoHash, source.title);
+      if (!result || result.cancelled) return;
+      setExportNotice(
+        result.ok
+          ? `Saved ${result.path?.split(/[\\/]/).pop() ?? 'the .torrent file'}`
+          : result.error ?? 'The .torrent file could not be saved.'
+      );
+    },
+    [setExportNotice]
+  );
+
   const [filterState, setFilterState] = useState<SourceFilterState>(DEFAULT_FILTER_STATE);
 
   const best = useMemo(() => data?.sources[0] ?? null, [data]);
@@ -294,6 +309,16 @@ export const SourcePicker: React.FC<SourcePickerProps> = ({
                 {copiedLink === source.infoHash ? <Check size={15} /> : <Link2 size={15} />}
               </button>
             )}
+            {!source.directUrl && /^[a-f0-9]{40}$/i.test(source.infoHash) && (
+              <button
+                className="icon-button"
+                onClick={() => void saveTorrentFile(source)}
+                aria-label={`Save the .torrent file for ${source.title}`}
+                title="Save .torrent file"
+              >
+                <FileDown size={15} />
+              </button>
+            )}
             <button
               className="icon-button"
               onClick={() => void copyDetails(source)}
@@ -360,6 +385,11 @@ export const SourcePicker: React.FC<SourcePickerProps> = ({
         {notice && (
           <p className="source-picker__notice" role="status">
             <Eraser size={13} aria-hidden /> {notice}
+          </p>
+        )}
+        {exportNotice && (
+          <p className="source-picker__notice" role="status">
+            <FileDown size={13} aria-hidden /> {exportNotice}
           </p>
         )}
 

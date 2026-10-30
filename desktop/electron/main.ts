@@ -4690,8 +4690,10 @@ storage.registerCacheArea({
   // runaway cache must not fill a disk: oldest go first beyond 20 GB.
   maxAgeMs: 7 * DAY_MS,
   maxBytes: 20 * 1024 ** 3,
-  isActive: (entry) => torrentEngine.isCacheEntryActive(path.basename(entry)),
-  clear: () => torrentEngine.clearCache(),
+  // A download started while its torrent was streaming lives here too.
+  isActive: (entry) =>
+    torrentEngine.isCacheEntryActive(path.basename(entry)) || downloadService.holdsPath(entry),
+  clear: () => torrentEngine.clearCache((entry) => downloadService.holdsPath(entry)),
 });
 storage.registerCacheArea({
   id: 'torrent-state',
@@ -4919,16 +4921,17 @@ ipcMain.handle('torrent:getContents', async (_, infoHash: string) => {
  * Joins the swarm for the sole purpose of fetching metadata.
  *
  * The engine owns every swarm timeout, the dead-swarm bail and the `xs` mirror
- * race, so this asks it rather than resolving alongside it. `mode: 'download'`
- * is deliberate: nothing is being watched yet, and the sequential piece
- * ordering a stream asks for is wrong for a metadata fetch.
+ * race, so this asks it rather than resolving alongside it. It used to start a
+ * download-mode stream, which fetched the largest file in the background for
+ * the rest of the session; `resolveMetadata` selects nothing.
  */
 ipcMain.handle('torrent:resolveMagnet', async (_, infoHash: string) => {
   try {
     const record = torrentImports.get((infoHash ?? '').toLowerCase());
     if (!record?.source) return { ok: false, error: 'That torrent has no magnet to resolve.' };
 
-    await torrentEngine.startStream({ torrentId: record.source, mode: 'download' });
+    // Metadata only: nothing is selected, so nothing is downloaded.
+    await torrentEngine.resolveMetadata(record.source);
     // The engine writes resolved metadata into the shared cache, so reading is
     // the whole handshake — see `TorrentImportService.load`.
     const contents = torrentImports.contents(record.infoHash);
@@ -5087,13 +5090,46 @@ ipcMain.handle('torrent:getActiveStreams', async () => torrentEngine.getActiveSt
 
 ipcMain.handle('torrent:clearCache', async () => {
   try {
-    return { ok: true, removed: await torrentEngine.clearCache() };
+    return { ok: true, removed: await torrentEngine.clearCache((entry) => downloadService.holdsPath(entry)) };
   } catch (error) {
     return { ...fail(error), removed: 0 };
   }
 });
 
 ipcMain.handle('torrent:getCachePath', async () => torrentEngine.getCachePath());
+
+/**
+ * Saves a torrent's `.torrent` where the viewer chooses. Only the original
+ * metainfo (info dictionary and trackers, verified against the infohash) is
+ * written; a magnet whose metadata was never fetched has none, and is said so
+ * rather than given a made-up file.
+ */
+ipcMain.handle('torrent:exportFile', async (_, infoHash: string, name?: string) => {
+  try {
+    const hash = String(infoHash ?? '').toLowerCase();
+    if (!/^[a-f0-9]{40}$/.test(hash)) return { ok: false, error: 'That is not a torrent.' };
+    const bytes = await torrentEngine.torrentFileFor(hash);
+    if (!bytes) {
+      return {
+        ok: false,
+        unavailable: true,
+        error: 'Its file list has not been fetched yet, so there is no .torrent to save. Copy the magnet link instead.',
+      };
+    }
+    if (!mainWindow) return { ok: false, error: 'No window to ask from.' };
+    const base = (String(name ?? '').replace(/[<>:"/\\|?*\x00-\x1f]+/g, ' ').trim() || hash).slice(0, 120);
+    const result = await dialog.showSaveDialog(mainWindow, {
+      title: 'Save .torrent file',
+      defaultPath: path.join(app.getPath('downloads'), `${base}.torrent`),
+      filters: [{ name: 'Torrent', extensions: ['torrent'] }],
+    });
+    if (result.canceled || !result.filePath) return { ok: false, cancelled: true };
+    await fs.promises.writeFile(result.filePath, bytes);
+    return { ok: true, path: result.filePath };
+  } catch (error) {
+    return fail(error);
+  }
+});
 
 /**
  * Why this torrent is as fast or as slow as it is.

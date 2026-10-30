@@ -5,7 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 
 import { AppStorage, OWNER_MARKER, isInside, migratePath, readMarker } from './appStorage.ts';
-import { sweepCacheArea, sweepTemp } from './storageCleanup.ts';
+import { bytesOnDisk, sweepCacheArea, sweepTemp } from './storageCleanup.ts';
 
 const DAY = 86_400_000;
 
@@ -223,4 +223,20 @@ test('a legacy cache file moves once, and never over a newer copy', () => {
 
 test('migrating something absent is a no-op', () => {
   assert.equal(migratePath(path.join(root(), 'nope'), path.join(root(), 'x')), false);
+});
+
+test('a sparse torrent file counts what it occupies, not its length', () => {
+  const GB = 1024 ** 3;
+  // 18 GB long, 40 MB written (measured shape of a streamed film).
+  assert.equal(bytesOnDisk({ size: 18 * GB, blocks: (40 * 1024 ** 2) / 512 }), 40 * 1024 ** 2);
+  // Nothing written yet: occupies nothing.
+  assert.equal(bytesOnDisk({ size: 18 * GB, blocks: 0 }), 0);
+});
+
+test('small files and platforms without blocks count their length', () => {
+  // NTFS reports 0 blocks for a file kept inside the MFT.
+  assert.equal(bytesOnDisk({ size: 100, blocks: 0 }), 100);
+  assert.equal(bytesOnDisk({ size: 5 * 1024 ** 2 }), 5 * 1024 ** 2);
+  // Cluster rounding never reports more than the file.
+  assert.equal(bytesOnDisk({ size: 100_000, blocks: 256 }), 100_000);
 });

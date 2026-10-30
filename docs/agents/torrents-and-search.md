@@ -80,6 +80,22 @@ Timing: `METADATA_TIMEOUT_MS` 45s→25s plus a 12s dead-swarm bail (measures **k
 
 Two more load-bearing torrent behaviours: **file selection inside season packs** (deselect all, select one, or bandwidth splits across episodes and nothing plays) and **leading-bytes readiness** measured as contiguous leading pieces, not overall percent.
 
+### 7.1a Streaming takes what the player reads; the cache holds what arrived (2026-10-30)
+
+Measured in the built app and on NTFS; numbers and method in the [Torrent Streaming Optimization PRD](../roadmap/2026-10-Torrent%20Streaming%20Optimization,%20Storage%20Management,%20and%20Torrent%20File%20Export.md) §0.
+
+- **Piece files are sparse** (`torrent/sparseStore.ts`: `fs-chunk-store` with `random-access-file`'s `sparse: true`). The stock store opens plain files, and NTFS zero-fills a plain file up to the furthest write: the first tail or seek write of a 2 GB file cost 2,048 MB and 1.3 s; sparse, 8 MB and 5 ms. ext4/APFS make holes anyway.
+- **A stream selects no whole-file range** (`torrent/piecePlan.ts`). WebTorrent 3 merges overlapping non-stream selections into one at the highest priority, so the old head (10) and tail (9) windows over a whole-file `select(1)` became the whole file at 10, walked from byte 0, ahead of every player read. Now: head and tail windows only; the player's range reads (stream selections, priority 1) drive the rest, so a seek moves the fetch. A download selects its file whole at priority 0, under any read, and suppresses the windows (they would merge into it).
+- **Holders.** A torrent has at most one stream and any number of per-file downloads (`TorrentEngine.streams`/`downloads`); it leaves the client only when none remain. `stopStream` and `stopDownload` release one each; a stream release never deletes outside the streaming cache. Two downloads from one pack both stay selected (the old `focusOn` deselected all but the last).
+- **Listing a magnet's files selects nothing** (`resolveMetadata`). It used to run `startStream` in download mode: the largest file was fetched in the background for the rest of the session.
+- **Kept stores come back with their bitfield** (`<torrent-state>/bitfields/<hash>.json`, written on release and at quit, dropped when the data folder is gone). Without it WebTorrent re-hashes every piece before `ready` (~2.5 s/GB here), and an 18 GB film reopened after Stop overran the 25 s metadata timeout. WebTorrent still spot-checks a piece per file.
+- **A torrent error is recorded for its whole life.** The only `error` listener used to be removed at `ready`; a failed piece write (full disk) destroyed the torrent silently. `ENOSPC` reads as a full cache disk (`torrentFailure.ts`: `disk-full`, stage `storage`).
+- **Idle is not stalled.** With nothing selected and missing (`_amInterested` false: a paused player with a full buffer), the stall clock does not run.
+- **Storage numbers are on-disk bytes** (`storageCleanup.bytesOnDisk`: `blocks × 512`, length under 64 KB because NTFS reports 0 blocks for MFT-resident files). The 20 GB cache cap and the storage report no longer count holes.
+- **Cache cleanup skips any path a listed download holds** (`DownloadService.holdsPath`): a download started while its torrent was streaming lives in the cache, because WebTorrent cannot move a live store. Not covered: such a download removed from the list with "keep file" is then ordinary cache and ages out.
+- **No read-ahead cap yet.** A player read selects to the end of the file, so a fast source keeps downloading ahead of the playhead (Cosmos Laundromat: 192 of 210 MB after 2 minutes). Disk grows with what arrives, not with the file.
+- **Export** (`torrent:exportFile`): the live torrent's `torrentFile` or the verified metadata cache entry, written through a save dialog. No metainfo, no file: the reply says to copy the magnet. No OS share sheet (Electron has one on macOS only; not wired).
+
 ### 7.2 A search costs what its worst indexer costs
 
 Every indexer used to get a flat 20s and they all ran at once; the circuit breaker needed three consecutive failures, so a permanently blocked scraper cost three full timeouts, then three more five minutes later.

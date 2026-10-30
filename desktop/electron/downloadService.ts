@@ -21,6 +21,7 @@ import { containersAgree, overlapWindow, planResume } from './download/resumePla
 import { fetchRemoteWindow, readLocalWindow } from './download/resumeWindow.ts';
 import { reconcileRestoredTask } from './download/restoredTask.ts';
 import type { TorrentEngine } from './torrent/torrentEngine';
+import { isInside } from './storage/appStorage.ts';
 import type { ContentService } from './contentService';
 import type { AnalyticsSink } from './pluginManager';
 import type { TorrentResult } from '../src/types/torrent';
@@ -601,9 +602,6 @@ export class DownloadService {
         mode: 'download',
       });
 
-      // The torrent may already be live from a stream the user was watching,
-      // in which case `add` never ran and the strategy is still sequential.
-      await this.torrentEngine.setMode(handle.infoHash, 'download');
       this.torrentTasks.set(task.id, handle.infoHash);
       this.torrentTaskFile.set(task.id, handle.fileIndex);
       task.totalBytes = handle.fileSize;
@@ -1369,6 +1367,18 @@ export class DownloadService {
   }
 
   /**
+   * Whether a listed download's file is at or under `target`. The torrent
+   * cache asks before deleting anything: a download started while its torrent
+   * was already streaming writes into that cache.
+   */
+  public holdsPath(target: string): boolean {
+    for (const task of this.queue.values()) {
+      if (task.targetFilePath && isInside(target, task.targetFilePath)) return true;
+    }
+    return false;
+  }
+
+  /**
    * Removes a download from the list, and optionally the file it produced.
    *
    * Two genuinely different actions behind one word, which is why `deleteFile`
@@ -1385,9 +1395,11 @@ export class DownloadService {
     const infoHash = this.torrentTasks.get(id);
     if (infoHash && this.torrentEngine) {
       // Keep completed files unless the caller asked for them to go; a finished
-      // download must survive removal from the queue by default.
-      await this.torrentEngine.stopStream(
+      // download must survive removal from the queue by default. A stream of
+      // the same torrent keeps it in the client.
+      await this.torrentEngine.stopDownload(
         infoHash,
+        this.torrentTaskFile.get(id),
         task.state === DownloadState.Completed && !deleteFile
       );
       this.torrentTasks.delete(id); this.torrentTaskFile.delete(id);

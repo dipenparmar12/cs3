@@ -142,7 +142,7 @@ Working directory is `desktop/` unless noted.
 ```
 RENDERER (React 19, src/)   App.tsx · views/{Home,Search,Detail,Library,Settings} · components/VideoPlayer …
         │ contextBridge, allow-listed, typed (electron/preload.ts)
-MAIN PROCESS (electron/main.ts)  wires every service as a singleton; 372 ipcMain.handle calls
+MAIN PROCESS (electron/main.ts)  wires every service as a singleton; 373 ipcMain.handle calls
   ├─ Datastore           cs3_datastore.json in app.getPath('userData')
   ├─ ContentService      search → MetadataProvider → getSources → IndexerRegistry → startStream → TorrentEngine
   ├─ PluginManager       Sidecar Supervisor ──► JVM process (JSON-RPC over stdio) · WebView host
@@ -162,7 +162,7 @@ Crossing the boundary changes four places together: (1) the service in `electron
 
 ### 4.2 IPC surface
 
-`electron/preload.ts` is the only bridge. `contextIsolation: true`, `nodeIntegration: false`. **372 invoke channels** (recounted 2026-10-28; 361 on 2026-10-20) across the namespaces: `api: torrent: playback: search: indexer: sources: download: extension: library: datastore: binary: dialog: pages: natives: ott: issues: profiles: media: mpv: external: player: analytics: bookmarks: discover: subtitles: log: runtime: history: home: backup: network: ratings: metadata: regions: privacy: interactions: diagnostics: components: videos: window: app: shell: storage: userData: dev: userProfiles: appUpdate:`. `subscribe()` unifies 14 listener/teardown pairs; teardown prevents accumulation across React remounts.
+`electron/preload.ts` is the only bridge. `contextIsolation: true`, `nodeIntegration: false`. **373 invoke channels** (recounted 2026-10-30; 361 on 2026-10-20) across the namespaces: `api: torrent: playback: search: indexer: sources: download: extension: library: datastore: binary: dialog: pages: natives: ott: issues: profiles: media: mpv: external: player: analytics: bookmarks: discover: subtitles: log: runtime: history: home: backup: network: ratings: metadata: regions: privacy: interactions: diagnostics: components: videos: window: app: shell: storage: userData: dev: userProfiles: appUpdate:`. `subscribe()` unifies 14 listener/teardown pairs; teardown prevents accumulation across React remounts.
 
 | Channel group | Shape and rules |
 |---|---|
@@ -267,7 +267,9 @@ Crossing the boundary changes four places together: (1) the service in `electron
 | `cs3/discovery.ts` | Home-screen catalogues. Stale-while-revalidate over Cinemeta's keyless catalogues (`top`, `year`, `imdbRating`; 19 genres; pageable) plus AniList for anime. Finds **nothing playable**; sources are resolved when an item is opened. |
 | `cs3/titleEnricher.ts` | Resolves `Avengers End Game 720p Hindi Dubbed` to the film it is about. Conservative: a disagreeing year disqualifies, and the similarity bar keeps `Avengers` from matching `Avengers: Endgame`. An unenriched row is a small loss; a mislabelled one looks like data corruption. |
 | `cs3/providerHitMatch.ts` | `judgeProviderHit`: is a provider's search hit the work being looked for? `match`, `mismatch` or `unknown` (kept). IMDb id decides; then season, movie/series, year (films only, ±1), instalment tokens (`2`, `II`, `Part Two`), Dice ≥ 0.8; containment only with an agreeing year. Pure; each rule mutation-checked against the labelled set in its test (`bun run test provider-hit-match`). |
-| `torrent/torrentEngine.ts` | WebTorrent plus loopback HTTP server with range support. Sequential pieces. The player only sees `http://127.0.0.1:PORT/…`. Warmed at launch (§7.1 in `torrents-and-search.md`). |
+| `torrent/torrentEngine.ts` | WebTorrent plus loopback HTTP server with range support. The player only sees `http://127.0.0.1:PORT/…`. Warmed at launch (§7.1 in `torrents-and-search.md`). Holders: a stream and per-file downloads; a torrent leaves the client only when none remain (§7.1a). `resolveMetadata` lists files without selecting any; `torrentFileFor` gives the real `.torrent` for export (`torrent:exportFile`). |
+| `torrent/piecePlan.ts` | Which pieces to ask for, given the holders. A stream gets head and tail windows only, never its whole file; the player's reads drive the rest. Pure, tested against WebTorrent's own `Selections`. |
+| `torrent/sparseStore.ts` | WebTorrent's `fs-chunk-store` with files opened sparse (`random-access-file`'s own option). Without it NTFS allocates and zero-fills a file up to the furthest piece written. |
 | `torrent/torrentMetadata.ts` | `.torrent` bytes cached by infohash, verified against it. A hit means `add()` has piece hashes synchronously; the swarm is needed only for bytes. Builds the `xs` mirror URLs. |
 | `torrent/torrentContents.ts` | What is in a torrent, as something a person can browse: seasons, episodes, samples, extras. Pure and tested. Extension decides the kind, never the folder; a sample is recognised by size ratio as well as by name. |
 | `torrent/dhtNodeCache.ts` | DHT routing table, node id and port, persisted. Turns a cold bootstrap into a warm one. |
@@ -502,6 +504,7 @@ Crossing the boundary changes four places together: (1) the service in `electron
 - **Indexer deadline = p90 of that indexer's own successes × 2.5, clamped to [4 s, 20 s].** Only successes shape it; otherwise timing out buys a longer deadline. Cooldown escalates; any success resets it.
 - **A block or a rate limit never opens a browser.** Only a genuine challenge does. A Cloudflare challenge is routinely served as **HTTP 200**.
 - **DHT: saved contacts go through `addNode()`, never `bootstrap`.** `dhtPort` is pinned to 6882.
+- **A stream never selects its whole file** (`piecePlan.ts`): WebTorrent 3 merges overlapping non-stream selections into one at the highest priority, and a whole-file selection then outranks every player read. **Piece files are sparse** (`sparseStore.ts`). **A kept store is re-added with its saved bitfield**, or WebTorrent re-hashes it (~2.5 s/GB) inside the 25 s metadata timeout. A stream release never deletes outside the streaming cache, and cache cleanup skips any path a listed download holds (`DownloadService.holdsPath`). Measured in `torrents-and-search.md` §7.1a.
 - **All sources is a mode, not an erasure.** It must never throw away a saved selection.
 - **Zero-pad episode terms** (`S01E02`). `S1E2` matches nothing and reads as "the indexer has nothing".
 - **Ranking on a maintainer's `status`:** weight **0.4**, `minSamples` **0** (a declaration is not a sample). It loses to the counters as soon as they have anything to say.

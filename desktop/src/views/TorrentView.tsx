@@ -5,6 +5,7 @@ import {
   ChevronDown,
   ChevronRight,
   Download,
+  FileDown,
   FileText,
   Film,
   Folder,
@@ -80,6 +81,13 @@ export const TorrentView: React.FC<{
   const [selected, setSelected] = useState<Set<number>>(new Set());
   const [openSeasons, setOpenSeasons] = useState<Record<number, boolean>>({});
   const { message: notice, flash } = useFlash<string>(4000);
+
+  const saveTorrentFile = useCallback(async () => {
+    const result = await window.cloudstream?.exportTorrentFile(infoHash, contents?.title);
+    if (!result || result.cancelled) return;
+    if (result.ok) flash(`Saved ${result.path?.split(/[\\/]/).pop() ?? 'the .torrent file'}`);
+    else setError(result.error ?? 'The .torrent file could not be saved.');
+  }, [infoHash, contents?.title, flash]);
 
   const read = useCallback(async () => {
     const result = await window.cloudstream?.getTorrentContents?.(infoHash);
@@ -332,6 +340,14 @@ export const TorrentView: React.FC<{
               <Play size={16} /> Play
             </button>
           )}
+          <button
+            type="button"
+            className="btn"
+            onClick={() => void saveTorrentFile()}
+            title="Save this torrent as a .torrent file"
+          >
+            <FileDown size={16} /> Save .torrent
+          </button>
           <button type="button" className="btn" onClick={onBack}>
             Back
           </button>

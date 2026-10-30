@@ -20,6 +20,9 @@ import {
 } from './swarmHealth';
 import type { SwarmReport } from '../../src/types/torrent';
 import { TorrentMetadataCache, metadataCacheUrls } from './torrentMetadata';
+import { planPieces } from './piecePlan.ts';
+import { loadSparseFileStore } from './sparseStore.ts';
+import { isInside } from '../storage/appStorage.ts';
 import { DhtNodeCache, DEFAULT_DHT_PORT, DHT_BOOTSTRAP_NODES } from './dhtNodeCache';
 import { describeError } from '../../src/utils/errors.ts';
 
@@ -131,9 +134,6 @@ const SUBTITLE_EXTENSIONS = new Set(['.srt', '.ass', '.ssa', '.vtt', '.sub', '.i
  * window below keeps fetching well ahead of it.
  */
 const PLAYABLE_THRESHOLD_BYTES = 4 * 1024 * 1024;
-
-/** Leading bytes fetched at top priority — enough for a container header plus a GOP. */
-const HEAD_PRIORITY_BYTES = 16 * 1024 * 1024;
 
 /** Trailing bytes fetched at top priority, for containers that index at the end. */
 const TAIL_PRIORITY_BYTES = 4 * 1024 * 1024;
@@ -332,8 +332,14 @@ export class TorrentEngine {
   private selectedFile = new Map<string, number>();
   private lastError = new Map<string, string>();
   private watches = new Map<string, StreamWatch>();
-  /** infoHash → what the bytes are for, which decides the piece strategy. */
-  private modes = new Map<string, SwarmMode>();
+  /**
+   * Who holds each torrent: a stream (the player) and explicit downloads (by
+   * file). A torrent leaves the client only when nobody does, so closing the
+   * player never stops a download of the same torrent, and the reverse.
+   */
+  private streams = new Set<string>();
+  private downloads = new Map<string, Set<number>>();
+  private readonly bitfieldDir: string;
   private readonly metadataCache: TorrentMetadataCache;
   private readonly dhtCache: DhtNodeCache;
   private readonly httpMetadataCache: () => boolean;
@@ -351,6 +357,7 @@ export class TorrentEngine {
     const stateDir =
       opts.statePath ?? path.join(os.tmpdir(), 'cloudstream-desktop', 'torrent-state');
     this.metadataCache = new TorrentMetadataCache(path.join(stateDir, 'metadata'));
+    this.bitfieldDir = path.join(stateDir, 'bitfields');
     this.dhtCache = new DhtNodeCache(path.join(stateDir, 'dht-nodes.json'));
     const mirrors = opts.httpMetadataCache ?? true;
     this.httpMetadataCache = typeof mirrors === 'function' ? mirrors : () => mirrors;
@@ -396,6 +403,7 @@ export class TorrentEngine {
     // Cheap, and it wants to happen away from the first play rather than during
     // it: a sweep walks every entry in the metadata directory.
     this.metadataCache.sweep();
+    this.sweepBitfields();
   }
 
   // --- lifecycle -----------------------------------------------------------
@@ -809,57 +817,41 @@ export class TorrentEngine {
   }
 
   /**
-   * Restricts download to the chosen file and front-loads the pieces playback
-   * actually blocks on.
+   * Asks the swarm for exactly what this torrent's holders need
+   * (`piecePlan.ts`): the streamed file's head and tail windows, and every
+   * explicitly downloaded file whole. Nothing else in a pack is fetched, and the
+   * player's own reads decide everything past the head.
    *
-   * Without the deselect, the client spreads bandwidth across every file in a
-   * pack and nothing becomes playable quickly. Without the explicit head/tail
-   * selection, a sequential strategy still walks the file from byte 0, which
-   * never reaches the trailing `moov` atom that MP4s muxed for disk need before
-   * the first frame can be decoded.
+   * Every earlier selection is cleared first, because a file switch or a
+   * finished download changes the plan. The player's reads are WebTorrent
+   * "stream selections", which a range deselect leaves alone.
    */
-  private focusOn(torrent: Torrent, target: TorrentFile, mode: SwarmMode): void {
-    for (const file of torrent.files) {
-      if (file !== target) {
-        try {
-          file.deselect();
-        } catch {
-          // Older builds throw when deselecting an already-deselected file.
-        }
-      }
-    }
-    target.select(1);
-
-    const profile = SWARM_PROFILES[mode];
-    // Settable at runtime and read live by WebTorrent's request loop, so a
-    // stream promoted to a download switches without re-adding the torrent.
-    torrent.strategy = profile.strategy;
-    if (!profile.prioritiseHeadAndTail) return;
-
-    const pieceLength = torrent.pieceLength;
-    if (!pieceLength || pieceLength <= 0) return;
-
-    const offset = this.offsetOf(torrent, target);
-    const firstPiece = Math.floor(offset / pieceLength);
-    const lastPiece = Math.floor((offset + target.length - 1) / pieceLength);
-
-    const headEnd = Math.min(
-      lastPiece,
-      firstPiece + Math.ceil(HEAD_PRIORITY_BYTES / pieceLength)
-    );
+  private applySelection(torrent: Torrent): void {
+    const hash = torrent.infoHash;
+    const streamed = this.streams.has(hash) ? torrent.files[this.selectedFile.get(hash) ?? -1] : undefined;
+    const downloaded = [...(this.downloads.get(hash) ?? [])]
+      .map((index) => torrent.files[index])
+      .filter((file): file is TorrentFile => Boolean(file));
+    const span = (file: TorrentFile) => ({ offset: this.offsetOf(torrent, file), length: file.length });
+    const plan = planPieces({
+      pieceLength: torrent.pieceLength,
+      stream: streamed ? { ...span(streamed), tailBytes: tailPriorityBytes(extensionOf(streamed.name)) } : undefined,
+      downloads: downloaded.map(span),
+    });
 
     try {
-      // Priority 10 outranks the plain `select(1)` above, so these windows are
-      // requested before the sequential walk reaches them.
-      torrent.select(firstPiece, headEnd, 10);
-
-      const tailBytes = tailPriorityBytes(extensionOf(target.name));
-      if (tailBytes > 0) {
-        const tailStart = Math.max(headEnd + 1, lastPiece - Math.ceil(tailBytes / pieceLength));
-        if (tailStart <= lastPiece) torrent.select(tailStart, lastPiece, 9);
-      }
+      if (torrent.pieces.length > 0) torrent.deselect(0, torrent.pieces.length - 1);
     } catch {
-      // Piece-range selection is best-effort; the file-level select still holds.
+      // Nothing was selected.
+    }
+    // Read live by WebTorrent's request loop: no re-add, no lost bytes.
+    torrent.strategy = plan.strategy;
+    for (const window of plan.selections) {
+      try {
+        torrent.select(window.from, window.to, window.priority);
+      } catch {
+        // Out of range for a torrent that changed under us; the next plan fixes it.
+      }
     }
   }
 
@@ -881,9 +873,7 @@ export class TorrentEngine {
       // Nothing here is playable, and failover will move on to another source —
       // so this torrent must not be left in the client holding sockets. It is
       // only dropped when no other stream is using it.
-      if (!this.selectedFile.has(torrent.infoHash)) {
-        await this.stopStream(torrent.infoHash, false);
-      }
+      if (!this.isHeld(torrent.infoHash)) await this.release(torrent.infoHash, false);
 
       const wanted =
         request.episode !== undefined
@@ -892,10 +882,17 @@ export class TorrentEngine {
       throw new Error(`This torrent does not contain ${wanted}.`);
     }
 
-    const mode = request.mode ?? 'stream';
-    this.focusOn(torrent, file, mode);
-    this.modes.set(torrent.infoHash, mode);
-    this.selectedFile.set(torrent.infoHash, torrent.files.indexOf(file));
+    const index = torrent.files.indexOf(file);
+    if ((request.mode ?? 'stream') === 'stream') {
+      this.streams.add(torrent.infoHash);
+      this.selectedFile.set(torrent.infoHash, index);
+    } else {
+      const held = this.downloads.get(torrent.infoHash) ?? new Set<number>();
+      this.downloads.set(torrent.infoHash, held.add(index));
+      // The player's file stays the one stats default to.
+      if (!this.streams.has(torrent.infoHash)) this.selectedFile.set(torrent.infoHash, index);
+    }
+    this.applySelection(torrent);
     this.lastError.delete(torrent.infoHash);
     this.watches.set(torrent.infoHash, {
       startedAt: Date.now(),
@@ -904,6 +901,39 @@ export class TorrentEngine {
     });
 
     return this.describeHandle(torrent, file, port);
+  }
+
+  /**
+   * Resolves a torrent's file list and nothing more.
+   *
+   * Listing an imported magnet used to go through `startStream` in download
+   * mode, which selected the largest file and kept fetching it in the
+   * background for the rest of the session: looking at a torrent downloaded
+   * it. Here nothing is selected, and the torrent leaves the client again
+   * unless something else holds it; the `.torrent` it resolved stays in the
+   * metadata cache, so the next Play starts from it.
+   */
+  public async resolveMetadata(torrentId: string): Promise<string> {
+    const { client } = await this.ensureStarted();
+    const torrent = await this.addTorrent(client, { torrentId });
+    const infoHash = torrent.infoHash;
+    if (!this.isHeld(infoHash)) await this.release(infoHash, true);
+    return infoHash;
+  }
+
+  /**
+   * The torrent's own `.torrent` (info dictionary and trackers), for export.
+   *
+   * Only real metainfo: the cached file is verified against the infohash on
+   * read, and a live torrent's bytes exist only once its metadata arrived. A
+   * bare magnet that was never resolved gives `null`, never a fabricated file.
+   */
+  public async torrentFileFor(infoHash: string): Promise<Buffer | null> {
+    const hash = infoHash.toLowerCase();
+    const live = this.client ? await Promise.resolve(this.client.get(hash)) : null;
+    const bytes = live?.torrentFile;
+    if (bytes && bytes.length > 0) return Buffer.from(bytes);
+    return this.metadataCache.read(hash);
   }
 
   private describeHandle(torrent: Torrent, file: TorrentFile, port: number): StreamHandle {
@@ -950,7 +980,11 @@ export class TorrentEngine {
       if (signal?.aborted) return { playable: false, aborted: true, reason: 'Superseded.' };
 
       const stats = await this.getStats(infoHash);
-      if (!stats) return { playable: false, reason: 'The stream was closed before it started.' };
+      if (!stats) {
+        // A torrent that failed (a write error, say) has left the client; its
+        // reason is still here.
+        return { playable: false, reason: this.lastError.get(infoHash) ?? 'The stream was closed before it started.' };
+      }
       if (stats.error) return { playable: false, reason: stats.error };
       if (stats.isPlayable) return { playable: true };
 
@@ -1049,11 +1083,21 @@ export class TorrentEngine {
      * is discarded rather than trusted.
      */
     const cached = knownHash ? this.metadataCache.read(knownHash) : null;
+    const dir = request.downloadPath ?? this.downloadPath;
+    const store = await loadSparseFileStore();
 
     let torrent: Torrent;
     try {
       torrent = client.add(cached ?? torrentId, {
-        path: request.downloadPath ?? this.downloadPath,
+        path: dir,
+        store,
+        // What was on disk when this torrent last left the client. Without it
+        // WebTorrent re-hashes every piece of a kept file before `ready`:
+        // ~2.5 s per GB here (measured 2026-10-30), so an 18 GB film reopened
+        // after Stop overran the metadata timeout and read as a dead swarm.
+        // WebTorrent still spot-checks a piece per file and rechecks any file
+        // that fails, so a cache swept since is caught.
+        bitfield: knownHash ? this.readBitfield(knownHash, dir) : undefined,
         strategy: SWARM_PROFILES[request.mode ?? 'stream'].strategy,
         /**
          * The magnet's own trackers travel with it — and on the cache-hit path
@@ -1088,6 +1132,24 @@ export class TorrentEngine {
       throw error instanceof Error ? error : new Error(message);
     }
 
+    /**
+     * Errors for the torrent's whole life, not only until `ready`.
+     *
+     * A failed piece write (a full disk) destroys the torrent. The only
+     * listener used to be removed at `ready`, so the error went to the client's
+     * log line, the torrent vanished, and the player was told the stream "was
+     * closed before it started".
+     */
+    const hash = torrent.infoHash ?? knownHash;
+    torrent.on('error', (err) => {
+      const message = describeError(err);
+      const reason = /ENOSPC/i.test(message)
+        ? `The disk holding the torrent cache is full (${dir}). Free some space or choose another cache folder in Settings.`
+        : message;
+      if (hash) this.lastError.set(hash, reason);
+      console.warn('[torrent] torrent error:', reason);
+    });
+
     return this.awaitReady(torrent, client);
   }
 
@@ -1107,8 +1169,8 @@ export class TorrentEngine {
       const cleanup = () => {
         clearTimeout(timer);
         clearInterval(probe);
-        torrent.removeAllListeners('ready');
-        torrent.removeAllListeners('error');
+        torrent.removeListener('ready', onReady);
+        torrent.removeListener('error', onError);
       };
 
       /** Drops the dead torrent so the same magnet can be tried again. */
@@ -1157,21 +1219,23 @@ export class TorrentEngine {
       }, 2_000);
       probe.unref?.();
 
-      torrent.on('ready', () => {
+      const onReady = () => {
         if (settled) return;
         settled = true;
         cleanup();
         resolve(torrent);
-      });
+      };
 
-      torrent.on('error', (err) => {
+      // The lasting listener in `addTorrent` ran first and worded the reason.
+      const onError = (err: Error | string) => {
         if (settled) return;
         settled = true;
         cleanup();
-        const message = describeError(err);
-        this.lastError.set(torrent.infoHash, message);
-        reject(new Error(message));
-      });
+        reject(new Error(this.lastError.get(torrent.infoHash) ?? describeError(err)));
+      };
+
+      torrent.on('ready', onReady);
+      torrent.on('error', onError);
 
       // `ready` may already have fired between the guard above and the listener.
       if (torrent.ready && !settled) {
@@ -1245,7 +1309,7 @@ export class TorrentEngine {
 
     const readyBytes = this.computeReadyBytes(torrent, file);
     const readyTargetBytes = Math.min(PLAYABLE_THRESHOLD_BYTES, file.length * 0.02);
-    const stalledMs = this.updateWatch(infoHash, file);
+    const stalledMs = this.updateWatch(infoHash, file, torrent._amInterested !== false);
 
     return {
       infoHash,
@@ -1277,8 +1341,11 @@ export class TorrentEngine {
    * Speed alone is a poor signal — it dips to zero constantly between pieces.
    * Time since the last increase in downloaded bytes is what distinguishes a
    * slow swarm from one that is never going to deliver.
+   *
+   * A stream asks only for what the player reads, so a paused player whose
+   * buffer is full wants nothing; that is idle, not stalled.
    */
-  private updateWatch(infoHash: string, file: TorrentFile): number {
+  private updateWatch(infoHash: string, file: TorrentFile, wanting: boolean): number {
     const now = Date.now();
     const watch = this.watches.get(infoHash);
 
@@ -1287,7 +1354,7 @@ export class TorrentEngine {
       return 0;
     }
 
-    if (file.downloaded > watch.lastBytes) {
+    if (file.downloaded > watch.lastBytes || !wanting) {
       watch.lastBytes = file.downloaded;
       watch.lastProgressAt = now;
       return 0;
@@ -1305,8 +1372,9 @@ export class TorrentEngine {
     const file = torrent.files[fileIndex];
     if (!file || !isVideoFile(file)) return null;
 
-    this.focusOn(torrent, file, this.modes.get(infoHash) ?? 'stream');
+    this.streams.add(infoHash);
     this.selectedFile.set(infoHash, fileIndex);
+    this.applySelection(torrent);
     // Switching files restarts the liveness clock; the new file has no bytes yet.
     this.watches.set(infoHash, {
       startedAt: Date.now(),
@@ -1315,31 +1383,6 @@ export class TorrentEngine {
     });
 
     return this.describeHandle(torrent, file, this.serverPort);
-  }
-
-  /**
-   * Changes what a live torrent is being fetched for.
-   *
-   * The case this exists for is a stream the user then chooses to download.
-   * Nothing about the swarm has changed, but the ordering requirement has
-   * disappeared, and staying sequential would keep paying for a playhead that
-   * no longer exists. WebTorrent reads `strategy` on every request round, so
-   * this takes effect without re-adding the torrent or losing a byte.
-   */
-  public async setMode(infoHash: string, mode: SwarmMode): Promise<boolean> {
-    if (!this.client) return false;
-
-    const torrent = await Promise.resolve(this.client.get(infoHash));
-    if (!torrent) return false;
-
-    this.modes.set(infoHash, mode);
-
-    const index = this.selectedFile.get(infoHash);
-    const file = index !== undefined ? torrent.files[index] : undefined;
-    if (file) this.focusOn(torrent, file, mode);
-    else torrent.strategy = SWARM_PROFILES[mode].strategy;
-
-    return true;
   }
 
   /**
@@ -1357,7 +1400,7 @@ export class TorrentEngine {
     if (!torrent) return null;
 
     const census = censusPeers(torrent._peers?.values() ?? []);
-    const mode = this.modes.get(infoHash) ?? 'stream';
+    const mode: SwarmMode = this.streams.has(infoHash) || !this.downloads.has(infoHash) ? 'stream' : 'download';
     const watch = this.watches.get(infoHash);
     const findings = diagnoseSwarm({
       census,
@@ -1397,10 +1440,35 @@ export class TorrentEngine {
   }
 
   /**
-   * Stops a stream. `keepFiles` is honoured so a torrent promoted to a download
-   * is not wiped when the player closes.
+   * The player let go of this torrent. A download of it keeps it in the client;
+   * otherwise it leaves, its pieces deleted unless `keepFiles`. A stream never
+   * deletes anything outside the streaming cache.
    */
   public async stopStream(infoHash: string, keepFiles = false): Promise<void> {
+    this.streams.delete(infoHash);
+    await this.releaseIfFree(infoHash, keepFiles);
+  }
+
+  /** A download of one file let go; `keepFiles` false deletes what it wrote. */
+  public async stopDownload(infoHash: string, fileIndex: number | undefined, keepFiles: boolean): Promise<void> {
+    const held = this.downloads.get(infoHash);
+    if (fileIndex === undefined) held?.clear();
+    else held?.delete(fileIndex);
+    if (held?.size === 0) this.downloads.delete(infoHash);
+    await this.releaseIfFree(infoHash, keepFiles, true);
+  }
+
+  private isHeld(infoHash: string): boolean {
+    return this.streams.has(infoHash) || this.downloads.has(infoHash);
+  }
+
+  private async releaseIfFree(infoHash: string, keepFiles: boolean, byDownload = false): Promise<void> {
+    if (!this.isHeld(infoHash)) return this.release(infoHash, keepFiles, byDownload);
+    const torrent = this.client ? await Promise.resolve(this.client.get(infoHash)) : null;
+    if (torrent?.ready) this.applySelection(torrent);
+  }
+
+  private async release(infoHash: string, keepFiles: boolean, byDownload = false): Promise<void> {
     if (!this.client) return;
 
     const torrent = await Promise.resolve(this.client.get(infoHash));
@@ -1409,13 +1477,73 @@ export class TorrentEngine {
     this.selectedFile.delete(infoHash);
     this.lastError.delete(infoHash);
     this.watches.delete(infoHash);
-    this.modes.delete(infoHash);
+
+    const destroyStore = !keepFiles && (byDownload || isInside(this.downloadPath, torrent.path));
+    if (destroyStore) this.forgetBitfield(infoHash);
+    else this.saveBitfield(torrent);
 
     await new Promise<void>((resolve) => {
-      this.client?.remove(torrent, { destroyStore: !keepFiles }, () => resolve());
+      this.client?.remove(torrent, { destroyStore }, () => resolve());
       // Never let a hung teardown block the caller.
       setTimeout(resolve, 5_000);
     });
+  }
+
+  // --- resume bitfields ------------------------------------------------------
+
+  private bitfieldFile(infoHash: string): string {
+    return path.join(this.bitfieldDir, `${infoHash.toLowerCase()}.json`);
+  }
+
+  /** Which pieces a kept store holds, so the next add need not re-hash it. */
+  private saveBitfield(torrent: Torrent): void {
+    const bits = torrent.bitfield?.buffer;
+    if (!torrent.ready || !bits || !/^[a-f0-9]{40}$/i.test(torrent.infoHash)) return;
+    try {
+      fs.mkdirSync(this.bitfieldDir, { recursive: true });
+      const record = { path: torrent.path, bits: Buffer.from(bits).toString('base64') };
+      fs.writeFileSync(this.bitfieldFile(torrent.infoHash), JSON.stringify(record));
+    } catch {
+      // Without it the next open re-hashes: slower, not wrong.
+    }
+  }
+
+  private readBitfield(infoHash: string, dir: string): Uint8Array | undefined {
+    try {
+      const record = JSON.parse(fs.readFileSync(this.bitfieldFile(infoHash), 'utf8')) as { path?: string; bits?: string };
+      if (record.path !== dir || typeof record.bits !== 'string') return undefined;
+      return new Uint8Array(Buffer.from(record.bits, 'base64'));
+    } catch {
+      return undefined;
+    }
+  }
+
+  private forgetBitfield(infoHash: string): void {
+    try {
+      fs.rmSync(this.bitfieldFile(infoHash), { force: true });
+    } catch {
+      // A stale record is checked against the data anyway.
+    }
+  }
+
+  /** Drops records whose data folder is gone (the cache was cleared or swept). */
+  private sweepBitfields(): void {
+    let names: string[];
+    try {
+      names = fs.readdirSync(this.bitfieldDir);
+    } catch {
+      return;
+    }
+    for (const name of names) {
+      const file = path.join(this.bitfieldDir, name);
+      try {
+        const record = JSON.parse(fs.readFileSync(file, 'utf8')) as { path?: string };
+        if (record.path && fs.existsSync(record.path)) continue;
+      } catch {
+        // Unreadable: drop it.
+      }
+      fs.rmSync(file, { force: true });
+    }
   }
 
   public async getActiveStreams(): Promise<TorrentStreamStats[]> {
@@ -1439,15 +1567,21 @@ export class TorrentEngine {
     return Boolean(this.client?.torrents.some((torrent) => torrent.name === entryName));
   }
 
-  /** Clears the on-disk piece cache for torrents that are no longer active. */
-  public async clearCache(): Promise<number> {
+  /**
+   * Clears the on-disk piece cache for torrents that are no longer active.
+   *
+   * `isKept` names entries something else owns: a download started while its
+   * torrent was already streaming writes into this cache (WebTorrent cannot
+   * move a live store), and clearing the cache must never delete it.
+   */
+  public async clearCache(isKept: (entryPath: string) => boolean = () => false): Promise<number> {
     const activeNames = new Set(this.client?.torrents.map((t) => t.name) ?? []);
     let removed = 0;
 
     if (!fs.existsSync(this.downloadPath)) return 0;
 
     for (const entry of fs.readdirSync(this.downloadPath)) {
-      if (activeNames.has(entry)) continue;
+      if (activeNames.has(entry) || isKept(path.join(this.downloadPath, entry))) continue;
       try {
         fs.rmSync(path.join(this.downloadPath, entry), { recursive: true, force: true });
         removed++;
@@ -1466,12 +1600,15 @@ export class TorrentEngine {
 
     const client = this.client;
     const server = this.server;
+    // Quitting keeps every store, so the next launch resumes without a re-hash.
+    for (const torrent of client?.torrents ?? []) this.saveBitfield(torrent);
     this.client = null;
     this.server = null;
     this.serverPort = 0;
     this.selectedFile.clear();
     this.watches.clear();
-    this.modes.clear();
+    this.streams.clear();
+    this.downloads.clear();
 
     await new Promise<void>((resolve) => {
       if (!server) return resolve();

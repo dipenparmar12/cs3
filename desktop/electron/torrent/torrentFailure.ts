@@ -16,9 +16,11 @@ export type TorrentFailureKind =
   | 'no-media'
   /** Peers answered, but the start of the chosen file never arrived in time. */
   | 'file-not-ready'
+  /** A piece could not be written: the cache's disk is full. */
+  | 'disk-full'
   | 'stream-failed';
 
-export type TorrentFailureStage = 'input' | 'engine' | 'metadata' | 'peers' | 'files' | 'playback';
+export type TorrentFailureStage = 'input' | 'engine' | 'metadata' | 'peers' | 'files' | 'storage' | 'playback';
 
 export interface TorrentFailure {
   kind: TorrentFailureKind;
@@ -33,6 +35,7 @@ const RULES: Array<[RegExp, TorrentFailure]> = [
   [/no peers/i, { kind: 'no-peers', stage: 'peers' }],
   [/does not contain/i, { kind: 'no-media', stage: 'files' }],
   [/waiting for enough data/i, { kind: 'file-not-ready', stage: 'files' }],
+  [/torrent cache is full|ENOSPC/i, { kind: 'disk-full', stage: 'storage' }],
 ];
 
 export function classifyTorrentFailure(message: string): TorrentFailure {
