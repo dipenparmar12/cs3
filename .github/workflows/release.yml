@@ -55,6 +55,8 @@ on:
 # its releases. Only the publish job is given write access, below.
 permissions:
   contents: read
+  # SignPath reads the unsigned artifact through this run's token.
+  actions: read
 
 concurrency:
   group: release-${{ github.ref }}
@@ -204,6 +206,39 @@ jobs:
             if [ -z "${!variable}" ]; then unset "$variable"; fi
           done
           node tools/package/build-installer.mjs --fast --arch ${{ matrix.arch }} --version "$VERSION"
+      # Windows signing through SignPath Foundation (free for open source),
+      # once the repository variables name a SignPath project. The installer,
+      # the portable exe and the portable zip go up as one artifact; SignPath's
+      # artifact configuration signs each, and the app's own exe inside the
+      # zip. The signed copies replace these before anything is checked or
+      # launched. Every request waits for an approver in SignPath.
+      - name: Upload Windows packages for signing
+        id: unsigned
+        if: runner.os == 'Windows' && vars.SIGNPATH_ORGANIZATION_ID != ''
+        uses: actions/upload-artifact@v4
+        with:
+          name: unsigned-${{ matrix.label }}
+          if-no-files-found: error
+          retention-days: 1
+          path: |
+            desktop/release/CS3-*.exe
+            desktop/release/CS3-*.zip
+      - name: Sign with SignPath (waits for approval)
+        if: steps.unsigned.outcome == 'success'
+        uses: signpath/github-action-submit-signing-request@v3
+        with:
+          api-token: ${{ secrets.SIGNPATH_API_TOKEN }}
+          organization-id: ${{ vars.SIGNPATH_ORGANIZATION_ID }}
+          project-slug: ${{ vars.SIGNPATH_PROJECT_SLUG }}
+          signing-policy-slug: ${{ vars.SIGNPATH_SIGNING_POLICY_SLUG }}
+          github-artifact-id: ${{ steps.unsigned.outputs.artifact-id }}
+          wait-for-completion-timeout-in-seconds: 3600
+          output-artifact-directory: ${{ runner.temp }}/signed
+          parameters: |
+            version: ${{ toJSON(env.VERSION) }}
+      - name: Put the signed packages in place
+        if: steps.unsigned.outcome == 'success'
+        run: cp -f "${{ runner.temp }}"/signed/CS3-* desktop/release/
       - name: Check the package carries its runtime, built for this CPU
         run: node tools/package/verify-package.mjs --arch ${{ matrix.arch }} --version "$VERSION"
       - name: Install and launch every package (smoke test)
@@ -233,6 +268,7 @@ jobs:
         run: >-
           node tools/package/verify-signatures.mjs
           ${{ vars.REQUIRE_SIGNING == 'true' && runner.os != 'Linux' && '--require' || '' }}
+          ${{ steps.unsigned.outcome == 'success' && '--downloads-only' || '' }}
       - name: Record the signing state
         run: echo "${{ runner.os == 'Linux' && 'n/a' || steps.signatures.outputs.signed }}" > "desktop/release/SIGNING-${{ matrix.label }}.txt"
       - name: Software bill of materials

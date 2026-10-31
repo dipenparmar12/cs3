@@ -19,3 +19,5 @@
 - **Linux**: make the AppImage executable (`chmod +x CS3-*.AppImage`). It needs FUSE 2 (`sudo apt install libfuse2`, or `libfuse2t64` on Ubuntu 24.04), or run it with `--appimage-extract-and-run`; on Ubuntu 23.10 and later, started from a terminal it may also need `--no-sandbox`. The `.deb` needs neither. The native engine and the fast downloader come from your distribution: `sudo apt install mpv aria2` (the `.deb` recommends both).
 
 Everything you set up — repositories, extensions, library, history — is kept across updates.
+
+[Code signing policy](https://github.com/dipenparmar12/cs3#code-signing-policy)

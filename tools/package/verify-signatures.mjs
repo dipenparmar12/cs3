@@ -3,11 +3,12 @@
  * Checks the finished release artifacts are signed, after packaging (PRD §126.2,
  * §126.6) — the state a user downloads, not an intermediate one.
  *
- *   node tools/package/verify-signatures.mjs [--require]
+ *   node tools/package/verify-signatures.mjs [--require] [--downloads-only]
  *
  * Windows: every top-level `.exe` in `desktop/release` (installer, portable) and
  * the app executable in `win-unpacked` must have a *Valid* Authenticode
- * signature. macOS: the `.app` must pass `codesign --verify --deep --strict`
+ * signature. `--downloads-only` skips `win-unpacked`: SignPath signs the files
+ * after electron-builder made them, so the unpacked copy is never signed. macOS: the `.app` must pass `codesign --verify --deep --strict`
  * and Gatekeeper's `spctl --assess`; a stapled notarization ticket is reported.
  * Linux has no OS-level signature to check; its integrity is SHA256SUMS.txt.
  *
@@ -27,6 +28,7 @@ import { fileURLToPath } from 'node:url';
 const here = path.dirname(fileURLToPath(import.meta.url));
 const release = path.resolve(here, '..', '..', 'desktop', 'release');
 const require = process.argv.includes('--require');
+const downloadsOnly = process.argv.includes('--downloads-only');
 
 function run(command, args) {
   try {
@@ -41,7 +43,7 @@ function windowsTargets() {
     ? fs.readdirSync(release).filter((f) => f.endsWith('.exe')).map((f) => path.join(release, f))
     : [];
   const unpacked = path.join(release, 'win-unpacked');
-  const app = fs.existsSync(unpacked)
+  const app = !downloadsOnly && fs.existsSync(unpacked)
     ? fs.readdirSync(unpacked).filter((f) => f.endsWith('.exe') && !/^elevate\.exe$/i.test(f)).map((f) => path.join(unpacked, f))
     : [];
   return [...top, ...app];

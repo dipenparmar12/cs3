@@ -38,6 +38,34 @@ Repository **variables**: `AZURE_SIGNING_ENDPOINT` (e.g. `https://eus.codesignin
 
 **B. A code-signing certificate (.pfx)** from a public CA. Secrets: `CSC_LINK` (base64 of the .pfx) and `CSC_KEY_PASSWORD`. Since 2023 such keys must live on hardware (HSM/token), which in practice means a cloud HSM or a signing service, not a file. Prefer A.
 
+**C. SignPath Foundation** — free for open-source projects; the certificate is issued to *SignPath Foundation*, which is the publisher users see. Apply at <https://signpath.org/apply> (needs an existing release, the "Code signing policy" section in `README.md` and the release notes, and MFA on GitHub and SignPath). Acceptance is SignPath's decision. Once accepted, in SignPath: install the SignPath GitHub App on this repository, create a project linked to it as a trusted build system, a signing policy with an approver, and this artifact configuration (the uploaded artifact is a zip of the three Windows files; only the app's own exe inside the portable zip is signed, never the bundled ffmpeg, mpv or JRE):
+
+```xml
+<?xml version="1.0" encoding="utf-8"?>
+<artifact-configuration xmlns="http://signpath.io/artifact-configuration/v1">
+  <parameters>
+    <parameter name="version" required="true" />
+  </parameters>
+  <zip-file>
+    <pe-file path="CS3-*-windows-x64-installer.exe" product-name="CloudStream 3 Desktop" product-version="${version}">
+      <authenticode-sign />
+    </pe-file>
+    <pe-file path="CS3-*-windows-x64-portable.exe" product-name="CloudStream 3 Desktop" product-version="${version}">
+      <authenticode-sign />
+    </pe-file>
+    <zip-file path="CS3-*-windows-x64-portable.zip">
+      <pe-file path="CloudStream 3 Desktop.exe" product-name="CloudStream 3 Desktop" product-version="${version}">
+        <authenticode-sign />
+      </pe-file>
+    </zip-file>
+  </zip-file>
+</artifact-configuration>
+```
+
+Check `product-version` against a built file's properties (Windows may report `0.0.2.0` for `0.0.2`) and adjust in SignPath's editor, which validates the configuration on save.
+
+Repository **secret**: `SIGNPATH_API_TOKEN` (a SignPath user with submitter rights). Repository **variables**: `SIGNPATH_ORGANIZATION_ID`, `SIGNPATH_PROJECT_SLUG`, `SIGNPATH_SIGNING_POLICY_SLUG`. With `SIGNPATH_ORGANIZATION_ID` unset the workflow skips SignPath. Each release's Windows build then waits (up to an hour) for the approver to approve the request in SignPath. The files users download are signed; the app exe the installer unpacks is not (it carries no download mark, so SmartScreen does not check it), and the signature check skips `win-unpacked` for that reason (`--downloads-only`).
+
 An EV certificate does **not** guarantee that SmartScreen is silent; Microsoft dropped EV's instant-reputation boost. Reputation builds from downloads of consistently signed files.
 
 ### macOS

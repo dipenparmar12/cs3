@@ -448,6 +448,19 @@ Contributions are warmly welcomed! Please follow these guidelines:
 
 ---
 
+## Code signing policy
+
+Windows releases are being prepared for free code signing provided by [SignPath.io](https://about.signpath.io/), certificate by [SignPath Foundation](https://signpath.org/). Until that is in place, releases are unsigned and say so in their title.
+
+- Committers and reviewers: [Dipen Parmar](https://github.com/dipenparmar12)
+- Approvers: [Dipen Parmar](https://github.com/dipenparmar12)
+
+Signed files are built by this repository's [release workflow](.github/workflows/release.yml) from the tagged source, and every signing request is approved by hand.
+
+**Privacy.** The app sends nothing to its developers: no telemetry, no analytics, no accounts. It connects to other services only to do what you use it for: the catalogues behind search and title pages (Cinemeta, TVmaze, AniList, Wikidata, Wikipedia), OpenSubtitles for subtitles, torrent peers and indexers, the extension repositories you add and the sites their extensions reach, and GitHub once a day to check for app and extension updates (Settings turns both off). Those services' own privacy policies apply to what they receive.
+
+---
+
 ## 12. License & Credits
 
 - **License:** Upstream CloudStream 3 is licensed under **[GPL-3.0](https://www.gnu.org/licenses/gpl-3.0.html)**. CloudStream 3 Desktop is released under the same license.
