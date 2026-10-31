@@ -126,9 +126,10 @@ jobs:
     name: Build ${{ matrix.label }}
     needs: [version, checks]
     strategy:
-      # One failure fails the release; finishing the others would only make
-      # artifacts nobody can publish.
-      fail-fast: true
+      # `needs: build` already keeps a failed target from publishing anything,
+      # so the others finish: the first real run had one target's failure cancel
+      # four builds that would each have reported their own.
+      fail-fast: false
       matrix:
         include:
           - { label: windows-x64, os: windows-latest, arch: x64 }
