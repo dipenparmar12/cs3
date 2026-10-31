@@ -16,7 +16,7 @@
  * it alone can never re-find one.
  */
 import assert from 'node:assert/strict';
-import { isLinkUsable, matchesRelease, pickReplacement, pickSibling } from './playedSource.ts';
+import { isLinkUsable, isWorthTryingFirst, matchesRelease, pickReplacement, pickSibling, playedThroughProvider } from './playedSource.ts';
 import type { StoredSource } from '../../src/types/library.ts';
 import type { TorrentResult } from '../../src/types/torrent.ts';
 
@@ -73,6 +73,27 @@ test('a direct link with no recorded deadline is treated as expired', () => {
    * costs one provider call and produces a stream that works.
    */
   assert.equal(isLinkUsable(saved({ expiresAt: undefined })), false);
+});
+
+test('a resume tries a link with no deadline first, but never one past its deadline', () => {
+  // Most provider links state no deadline; treating them as expired made every
+  // resume a fresh search. Discovery runs alongside the attempt.
+  const now = 1_000_000;
+  assert.equal(isWorthTryingFirst(saved({ expiresAt: undefined }), now), true);
+  assert.equal(isWorthTryingFirst(saved({ expiresAt: now - 1 }), now), false);
+  assert.equal(isWorthTryingFirst(saved({ expiresAt: now + 60_000 }), now), true);
+  assert.equal(isWorthTryingFirst(saved({ directUrl: undefined, expiresAt: undefined }), now), false);
+});
+
+test("Play on Provider B's page never uses what played through Provider A", () => {
+  const record = {
+    source: saved({ providerName: 'ProviderA' }),
+    origin: { mediaUrl: 'cs3ext://ProviderA/https%3A%2F%2Fa.example%2Fmatrix', title: 'The Matrix', year: 1999 },
+  };
+  assert.equal(playedThroughProvider(record, 'cs3ext://ProviderB/https%3A%2F%2Fb.example%2Fmatrix'), false);
+  assert.equal(playedThroughProvider(record, 'cs3ext://ProviderA/https%3A%2F%2Fa.example%2Fmatrix'), true);
+  assert.equal(playedThroughProvider(record, 'cs3meta://movie/tt0133093'), true, 'a catalogue row names no provider');
+  assert.equal(playedThroughProvider(record, undefined), true);
 });
 
 // --- matching --------------------------------------------------------------

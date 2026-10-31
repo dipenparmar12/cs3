@@ -1,7 +1,7 @@
 import { fetchJson, postJson } from '../http.ts';
 import {
   buildMagnet,
-  parseIntSafe,
+  parseIntSafe, parseCount,
   parseSize,
   tryMirrors,
   withEpisodeTerms,
@@ -77,7 +77,7 @@ interface StremioResponse {
 function parseStremioTitle(title: string): {
   releaseName: string;
   fileName?: string;
-  seeders: number;
+  seeders?: number;
   sizeBytes: number;
   source?: string;
 } {
@@ -85,7 +85,7 @@ function parseStremioTitle(title: string): {
   const statsLine = lines.find((l) => /👤|💾|⚙️|🌱|📦|🔗/.test(l)) ?? '';
   const contentLines = lines.filter((l) => l !== statsLine);
 
-  const seeders = parseIntSafe(
+  const seeders = parseCount(
     statsLine.match(/(?:👤|🌱)\s*([\d,]+)/)?.[1]?.replace(/,/g, '')
   );
   const sizeBytes = parseSize(
@@ -347,7 +347,7 @@ export class KnabenIndexer implements TorrentIndexer {
             infoHash: infoHash && /^[a-f0-9]{40}$/.test(infoHash) ? infoHash : undefined,
             magnet,
             sizeBytes: parseSize(hit.bytes ?? hit.size),
-            seeders: parseIntSafe(hit.seeders),
+            seeders: parseCount(hit.seeders),
             // Knaben reports total swarm size as `peers`.
             leechers: Math.max(0, parseIntSafe(hit.peers) - parseIntSafe(hit.seeders)),
             publishedAt: Number.isNaN(published) ? undefined : published,
@@ -411,7 +411,7 @@ export class SolidTorrentsIndexer implements TorrentIndexer {
             infoHash: infoHash && /^[a-f0-9]{40}$/.test(infoHash) ? infoHash : undefined,
             magnet: item.magnet || (infoHash ? buildMagnet(infoHash, title) : undefined),
             sizeBytes: parseSize(item.size),
-            seeders: parseIntSafe(item.swarm?.seeders),
+            seeders: parseCount(item.swarm?.seeders),
             leechers: parseIntSafe(item.swarm?.leechers),
             publishedAt: item.imported ? item.imported : undefined,
             category: item.category ?? 'Video',
@@ -483,7 +483,7 @@ export class TorrentsCsvIndexer implements TorrentIndexer {
             infoHash,
             magnet: buildMagnet(infoHash, title),
             sizeBytes: parseSize(row.size_bytes),
-            seeders: parseIntSafe(row.seeders),
+            seeders: parseCount(row.seeders),
             leechers: parseIntSafe(row.leechers),
             publishedAt: row.created_unix ? row.created_unix * 1000 : undefined,
           };
@@ -579,7 +579,7 @@ export class ApiBayIndexer implements TorrentIndexer {
             infoHash,
             magnet: buildMagnet(infoHash, name),
             sizeBytes: parseSize(item.size),
-            seeders: parseIntSafe(item.seeders),
+            seeders: parseCount(item.seeders),
             leechers: parseIntSafe(item.leechers),
             publishedAt: item.added ? parseIntSafe(item.added) * 1000 : undefined,
             category: item.category,

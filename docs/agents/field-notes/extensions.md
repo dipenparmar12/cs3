@@ -32,6 +32,7 @@ Dated post-mortems and measurements moved verbatim out of `AGENTS.md` (nothing r
 - CloudStream X (CSX), and two shim gaps it found (2026-08-27)
 - `InvalidHeader` was every unclassified record (2026-08-27)
 - Extensions: browse opens where you asked (2026-08-27)
+- The provider audit's first live runs (2026-10-28)
 
 ---
 
@@ -1517,3 +1518,93 @@ have found nothing, even with the repository carrying it on screen. It now also 
 installed extensions and providers underneath, and the card says *why* it matched: a result
 with no visible reason reads as a broken filter.
 
+### The provider audit's first live runs (2026-10-28)
+
+`tools/audit/provider-audit.mjs` (Provider Compatibility Audit PRD; S0–S6 only, no network worker yet)
+over the scratch profile's 17 archives, 19 providers: **391 s**. 12 reached links (S6), 5 broken,
+1 needs sign-in, 1 unverifiable. Three things the first runs taught, each now a rule in the code:
+
+- **Run the JVM with the app's heap.** The borrowed `catalogue-e2e.mjs` client starts it at
+  768 MB; AniSnatch's DEX translation then fails with `OutOfMemoryError` and the audit called
+  the extension broken. The app gives 2–4 GB by machine memory. The rule is now one function
+  (`cs3/jvmHeap.ts`) used by `sidecarSupervisor.ts` and the audit. At the app's heap AniSnatch
+  loads; its real failure is the site answering a PNG where the provider expects a page.
+- **"Not logged in" is not broken.** Cinemacity's catalogue answers `ErrorLoadingException: Not
+  logged in. Open Cinemacity addon settings and login.` The audit never signs in (PRD §9), so
+  that is `skipped: needs-credentials`, and a run where it changes is `NOT_COMPARED`, not a
+  regression.
+- **One run cannot tell flaky from broken.** AniZone gave a link at 16:31 and timed out twice at
+  16:45 (`SocketTimeoutException`, attributed to the environment). With nothing in the blame
+  dimensions moved, the diff calls that `FLAKY`; only a moved plugin, runtime or app build makes
+  it a regression.
+
+The most common failure (6 providers) is S4: a search for a title the provider itself listed on
+its home page finds nothing. That is the round trip the PRD asks for (H-05), and it is a
+provider-side finding, not an app one.
+
+**With the network worker (S0–S9), same profile, later that day:** 19 providers in **524 s**;
+compatible 11 · walled 3 · extraction-only 2 · plugin-broken 2 · site-down 1. 29 sources reached,
+inspected and routed. Each one got the same strategy on all 8 machine profiles: `HLS_NATIVE` 25,
+`DIRECT` 4, and no AC-3/DTS or DRM rule broken. The probes read 15.5 MB in all, at most 2.8 MB per
+source. Grepping the run for tokens and signatures found nothing. (Corrected 2026-10-29: the
+8.6 MB first written here summed `probeBytesTransferred`, which is the probe size the inspector
+asks ffprobe for, not bytes read. The evidence now calls it `probeSize`.)
+- **Electron's main process has no usable stdin on Windows.** The worker
+  (`tools/audit/net-worker.cjs`) is driven over a loopback port guarded by a token. It quits
+  when its parent's pid dies. `ELECTRON_RUN_AS_NODE`, if present at all (even empty), starts it
+  as plain Node with no `net`, so the variable is deleted, not blanked.
+- **`session.fetch` refuses `redirect: 'manual'`** ("Redirect was cancelled"), and its
+  `response.url` stays the URL that was asked for. Redirects are followed, and their chain is
+  read from `webRequest.onBeforeRedirect`.
+- **A capped read must stream, and must never end like a file.** The first metered fetch read
+  each request whole, up to a slice (4 MB, then 1 MB), and handed the proxy a body cut there.
+  - At 4 MB, one MP4 probe read 8.8 MB.
+  - At 1 MB, an MP4 indexed at the end failed with "error reading header … End of file"
+    (2026-10-29: Animegg, called `app-gap`), because the cut read as the end of the file. HLS
+    segments over 1 MB arrived short.
+  - Reading on demand in bounded slices fixed the ends, but each slice still had to fill before
+    anything moved. On Animegg's CDN (about 330 KB/s) a 4 MB slice takes 12 s, the whole S10 wall.
+
+  The worker now streams (`op: stream`). The body arrives as upstream sends it and is counted per
+  chunk. At the cap the socket is destroyed, never ended, and a consumer that hangs up aborts the
+  upstream. A public MP4 now starts in 0.5 s instead of 1.1 s.
+
+**S10, playback (2026-10-29), same profile, `--verify all`:** 19 providers in **551 s**:
+
+| Verdict | Providers |
+|---|---|
+| verified-playback | 11 |
+| walled | 3 |
+| plugin-broken | 2 |
+| extraction-only | 1 |
+| site-down | 1 |
+| compatible | 1 (Animexin) |
+
+The 12 played sources read 99.5 MB in all, at most 15.1 MB each. Grepping the run for secrets
+found nothing.
+- **Tiers seen:**
+  - **Element:** 10 HLS sources through hls.js, mostly 1080p, 129–166 frames decoded in about
+    5 s. Animegg's MP4 is indexed at the end and starts after 7.7 s from its slow CDN, yet still
+    plays 4.2 s inside the 12 s wall.
+  - **ffmpeg:** WatchDrama's HLS is HEVC, routed `VIDEO_TRANSCODE`; QSV re-encodes it at 3.06×
+    realtime.
+  - **mpv:** WatchDrama again, on `NATIVE_MPV` with `d3d11va-copy`.
+- **The audit must set up ffmpeg the way the app does.** The app asks ffprobe whether it has
+  `-extension_picky` (FFmpeg 7.1+) and turns it off (`refreshFfmpegOptionSupport` in `main.ts`).
+  Without that, every HLS conversion through the proxy failed with "… is not in
+  allowed_segment_extensions" (WatchDrama's ffmpeg tier). The runner now asks the same
+  questions (`askMediaTools`).
+- **An HLS S8 pass can be manifest-only.** Animexin's S8 read 3 KB, the master playlist alone.
+  hls.js then stopped at `levelParsingError` (HTTP 200), and mpv read 4 MB without starting in
+  12 s. That is `inconclusive`, not a verdict on the app; not investigated further.
+- **A hidden window plays.** `show: false`, `backgroundThrottling: false`,
+  `autoplay-policy=no-user-gesture-required` and `disable-background-media-suspend`, with
+  software decoding (the worker disables the GPU). `getVideoPlaybackQuality` counts decoded
+  frames there.
+- **Two verdict rules came from live data.** CineStream's `mainUrl` front page
+  (cinemeta-catalogs.strem.io) answers 404 while every later stage passes; it was called
+  `site-down`. Now a failed S2 is `site-down` only when no content stage passed. Anichi declares
+  `mainUrl = "NONE"`, so S2 is `skipped: not-offered`, not a dead site.
+- AniStream's HLS needs its Referer and ignores Range. AllWish's MegaPlay playlist fails with
+  `net::ERR_FAILED` on 3 of 3 tries; this was not investigated. CineTmdb's MovieBox CDN answers
+  429 (`inconclusive: rate-limited`).

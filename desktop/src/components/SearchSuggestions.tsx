@@ -1,7 +1,9 @@
 import React from 'react';
 import { Poster } from './Poster';
-import { BookmarkCheck, Clock, Loader2, Search, Trash2, X } from 'lucide-react';
-import type { SearchHistoryEntry, SearchSuggestion } from '../types/api';
+import { BookmarkCheck, Building2, Clock, Loader2, Search, Trash2, User, X } from 'lucide-react';
+import type { EntitySuggestion, SearchCategory, SearchHistoryEntry, SearchSuggestion } from '../types/api';
+import { SEARCH_CATEGORIES, toggleCategory, wantsEntities, wantsTitles } from '../utils/searchCategories';
+import { rowPosition, suggestionRows, type SuggestionRowKind } from '../utils/suggestionLayout';
 import type { SavedSearchSummary } from '../../electron/savedSearches';
 import { isAdultMedia } from '../utils/adultContent';
 import { useAdultMode } from '../utils/useAdultMode';
@@ -20,14 +22,18 @@ import { useAdultMode } from '../utils/useAdultMode';
 
 interface SearchSuggestionsProps {
   open: boolean;
-  query: string;
   suggestions: SearchSuggestion[];
+  /** People and companies the query names. */
+  entities: EntitySuggestion[];
   history: SearchHistoryEntry[];
+  /** Block order (`utils/suggestionLayout.ts`); the navbar's arrow keys walk the same one. */
+  order: SuggestionRowKind[];
   loading: boolean;
-  /** Index into the combined list, driven by arrow keys. */
+  /** Index into `rows`, driven by arrow keys. */
   highlightedIndex: number;
   onHighlight: (index: number) => void;
   onPickSuggestion: (suggestion: SearchSuggestion) => void;
+  onPickEntity: (entity: EntitySuggestion) => void;
   onPickHistory: (entry: SearchHistoryEntry) => void;
   onRemoveHistory: (entry: SearchHistoryEntry) => void;
   onClearHistory: () => void;
@@ -36,6 +42,12 @@ interface SearchSuggestionsProps {
   onPickSaved?: (id: string) => void;
   /** Optional handler to run live search for a query */
   onRunFreshSearch?: (query: string) => void;
+  /** The category chips; none is All. */
+  categories: SearchCategory[];
+  /** Takes an updater, so two presses in a row each see the other. */
+  onCategoriesChange: (update: (current: SearchCategory[]) => SearchCategory[]) => void;
+  /** Chips only where a person can be opened; otherwise every category but Titles would lead nowhere. */
+  chipsEnabled: boolean;
 }
 
 function relativeTime(at: number): string {
@@ -52,29 +64,69 @@ function relativeTime(at: number): string {
 
 export const SearchSuggestions: React.FC<SearchSuggestionsProps> = ({
   open,
-  query,
   suggestions,
+  entities,
   history,
+  order,
   loading,
   highlightedIndex,
   onHighlight,
   onPickSuggestion,
+  onPickEntity,
   onPickHistory,
   onRemoveHistory,
   onClearHistory,
   onRunFreshSearch,
+  categories,
+  onCategoriesChange,
+  chipsEnabled,
 }) => {
   const { adultProviders } = useAdultMode();
   if (!open) return null;
 
-  const hasQuery = query.trim().length >= 2;
   const showHistory = history.length > 0;
+  const titlesWanted = wantsTitles(categories);
+  const peopleOnly = !titlesWanted && wantsEntities(categories);
 
-  if (!loading && suggestions.length === 0 && !showHistory) return null;
+  // With chips the panel opens on focus even when empty, so the filters can be found before typing.
+  if (!chipsEnabled && !loading && suggestions.length === 0 && entities.length === 0 && !showHistory) return null;
 
-  // History is offered first while the box is empty and demoted once the user
-  // is typing, because at that point they are naming something new.
-  const historyFirst = !hasQuery;
+  // Quiet, one row, and pressing one never takes focus from the box.
+  const chips = chipsEnabled && (
+    <div className="search-suggest__chips" role="group" aria-label="Search for">
+      {[{ id: 'all' as const, label: 'All' }, ...SEARCH_CATEGORIES].map((chip) => {
+        const on = chip.id === 'all' ? categories.length === 0 : categories.includes(chip.id);
+        return (
+          <button
+            key={chip.id}
+            type="button"
+            className={`search-suggest__chip${on ? ' search-suggest__chip--on' : ''}`}
+            aria-pressed={on}
+            tabIndex={-1}
+            onMouseDown={(e) => {
+              e.preventDefault();
+              onCategoriesChange((current) => toggleCategory(current, chip.id));
+            }}
+          >
+            {chip.label}
+          </button>
+        );
+      })}
+    </div>
+  );
+
+  /** What the row says a person is: the selected credits they hold, else Person; a company is a Studio. */
+  const kindLabel = (entity: EntitySuggestion): string => {
+    if (entity.kind === 'company') return 'Studio';
+    const held = SEARCH_CATEGORIES.filter((c) => categories.includes(c.id) && (entity.roles as readonly string[] | undefined)?.includes(c.id));
+    return held.length ? held.map((c) => c.label).join(' · ') : 'Person';
+  };
+
+  const rows = suggestionRows(order, {
+    history: history.length,
+    entity: entities.length,
+    suggestion: suggestions.length,
+  });
 
   const historyBlock = showHistory && (
     <div className="search-suggest__group">
@@ -93,7 +145,7 @@ export const SearchSuggestions: React.FC<SearchSuggestionsProps> = ({
       </div>
 
       {history.map((entry, index) => {
-        const combinedIndex = historyFirst ? index : suggestions.length + index;
+        const combinedIndex = rowPosition(rows, 'history', index);
         const isSaved = Boolean(entry.isSaved);
         const isActive = combinedIndex === highlightedIndex;
         const rowClass = `search-suggest__row search-suggest__row--history${
@@ -171,7 +223,7 @@ export const SearchSuggestions: React.FC<SearchSuggestionsProps> = ({
     </div>
   );
 
-  const suggestionBlock = (loading || suggestions.length > 0) && (
+  const suggestionBlock = titlesWanted && (loading || suggestions.length > 0) && (
     <div className="search-suggest__group">
       <div className="search-suggest__heading">
         <span>
@@ -181,7 +233,7 @@ export const SearchSuggestions: React.FC<SearchSuggestionsProps> = ({
       </div>
 
       {suggestions.map((suggestion, index) => {
-        const combinedIndex = historyFirst ? history.length + index : index;
+        const combinedIndex = rowPosition(rows, 'suggestion', index);
         const isAdult = isAdultMedia(
           {
             adult: suggestion.adult,
@@ -270,19 +322,64 @@ export const SearchSuggestions: React.FC<SearchSuggestionsProps> = ({
     </div>
   );
 
+  // Picking one opens their films and series; Enter on the box still searches.
+  const entityBlock = (entities.length > 0 || (peopleOnly && loading)) && (
+    <div className="search-suggest__group search-suggest__group--entities">
+      <div className="search-suggest__heading">
+        <span>
+          {peopleOnly && loading ? <Loader2 size={12} className="spin" /> : <User size={12} />}
+          {peopleOnly && loading && entities.length === 0 ? 'Finding people…' : 'People and studios'}
+        </span>
+      </div>
+
+      {entities.map((entity, index) => {
+        const combinedIndex = rowPosition(rows, 'entity', index);
+        const Icon = entity.kind === 'company' ? Building2 : User;
+        return (
+          <button
+            key={entity.id}
+            type="button"
+            className={`search-suggest__row search-suggest__entity${
+              combinedIndex === highlightedIndex ? ' search-suggest__row--active' : ''
+            }`}
+            title={`Films and series ${entity.kind === 'company' ? 'from' : 'with'} ${entity.name}`}
+            onMouseEnter={() => onHighlight(combinedIndex)}
+            onMouseDown={(e) => {
+              e.preventDefault();
+              onPickEntity(entity);
+            }}
+          >
+            <Poster
+              src={entity.imageUrl}
+              title={entity.name}
+              decorative
+              itemKey={entity.id}
+              fallback={
+                <div className="search-suggest__poster-empty">
+                  <Icon size={16} />
+                </div>
+              }
+            />
+            <div className="search-suggest__body">
+              <div className="search-suggest__line">
+                <strong>{entity.name}</strong>
+                <span className="search-suggest__type">{kindLabel(entity)}</span>
+              </div>
+              {entity.description && <div className="search-suggest__genres">{entity.description}</div>}
+            </div>
+          </button>
+        );
+      })}
+    </div>
+  );
+
+  const blocks = { history: historyBlock, entity: entityBlock, suggestion: suggestionBlock };
   return (
     <div className="search-suggest" role="listbox" aria-label="Search suggestions">
-      {historyFirst ? (
-        <>
-          {historyBlock}
-          {suggestionBlock}
-        </>
-      ) : (
-        <>
-          {suggestionBlock}
-          {historyBlock}
-        </>
-      )}
+      {chips}
+      {order.map((kind) => (
+        <React.Fragment key={kind}>{blocks[kind]}</React.Fragment>
+      ))}
     </div>
   );
 };

@@ -2,6 +2,7 @@ import type { Datastore } from '../datastore';
 import type { SavedPlayback } from '../../src/types/library.ts';
 import type { TvType } from '../../src/types/api';
 import { prune } from '../util/prune.ts';
+import { bookmarkTitle, usableTitle } from '../../src/utils/bookmarkTitle.ts';
 import { isPrivateSession, allowsExplicitSaves } from './privacyMode.ts';
 
 /**
@@ -89,9 +90,21 @@ export interface Bookmark {
   /** Saved from the player: the exact playback to come back to. */
   playback?: SavedPlayback;
   savedAt: number;
+  /** Last time it was saved again (a new place, a new source). Orders the list. */
+  updatedAt?: number;
   /** Last time the page was reopened from here, for ordering by usefulness. */
   lastOpenedAt?: number;
   openCount: number;
+}
+
+function lastSaved(bookmark: Bookmark): number {
+  return Math.max(bookmark.savedAt ?? 0, bookmark.updatedAt ?? 0);
+}
+
+/** A row saved before the title rule (empty or a placeholder like "Unknown Title") is repaired as it is read. */
+function withTitle(bookmark: Bookmark): Bookmark {
+  const title = bookmarkTitle(bookmark);
+  return title === bookmark.title ? bookmark : { ...bookmark, title };
 }
 
 export class BookmarkStore {
@@ -116,13 +129,14 @@ export class BookmarkStore {
 
   public list(): Bookmark[] {
     // Newest save first, which is what someone looking for "the thing I just
-    // saved" expects. Ordering by last opened would bury it under old
-    // favourites the moment they were reopened.
-    return [...this.bookmarks].sort((a, b) => b.savedAt - a.savedAt);
+    // saved" expects; saving a page again counts. Ordering by last opened would
+    // bury it under old favourites the moment they were reopened.
+    return [...this.bookmarks].sort((a, b) => lastSaved(b) - lastSaved(a)).map(withTitle);
   }
 
   public get(mediaUrl: string): Bookmark | null {
-    return this.bookmarks.find((entry) => entry.mediaUrl === mediaUrl) ?? null;
+    const found = this.bookmarks.find((entry) => entry.mediaUrl === mediaUrl);
+    return found ? withTitle(found) : null;
   }
 
   public isSaved(mediaUrl: string): boolean {
@@ -143,6 +157,7 @@ export class BookmarkStore {
       return (
         existing ?? {
           ...input,
+          title: bookmarkTitle(input),
           id: input.mediaUrl,
           savedAt: Date.now(),
           openCount: 0,
@@ -153,17 +168,21 @@ export class BookmarkStore {
       Object.assign(existing, {
         ...input,
         origin: { ...existing.origin, ...prune(input.origin) },
-        title: input.title || existing.title,
+        title: bookmarkTitle({ ...input, title: usableTitle(input.title) ?? usableTitle(existing.title) }),
         posterUrl: input.posterUrl ?? existing.posterUrl,
         plot: input.plot ?? existing.plot,
         genres: input.genres ?? existing.genres,
+        // Saving again is activity: it moves the page to the top of the list.
+        updatedAt: Date.now(),
       });
+      this.bookmarks = [existing, ...this.bookmarks.filter((entry) => entry !== existing)];
       this.persist();
       return existing;
     }
 
     const bookmark: Bookmark = {
       ...input,
+      title: bookmarkTitle(input),
       id: input.mediaUrl,
       savedAt: Date.now(),
       openCount: 0,
@@ -188,7 +207,7 @@ export class BookmarkStore {
         return true;
       })
       .map((row) => ({ ...row, id: row.id || row.mediaUrl, openCount: row.openCount ?? 0 }))
-      .sort((a, b) => b.savedAt - a.savedAt);
+      .sort((a, b) => lastSaved(b) - lastSaved(a));
     this.persist();
   }
 

@@ -7,6 +7,8 @@ import Hls from 'hls.js';
 import { NativeEngineStage, trackLabel } from './player/NativeEngineStage';
 import { PlaybackPrivacyOverlay } from './player/PlaybackPrivacyOverlay';
 import { mediaSessionRecord } from './player/playbackPrivacy';
+import { PlaybackStats } from './player/playbackStats';
+import { shouldSkipStalledTorrent, startOfFilePercent } from './player/torrentStall';
 import { usePlaybackPrivacy } from './player/usePlaybackPrivacy';
 import {
   Play, Pause, Volume2, VolumeX, Maximize, Minimize, ArrowLeft,
@@ -30,18 +32,27 @@ import {
 } from '../utils/downloadIdentity';
 import { HoverMenu } from './player/HoverMenu';
 import { controlLanguageLabel, languageLabels, languageSetLabel } from './player/controlLabels';
+import {
+  audioSwitchRoute,
+  enableLiveTrack,
+  liveTrackFor,
+  liveTrackId,
+  liveTrackLabel,
+} from './player/audioTrackSwitch';
 import { EpisodePanel } from './player/EpisodePanel';
 import { SourcePanel } from './player/SourcePanel';
 import { SourceResolveOverlay } from './player/SourceResolveOverlay';
 import { SubtitlePanel } from './player/SubtitlePanel';
 import { PlayerDownloadPanel } from './player/PlayerDownloadPanel';
-import type { PlaybackStreamResponse, SourceCapabilityModel } from '../types/media';
+import type { MismatchWarningAnswer, PlaybackStreamResponse, SourceCapabilityModel } from '../types/media';
 import { attachClearKey, type ClearKeyAttachment } from '../utils/clearKeySession';
 import { attachShaka, type ShakaAttachment } from '../utils/shakaSession';
 import type { SeriesContext } from './player/seriesContext';
 import type { PlaybackPreferences, StoredSource } from '../types/library';
 import { matchesRelease } from '../../electron/cs3/playedSource';
-import { judgeableDuration, looksLikeWrongMedia, wrongMediaReason } from '../utils/mediaSanity';
+import { judgeableDuration, looksLikeWrongMedia, wrongMediaBeforePlay, wrongMediaReason } from '../utils/mediaSanity';
+import { verdictForProbeFailure, type SourceVerdict } from '../utils/sourceVerdict';
+import { validateContent } from '../utils/contentValidation';
 import { torrentResultToStoredSource } from '../../electron/cs3/libraryStore';
 import { isPlaceholderOrigin } from '../utils/originName';
 import { canonicalKey } from '../../electron/cs3/libraryStore';
@@ -193,7 +204,7 @@ interface VideoPlayerProps {
     error?: string;
     attempts: Array<{ title: string; indexerName: string; error: string }>;
     /** Played / failed per source in this session — the source list's ✓ and ⚠. */
-    sourceStates?: Record<string, { state: 'played' | 'failed'; reason?: string }>;
+    sourceStates?: Record<string, { state: 'played' | 'failed'; reason?: string; verdict?: SourceVerdict }>;
     onPlayNow: () => void;
     onSelectSource: (source: TorrentResult) => void;
     /**
@@ -203,7 +214,7 @@ interface VideoPlayerProps {
      * stream will not *start*, but one that starts fine and then cannot be
      * decoded looks like success from the main process.
      */
-    onSourceUnplayable?: (reason: string) => void;
+    onSourceUnplayable?: (reason: string, verdict?: SourceVerdict) => void;
     onRefresh: () => void;
     /**
      * Look beyond the providers this title was found on — every other
@@ -514,6 +525,14 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
   const [activeSubtitle, setActiveSubtitle] = useState<string | null>(null);
   const [panelOpen, setPanelOpen] = useState(false);
   const [sourcePanelOpen, setSourcePanelOpen] = useState(false);
+  /** A possible-mismatch warning for the stream playing now (see the sanity check). */
+  const [mismatchWarning, setMismatchWarning] = useState<string | null>(null);
+  useEffect(() => setMismatchWarning(null), [streamUrl]);
+  /** What the viewer did with that warning, for this stream's telemetry report. */
+  const warningAnswerRef = useRef<MismatchWarningAnswer | undefined>(undefined);
+  useEffect(() => {
+    if (mismatchWarning) warningAnswerRef.current ??= 'unanswered';
+  }, [mismatchWarning]);
   const [subtitlePanelOpen, setSubtitlePanelOpen] = useState(false);
 
   // `s` in mpv's own window asks for the subtitle search, which lives here.
@@ -1062,6 +1081,9 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
    * duration, so it never delays a working source (`mediaSanity.ts`).
    */
   const sanityCheckedFor = useRef<string | null>(null);
+  /** Read by the prepare effect, which runs per stream and must not re-run per progress tick. */
+  const expectedSecondsRef = useRef<number | undefined>(undefined);
+  expectedSecondsRef.current = progress?.expectedDurationSeconds;
   /** hls.js says the playlist is live: its duration is a window, not a length. */
   const hlsLiveRef = useRef(false);
   /** The stream the element was last given, and the stream whose metadata it has loaded. */
@@ -1080,16 +1102,55 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
     if (actual === undefined) return;
     sanityCheckedFor.current = streamUrl;
     const expected = progress?.expectedDurationSeconds;
-    if (!looksLikeWrongMedia({ actualSeconds: actual, expectedSeconds: expected })) return;
+    if (!looksLikeWrongMedia({ actualSeconds: actual, expectedSeconds: expected })) {
+      /*
+       * Not plainly wrong, but possibly (Content Validation PRD §9.1): a
+       * 25-minute stream for a 2-hour film may be part one, or a different
+       * cut. Said once, with the way out; playback is never stopped for it.
+       */
+      const verdict = validateContent({
+        kind: progress?.season !== undefined ? 'episode' : 'movie',
+        expectedSeconds: expected,
+        detectedSeconds: actual,
+      });
+      if (verdict.identity === 'possible-mismatch') {
+        const provider = providerProvenance?.provider || activeSource?.indexerName;
+        setMismatchWarning(provider ? `${verdict.summary} (${provider})` : verdict.summary);
+      }
+      return;
+    }
     const reason = wrongMediaReason(actual, expected!);
     if (sourceSession?.onSourceUnplayable) {
       notify('That source was not the title — trying the next one', 'info');
-      sourceSession.onSourceUnplayable(reason);
+      sourceSession.onSourceUnplayable(reason, 'confirmed-mismatch');
     } else {
       notify(reason, 'bad');
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [streamUrl, duration, hasStartedPlayback]);
+
+  /**
+   * A torrent that never got going is left for the next source, as the
+   * wrong-media check above does (`player/torrentStall.ts`). Only before the
+   * first frame, only in standard mode (developer mode stops to show what
+   * failed), and once per stream.
+   */
+  const stallSkippedFor = useRef<string | null>(null);
+  useEffect(() => {
+    if (!stats || !streamUrl || stallSkippedFor.current === streamUrl) return;
+    if (isDeveloper || !sourceSession?.onSourceUnplayable) return;
+    const reason = shouldSkipStalledTorrent({
+      startedPlayback: hasStartedPlayback,
+      stalledMs: stats.stalledMs,
+      peers: stats.peers,
+      isStalled: stats.isStalled,
+    });
+    if (!reason) return;
+    stallSkippedFor.current = streamUrl;
+    notify('That torrent is not delivering — trying the next source', 'info');
+    sourceSession.onSourceUnplayable(reason, 'temporarily-unavailable');
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [stats, streamUrl, hasStartedPlayback, isDeveloper]);
 
   // A new stream is a new question about which source works.
   useEffect(() => {
@@ -1457,7 +1518,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
    * element can fire `error` repeatedly, and each one would burn another
    * candidate off a list that is not long.
    */
-  const skipRef = useRef<((reason: string) => void) | null>(null);
+  const skipRef = useRef<((reason: string, verdict?: SourceVerdict) => void) | null>(null);
   const skippedFor = useRef<string | null>(null);
   /**
    * Forces a remux of the current URL, once, before giving up on it.
@@ -1965,9 +2026,9 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
       let activeId: string | number = 0;
       for (let i = 0; i < nativeList.length; i++) {
         const t = nativeList[i];
-        const trackId = t.id !== undefined && t.id !== '' ? t.id : i;
+        const trackId = liveTrackId(t, i);
         const lang = t.language ? t.language.toUpperCase() : '';
-        const label = t.label || (lang ? `Audio (${lang})` : `Audio Track ${i + 1}`);
+        const label = liveTrackLabel(t.label) || (lang ? `Audio (${lang})` : `Audio Track ${i + 1}`);
         const isEnabled = Boolean(t.enabled);
         if (isEnabled) activeId = trackId;
         tracks.push({
@@ -2001,21 +2062,15 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
       const video = videoRef.current;
       if (!video) return;
 
-      // 1. Native HTML5 audioTracks
-      const nativeList = (video as any).audioTracks;
-      if (nativeList && nativeList.length > 0) {
-        for (let i = 0; i < nativeList.length; i++) {
-          const t = nativeList[i];
-          const currentId = t.id !== undefined && t.id !== '' ? t.id : i;
-          const match = String(currentId) === String(trackId) || i === Number(trackId);
-          t.enabled = match;
-        }
-      }
-
-      // 2. HLS.js audioTrack
+      // The same precedence as `detectAudioTracks`, so an id means what the
+      // list it came from meant: hls.js renditions by position, else the
+      // element's own tracks by id alone.
       const hls = hlsRef.current;
-      if (hls && (typeof trackId === 'number' || !isNaN(Number(trackId)))) {
-        hls.audioTrack = Number(trackId);
+      if (hls && Array.isArray(hls.audioTracks) && hls.audioTracks.length > 0) {
+        if (!Number.isNaN(Number(trackId))) hls.audioTrack = Number(trackId);
+      } else {
+        const nativeList = (video as any).audioTracks;
+        if (nativeList && nativeList.length > 0) enableLiveTrack(nativeList, trackId);
       }
 
       setActiveAudioTrack(trackId);
@@ -2292,6 +2347,46 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
       video.removeEventListener('loadstart', syncBuffered);
     };
   }, [setBufferedRanges]);
+
+  /**
+   * PRD-40.1 runtime telemetry: what the element did with one prepared stream.
+   *
+   * Keyed on the telemetry id, not the response: an audio switch or a `?t=`
+   * re-request replaces the response object but not the session. Reported once,
+   * when the stream is left (another source, or the player closing). mpv never
+   * fires these events, so its sessions report a zero first frame.
+   */
+  const telemetryId = prepared?.telemetryId;
+  useEffect(() => {
+    const video = videoRef.current;
+    if (!telemetryId || !video) return;
+    warningAnswerRef.current = undefined;
+    const stats = new PlaybackStats(performance.now());
+    const now = () => performance.now();
+    const onPlaying = () => stats.playing(now());
+    const onPause = () => stats.paused(now());
+    const onWaiting = () => stats.waiting(now());
+    const onSeeking = () => stats.seekStarted(now());
+    const onSeeked = () => stats.seekFinished();
+    video.addEventListener('playing', onPlaying);
+    video.addEventListener('pause', onPause);
+    video.addEventListener('waiting', onWaiting);
+    video.addEventListener('seeking', onSeeking);
+    video.addEventListener('seeked', onSeeked);
+    return () => {
+      video.removeEventListener('playing', onPlaying);
+      video.removeEventListener('pause', onPause);
+      video.removeEventListener('waiting', onWaiting);
+      video.removeEventListener('seeking', onSeeking);
+      video.removeEventListener('seeked', onSeeked);
+      void window.cloudstream
+        ?.reportPlayback(telemetryId, {
+          ...stats.report(now(), video.ended),
+          mismatchWarning: warningAnswerRef.current,
+        })
+        .catch(() => undefined);
+    };
+  }, [telemetryId]);
 
   // Rolling on to the next episode is the expected behaviour for a series, and
   // it is the one thing a viewer should never have to reach for. Dismissing the
@@ -3375,7 +3470,25 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
        * a live mirror one row down.
        */
       if (response.capability?.failure?.dead) {
-        skipRef.current?.(response.capability.failure.reason);
+        skipRef.current?.(response.capability.failure.reason, verdictForProbeFailure(response.capability.failure));
+        return;
+      }
+
+      /*
+       * A clip the probe already measured is skipped before it is attached, as
+       * the after-start check below would skip it a few seconds in. Only where
+       * a skip goes somewhere: without a session the after-start check says so.
+       */
+      const clip = skipRef.current
+        ? wrongMediaBeforePlay({
+            sourceSeconds: response.capability?.metadata?.durationSeconds,
+            expectedSeconds: expectedSecondsRef.current,
+          })
+        : null;
+      if (clip) {
+        sanityCheckedFor.current = streamUrl;
+        notify('That source was not the title — trying the next one', 'info');
+        skipRef.current?.(clip, 'confirmed-mismatch');
       }
     })();
 
@@ -3480,10 +3593,10 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
   useEffect(() => {
     const skip = sourceSession?.onSourceUnplayable;
     skipRef.current = skip
-      ? (reason: string) => {
+      ? (reason: string, verdict?: SourceVerdict) => {
           if (skippedFor.current === streamUrl) return;
           skippedFor.current = streamUrl;
-          skip(reason);
+          skip(reason, verdict);
         }
       : null;
   }, [sourceSession?.onSourceUnplayable, streamUrl]);
@@ -3508,7 +3621,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
       const failure = probeFailureRef.current;
       if (failure) {
         setError(failure.reason);
-        skipRef.current?.(failure.reason);
+        skipRef.current?.(failure.reason, verdictForProbeFailure(failure));
         return;
       }
 
@@ -3592,23 +3705,42 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
         }
       }
 
-      selectAudioTrack(index);
+      /*
+       * The cheapest thing that changes the soundtrack (`audioTrackSwitch.ts`).
+       * Every direct file used to take the forced re-encode below, the path for
+       * streams whose contents are unknown, which sent a dub change to mpv's
+       * window or a software video encode. Languages muxed in an HLS stream's
+       * segments are a known quantity too: the engine remuxes the chosen one
+       * in, or hands the first back to hls.js.
+       */
+      const known = preparedRef.current?.capability;
+      const probe = known?.metadata?.audio ?? [];
+      const picked = probe.find((track) => track.index === index);
+      const hlsRenditions = (hlsRef.current?.audioTracks?.length ?? 0) > 1;
+      const live = picked
+        ? liveTrackFor(audioTracks, picked, probe.length) ??
+          // hls.js renditions the language cannot name: the position, as this
+          // always did. A likely-right rendition beats a forced conversion.
+          (hlsRenditions ? audioTracks[picked.index] : undefined)
+        : undefined;
+      const inSegments = Boolean(known?.metadata?.audioMuxedInSegments);
+      const route = audioSwitchRoute({
+        index,
+        liveMatch: Boolean(live),
+        measured:
+          known?.transport === 'progressive' && Boolean(known.metadata?.video) && !known.languagesUnverified,
+        inSegments,
+        isConverted,
+        defaultIndex: (probe.find((track) => track.isDefault) ?? probe[0])?.index ?? 0,
+      });
+      if (route === 'none') return;
+      if (route === 'live') {
+        if (live) selectAudioTrack(live.id);
+        return;
+      }
 
-      const hasNativeAudioSwitching = Boolean(
-        (video as any)?.audioTracks?.length > 1 ||
-        (hlsRef.current && (hlsRef.current.audioTracks?.length ?? 0) > 1)
-      );
-      if (!hasNativeAudioSwitching && streamUrl && window.cloudstream?.preparePlaybackStream) {
-        /*
-         * Languages muxed in an HLS stream's segments are a known quantity: the
-         * engine remuxes the chosen one in (copy, no decode), or hands the first
-         * back to hls.js. Only an unknown case still takes the forced re-encode,
-         * which for this stream had spent a software H.264 encode on changing
-         * the soundtrack — and mapped the first track anyway.
-         */
-        const inSegments = Boolean(preparedRef.current?.capability?.metadata?.audioMuxedInSegments);
-        // hls.js is already playing the first of them; there is nothing to change.
-        if (inSegments && index === 0 && !isConverted) return;
+      if (streamUrl && window.cloudstream?.preparePlaybackStream) {
+        const convert = route === 'convert';
         setConverting(true);
         try {
           const response = await window.cloudstream.preparePlaybackStream({
@@ -3617,8 +3749,9 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
             isM3u8: mimeType === 'application/x-mpegURL',
             provider: providerProvenance?.provider,
             preferredAudioLanguage: language,
-            refresh: !inSegments,
-            force: !inSegments,
+            preferredAudioIndex: index,
+            refresh: convert,
+            force: convert,
           });
           if (response?.ok && response.playbackUrl) {
             const previous = prepared?.sessionId;
@@ -4998,6 +5131,11 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
               learn — so the peer count and the swarm go together, behind the
               mode, and standard mode gets the one fact that is always true. */}
           <p>{isDeveloper ? 'Buffering from peers…' : 'Buffering…'}</p>
+          {/* Connected, and the opening of the file is still on its way: said
+              in both modes, because "Buffering…" alone at 0:00 reads as stuck. */}
+          {stats && !hasStartedPlayback && startOfFilePercent(stats) !== null && (
+            <span className="muted">Getting the start of the file · {startOfFilePercent(stats)}%</span>
+          )}
           {stats && isDeveloper && (
             <span className="muted">
               {formatTransferRate(stats.downloadSpeed)} · {stats.peers} peer
@@ -5072,6 +5210,32 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
       <div className="player__messages player__messages--bottom">
         {showStrategyNote && capability && (
           <div className="player__strategy-note">{capability.explanation}</div>
+        )}
+        {mismatchWarning && (
+          <div className="player__mismatch" role="alert">
+            <span>{mismatchWarning}</span>
+            <button
+              type="button"
+              className="btn btn-primary btn-sm"
+              onClick={() => {
+                warningAnswerRef.current = 'chose-another';
+                setMismatchWarning(null);
+                setSourcePanelOpen(true);
+              }}
+            >
+              Choose another source
+            </button>
+            <button
+              type="button"
+              className="btn btn-sm"
+              onClick={() => {
+                warningAnswerRef.current = 'kept-watching';
+                setMismatchWarning(null);
+              }}
+            >
+              Keep watching
+            </button>
+          </div>
         )}
         {/* Above the controls, clear of the seek bar, gone in four seconds. */}
         {toasts.length > 0 && (

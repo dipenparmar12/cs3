@@ -8,7 +8,9 @@ import {
   collapseTitle,
   matchableNames,
   stillMatches,
+  withCarried,
 } from './searchSuggestions.ts';
+import { resetEntityCache } from './metadata/entitySearch.ts';
 import { TvType, type SearchSuggestion } from '../src/types/api.ts';
 
 /**
@@ -559,5 +561,113 @@ test('a merged row has one identity, whichever host answered first', async () =>
   } finally {
     stub.release();
     stub.restore();
+  }
+});
+
+// --- categories and steadiness (2026-10-30) ----------------------------------
+
+test('last keystroke’s rows stay up while this one’s catalogues land, and go only when all have', () => {
+  const row = (title: string): SearchSuggestion => ({ title, url: `u:${title}`, genres: [], sources: ['cinemeta'] });
+  const merged = [row('Spider-Man')];
+  // A carried row the new answer already holds is not shown twice, even with another year.
+  assert.deepEqual(
+    withCarried(merged, [row('Spider-Man'), row('Spider-Man: No Way Home')]).map((r) => r.title),
+    ['Spider-Man', 'Spider-Man: No Way Home']
+  );
+  assert.deepEqual(withCarried([], []), []);
+});
+
+test('the first catalogue to answer does not wipe what was on screen', async () => {
+  // AniList is held, so the first update for "attack" holds only Cinemeta's row.
+  const stub = stubFetch(route, 'graphql.anilist.co');
+  try {
+    const service = new SearchSuggestionService();
+    stub.release();
+    await service.suggest('atta');
+    assert.ok(service.instant('attack').suggestions.some((s) => s.title === 'Attack on Titan'));
+
+    const held = stubFetch(route, 'graphql.anilist.co');
+    const updates: string[][] = [];
+    const finished = service.suggest('attack', undefined, (rows) => updates.push(rows.map((s) => s.title)));
+    await new Promise((resolve) => setTimeout(resolve, 60));
+    assert.ok(updates.length > 0, 'Cinemeta answered while AniList was held');
+    for (const titles of updates) assert.ok(titles.includes('Attack on Titan'), `an update dropped the carried row: ${titles}`);
+    held.release();
+    await finished;
+    held.restore();
+  } finally {
+    stub.restore();
+  }
+});
+
+test('a people category asks no title catalogue; Titles asks no Wikidata', async () => {
+  resetEntityCache();
+  const stub = stubFetch(route);
+  try {
+    const service = new SearchSuggestionService();
+    await service.suggest('spider', undefined, undefined, ['director']);
+    assert.equal(stub.calls.filter((u) => /cinemeta|tvmaze|anilist/.test(u)).length, 0);
+    assert.ok(stub.calls.some((u) => u.includes('wikidata.org')), 'the people lookup ran');
+
+    const before = stub.calls.length;
+    await service.suggest('spider', undefined, undefined, ['title']);
+    const asked = stub.calls.slice(before);
+    assert.ok(asked.some((u) => /cinemeta/.test(u)));
+    assert.equal(asked.filter((u) => u.includes('wikidata.org')).length, 0);
+    // Each selection is its own cache entry: All is not answered from Titles.
+    assert.equal(service.instant('spider').done, false);
+  } finally {
+    stub.restore();
+    resetEntityCache();
+  }
+});
+
+test('a refused people lookup is reported, keeps the people shown, and is not cached as finished', async () => {
+  resetEntityCache();
+  const stub = stubFetch(route);
+  setHttpFetch(async (input) => {
+    const url = String(input);
+    if (url.includes('wikidata.org')) return new Response('too many', { status: 429 });
+    return new Response(JSON.stringify(route(url)), { status: 200, headers: { 'content-type': 'application/json' } });
+  });
+  try {
+    const service = new SearchSuggestionService();
+    let last: { entitiesFailed?: boolean; done: boolean } = { done: false };
+    await service.suggest('spider man', undefined, (_rows, done, _entities, entitiesFailed) => {
+      last = { done, entitiesFailed };
+    });
+    assert.deepEqual(last, { done: true, entitiesFailed: true });
+    assert.equal(service.instant('spider man').done, false, 'the next ask must try the people again');
+  } finally {
+    stub.restore();
+    resetEntityCache();
+  }
+});
+
+test('people found for the last keystroke stay up while this one is looked up, even if it is refused', async () => {
+  resetEntityCache();
+  let refuse = false;
+  const stub = stubFetch(route);
+  setHttpFetch(async (input) => {
+    const url = String(input);
+    if (url.includes('wikidata.org') && refuse) return new Response('too many', { status: 429 });
+    const body = url.includes('wbsearchentities')
+      ? { search: [{ id: 'Q44437', label: 'John Cena' }] }
+      : url.includes('query.wikidata.org')
+        ? { results: { bindings: [{ item: { value: 'http://www.wikidata.org/entity/Q44437' }, human: { value: 'true' }, cast: { value: 'true' } }] } }
+        : route(url);
+    return new Response(JSON.stringify(body), { status: 200, headers: { 'content-type': 'application/json' } });
+  });
+  try {
+    const service = new SearchSuggestionService();
+    await service.suggest('john ce');
+    refuse = true;
+    const people: string[][] = [];
+    await service.suggest('john cena', undefined, (_rows, _done, entities) => people.push(entities.map((e) => e.name)));
+    assert.ok(people.length > 0);
+    for (const names of people) assert.deepEqual(names, ['John Cena']);
+  } finally {
+    stub.restore();
+    resetEntityCache();
   }
 });

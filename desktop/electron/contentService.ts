@@ -50,10 +50,29 @@ import { SearchSessionManager, type SearchSnapshot } from './searchSession';
 import type { SourceDiagnosis } from '../src/types/diagnostics';
 import { SharedDiscovery } from './sharedDiscovery';
 import { isTorrentLink } from './cs3/providerLinks';
+import { LinkOrigins, pickRefreshedLink } from './cs3/linkOrigins.ts';
 import { NativeProviderRegistry } from './cs3/nativeProviderRegistry.ts';
 import { parseNativeAddress } from './cs3/nativeProviders/types.ts';
 import { classifyFailure } from './cs3/failureTaxonomy.ts';
 import { planSourceScope, shouldEscalateScope } from './cs3/sourceScope';
+import { judgeProviderHit, type HitVerdict } from './cs3/providerHitMatch.ts';
+import { planDiscoveryWalk, walkDiscovery, type WalkOutcome, type WalkStop } from './cs3/discoveryWalk.ts';
+import { ProviderAttemptStore, type ProviderAttempt } from './cs3/providerAttempts.ts';
+import { classifyTorrentFailure } from './torrent/torrentFailure.ts';
+
+/** The stored search mode: `ranked` (default) or `all`. In the backup's source preferences. */
+export const DISCOVERY_MODE_KEY = 'cs3_discovery_mode';
+import { canonicalKey } from './cs3/libraryStore.ts';
+import { pickEpisodeHandle } from './cs3/episodeMatch.ts';
+
+/**
+ * The widened search asks providers in ranked batches (`cs3/discoveryWalk.ts`).
+ * The first batch is small so the likeliest providers answer before anything
+ * else competes with them; 45 s is where the player shows what it has and
+ * offers "Keep looking" (PRD Part C, about five search-stage p50s).
+ */
+const WALK_FIRST_BATCH = 4;
+const WALK_BUDGET_MS = 45_000;
 import { describeError } from '../src/utils/errors.ts';
 import type { PageSnapshotStore } from './cs3/pageSnapshot.ts';
 import { tidyReleaseName } from '../src/utils/releaseName.ts';
@@ -152,6 +171,12 @@ export interface SourceQuery {
   titleOverride?: string;
   /** Defaults to `origin`. See {@link SourceScope}. */
   scope?: SourceScope;
+  /**
+   * At `all` scope, ask every provider: no time budget and no stop at the
+   * first verified source (`cs3/discoveryWalk.ts`). The player's "Keep
+   * looking" after a ranked walk stopped early.
+   */
+  exhaustive?: boolean;
 }
 
 export interface SourceResponse {
@@ -179,8 +204,13 @@ export interface SourceResponse {
    * search that already did.
    */
   scopeUsed: SourceScope;
-  /** True when widening to `all` would ask anything that has not been asked. */
+  /** True when widening would ask anything that has not been asked. */
   canWiden: boolean;
+  /**
+   * How the widened provider search walked the providers, when it ran:
+   * why it stopped and how many were never asked (`cs3/discoveryWalk.ts`).
+   */
+  walk?: { stoppedBy: WalkStop; asked: number; remaining: number };
   /**
    * True when this answer came from an automatic escalation: the providers this
    * row came from had nothing, so everything else was asked without the viewer
@@ -406,6 +436,7 @@ export class ContentService {
   }
 
   constructor(datastore: DatastoreManager, plugins: PluginManager, engine: TorrentEngine) {
+    this.settings = datastore;
     this.registry = new IndexerRegistry(datastore);
     this.plugins = plugins;
     this.engine = engine;
@@ -427,6 +458,10 @@ export class ContentService {
       return new SourceProfileStore(view, new SearchScopeStore(view));
     }).current;
     this.natives = new NativeProviderRegistry(datastore);
+    this.attempts = new ProviderAttemptStore(datastore);
+    // One switch per service, whichever side it was flipped on.
+    this.natives.setServiceGate(() => this.plugins.switchedOffServices());
+    this.plugins.setServiceGate(() => this.natives.switchedOffServices());
     this.searches = new SearchSessionManager({
       plugins: this.plugins,
       registry: this.registry,
@@ -498,6 +533,27 @@ export class ContentService {
   }
 
   private transcoder: MediaTranscoder | null = null;
+
+  /** Which provider answer each direct link came from (`cs3/linkOrigins.ts`). */
+  private readonly linkOrigins = new LinkOrigins();
+
+  /**
+   * How to get a fresh copy of a provider's link once it has expired, for the
+   * playback lease (`media/sourceLease.ts`); `undefined` for a link no
+   * provider answer produced this launch. The provider is asked for the same
+   * handle again and only the same link is taken.
+   */
+  public linkResolver(url: string): (() => Promise<{ url: string; headers: Record<string, string> }>) | undefined {
+    const origin = this.linkOrigins.get(url);
+    if (!origin) return undefined;
+    return async () => {
+      const { links } = await this.plugins.loadLinksDetailed(origin.handle);
+      const fresh = pickRefreshedLink(origin, links);
+      if (!fresh) throw new Error('The provider no longer offers this link.');
+      this.linkOrigins.remember(fresh.url, origin);
+      return fresh;
+    };
+  }
 
   public getProxy(): MediaProxy {
     return this.proxy;
@@ -1066,6 +1122,8 @@ export class ContentService {
       // without this it would share a slot with the play that does, and the
       // viewer would be handed the narrow empty answer it settled for.
       autoWiden ? 'widen' : 'narrow',
+      // A ranked walk and an exhaustive one answer differently.
+      request.exhaustive ? 'exhaustive' : 'ranked',
     ].join('|');
   }
 
@@ -1110,6 +1168,8 @@ export class ContentService {
       escalated?: boolean;
     } = {}
   ): Promise<SourceResponse> {
+    // Search all providers is the exhaustive walk, chosen once in Settings.
+    if (!request.exhaustive && this.discoveryMode() === 'all') request = { ...request, exhaustive: true };
     const bypass = Boolean(options.bypassCache);
     const autoWiden = options.autoWiden ?? true;
     return this.inFlightSources.run(
@@ -1582,8 +1642,35 @@ export class ContentService {
     const totalExtensionsToAsk = routes.length + (needProviderSearch ? providerList.length : 0);
 
     const fromExtensions: TorrentResult[] = [];
+    /** Provider hits the widened search refused as another work, with why. */
+    const refusedHits: SourceResponse['filtered'] = [];
+    // Who the widened search is looking for. Anime years are left out for the
+    // reason the indexer query leaves them out.
+    const work = {
+      title: wanted.title,
+      year: isAnime ? undefined : wanted.year,
+      type: detail?.type,
+      imdbId: wanted.imdbId,
+      season,
+    };
     let extensionsSettled = 0;
     let latestIndexerProgress: SearchProgress | null = null;
+    /** A widened-search hit judged the same work produced sources: the walk may stop. */
+    let verifiedFound = false;
+    let walk: WalkOutcome | null = null;
+    /** Every provider's answer, written once when the search settles. */
+    const workKey = canonicalKey(wanted.title, wanted.year);
+    const answered: Array<Omit<ProviderAttempt, 'at'>> = [];
+    const walkBatches = needProviderSearch
+      ? request.exhaustive
+        ? [this.plugins.rankForSearch(targetProviders)]
+        : planDiscoveryWalk({
+            ranked: this.plugins.rankForSearch(targetProviders),
+            preferred: this.playedProviders?.(wanted.title, wanted.year) ?? [],
+            firstBatch: WALK_FIRST_BATCH,
+            batchSize: this.plugins.searchConcurrency(),
+          })
+      : [];
 
     const report = (progress: SearchProgress | null) => {
       if (!onProgress) return;
@@ -1632,8 +1719,19 @@ export class ContentService {
           if (res.sources.length > 0) {
             fromExtensions.push(...res.sources);
           }
-        } catch {
+          const provider = parseExtensionUrl(route)?.provider;
+          if (provider) {
+            answered.push({
+              work: workKey,
+              provider,
+              outcome: res.sources.length > 0 ? 'sources' : 'no-sources',
+              detail: res.sources.length > 0 ? undefined : res.diagnosis?.summary,
+            });
+          }
+        } catch (error) {
           // One provider failing is not a search failure; the rest still answer.
+          const provider = parseExtensionUrl(route)?.provider;
+          if (provider) answered.push({ work: workKey, provider, outcome: 'error', detail: describeError(error) });
         } finally {
           extensionsSettled += 1;
           report(latestIndexerProgress);
@@ -1641,41 +1739,104 @@ export class ContentService {
       }),
       ...(needProviderSearch && providerList.length > 0
         ? [
-            this.plugins.searchEach(
-              wanted.title,
-              targetProviders,
-              async (providerOutcome) => {
-                if (options.signal?.aborted) return;
-                try {
-                  const extMatches = (providerOutcome.results ?? []).filter((m) => {
-                    if (!m.url || !m.url.startsWith('cs3ext://')) return false;
-                    // Already asked through a route; asking again would double
-                    // the work and the results.
-                    const ref = parseExtensionUrl(m.url);
-                    return ref ? !routeProviders.has(ref.provider) : true;
-                  });
-                  if (extMatches.length > 0) {
-                    for (const match of extMatches.slice(0, 2)) {
-                      if (options.signal?.aborted) break;
-                      try {
-                        const res = await this.extensionSources(match.url, season, episode);
-                        if (res.sources.length > 0) {
-                          fromExtensions.push(...res.sources);
-                          report(latestIndexerProgress);
+            walkDiscovery({
+              batches: walkBatches,
+              verifiedFound: () => verifiedFound,
+              budgetMs: request.exhaustive ? Number.POSITIVE_INFINITY : WALK_BUDGET_MS,
+              now: () => Date.now(),
+              signal: options.signal,
+              runBatch: (batch) =>
+                this.plugins.searchEach(
+                  wanted.title,
+                  batch,
+                  async (providerOutcome) => {
+                    if (options.signal?.aborted) return;
+                    try {
+                      const verdicts = new Map<string, HitVerdict['kind']>();
+                      const extMatches = (providerOutcome.results ?? []).filter((m) => {
+                        if (!m.url || !m.url.startsWith('cs3ext://')) return false;
+                        // Already asked through a route; asking again would double
+                        // the work and the results.
+                        const ref = parseExtensionUrl(m.url);
+                        if (ref && routeProviders.has(ref.provider)) return false;
+                        // A provider without the title answers anyway, with a
+                        // sequel, another season or its home page. Judged before
+                        // the first two are taken, so a wrong first hit does not
+                        // push the right second one out (PRD Phase 1).
+                        const verdict = judgeProviderHit(work, m);
+                        verdicts.set(m.url, verdict.kind);
+                        if (verdict.kind !== 'mismatch') return true;
+                        refusedHits.push({
+                          title: m.name,
+                          reason: `${providerOutcome.provider}: ${verdict.reason}`,
+                          seeders: 0,
+                        });
+                        return false;
+                      });
+                      let produced = 0;
+                      if (extMatches.length > 0) {
+                        for (const match of extMatches.slice(0, 2)) {
+                          if (options.signal?.aborted) break;
+                          try {
+                            const res = await this.extensionSources(match.url, season, episode);
+                            if (res.sources.length > 0) {
+                              produced += res.sources.length;
+                              fromExtensions.push(...res.sources);
+                              // Only a hit judged the same work ends the walk; an
+                              // unreadable title (`unknown`) is kept but proves nothing.
+                              if (verdicts.get(match.url) === 'match') verifiedFound = true;
+                              report(latestIndexerProgress);
+                            }
+                          } catch {}
                         }
-                      } catch {}
+                      }
+                      const refused = (providerOutcome.results ?? []).filter(
+                        (m) => verdicts.get(m.url) === 'mismatch'
+                      );
+                      // A paused provider was not asked: it answered nothing.
+                      if (!providerOutcome.cooling) answered.push({
+                        work: workKey,
+                        provider: providerOutcome.provider,
+                        outcome: providerOutcome.error
+                          ? 'error'
+                          : produced > 0
+                            ? 'sources'
+                            : extMatches.length === 0 && refused.length > 0
+                              ? 'wrong-match'
+                              : 'no-sources',
+                        detail: providerOutcome.error
+                          ? providerOutcome.error
+                          : produced === 0 && extMatches.length === 0 && refused.length > 0
+                            ? `Answered with “${refused[0].name}”`
+                            : undefined,
+                      });
+                    } finally {
+                      extensionsSettled += 1;
+                      report(latestIndexerProgress);
                     }
-                  }
-                } finally {
-                  extensionsSettled += 1;
-                  report(latestIndexerProgress);
-                }
-              },
-              options.signal
-            ),
+                  },
+                  options.signal,
+                  { ignoreCooldown: Boolean(request.exhaustive) }
+                ),
+            }).then((outcome) => {
+              walk = outcome;
+              // Providers the walk never asked still count as settled, or the
+              // progress bar would wait for them forever.
+              extensionsSettled += outcome.remaining.length;
+              report(latestIndexerProgress);
+              log.info('discovery_walk', {
+                title: wanted.title,
+                stoppedBy: outcome.stoppedBy,
+                asked: outcome.asked.length,
+                remaining: outcome.remaining.length,
+                exhaustive: Boolean(request.exhaustive),
+              });
+            }),
           ]
         : []),
     ]);
+    const walked = walk as WalkOutcome | null;
+    if (!options.signal?.aborted) this.attempts.record(answered);
 
     /**
      * One row per source, even when two paths found the same one.
@@ -1694,15 +1855,28 @@ export class ContentService {
 
     const response: SourceResponse = {
       sources: deduped,
-      filtered: outcome.rejected.slice(0, 50).map((r) => ({
-        title: r.result.title,
-        reason: r.reason,
-        seeders: r.result.seeders,
-      })),
+      filtered: [
+        ...refusedHits,
+        ...outcome.rejected.map((r) => ({
+          title: r.result.title,
+          reason: r.reason,
+          seeders: r.result.seeders,
+        })),
+      ].slice(0, 50),
       indexerOutcomes: outcome.indexerOutcomes,
       query: { title: wanted.title, season, episode, imdbId: wanted.imdbId },
       scopeUsed,
-      canWiden: plan.canWiden,
+      // A walk that stopped early left providers to ask: "Keep looking" asks them.
+      canWiden: plan.canWiden || (walked?.remaining.length ?? 0) > 0,
+      ...(walked
+        ? {
+            walk: {
+              stoppedBy: walked.stoppedBy,
+              asked: walked.asked.length,
+              remaining: walked.remaining.length,
+            },
+          }
+        : {}),
     };
 
     if (response.sources.length === 0) {
@@ -1935,7 +2109,24 @@ export class ContentService {
     season?: number,
     episode?: number
   ): Promise<{ sources: TorrentResult[]; diagnosis?: SourceDiagnosis }> {
-    const target = await this.resolveExtensionTarget(url, season, episode);
+    const resolved = await this.resolveExtensionTarget(url, season, episode);
+    if (resolved === null) {
+      const provider = parseExtensionUrl(url)?.provider;
+      const which = `${season !== undefined ? `season ${season} ` : ''}episode ${episode}`;
+      return {
+        sources: [],
+        diagnosis: {
+          kind: 'no-links',
+          summary: `${provider ?? 'This provider'} does not list ${which}.`,
+          provider,
+          address: url,
+          stage: 'sources',
+          facts: [{ label: 'Requested', value: which }],
+          at: Date.now(),
+        },
+      };
+    }
+    const target = resolved;
     // `cs3ext://<provider>/<handle>` — the provider is the part worth
     // attributing outcomes to, and the only place it is still available.
     const providerName = target.startsWith('cs3ext://')
@@ -1956,6 +2147,8 @@ export class ContentService {
       target.startsWith('cs3ext://') ? parseExtensionUrl(target)?.target ?? '' : target
     );
     let attempt = await this.plugins.loadLinksDetailed(target, { speculative });
+    // The handle that produced `links`, kept so an expired link can be asked for again.
+    let linksHandle = target;
     let links = attempt.links;
     let diagnosis = attempt.diagnosis;
 
@@ -1987,6 +2180,7 @@ export class ContentService {
           // The retry's verdict replaces the first one: the first address was
           // never the playable handle, so its failure describes the wrong thing.
           attempt = await this.plugins.loadLinksDetailed(detail.dataUrl);
+          linksHandle = detail.dataUrl;
           links = attempt.links;
           diagnosis = attempt.diagnosis;
         }
@@ -2063,6 +2257,15 @@ export class ContentService {
               directUrl: address,
               directHeaders: link.headers,
             };
+        if (!torrent) {
+          this.linkOrigins.remember(address, {
+            handle: linksHandle,
+            source: link.source,
+            name: link.name,
+            quality: link.quality,
+            part: parts > 1 ? part : 0,
+          });
+        }
 
         return {
           infoHash: identity,
@@ -2255,7 +2458,7 @@ export class ContentService {
     url: string,
     season?: number,
     episode?: number
-  ): Promise<string> {
+  ): Promise<string | null> {
     if (episode === undefined) return url;
 
     /**
@@ -2286,17 +2489,14 @@ export class ContentService {
     const episodes = detail?.episodes;
     if (!episodes?.length) return url;
 
-    const match =
-      episodes.find(
-        (e) => e.episode === episode && (season === undefined || e.season === season)
-      ) ??
-      // Providers routinely omit the season on a single-season show; matching
-      // on episode number alone is better than refusing to play it.
-      (season === undefined || season === 1
-        ? episodes.find((e) => e.episode === episode && e.season === undefined)
-        : undefined);
 
-    return match?.url ?? url;
+    /**
+     * The provider lists episodes and this one is not among them: there is
+     * nothing of it to play here. Falling back to the series page asked
+     * `loadLinks` for the page, which most providers answer with their first
+     * episode, so "Episode 2" played Episode 1 (2026-10-23).
+     */
+    return pickEpisodeHandle(episodes, season, episode);
   }
 
   /**
@@ -2313,6 +2513,35 @@ export class ContentService {
    * leak in an app that stays open for days.
    */
   private alternateRoutes = new Map<string, string[]>();
+
+  /**
+   * Which providers a source of this work played from, for this viewer
+   * (`main.ts` reads the played-source records). Those are asked first by the
+   * widened search; nothing about them is skipped or trusted beyond the order.
+   */
+  private playedProviders: ((title: string, year?: number) => string[]) | null = null;
+
+  /** What each provider answered for each work (`cs3/providerAttempts.ts`). */
+  private attempts: ProviderAttemptStore;
+  private readonly settings: DatastoreManager;
+
+  /**
+   * Search mode (Playback Source Resolution PRD §4.4): `ranked` walks providers
+   * in ranked batches inside a budget and stops at the first verified source;
+   * `all` asks every provider every time, as a second Find more sources does.
+   * A fallback strategy, separate from "Providers searched at once".
+   */
+  private discoveryMode(): 'ranked' | 'all' {
+    return this.settings.getString(DISCOVERY_MODE_KEY, 'ranked', true) === 'all' ? 'all' : 'ranked';
+  }
+
+  public getProviderAttempts(): ProviderAttemptStore {
+    return this.attempts;
+  }
+
+  public setPlayedProviders(lookup: (title: string, year?: number) => string[]): void {
+    this.playedProviders = lookup;
+  }
 
   /**
    * Re-teaches the routes a saved search's rows carry.
@@ -2556,7 +2785,12 @@ export class ContentService {
       try {
         handle = await this.startStream(source, season, episode);
       } catch (error) {
-        failed(source, describeError(error));
+        const message = describeError(error);
+        // Counted by kind and stage, as imported torrents are (Torrent PRD §2.3).
+        if (!source.directUrl) {
+          log.warn('torrent_start_failed', { ...classifyTorrentFailure(message), infoHash: source.infoHash });
+        }
+        failed(source, message);
         continue;
       }
 

@@ -1,5 +1,11 @@
 import { createHash } from 'crypto';
-import type { PlaybackStrategyType } from '../../src/types/media.ts';
+import { release } from 'os';
+import type {
+  MediaTransport,
+  MismatchWarningAnswer,
+  PlaybackRuntimeReport,
+  PlaybackStrategyType,
+} from '../../src/types/media.ts';
 import { scopedLogger } from '../logging/logger.ts';
 
 const log = scopedLogger('playback');
@@ -87,6 +93,10 @@ export interface PlaybackTelemetryRecord {
   terminalState: PlaybackTerminalState;
   fatalError: string | null;
   transitionCount: number;
+
+  // ── Validation (Content Validation PRD §11) ──────────────
+  /** A possible-mismatch warning was shown, and what the viewer did with it. */
+  mismatchWarning?: MismatchWarningAnswer;
 }
 
 /**
@@ -123,6 +133,108 @@ export function generateCapabilityFingerprint(details: {
   ].join('|');
 
   return createHash('sha256').update(payload).digest('hex').slice(0, 16);
+}
+
+/**
+ * One session's record from what `PlaybackEngine.prepare` knows.
+ *
+ * The runtime half (first frame, stalls, seeks, lease refreshes) is measured in
+ * the renderer and nothing carries it here yet, so it is zero rather than
+ * invented; `summarizeTelemetry` already skips a zero first-frame time.
+ * `engineAttachMs` is the prepare's wall time outside the probe.
+ */
+export function sessionTelemetry(input: {
+  sessionId: string;
+  url: string;
+  strategy: PlaybackStrategyType;
+  transport: MediaTransport;
+  container: string;
+  probeError: string | null;
+  probeLatencyMs: number;
+  totalMs: number;
+  appVersion: string;
+  hevcSupported: boolean;
+  fatalError: string | null;
+}): PlaybackTelemetryRecord {
+  const electronVersion = process.versions.electron ?? 'none';
+  const engine: SelectedPlaybackEngine =
+    input.strategy === 'NATIVE_MPV'
+      ? 'mpv'
+      : input.strategy === 'HLS_NATIVE'
+        ? 'hlsjs'
+        : input.strategy === 'DASH_NATIVE'
+          ? 'shaka'
+          : 'html5';
+  const sourceFingerprint = createHash('sha256').update(input.url).digest('hex').slice(0, 16);
+  return {
+    sessionId: input.sessionId,
+    sourceId: sourceFingerprint,
+    sourceFingerprint,
+    timestamp: Date.now(),
+    appVersion: input.appVersion,
+    electronVersion,
+    decisionPolicyVersion: DECISION_POLICY_VERSION,
+    capabilityFingerprint: generateCapabilityFingerprint({
+      appVersion: input.appVersion,
+      electronVersion,
+      osRelease: release(),
+      hevcSupported: input.hevcSupported,
+    }),
+    selectedEngine: engine,
+    selectedStrategy: input.strategy,
+    renderSurface: engine === 'mpv' ? 'native-window' : 'dom',
+    subtitleMode: 'none',
+    inspectionStrategy:
+      input.transport === 'hls' ? 'manifest-hls' : input.transport === 'dash' ? 'manifest-dash' : 'progressive',
+    container: input.container,
+    probeIncomplete: input.probeError !== null,
+    probeError: input.probeError,
+    probeBytesTransferred: 0,
+    probeNetworkMs: input.probeLatencyMs,
+    probeParseMs: 0,
+    capabilityLookupMs: 0,
+    decisionMs: 0,
+    engineAttachMs: Math.max(0, input.totalMs - input.probeLatencyMs),
+    timeToFirstFrameMs: 0,
+    playbackSeconds: 0,
+    seekCount: 0,
+    seekRestartCount: 0,
+    seekRestartMsSamples: [],
+    stallCount: 0,
+    stallTotalMs: 0,
+    leaseRefreshAttempts: 0,
+    leaseRefreshSuccesses: 0,
+    reconnectCount: 0,
+    terminalState: input.fatalError ? 'fatal-error' : 'user-abort',
+    fatalError: input.fatalError,
+    transitionCount: 0,
+  };
+}
+
+/**
+ * A session's record with the renderer's runtime report folded in.
+ *
+ * First frame is counted from the start of the prepare, so the prepare's own
+ * time is added back. A session already closed keeps its terminal state unless
+ * the film actually ended: `engine-switch` is usually the renderer's report
+ * arriving after the next source was prepared.
+ */
+export function withRuntime(
+  record: PlaybackTelemetryRecord,
+  report: PlaybackRuntimeReport,
+  open: boolean
+): PlaybackTelemetryRecord {
+  const prepareMs = record.probeNetworkMs + record.engineAttachMs;
+  return {
+    ...record,
+    timeToFirstFrameMs: report.firstFrameMs > 0 ? prepareMs + report.firstFrameMs : 0,
+    playbackSeconds: report.playbackSeconds,
+    seekCount: report.seekCount,
+    stallCount: report.stallCount,
+    stallTotalMs: report.stallTotalMs,
+    terminalState: report.ended ? 'completed' : open ? 'user-abort' : record.terminalState,
+    ...(report.mismatchWarning ? { mismatchWarning: report.mismatchWarning } : {}),
+  };
 }
 
 /**
@@ -246,6 +358,27 @@ export class PlaybackTelemetryStore {
       terminalState: telemetry.terminalState,
       fatalError: telemetry.fatalError,
     });
+  }
+
+  /** Replaces the newest record for this session; false when there is none. */
+  public amend(sessionId: string, update: (record: PlaybackTelemetryRecord) => PlaybackTelemetryRecord): boolean {
+    for (let i = this.records.length - 1; i >= 0; i--) {
+      if (this.records[i].sessionId !== sessionId) continue;
+      const next = update(this.records[i]);
+      this.records[i] = next;
+      log.info('playback_session_runtime', {
+        sessionId,
+        firstFrameMs: next.timeToFirstFrameMs,
+        playbackSeconds: next.playbackSeconds,
+        stallCount: next.stallCount,
+        stallTotalMs: next.stallTotalMs,
+        seekCount: next.seekCount,
+        terminalState: next.terminalState,
+        mismatchWarning: next.mismatchWarning,
+      });
+      return true;
+    }
+    return false;
   }
 
   public getRecords(): PlaybackTelemetryRecord[] {

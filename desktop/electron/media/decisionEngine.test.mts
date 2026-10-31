@@ -389,6 +389,41 @@ test('user preferred audio language wins over default track', () => {
   assert.equal(selected?.index, 1);
 });
 
+test("the menu's pick by index outranks the remembered language", () => {
+  const tracks = [
+    audio({ index: 0, codec: 'aac', language: 'eng', isDefault: true }),
+    audio({ index: 1, codec: 'aac', language: 'eng', isDefault: false, title: 'Commentary' }),
+  ];
+  // Two English tracks: a language cannot name the second one.
+  assert.equal(selectAudioTrack(tracks, 'en', 1)?.index, 1);
+  assert.equal(selectAudioTrack(tracks, 'en')?.index, 0);
+});
+
+test('an index names one of two untagged tracks', () => {
+  const tracks = [
+    audio({ index: 0, codec: 'aac', language: 'und', isDefault: true }),
+    audio({ index: 1, codec: 'aac', language: 'und', isDefault: false }),
+  ];
+  assert.equal(selectAudioTrack(tracks, undefined, 1)?.index, 1);
+  assert.equal(selectAudioTrack(tracks, undefined, 7)?.index, 0, 'an index no track has falls back');
+});
+
+test("a direct file's second dub picked by index is a remux, video copied", () => {
+  // The reported bug: switching dubs on a playable MP4 went to a forced
+  // re-encode or to mpv. The decision itself already knew the cheap answer.
+  const twoDubs = media({
+    audio: [
+      audio({ index: 0, codec: 'aac', language: 'und', isDefault: true }),
+      audio({ index: 1, codec: 'aac', language: 'und', isDefault: false }),
+    ],
+  });
+  const decision = decideStrategy(twoDubs, 'progressive', PLAIN, GPU, NO_DRM, undefined, undefined, 1);
+  assert.equal(decision.strategy, 'REMUX_CONTAINER');
+  assert.equal(decision.plan.videoAction, 'copy');
+  assert.equal(decision.plan.selectedAudioIndex, 1);
+  assert.equal(decide(twoDubs).strategy, 'DIRECT', 'the default track still plays untouched');
+});
+
 test('language code normalization matches 2-letter and 3-letter codes', () => {
   const tracks = [
     audio({ index: 0, codec: 'aac', language: 'hin', isDefault: false }),

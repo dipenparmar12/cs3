@@ -3,9 +3,9 @@ import {
   type ExactMedia,
   type SearchAlternate,
   type SearchResponse,
-} from '../src/types/api';
-import { normaliseTitleForMatch, titleSimilarity } from './torrent/releaseParser';
-import { parseCinemetaUrl } from './cinemeta';
+} from '../src/types/api.ts';
+import { normaliseTitleForMatch, titleSimilarity } from './torrent/releaseParser.ts';
+import { parseCinemetaUrl } from './cinemeta.ts';
 
 /**
  * Collapses duplicate results within each provider / source down to one row.

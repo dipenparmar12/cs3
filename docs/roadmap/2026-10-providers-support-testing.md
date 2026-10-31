@@ -1,10 +1,10 @@
-> **Filed 2026-10-20: Partial / pending.** Some code this PRD names exists; the rest is not verified.
+> **Filed 2026-10-20: Partial / pending.** **Updated 2026-10-29: M0–M4 built; M5 in part (S10 tiers built; `--webview`, `--torrents` not).** The seven pure modules of §5.3, plus `stageEvidence.ts`, `networkEvidence.ts` and `mediaEvidence.ts`, are in `desktop/electron/cs3/audit/` with tests. `tools/audit/provider-audit.mjs` runs S0–S9 against a profile's installed archives (copied, never touched), journals each stage, resumes, reports and diffs. The net-worker (`tools/audit/net-worker.cjs`, headless Electron) carries S2 and S7–S10. S10 is opt-in (`--verify`, §16 Q5) and runs T1 element, T2 ffmpeg (`MediaTranscoder` ran headless: §16 Q4 needed no deferral) and T3 mpv (`playbackEvidence.ts`). Status is in `ROADMAP.md`.
 
 # PRD: Provider Compatibility Audit — a repeatable, evidence-based validation of every community provider
 
 | | |
 |---|---|
-| **Status** | Proposed. **Nothing in this document is built.** No source file was changed while writing it. |
+| **Status** | Partial (2026-10-28): see the note above. |
 | **Number** | Unassigned (filename-dated; next free PRD number is 56) |
 | **Date** | 2026-10-16 |
 | **Audience** | The engineer (or agent) who will implement it. Written to be executed without further questions; open decisions are in §16 with a recommended default. |

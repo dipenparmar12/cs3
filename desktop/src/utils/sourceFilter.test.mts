@@ -10,6 +10,7 @@ import {
   detectResolutionCategory,
   filterAndSortSources,
   foldTorrents,
+  groupSourcesByOrigin,
   isFilterActive,
   matchesLanguage,
   matchesSize,
@@ -199,16 +200,40 @@ test('foldTorrents keeps every stream and the best torrents, folds the tail in o
   assert.equal(hidden, 5);
 });
 
-test('foldTorrents never folds without streams, under a torrent filter, or the playing row', () => {
-  const torrents = Array.from({ length: 8 }, (_, i) => createSource({ infoHash: `t${i}` }));
-  assert.equal(foldTorrents(torrents, DEFAULT_FILTER_STATE, undefined, 3).hidden, 0);
+test('a list of torrents alone folds too, at the larger limit, and never folds the playing row', () => {
+  const torrents = Array.from({ length: 12 }, (_, i) => createSource({ infoHash: `t${i}`, title: `Torrent ${i}` }));
+  const alone = foldTorrents(torrents, DEFAULT_FILTER_STATE);
+  assert.equal(alone.shown.length, 8);
+  assert.equal(alone.hidden, 4);
 
   const stream = createSource({ infoHash: 's', directUrl: 'https://cdn.example.com/a.mp4' });
-  assert.equal(foldTorrents([stream, ...torrents], { kind: 'torrent' }, undefined, 3).hidden, 0);
+  assert.equal(foldTorrents([stream, ...torrents], { kind: 'torrent' }).shown.length, 9, 'torrent filter: 8 + the stream');
 
-  const playing = foldTorrents([stream, ...torrents], DEFAULT_FILTER_STATE, (s) => s.infoHash === 't7', 3);
-  assert.ok(playing.shown.some((s) => s.infoHash === 't7'));
-  assert.equal(playing.hidden, 4);
+  const playing = foldTorrents([stream, ...torrents], DEFAULT_FILTER_STATE, (s) => s.infoHash === 't11', 3);
+  assert.ok(playing.shown.some((s) => s.infoHash === 't11'));
+  assert.equal(playing.hidden, 8);
+});
+
+test('copies of a shown release fold behind it; an unknown size never groups', () => {
+  const size = 2_000_000_000;
+  const a = createSource({ infoHash: 'a', title: 'Dune.2021.1080p.WEB-DL.x264-GRP', sizeBytes: size });
+  const copy = createSource({ infoHash: 'b', title: 'Dune 2021 1080p WEB-DL x264-GRP', sizeBytes: size * 1.004 });
+  const other = createSource({ infoHash: 'c', title: 'Dune.2021.2160p.WEB-DL.x265-GRP', sizeBytes: size * 3 });
+  const noSize1 = createSource({ infoHash: 'd', title: 'Dune.2021.720p', sizeBytes: 0 });
+  const noSize2 = createSource({ infoHash: 'e', title: 'Dune.2021.720p', sizeBytes: 0 });
+  const { shown, hidden } = foldTorrents([a, copy, other, noSize1, noSize2], DEFAULT_FILTER_STATE);
+  assert.deepEqual(shown.map((s) => s.infoHash), ['a', 'c', 'd', 'e']);
+  assert.equal(hidden, 1);
+});
+
+test('sources group by origin in order of their best row, ranking kept inside', () => {
+  const a1 = createSource({ infoHash: 'a1', indexerName: 'Torrentio' });
+  const b1 = createSource({ infoHash: 'b1', indexerName: 'YTS' });
+  const a2 = createSource({ infoHash: 'a2', indexerName: 'Torrentio, The Pirate Bay' });
+  const p1 = createSource({ infoHash: 'p1', indexerName: 'x', providerName: 'HDO', directUrl: 'https://h/x.m3u8' });
+  const groups = groupSourcesByOrigin([a1, b1, a2, p1]);
+  assert.deepEqual(groups.map((g) => [g.origin, g.sources.map((s) => s.infoHash)]), [['Torrentio', ['a1', 'a2']], ['YTS', ['b1']], ['HDO', ['p1']]]);
+  assert.equal(groupSourcesByOrigin([]).length, 0);
 });
 
 let failed = 0;

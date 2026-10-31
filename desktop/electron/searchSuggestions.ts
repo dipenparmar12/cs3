@@ -1,5 +1,7 @@
 import { fetchJson, postJson } from './torrent/http.ts';
-import { TvType, type SearchSuggestion } from '../src/types/api.ts';
+import { TvType, type EntitySuggestion, type SearchCategory, type SearchSuggestion } from '../src/types/api.ts';
+import { entityStillMatches, searchEntities } from './metadata/entitySearch.ts';
+import { categoryScope, wantsTitles } from '../src/utils/searchCategories.ts';
 import { normaliseTitleForMatch, titleSimilarity } from './torrent/releaseParser.ts';
 import { buildCinemetaUrl, parseCinemetaUrl } from './cinemeta.ts';
 import { buildMetadataUrl } from './metadataProvider.ts';
@@ -169,6 +171,8 @@ const PREFIX_SIMILARITY_FLOOR = 0.85;
 interface CacheEntry {
   at: number;
   suggestions: SearchSuggestion[];
+  /** People and companies the query names (`metadata/entitySearch.ts`). */
+  entities: EntitySuggestion[];
   /** False while the fan-out is still running behind a provisional answer. */
   done: boolean;
 }
@@ -316,6 +320,22 @@ export function matchableNames(suggestion: SearchSuggestion): string[] {
  * dropdown for the length of a round trip. Both prefix and substring count,
  * across every name the row answers to.
  */
+/**
+ * The merged answer so far, with last keystroke's rows that still match kept
+ * underneath until the fan-out is done.
+ *
+ * Each catalogue landing re-merges what has arrived, so the first one used to
+ * replace a full list on screen with its own two rows, and the rest grew it
+ * back: the panel visibly emptied and refilled after every key (measured
+ * 2026-10-30, "Tom Hanks": four layouts in 2.4 s after the last key). Rows
+ * already confirmed lead; the carried ones fill in behind them and are
+ * dropped only when every catalogue has answered.
+ */
+export function withCarried(merged: SearchSuggestion[], carried: readonly SearchSuggestion[]): SearchSuggestion[] {
+  const seen = new Set(merged.map((row) => normaliseTitleForMatch(row.title)));
+  return [...merged, ...carried.filter((row) => !seen.has(normaliseTitleForMatch(row.title)))];
+}
+
 export function stillMatches(suggestion: SearchSuggestion, query: string): boolean {
   const collapsed = collapseTitle(query);
   if (!collapsed) return true;
@@ -329,7 +349,8 @@ export function stillMatches(suggestion: SearchSuggestion, query: string): boole
 
 /** How each source's rows reach the merge, as it lands. */
 export interface SuggestionProgress {
-  (suggestions: SearchSuggestion[], done: boolean): void;
+  /** `entitiesFailed`: the people lookup was refused or failed, so `entities` is what was shown before, not an answer. */
+  (suggestions: SearchSuggestion[], done: boolean, entities: EntitySuggestion[], entitiesFailed?: boolean): void;
 }
 
 export class SearchSuggestionService {
@@ -348,14 +369,18 @@ export class SearchSuggestionService {
    * call — which is how the latency this method exists to remove got there in
    * the first place.
    */
-  public instant(query: string): { suggestions: SearchSuggestion[]; done: boolean } {
+  public instant(
+    query: string,
+    categories: readonly SearchCategory[] = []
+  ): { suggestions: SearchSuggestion[]; done: boolean; entities: EntitySuggestion[] } {
     const trimmed = query.trim();
-    if (!trimmed) return { suggestions: [], done: true };
+    if (!trimmed) return { suggestions: [], done: true, entities: [] };
 
-    const key = trimmed.toLowerCase();
+    // The selection leads the key, so a prefix of another selection's query never answers for this one.
+    const key = `${categoryScope(categories)}|${trimmed.toLowerCase()}`;
     const exact = this.cache.get(key);
     if (exact && Date.now() - exact.at < CACHE_TTL_MS) {
-      return { suggestions: exact.suggestions, done: exact.done };
+      return { suggestions: exact.suggestions, done: exact.done, entities: exact.entities };
     }
 
     // The longest cached prefix of this query is the closest thing already
@@ -366,12 +391,13 @@ export class SearchSuggestionService {
       if (Date.now() - entry.at >= CACHE_TTL_MS) continue;
       if (!best || cachedKey.length > best.key.length) best = { key: cachedKey, entry };
     }
-    if (!best) return { suggestions: [], done: false };
+    if (!best) return { suggestions: [], done: false, entities: [] };
 
     const narrowed = best.entry.suggestions.filter((row) => stillMatches(row, trimmed));
+    const people = best.entry.entities.filter((entity) => entityStillMatches(entity, trimmed));
     // Never `done`: these are last keystroke's rows re-filtered, and calling
     // them final would stop the caller replacing them with the real answer.
-    return { suggestions: narrowed, done: false };
+    return { suggestions: narrowed, done: false, entities: people };
   }
 
   /**
@@ -387,20 +413,25 @@ export class SearchSuggestionService {
   public async suggest(
     query: string,
     signal?: AbortSignal,
-    onProgress?: SuggestionProgress
+    onProgress?: SuggestionProgress,
+    categories: readonly SearchCategory[] = []
   ): Promise<SearchSuggestion[]> {
     const trimmed = query.trim();
     if (!trimmed) return [];
 
-    const cacheKey = trimmed.toLowerCase();
+    const cacheKey = `${categoryScope(categories)}|${trimmed.toLowerCase()}`;
     const cached = this.cache.get(cacheKey);
     if (cached?.done && Date.now() - cached.at < CACHE_TTL_MS) {
-      onProgress?.(cached.suggestions, true);
+      onProgress?.(cached.suggestions, true, cached.entities);
       return cached.suggestions;
     }
 
     const found: Candidate[] = [];
     let published: SearchSuggestion[] = [];
+    // Last keystroke's answer, still true of this one, stays up until this one's replaces it.
+    const carried = this.instant(trimmed, categories);
+    let entities: EntitySuggestion[] = carried.entities;
+    let entitiesFailed = false;
 
     /**
      * Merges everything landed so far and hands it up.
@@ -412,21 +443,27 @@ export class SearchSuggestionService {
      * class of bug as `diffProviders` observing a global by its length.
      */
     const publish = (done: boolean) => {
-      published = this.merge(found, trimmed);
-      this.remember(cacheKey, published, done);
-      onProgress?.(published, done);
+      const merged = this.merge(found, trimmed);
+      published = done ? merged : withCarried(merged, carried.suggestions);
+      // Never cached as finished without its people: the next ask must try them again.
+      this.remember(cacheKey, published, done && !entitiesFailed, entities);
+      onProgress?.(published, done, entities, entitiesFailed);
     };
 
-    const sources: Array<Promise<void>> = [
-      this.fromCinemeta(trimmed, signal)
-        .then((rows) => {
-          found.push(...rows);
-          publish(false);
-        })
-        .catch(() => {}),
-    ];
+    const titles = wantsTitles(categories);
+    const sources: Array<Promise<void>> = [];
+    if (titles) {
+      sources.push(
+        this.fromCinemeta(trimmed, signal)
+          .then((rows) => {
+            found.push(...rows);
+            publish(false);
+          })
+          .catch(() => {})
+      );
+    }
 
-    if (trimmed.length >= FULL_FANOUT_MIN_LENGTH) {
+    if (titles && trimmed.length >= FULL_FANOUT_MIN_LENGTH) {
       sources.push(
         this.fromTvMaze(trimmed, signal)
           .then((rows) => {
@@ -442,6 +479,19 @@ export class SearchSuggestionService {
           .catch(() => {})
       );
     }
+    // People and companies the query names (nobody, for Titles alone). Their
+    // own source, so a slow lookup never holds back a title row, and a refused
+    // one leaves the people already shown rather than answering "nobody".
+    sources.push(
+      searchEntities(trimmed, { signal, categories })
+        .then((rows) => {
+          entities = rows;
+          publish(false);
+        })
+        .catch(() => {
+          if (!signal?.aborted) entitiesFailed = true;
+        })
+    );
 
     await Promise.all(sources);
     publish(true);
@@ -451,8 +501,8 @@ export class SearchSuggestionService {
     void this.enrich(published, signal)
       .then((changed) => {
         if (!changed || signal?.aborted) return;
-        this.remember(cacheKey, published, true);
-        onProgress?.(published, true);
+        this.remember(cacheKey, published, !entitiesFailed, entities);
+        onProgress?.(published, true, entities, entitiesFailed);
       })
       .catch(() => {});
 
@@ -520,12 +570,12 @@ export class SearchSuggestionService {
     return changed;
   }
 
-  private remember(key: string, suggestions: SearchSuggestion[], done: boolean): void {
+  private remember(key: string, suggestions: SearchSuggestion[], done: boolean, entities: EntitySuggestion[]): void {
     // Re-inserted rather than updated in place, so the eviction below sees the
     // refreshed entry as the newest — `Map.set` on an existing key keeps its
     // original position, which would make the most active query the first out.
     this.cache.delete(key);
-    this.cache.set(key, { at: Date.now(), suggestions, done });
+    this.cache.set(key, { at: Date.now(), suggestions, done, entities });
     if (this.cache.size > CACHE_MAX_ENTRIES) {
       // Insertion-ordered: the oldest key is the first one Map yields.
       const oldest = this.cache.keys().next().value;

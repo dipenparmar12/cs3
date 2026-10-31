@@ -3,13 +3,21 @@ import { test } from 'node:test';
 import {
   areAllFilteredSelected,
   calculateSelectionImpact,
+  EMPTY_INTENT,
   excludeSection,
   getFilteredMembers,
   includeSection,
+  intentFromSnapshot,
+  matchingPreset,
+  presetIntent,
   prettyType,
+  providersForIntent,
   stateOf,
+  toggleIntent,
   type Row,
+  type ScopeIntent,
 } from './sourceScopeModel.ts';
+import type { ProviderTreeRepository } from '../../types/plugin';
 
 /**
  * The tri-state is what makes a three-level tree legible: a repository whose
@@ -178,4 +186,156 @@ test('calculateSelectionImpact accurately determines delta and consequential thr
   assert.equal(routineImpact.totalAdded, 1);
   assert.equal(routineImpact.totalRemoved, 0);
   assert.equal(routineImpact.isConsequential, false);
+});
+
+// --- quick setup: chips are what was ticked, nothing more ------------------
+
+
+/** Shaped like the real tree: most movie providers carry series too. */
+const TREE = [
+  {
+    name: 'Repo',
+    extensions: [
+      { name: 'Hin', language: 'hi', providers: [
+        { name: 'HindiMovies', supportedTypes: ['Movie', 'TvSeries'] },
+        { name: 'HindiAnime', supportedTypes: ['Anime'] },
+      ] },
+      { name: 'Eng', language: 'en', providers: [
+        { name: 'EnglishMovies', supportedTypes: ['Movie', 'TvSeries', 'Documentary'] },
+        { name: 'EnglishUS', lang: 'en-US', supportedTypes: ['Movie'] },
+      ] },
+      { name: 'Tam', language: 'ta', providers: [
+        { name: 'TamilMovies', supportedTypes: ['Movie', 'TvSeries'] },
+        { name: 'Switched off', supportedTypes: ['Movie'], enabled: false },
+      ] },
+      { name: 'Adult', language: 'en', providers: [
+        { name: 'AdultEn', supportedTypes: ['NSFW'] },
+      ] },
+      { name: 'Adult JP', language: 'ja', providers: [
+        { name: 'AdultJa', supportedTypes: ['NSFW'] },
+      ] },
+    ],
+  },
+] as unknown as ProviderTreeRepository[];
+
+const selectable = (p: { enabled?: boolean }) => p.enabled !== false;
+const chips = (languages: string[] = [], types: string[] = []): ScopeIntent => ({
+  languages: new Set(languages),
+  types: new Set(types),
+});
+
+/**
+ * The rule the picker used before 2026-10-21, kept as the counter-example: the
+ * chips were rebuilt from the providers the last change selected.
+ */
+function inferredFromProviders(names: Set<string>): ScopeIntent {
+  const out = chips();
+  for (const ext of TREE[0].extensions) {
+    for (const p of ext.providers) {
+      if (!names.has(p.name)) continue;
+      const lang = p.lang ?? ext.language;
+      if (lang) out.languages.add(lang);
+      for (const t of p.supportedTypes) out.types.add(t);
+    }
+  }
+  return out;
+}
+
+/** What the picker shows after a save: the stored chips read back. */
+function afterSave(intent: ScopeIntent): ScopeIntent {
+  return intentFromSnapshot({
+    activeId: '',
+    draft: { languages: [...intent.languages], contentTypes: [...intent.types] },
+  });
+}
+
+test('ticking Movies leaves Series and every language unticked', () => {
+  const ticked = toggleIntent(EMPTY_INTENT, 'types', 'Movie');
+  const selected = providersForIntent(TREE, ticked, selectable);
+  assert.deepEqual([...afterSave(ticked).types], ['Movie']);
+  assert.equal(afterSave(ticked).languages.size, 0);
+
+  // The old rule lit Series and four languages from the same selection.
+  const old = inferredFromProviders(selected);
+  assert.ok(old.types.has('TvSeries') && old.languages.size >= 3, 'the counter-example still shows the bug');
+});
+
+test('the NSFW content chip ticks no language', () => {
+  const ticked = toggleIntent(EMPTY_INTENT, 'types', 'NSFW');
+  assert.equal(afterSave(ticked).languages.size, 0);
+  assert.deepEqual([...providersForIntent(TREE, ticked, selectable)].sort(), ['AdultEn', 'AdultJa']);
+  assert.ok(inferredFromProviders(providersForIntent(TREE, ticked, selectable)).languages.size === 2);
+});
+
+test('ticking a language changes only that language', () => {
+  const hindi = toggleIntent(EMPTY_INTENT, 'languages', 'hi');
+  const both = toggleIntent(hindi, 'languages', 'ta');
+  assert.deepEqual([...both.languages], ['hi', 'ta']);
+  assert.equal(both.types.size, 0, 'no content chip appears');
+  assert.deepEqual([...toggleIntent(both, 'languages', 'hi').languages], ['ta'], 'and unticks only itself');
+});
+
+test('chips combine as any-of within a row and all-of across rows', () => {
+  assert.deepEqual(
+    [...providersForIntent(TREE, chips(['hi', 'ta']), selectable)].sort(),
+    ['HindiAnime', 'HindiMovies', 'TamilMovies'],
+    'Hindi or Tamil'
+  );
+  assert.deepEqual(
+    [...providersForIntent(TREE, chips(['hi'], ['Movie']), selectable)],
+    ['HindiMovies'],
+    'Hindi and Movies'
+  );
+  assert.deepEqual(
+    [...providersForIntent(TREE, chips(['hi'], ['Movie', 'Anime']), selectable)].sort(),
+    ['HindiAnime', 'HindiMovies'],
+    'Movies or Anime, in Hindi'
+  );
+  assert.equal(providersForIntent(TREE, chips(['hi'], ['NSFW']), selectable).size, 0, 'nothing matches both');
+});
+
+test('no chips selects nothing, which the scope reads as every source', () => {
+  assert.equal(providersForIntent(TREE, EMPTY_INTENT, selectable).size, 0);
+});
+
+test('a switched-off provider is never selected by a chip', () => {
+  assert.ok(!providersForIntent(TREE, chips(['ta']), selectable).has('Switched off'));
+});
+
+test('stored chips come back from the profile or draft that is active', () => {
+  const snapshot = {
+    activeId: 'p1',
+    profiles: [{ id: 'p1', languages: ['ta'], contentTypes: ['Movie'] }],
+    draft: { languages: ['hi'], contentTypes: [] },
+  };
+  assert.deepEqual([...intentFromSnapshot(snapshot).languages], ['ta']);
+  assert.deepEqual([...intentFromSnapshot({ ...snapshot, activeId: '' }).languages], ['hi']);
+  assert.equal(intentFromSnapshot({ ...snapshot, activeId: 'all' }).languages.size, 0);
+});
+
+test('a hand-picked selection shows no chips, however many providers it holds', () => {
+  const handPicked = intentFromSnapshot({
+    activeId: '',
+    draft: { languages: [], contentTypes: [] },
+  });
+  assert.equal(handPicked.languages.size + handPicked.types.size, 0);
+});
+
+test('a preset is a set of chips built from what is installed', () => {
+  const available = { languages: ['hi', 'en', 'en-US', 'ta'], types: ['Movie', 'Anime', 'NSFW'] };
+  assert.deepEqual([...presetIntent('english', available).languages], ['en', 'en-US']);
+  assert.deepEqual([...presetIntent('anime', available).types], ['Anime'], 'only types that exist');
+  assert.deepEqual([...presetIntent('nsfw', available).types], ['NSFW']);
+  assert.equal(presetIntent('nsfw', available).languages.size, 0);
+});
+
+test('the unnamed selection is a preset exactly when its chips are', () => {
+  const available = { languages: ['hi', 'en'], types: ['Movie', 'Anime'] };
+  const presets = ['english', 'hindi', 'anime'] as const;
+  assert.equal(matchingPreset(chips(['hi']), [...presets], available), 'hindi');
+  assert.equal(matchingPreset(chips(['hi'], ['Movie']), [...presets], available), undefined);
+  assert.equal(matchingPreset(EMPTY_INTENT, [...presets], available), undefined, 'no chips is not a preset');
+  // Nothing here carries Asian drama, so that preset has no chips at all; it
+  // must not light up whenever nothing is chosen.
+  assert.equal(matchingPreset(EMPTY_INTENT, ['drama'], available), undefined);
 });

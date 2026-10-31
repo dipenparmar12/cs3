@@ -8,9 +8,9 @@ This document provides a comprehensive mapping of key files across the CloudStre
 
 | File Path | Description & Responsibilities |
 |---|---|
-| [`build.gradle.kts`](build.gradle.kts) | Top-level Gradle script defining plugins catalog (`android.application`, `kotlin.multiplatform`, `dokka`, `buildkonfig`). |
-| [`settings.gradle.kts`](settings.gradle.kts) | Gradle settings declaring root project name (`CloudStream`) and included modules (`:app`, `:library`, `:shared`, `:desktopApp`, `:docs`). |
-| [`gradle/libs.versions.toml`](gradle/libs.versions.toml) | Gradle Version Catalog declaring all dependency versions (AndroidX Media3, Coil 3, Jsoup, Conscrypt, NiceHttp, TorrentServer, Zipline). |
+| [`build.gradle.kts`](https://github.com/recloudstream/cloudstream/blob/eb962b4fb7b1387b8de42ec58000cee0a01fe741/build.gradle.kts) | Top-level Gradle script defining plugins catalog (`android.application`, `kotlin.multiplatform`, `dokka`, `buildkonfig`). |
+| [`settings.gradle.kts`](https://github.com/recloudstream/cloudstream/blob/eb962b4fb7b1387b8de42ec58000cee0a01fe741/settings.gradle.kts) | Gradle settings declaring root project name (`CloudStream`) and included modules (`:app`, `:library`, `:shared`, `:desktopApp`, `:docs`). |
+| [`gradle/libs.versions.toml`](https://github.com/recloudstream/cloudstream/blob/eb962b4fb7b1387b8de42ec58000cee0a01fe741/gradle/libs.versions.toml) | Gradle Version Catalog declaring all dependency versions (AndroidX Media3, Coil 3, Jsoup, Conscrypt, NiceHttp, TorrentServer, Zipline). |
 
 ---
 

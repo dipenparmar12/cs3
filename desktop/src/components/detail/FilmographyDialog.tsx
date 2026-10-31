@@ -3,9 +3,10 @@ import { Building2, ExternalLink, Loader2, User } from 'lucide-react';
 import { Dialog } from '../ui';
 import { Poster } from '../Poster';
 import { PosterCard } from '../PosterCard';
-import type { SearchResponse, TvType } from '../../types/api';
+import type { SearchResponse } from '../../types/api';
 import type { Filmography, FilmographyRequest, FilmographyRole, FilmographyWork } from '../../types/filmography';
 import { describeError } from '../../utils/errors';
+import { workAsItem as asItem } from '../../utils/matchReasons';
 
 /**
  * "More from …" — a person's or studio's other work, browsable in place.
@@ -27,11 +28,13 @@ export const FilmographyDialog: React.FC<{
   onSelectMedia: (item: SearchResponse) => void;
   onPlayDirectly?: (item: SearchResponse) => void;
   onSearch?: (query: string) => void;
-}> = ({ request, hint, onClose, onSelectMedia, onPlayDirectly, onSearch }) => {
+  /** The role filter to open on (a Director chip opens on Directing), when they hold it. */
+  initialRole?: FilmographyRole;
+}> = ({ request, hint, onClose, onSelectMedia, onPlayDirectly, onSearch, initialRole }) => {
   const [state, setState] = useState<{ status: 'loading' | 'ready' | 'none' | 'error'; data?: Filmography; error?: string }>({
     status: 'loading',
   });
-  const [role, setRole] = useState<FilmographyRole | 'all'>('all');
+  const [chosenRole, setRole] = useState<FilmographyRole | 'all'>(initialRole ?? 'all');
   const [type, setType] = useState<'all' | 'movie' | 'series'>('all');
 
   useEffect(() => {
@@ -58,23 +61,13 @@ export const FilmographyDialog: React.FC<{
     for (const work of works) for (const r of work.roles) counts.set(r, (counts.get(r) ?? 0) + 1);
     return [...counts.entries()].sort((a, b) => b[1] - a[1]);
   }, [works]);
+  // A role they do not hold would show nothing; All then.
+  const role = chosenRole === 'all' || roles.some(([name]) => name === chosenRole) ? chosenRole : 'all';
   const hasSeries = works.some((work) => work.type === 'series');
   const hasMovies = works.some((work) => work.type === 'movie');
   const shown = works.filter(
     (work) => (role === 'all' || work.roles.includes(role)) && (type === 'all' || work.type === type)
   );
-
-  const asItem = (work: FilmographyWork): SearchResponse => ({
-    name: work.title,
-    url: work.imdbId
-      ? `cs3meta://cinemeta/${work.type === 'series' ? 'series' : 'movie'}/${work.imdbId}`
-      : `search://${encodeURIComponent(work.title)}`,
-    apiName: 'Cinemeta',
-    type: (work.type === 'series' ? 'TvSeries' : 'Movie') as TvType,
-    year: work.year,
-    posterUrl: work.posterUrl,
-    imdbId: work.imdbId,
-  });
 
   const open = (work: FilmographyWork) => {
     onClose();

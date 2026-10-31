@@ -35,6 +35,16 @@ export interface SearchScope {
   indexers: string[];
 }
 
+/**
+ * An edit from the search-sources picker: the selection, plus the quick-setup
+ * chips that produced it. The chips are stored with the profile or draft and
+ * never narrow the search themselves (`sourceProfiles.ts`).
+ */
+export interface SearchScopeEdit extends Partial<SearchScope> {
+  languages?: string[];
+  contentTypes?: string[];
+}
+
 /** What one dimension of the scope resolves to against what exists right now. */
 export interface ScopeResolution {
   /** True when the user narrowed this dimension at all. */

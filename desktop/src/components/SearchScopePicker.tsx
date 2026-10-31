@@ -23,14 +23,23 @@ import { healthIndex, type ProviderHealth } from './search/providerHealth';
 import {
   areAllFilteredSelected,
   calculateSelectionImpact,
+  EMPTY_INTENT,
   excludeSection,
   getFilteredMembers,
   includeSection,
+  intentFromSnapshot,
+  isIntentEmpty,
+  matchingPreset,
+  presetIntent,
+  providersForIntent,
   stateOf,
+  toggleIntent,
+  type BuiltInPreset,
   type ChosenSource,
   type Facets,
   type FacetSelection,
   type Row,
+  type ScopeIntent,
 } from './search/sourceScopeModel';
 
 /**
@@ -123,7 +132,14 @@ export const SearchScopePicker: React.FC<SearchScopePickerProps> = ({
   const [query, setQuery] = useState('');
   const deferredQuery = useDeferredValue(query);
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
+  /**
+   * The Customize view's filters: which rows the list shows. Nothing else.
+   * Ticking one used to rewrite the selection, so filtering the list by Hindi
+   * to look at it replaced a hand-picked set with every Hindi provider.
+   */
   const [facets, setFacets] = useState<FacetSelection>(EMPTY_SELECTION);
+  /** Quick setup's chips, as stored with the profile or draft. */
+  const [intent, setIntent] = useState<ScopeIntent>(EMPTY_INTENT);
 
   /** The scope as it was when the dialog opened, to detect a real change on close. */
   const openedWith = useRef<string>('');
@@ -214,7 +230,7 @@ export const SearchScopePicker: React.FC<SearchScopePickerProps> = ({
   }, [open]);
 
   /**
-   * Saved source sets, and which one is driving the search.
+   * Saved source lists, and which one is driving the search.
    *
    * Held here rather than inside `SourceProfileBar` for the same reason every
    * other list in this component is: the bar is presentation, and the selection
@@ -225,7 +241,13 @@ export const SearchScopePicker: React.FC<SearchScopePickerProps> = ({
   const adult = useAdultMode();
   const [profiles, setProfiles] = useState<ProfileSummary[]>([]);
   const [activeProfile, setActiveProfile] = useState<string>('all');
+  const [defaultProfile, setDefaultProfile] = useState<string | undefined>();
   const [draftCount, setDraftCount] = useState(0);
+  /** The unnamed selection itself: the profile bar offers to save it only when no profile holds it already. */
+  const [draftSelection, setDraftSelection] = useState<{ providers: string[]; indexers: string[] }>({
+    providers: [],
+    indexers: [],
+  });
 
   const [pendingImpact, setPendingImpact] = useState<PendingImpactConfirmation | null>(null);
   const pendingCommitRef = useRef<(() => void) | null>(null);
@@ -257,31 +279,6 @@ export const SearchScopePicker: React.FC<SearchScopePickerProps> = ({
     setPendingImpact(null);
   }, []);
 
-  const inferFacetsForProviders = useCallback(
-    (providerNames: string[] | Set<string>) => {
-      const names = new Set(providerNames);
-      const languages = new Set<string>();
-      const types = new Set<string>();
-
-      for (const repo of repositories) {
-        for (const ext of repo.extensions) {
-          for (const p of ext.providers) {
-            if (names.has(p.name)) {
-              const lang = p.lang ?? ext.language;
-              if (lang) languages.add(lang);
-              for (const t of p.supportedTypes ?? []) {
-                types.add(t);
-              }
-            }
-          }
-        }
-      }
-
-      return { languages, types };
-    },
-    [repositories]
-  );
-
   /**
    * Applies a profile answer to everything on screen.
    *
@@ -295,13 +292,21 @@ export const SearchScopePicker: React.FC<SearchScopePickerProps> = ({
       ok?: boolean;
       profiles?: ProfileSummary[];
       activeId?: string;
-      draft?: { providers?: string[]; indexers?: string[] };
+      defaultId?: string;
+      draft?: {
+        providers?: string[];
+        indexers?: string[];
+        languages?: string[];
+        contentTypes?: string[];
+      };
     } | undefined) => {
       if (!snapshot?.ok) return;
       setProfiles(snapshot.profiles ?? []);
       setActiveProfile(snapshot.activeId ?? 'all');
+      setDefaultProfile(snapshot.defaultId);
       const draft = snapshot.draft ?? {};
       setDraftCount((draft.providers?.length ?? 0) + (draft.indexers?.length ?? 0));
+      setDraftSelection({ providers: draft.providers ?? [], indexers: draft.indexers ?? [] });
 
       const active = (snapshot.profiles ?? []).find((p) => p.id === snapshot.activeId);
       const scoped =
@@ -310,20 +315,11 @@ export const SearchScopePicker: React.FC<SearchScopePickerProps> = ({
           : active ?? { providers: draft.providers ?? [], indexers: draft.indexers ?? [] };
       setProviders(new Set(scoped.providers));
       setChosenIndexers(new Set(scoped.indexers));
-
-      // Clear leftover selections when All sources is active, or reflect active profile's facets
-      if (snapshot.activeId === 'all') {
-        setFacets(EMPTY_SELECTION);
-      } else if (scoped.providers.length > 0) {
-        const inferred = inferFacetsForProviders(scoped.providers);
-        setFacets({
-          kinds: new Set(),
-          languages: inferred.languages,
-          types: inferred.types,
-        });
-      }
+      // The chips as they were stored. A selection made by hand has none, and
+      // shows none: guessing them from its providers lit up chips nobody chose.
+      setIntent(intentFromSnapshot(snapshot));
     },
-    [inferFacetsForProviders]
+    []
   );
 
   useEffect(() => {
@@ -347,15 +343,28 @@ export const SearchScopePicker: React.FC<SearchScopePickerProps> = ({
     });
   }, [open]);
 
+  /**
+   * Saves a selection, with the chips that produced it.
+   *
+   * `nextIntent` defaults to none: every edit made source by source (a tick in
+   * the tree, select filtered, invert) leaves a selection the chips no longer
+   * describe, and keeping them would show "Hindi" over a hand-picked set.
+   */
   const persist = useCallback(
-    (nextProviders: Set<string>, nextIndexers: Set<string>) => {
+    (nextProviders: Set<string>, nextIndexers: Set<string>, nextIntent: ScopeIntent = EMPTY_INTENT) => {
       setProviders(nextProviders);
       setChosenIndexers(nextIndexers);
+      setIntent(nextIntent);
       // Goes through the profile layer, which decides whether this edits the
       // active profile or forks to the unnamed draft, then writes the effective
       // scope through to the store every search path already reads.
       void window.cloudstream
-        ?.setSearchScope({ providers: [...nextProviders], indexers: [...nextIndexers] })
+        ?.setSearchScope({
+          providers: [...nextProviders],
+          indexers: [...nextIndexers],
+          languages: [...nextIntent.languages],
+          contentTypes: [...nextIntent.types],
+        })
         .then(() => window.cloudstream?.listSourceProfiles?.().then(applyProfiles));
     },
     [applyProfiles]
@@ -406,125 +415,6 @@ export const SearchScopePicker: React.FC<SearchScopePickerProps> = ({
     return { providers: providerNames, indexers: indexers.map((i) => i.id) };
   }, [repositories, indexers]);
 
-  const resolveBuiltInSelection = useCallback(
-    (id: string): { providers: Set<string>; indexers: Set<string> } => {
-      if (id === 'all') {
-        return { providers: new Set(), indexers: new Set() };
-      }
-      const provs = new Set<string>();
-      for (const repo of repositories) {
-        for (const ext of repo.extensions) {
-          for (const p of ext.providers) {
-            if (!isSelectable(p)) continue;
-            const lang = (p.lang ?? ext.language ?? '').toLowerCase();
-            const types = (p.supportedTypes ?? []).map((t) => t.toLowerCase());
-            if (id === 'builtin:english') {
-              if (lang.startsWith('en')) provs.add(p.name);
-            } else if (id === 'builtin:hindi') {
-              if (lang.startsWith('hi') || lang === 'hin') provs.add(p.name);
-            } else if (id === 'builtin:anime') {
-              if (types.includes('anime') || p.name.toLowerCase().includes('anime')) {
-                provs.add(p.name);
-              }
-            } else if (id === 'builtin:drama') {
-              if (
-                types.some((t) => t.includes('drama') || t.includes('asian')) ||
-                p.name.toLowerCase().includes('drama')
-              ) {
-                provs.add(p.name);
-              }
-            } else if (id === 'builtin:nsfw') {
-              if (types.includes('nsfw') || adult.adultProviders.has(p.name)) {
-                provs.add(p.name);
-              }
-            }
-          }
-        }
-      }
-      return { providers: provs, indexers: new Set() };
-    },
-    [repositories, adult]
-  );
-
-  const builtInProfiles = useMemo<BuiltInProfileDef[]>(() => {
-    let enCount = 0;
-    let hiCount = 0;
-    let animeCount = 0;
-    let dramaCount = 0;
-    let nsfwCount = 0;
-
-    for (const repo of repositories) {
-      for (const ext of repo.extensions) {
-        for (const p of ext.providers) {
-          if (!isSelectable(p)) continue;
-          const lang = (p.lang ?? ext.language ?? '').toLowerCase();
-          const types = (p.supportedTypes ?? []).map((t) => t.toLowerCase());
-
-          if (lang.startsWith('en')) enCount++;
-          if (lang.startsWith('hi') || lang === 'hin') hiCount++;
-          if (types.includes('anime') || p.name.toLowerCase().includes('anime')) animeCount++;
-          if (
-            types.some((t) => t.includes('drama') || t.includes('asian')) ||
-            p.name.toLowerCase().includes('drama')
-          ) {
-            dramaCount++;
-          }
-          if (types.includes('nsfw') || adult.adultProviders.has(p.name)) nsfwCount++;
-        }
-      }
-    }
-
-    const list: BuiltInProfileDef[] = [
-      {
-        id: 'all',
-        name: 'All sources',
-        description: 'Search every enabled extension and torrent source installed on your app.',
-        icon: 'globe',
-        count: universe.providers.length + universe.indexers.length,
-      },
-      {
-        id: 'builtin:english',
-        name: 'English',
-        description: 'Prioritize extensions and providers providing English-language content.',
-        icon: 'languages',
-        count: enCount,
-      },
-      {
-        id: 'builtin:hindi',
-        name: 'Hindi',
-        description: 'Prioritize extensions and providers providing Hindi-language content.',
-        icon: 'languages',
-        count: hiCount,
-      },
-      {
-        id: 'builtin:anime',
-        name: 'Anime',
-        description: 'Focus on dedicated anime extensions and streaming providers.',
-        icon: 'sparkles',
-        count: animeCount,
-      },
-      {
-        id: 'builtin:drama',
-        name: 'Asian Drama',
-        description: 'Focus on Asian drama, K-drama, and C-drama providers.',
-        icon: 'clapperboard',
-        count: dramaCount,
-      },
-    ];
-
-    if (adult.allowed) {
-      list.push({
-        id: 'builtin:nsfw',
-        name: 'NSFW (18+)',
-        description: 'Focus on adult and 18+ content providers.',
-        icon: 'shield',
-        count: nsfwCount,
-      });
-    }
-
-    return list;
-  }, [repositories, universe, adult]);
-
   /**
    * The facet values that actually exist, counted from what is installed.
    *
@@ -553,8 +443,51 @@ export const SearchScopePicker: React.FC<SearchScopePickerProps> = ({
     return {
       types: [...types.entries()].sort(byCount).map(([value]) => value),
       languages: [...languages.entries()].sort(byCount).map(([value]) => value),
+      typeCounts: Object.fromEntries(types),
+      languageCounts: Object.fromEntries(languages),
     };
   }, [repositories, adult.allowed]);
+
+  /** The ready-made setups. NSFW only while adult content is allowed at all. */
+  const presets = useMemo<BuiltInPreset[]>(
+    () =>
+      adult.allowed
+        ? ['english', 'hindi', 'anime', 'drama', 'nsfw']
+        : ['english', 'hindi', 'anime', 'drama'],
+    [adult.allowed]
+  );
+
+  /**
+   * Each preset is a set of chips (`presetIntent`), counted by the same rule
+   * that resolves it, so the number on the card is the number it selects.
+   */
+  const builtInProfiles = useMemo<BuiltInProfileDef[]>(() => {
+    const described: Record<BuiltInPreset, Pick<BuiltInProfileDef, 'name' | 'description' | 'icon'>> = {
+      english: { name: 'English', description: 'Only sources in English.', icon: 'languages' },
+      hindi: { name: 'Hindi', description: 'Only sources in Hindi.', icon: 'languages' },
+      anime: {
+        name: 'Anime',
+        description: 'Only sources that carry anime series, films or OVAs.',
+        icon: 'sparkles',
+      },
+      drama: { name: 'Asian Drama', description: 'Only sources that carry Asian drama.', icon: 'clapperboard' },
+      nsfw: { name: 'NSFW (18+)', description: 'Only adult (18+) sources.', icon: 'shield' },
+    };
+    return [
+      {
+        id: 'all',
+        name: 'All sources',
+        description: 'Search every enabled extension and torrent source installed on your app.',
+        icon: 'globe',
+        count: universe.providers.length + universe.indexers.length,
+      },
+      ...presets.map((preset) => ({
+        id: `builtin:${preset}`,
+        ...described[preset],
+        count: providersForIntent(repositories, presetIntent(preset, available), isSelectable).size,
+      })),
+    ];
+  }, [repositories, universe, available, presets]);
 
   const facetsActive =
     facets.types.size > 0 || facets.languages.size > 0 || facets.kinds.size > 0;
@@ -589,52 +522,67 @@ export const SearchScopePicker: React.FC<SearchScopePickerProps> = ({
     facets.types.size === 0 &&
     facets.languages.size === 0;
 
-  const toggleFacet = useCallback(
-    (group: keyof FacetSelection, value: string) => {
-      setFacets((current) => {
-        const next: FacetSelection = {
-          types: new Set(current.types),
-          languages: new Set(current.languages),
-          kinds: new Set(current.kinds),
-        };
-        const bucket = next[group] as Set<string>;
-        if (bucket.has(value)) bucket.delete(value);
-        else bucket.add(value);
+  /** A Customize filter chip: shows or hides rows, and selects nothing. */
+  const toggleFacet = useCallback((group: keyof FacetSelection, value: string) => {
+    setFacets((current) => {
+      const bucket = new Set(current[group] as Set<string>);
+      if (bucket.has(value)) bucket.delete(value);
+      else bucket.add(value);
+      return { ...current, [group]: bucket };
+    });
+  }, []);
 
-        // When toggling language or content in quick setup, also update the participating providers
-        if (group === 'languages' || group === 'types') {
-          if (next.languages.size === 0 && next.types.size === 0) {
-            persist(new Set(), new Set());
-            setActiveProfile('all');
-          } else {
-            const matchingProviders = new Set<string>();
-            for (const repo of repositories) {
-              for (const ext of repo.extensions) {
-                for (const p of ext.providers) {
-                  if (!isSelectable(p)) continue;
-                  const lang = p.lang ?? ext.language;
-                  const types = p.supportedTypes ?? [];
+  /**
+   * A quick-setup chip: searches the sources that match the chips now ticked.
+   *
+   * Only the pressed chip changes. A combination nothing installed matches is
+   * refused with a reason rather than saved, because an empty selection means
+   * "search everything", the opposite of what was asked.
+   */
+  const toggleIntentChip = useCallback(
+    (group: 'languages' | 'types', value: string) => {
+      const next = toggleIntent(intent, group, value);
 
-                  const matchesLang =
-                    next.languages.size === 0 || (lang !== undefined && next.languages.has(lang));
-                  const matchesType =
-                    next.types.size === 0 || types.some((t) => next.types.has(t));
-
-                  if (matchesLang && matchesType) {
-                    matchingProviders.add(p.name);
-                  }
-                }
-              }
-            }
-            persist(matchingProviders, chosenIndexers);
-            setActiveProfile('');
-          }
+      if (isIntentEmpty(next)) {
+        persist(new Set(), chosenIndexers);
+        if (activeProfile === '') {
+          void window.cloudstream?.activateSourceProfile?.('all').then(applyProfiles);
         }
+        return;
+      }
 
-        return next;
-      });
+      const target = providersForIntent(repositories, next, isSelectable);
+      if (target.size === 0) {
+        triggerFeedback('No installed source matches that combination.');
+        return;
+      }
+
+      // Chips over a hand-picked selection start a new one; say so first when
+      // it throws away more than a couple of picks.
+      const handPicked = isIntentEmpty(intent) && providers.size > 0;
+      if (handPicked) {
+        applyWithImpactCheck(
+          'Replace your hand-picked sources',
+          `This replaces the ${providers.size} sources you picked in Customize sources with the ${target.size} that match.`,
+          target,
+          chosenIndexers,
+          () => persist(target, chosenIndexers, next)
+        );
+        return;
+      }
+      persist(target, chosenIndexers, next);
     },
-    [repositories, chosenIndexers, persist]
+    [
+      intent,
+      providers,
+      repositories,
+      chosenIndexers,
+      activeProfile,
+      persist,
+      applyProfiles,
+      applyWithImpactCheck,
+      triggerFeedback,
+    ]
   );
 
   /**
@@ -1063,11 +1011,18 @@ export const SearchScopePicker: React.FC<SearchScopePickerProps> = ({
     );
   }, [totalChosen, applyWithImpactCheck, applyProfiles]);
 
+  /**
+   * The preset the unnamed selection currently is, if any. Derived from the
+   * stored chips on every render, so the pill stays lit after the save that
+   * follows a click (it used to go dark the moment the reply came back).
+   */
+  const activePreset = activeProfile === '' ? matchingPreset(intent, presets, available) : undefined;
+
   const handleActivateProfile = useCallback(
     (id: string) => {
-      // Switching profiles should be smooth and direct. Only warn/confirm if the user
-      // has an active unsaved draft selection (activeProfile === '') that would be discarded.
-      const hasUnsavedDraft = draftCount > 0 && activeProfile === '';
+      // Only an unsaved selection someone built is worth a confirmation; a
+      // preset can be picked again in one click.
+      const hasUnsavedDraft = draftCount > 0 && activeProfile === '' && !activePreset;
 
       if (id === 'all') {
         if (hasUnsavedDraft) {
@@ -1096,85 +1051,101 @@ export const SearchScopePicker: React.FC<SearchScopePickerProps> = ({
       }
 
       if (id.startsWith('builtin:')) {
-        const target = resolveBuiltInSelection(id);
-        const builtinDef = builtInProfiles.find((b) => b.id === id);
-        const name = builtinDef?.name ?? 'Built-in profile';
-        const inferred = inferFacetsForProviders(target.providers);
+        const preset = id.slice('builtin:'.length) as BuiltInPreset;
+        const nextIntent = presetIntent(preset, available);
+        const target = providersForIntent(repositories, nextIntent, isSelectable);
+        const name = builtInProfiles.find((b) => b.id === id)?.name ?? 'Built-in source list';
+        if (target.size === 0) {
+          triggerFeedback(`No installed source matches “${name}”.`);
+          return;
+        }
+        /*
+         * A preset is a starting point, not an edit to the profile on screen.
+         * Saved while a named profile was active, it overwrote that profile
+         * (`edit` writes into whatever is active), so it goes to the draft.
+         */
+        const apply = () => {
+          const named = activeProfile !== '' && activeProfile !== 'all';
+          const ready = named
+            ? window.cloudstream?.activateSourceProfile?.('') ?? Promise.resolve(undefined)
+            : Promise.resolve(undefined);
+          void ready.then(() => persist(target, new Set(), nextIntent));
+        };
 
         if (hasUnsavedDraft) {
           applyWithImpactCheck(
-            `Switch to profile “${name}”`,
-            `This will replace your current unsaved selection with ${name} (${target.providers.size} sources).`,
-            target.providers,
-            target.indexers,
-            () => {
-              persist(target.providers, target.indexers);
-              setActiveProfile(id);
-              setFacets({
-                kinds: new Set(),
-                languages: inferred.languages,
-                types: inferred.types,
-              });
-            },
-            `Switched to profile “${name}”.`
+            `Switch to “${name}”`,
+            `This will replace your current unsaved selection with ${name} (${target.size} sources).`,
+            target,
+            new Set(),
+            apply,
+            `Switched to “${name}”.`
           );
         } else {
-          persist(target.providers, target.indexers);
-          setActiveProfile(id);
-          setFacets({
-            kinds: new Set(),
-            languages: inferred.languages,
-            types: inferred.types,
-          });
-          triggerFeedback(`Switched to profile “${name}”.`);
+          apply();
+          triggerFeedback(`Switched to “${name}”.`);
         }
         return;
       }
 
+      // A saved profile brings its own chips back with it (`applyProfiles`).
       const custom = profiles.find((p) => p.id === id);
       const targetProv = new Set(custom?.providers ?? []);
       const targetIdx = new Set(custom?.indexers ?? []);
-      const inferred = inferFacetsForProviders(custom?.providers ?? []);
 
       if (hasUnsavedDraft) {
         applyWithImpactCheck(
-          `Switch to profile “${custom?.name ?? 'profile'}”`,
+          `Switch to “${custom?.name ?? 'the source list'}”`,
           `This will replace your current unsaved selection with “${custom?.name}”.`,
           targetProv,
           targetIdx,
           () => {
-            setFacets({
-              kinds: new Set(),
-              languages: inferred.languages,
-              types: inferred.types,
-            });
             void window.cloudstream?.activateSourceProfile?.(id).then(applyProfiles);
           },
-          `Switched to profile “${custom?.name}”.`
+          `Switched to “${custom?.name}”.`
         );
       } else {
-        setFacets({
-          kinds: new Set(),
-          languages: inferred.languages,
-          types: inferred.types,
-        });
         void window.cloudstream?.activateSourceProfile?.(id).then(applyProfiles);
-        triggerFeedback(`Switched to profile “${custom?.name}”.`);
+        triggerFeedback(`Switched to “${custom?.name}”.`);
       }
     },
     [
       draftCount,
       activeProfile,
+      activePreset,
       applyWithImpactCheck,
       applyProfiles,
       triggerFeedback,
-      resolveBuiltInSelection,
+      available,
+      repositories,
       builtInProfiles,
-      inferFacetsForProviders,
       persist,
       profiles,
     ]
   );
+
+  /**
+   * Writes the selection on screen into an existing profile: the viewer chose
+   * Replace after naming a new profile with that profile's name. Activated
+   * first, because an edit lands in whatever is active (`sourceProfiles.edit`).
+   */
+  const handleReplaceProfile = useCallback(
+    (id: string) => {
+      const keep = { providers: new Set(providers), indexers: new Set(chosenIndexers), intent };
+      const name = profiles.find((p) => p.id === id)?.name ?? 'the source list';
+      void window.cloudstream?.activateSourceProfile?.(id).then(() => {
+        persist(keep.providers, keep.indexers, keep.intent);
+        triggerFeedback(`Saved to “${name}”.`);
+      });
+    },
+    [providers, chosenIndexers, intent, profiles, persist, triggerFeedback]
+  );
+
+  /** What ticking a filter changes, said once beside the filters (`sourceProfiles.edit`). */
+  const activeSet = profiles.find((p) => p.id === activeProfile);
+  const editNote = activeSet
+    ? `Changes are saved to “${activeSet.name}”.`
+    : 'Changes stay unsaved until you save them as a source list.';
 
   const label =
     totalChosen === 0
@@ -1210,6 +1181,9 @@ export const SearchScopePicker: React.FC<SearchScopePickerProps> = ({
         <SourceScopeDialog
           rows={rows}
           available={available}
+          intent={intent}
+          onToggleIntent={toggleIntentChip}
+          handPicked={isIntentEmpty(intent) && providers.size > 0}
           facets={facets}
           facetsActive={facetsActive}
           onToggleFacet={toggleFacet}
@@ -1254,22 +1228,30 @@ export const SearchScopePicker: React.FC<SearchScopePickerProps> = ({
           onCancelImpact={handleCancelImpact}
           feedbackToast={feedbackToast}
           onDismissFeedback={handleDismissFeedback}
+          editNote={editNote}
           profileBar={
             <SourceProfileBar
               profiles={profiles}
               builtInProfiles={builtInProfiles}
-              activeId={activeProfile}
-              hasDraft={draftCount > 0}
-              draftCount={draftCount}
+              activeId={activePreset ? `builtin:${activePreset}` : activeProfile}
+              draft={draftSelection}
               onActivate={handleActivateProfile}
               onCreate={(name) =>
-                void window.cloudstream?.createSourceProfile?.(name).then(applyProfiles)
+                void window.cloudstream?.createSourceProfile?.(name).then((snapshot) => {
+                  applyProfiles(snapshot);
+                  if (snapshot?.ok) triggerFeedback(`Saved as “${name}”.`);
+                })
               }
+              onReplace={handleReplaceProfile}
               onRename={(id, name) =>
                 void window.cloudstream?.renameSourceProfile?.(id, name).then(applyProfiles)
               }
               onDuplicate={(id) =>
                 void window.cloudstream?.duplicateSourceProfile?.(id).then(applyProfiles)
+              }
+              defaultId={defaultProfile}
+              onSetDefault={(id) =>
+                void window.cloudstream?.setDefaultSourceProfile?.(id).then(applyProfiles)
               }
               onDelete={(id) =>
                 void window.cloudstream?.deleteSourceProfile?.(id).then(applyProfiles)

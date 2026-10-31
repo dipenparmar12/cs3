@@ -18,6 +18,7 @@ import type { PlayedSource } from '../types/library';
 import type { TorrentResult } from '../types/torrent';
 import {
   Trash2,
+  X,
   Star,
   Clock,
   Play,
@@ -30,7 +31,7 @@ import {
   CheckSquare,
 } from 'lucide-react';
 import type { SearchResponse } from '../types/api';
-import { TvType } from '../types/api';
+import { BUCKET_LABELS, BUCKET_ORDER, TvType } from '../types/api';
 import type { LibraryEntry, WatchProgress, WatchStatus } from '../../electron/cs3/libraryStore';
 import type { Bookmark } from '../../electron/cs3/bookmarkStore';
 import { Poster } from '../components/Poster';
@@ -82,13 +83,10 @@ interface LibraryViewProps {
  */
 type LibraryMode = 'watching' | 'saved' | 'searches';
 
-const BUCKETS: Array<{ status: WatchStatus; label: string }> = [
-  { status: 'Watching', label: 'Watching' },
-  { status: 'Completed', label: 'Completed' },
-  { status: 'OnHold', label: 'On hold' },
-  { status: 'PlanToWatch', label: 'Plan to watch' },
-  { status: 'Dropped', label: 'Dropped' },
-];
+const BUCKETS: Array<{ status: WatchStatus; label: string }> = BUCKET_ORDER.map((status) => ({
+  status,
+  label: BUCKET_LABELS[status],
+}));
 
 /** What a shelf entry is found by: the names it goes by and what it is. */
 const entryMatches = (entry: LibraryEntry, query: string) =>
@@ -676,6 +674,40 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
                       </button>
                     </div>
                   )}
+                  {/*
+                    Remove without entering selection mode, and the saved sources
+                    one press away. Both sit on the poster so every card keeps the
+                    same height: the sources line under the title used to push the
+                    actions row out through the card's border.
+                  */}
+                  {!selection.active && (
+                    <button
+                      type="button"
+                      className="library-card__remove"
+                      aria-label={`Remove ${entry.title} from library`}
+                      title="Remove from library"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        remove(entry);
+                      }}
+                    >
+                      <X size={14} aria-hidden />
+                    </button>
+                  )}
+                  {!selection.active && entry.sources && entry.sources.length > 0 && (
+                    <button
+                      type="button"
+                      className="library-card__sources-chip"
+                      aria-label={`${entry.sources.length} saved sources for ${entry.title}`}
+                      title="View saved sources"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setSourcesModalEntry(entry);
+                      }}
+                    >
+                      <Database size={11} aria-hidden /> {entry.sources.length}
+                    </button>
+                  )}
                   {percent > 0 && (
                     <div className="poster-progress">
                       <div style={{ width: `${Math.min(100, percent)}%` }} />
@@ -701,24 +733,6 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
                     </div>
                   )}
 
-                  {entry.sources && entry.sources.length > 0 && (
-                    <div style={{ marginTop: '0.2rem' }}>
-                      <Button
-                        size="compact"
-                        variant="ambient"
-                        icon={Database}
-                        className="library-card__sources"
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          setSourcesModalEntry(entry);
-                        }}
-                        title="View saved sources"
-                      >
-                        {entry.sources.length} saved sources
-                      </Button>
-                    </div>
-                  )}
-
                   <div className="library-card__actions">
                     <Select
                       size="compact"
@@ -740,14 +754,6 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
                       <RotateCw size={13} className={refreshingKey === entry.key ? 'animate-spin' : ''} />
                     </button>
 
-                    <button
-                      className="icon-button"
-                      onClick={() => remove(entry)}
-                      aria-label={`Remove ${entry.title}`}
-                      title="Remove from library"
-                    >
-                      <Trash2 size={14} />
-                    </button>
                   </div>
                 </div>
               </div>
@@ -784,6 +790,10 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
               <Button
                 variant="prominent"
                 icon={ExternalLink}
+                // An entry added before its page address was recorded has none;
+                // the button used to close the dialog and open nothing.
+                disabled={sourcesModalEntry.urls.length === 0}
+                title={sourcesModalEntry.urls.length === 0 ? 'No page address was saved for this title' : undefined}
                 onClick={() => {
                   openEntry(sourcesModalEntry);
                   setSourcesModalEntry(null);

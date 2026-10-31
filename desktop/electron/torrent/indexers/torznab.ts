@@ -1,5 +1,5 @@
 import { fetchText } from '../http.ts';
-import { parseIntSafe, parseSize, lazyXmlParser, type RawTorrent, type TorrentIndexer } from './base.ts';
+import { parseIntSafe, parseCount, parseSize, lazyXmlParser, type RawTorrent, type TorrentIndexer } from './base.ts';
 import type { IndexerConfig, IndexerQuery } from '../../../src/types/torrent.ts';
 
 /**
@@ -154,7 +154,7 @@ export class TorznabIndexer implements TorrentIndexer {
           magnet,
           torrentUrl,
           sizeBytes: size,
-          seeders: parseIntSafe(attrs.seeders),
+          seeders: parseCount(attrs.seeders),
           // Torznab reports `peers` as the total swarm; leechers = peers - seeders.
           leechers: Math.max(0, parseIntSafe(attrs.peers) - parseIntSafe(attrs.seeders)),
           publishedAt: Number.isNaN(published) ? undefined : published,

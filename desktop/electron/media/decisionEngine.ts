@@ -366,9 +366,17 @@ export function languagesMatch(lang1?: string, lang2?: string): boolean {
  */
 export function selectAudioTrack(
   audio: AudioStreamMetadata[],
-  preferredLanguage?: string
+  preferredLanguage?: string,
+  preferredIndex?: number
 ): AudioStreamMetadata | null {
   if (audio.length === 0) return null;
+
+  // 0. The track picked from the player's menu. An index, because a language
+  // cannot name the second of two English tracks, or either of two untagged.
+  if (preferredIndex !== undefined) {
+    const picked = audio.find((track) => track.index === preferredIndex);
+    if (picked) return picked;
+  }
 
   // 1. User preferred language matching
   if (preferredLanguage) {
@@ -608,10 +616,11 @@ function decideBrowserStrategy(
   capabilities: RendererCapabilities | null,
   host: HostEncodeCapability,
   drm: DrmConfiguration,
-  preferredAudioLanguage?: string
+  preferredAudioLanguage?: string,
+  preferredAudioIndex?: number
 ): StrategyDecision {
   const video = metadata.video;
-  const track = selectAudioTrack(metadata.audio, preferredAudioLanguage);
+  const track = selectAudioTrack(metadata.audio, preferredAudioLanguage, preferredAudioIndex);
   const audioIndex = track?.index ?? -1;
 
   const hasTextSubtitles = metadata.subtitles.some((sub) => isTextSubtitle(sub.codec));
@@ -788,11 +797,13 @@ function decideBrowserStrategy(
    * `withSegmentStreams` did; the first track still goes to hls.js untouched.
    */
   /*
-   * The same holds for a progressive file with several audio tracks: Chromium
-   * exposes no audio-track API, so the element plays the file's default track
-   * whatever is wanted. Handing it over while the player's menu named the
-   * remembered language was "I chose Hindi and it plays English" after every
-   * source switch and resume. Any other track is remuxed in.
+   * The same holds for a progressive file with several audio tracks: the
+   * element starts on the file's default track whatever is wanted. Handing it
+   * over while the player's menu named the remembered language was "I chose
+   * Hindi and it plays English" after every source switch and resume. Any
+   * other track is remuxed in. (With `AudioVideoTracks` on, `main.ts`, the
+   * element can switch once playing; the player does that for a menu pick, but
+   * the first frame would still be in the default language.)
    */
   const defaultAudioIndex = (metadata.audio.find((a) => a.isDefault) ?? metadata.audio[0])?.index ?? 0;
   const elementCannotPick =
@@ -1107,7 +1118,9 @@ export function decideStrategy(
    */
   drm: DrmConfiguration = NO_DRM,
   native: NativeEngineCapability = NO_NATIVE_ENGINE,
-  preferredAudioLanguage?: string
+  preferredAudioLanguage?: string,
+  /** The player menu's pick, an index into `metadata.audio`; outranks the language. */
+  preferredAudioIndex?: number
 ): StrategyDecision {
   const browser = decideBrowserStrategy(
     metadata,
@@ -1115,7 +1128,8 @@ export function decideStrategy(
     capabilities,
     host,
     drm,
-    preferredAudioLanguage
+    preferredAudioLanguage,
+    preferredAudioIndex
   );
   const decision = withFfmpegExtras(browser, metadata, drm, transport);
   if (!shouldRouteToNativeEngine(decision, metadata, native)) return decision;

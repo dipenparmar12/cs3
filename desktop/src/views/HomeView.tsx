@@ -266,7 +266,8 @@ export const HomeView: React.FC<HomeViewProps> = ({
       filteredSections
         .map((section) => ({
           ...section,
-          items: section.items.filter((item) => matchesTab(item, activeTab)),
+          // A live row on Home is one the viewer chose to show; All keeps it.
+          items: section.items.filter((item) => matchesTab(item, activeTab, { ownTabRowsInAll: true })),
         }))
         .filter((section) => section.items.length > 0),
     [filteredSections, activeTab]

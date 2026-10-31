@@ -5,6 +5,7 @@ import type {
   MediaTransport,
   NativeEngineCapability,
   PlaybackDiagnosticEvent,
+  PlaybackRuntimeReport,
   PlaybackStreamRequest,
   PlaybackStreamResponse,
   ProbeFailure,
@@ -21,11 +22,19 @@ import {
   planForAudioTrack,
 } from './decisionEngine.ts';
 import { MediaInspector, drmRequiresEme, transportFromUrl } from './mediaInspector.ts';
-import { SourceLease } from './sourceLease.ts';
+import { SourceLease, type ResolvedSource } from './sourceLease.ts';
 import { drmFromProvider } from '../cs3/providerLinks.ts';
 import { describeError } from '../../src/utils/errors.ts';
 import type { InspectionStore } from './inspectionStore.ts';
 import { scopedLogger } from '../logging/logger.ts';
+import {
+  PlaybackTelemetryStore,
+  sessionTelemetry,
+  withRuntime,
+  type PlaybackTelemetryRecord,
+  type PlaybackTerminalState,
+  type TelemetrySummary,
+} from './playbackTelemetry.ts';
 
 const log = scopedLogger('playback');
 
@@ -95,6 +104,14 @@ export interface PlaybackEngineDeps {
   fetchBytes?: (url: string, bytes: number) => Promise<Uint8Array | null>;
   /** Asks the source itself why it could not be read. See `main.ts`. */
   describeUnreadable: (url: string) => Promise<ProbeFailure>;
+  /** Stamped on every telemetry record; `app.getVersion()` in `main.ts`. */
+  appVersion?: string;
+  /**
+   * How to ask the provider for a fresh copy of an expired link, when one
+   * produced it (`ContentService.linkResolver`). Without it a lease never
+   * refreshes, and a signed link that expires mid-film stops the film.
+   */
+  refreshResolver?: (originUrl: string) => (() => Promise<ResolvedSource>) | undefined;
   diagnostics: {
     record(entry: {
       level: 'error' | 'warn' | 'info';
@@ -124,6 +141,17 @@ export class PlaybackEngine {
    */
   private sessionTracks = new Map<string, AudioStreamMetadata[]>();
   private nextSession = 1;
+  /**
+   * PRD-40.1 per-session records (`playback_session_telemetry` in the log).
+   *
+   * A prepare that fails is a session that ended there (`fatal-error`). One that
+   * succeeds stays open until `close`, or until the next prepare replaces it
+   * (`engine-switch`): the renderer never calls `media:closeStream`, so without
+   * that rule no successful session would ever be recorded. Completion is not
+   * claimed, because this engine never learns that a film ended.
+   */
+  private telemetry = new PlaybackTelemetryStore();
+  private openTelemetry = new Map<string, PlaybackTelemetryRecord>();
 
   private deps: PlaybackEngineDeps;
 
@@ -173,6 +201,32 @@ export class PlaybackEngine {
     return sessionId ? this.events.filter((e) => e.sessionId === sessionId) : [...this.events];
   }
 
+  public getTelemetry(): PlaybackTelemetryRecord[] {
+    return this.telemetry.getRecords();
+  }
+
+  public getTelemetrySummary(): TelemetrySummary {
+    return this.telemetry.getSummary();
+  }
+
+  /** The renderer's measurements for a session, which also end it. */
+  public reportPlayback(telemetryId: string, report: PlaybackRuntimeReport): void {
+    const open = this.openTelemetry.get(telemetryId);
+    if (open) {
+      this.openTelemetry.delete(telemetryId);
+      this.telemetry.record(withRuntime(open, report, true));
+      return;
+    }
+    this.telemetry.amend(telemetryId, (record) => withRuntime(record, report, false));
+  }
+
+  private finishTelemetry(key: string, terminal: PlaybackTerminalState): void {
+    const open = this.openTelemetry.get(key);
+    if (!open) return;
+    this.openTelemetry.delete(key);
+    this.telemetry.record({ ...open, terminalState: terminal });
+  }
+
   private async hostCapability(): Promise<HostEncodeCapability> {
     if (!this.host) this.host = await this.deps.transcoder.hostCapability();
     return this.host;
@@ -198,7 +252,7 @@ export class PlaybackEngine {
   public async inspect(
     request: Pick<
       PlaybackStreamRequest,
-      'url' | 'headers' | 'isM3u8' | 'isDash' | 'drm' | 'refresh' | 'provider' | 'preferredAudioLanguage' | 'avoidNativeEngine'
+      'url' | 'headers' | 'isM3u8' | 'isDash' | 'drm' | 'refresh' | 'provider' | 'preferredAudioLanguage' | 'preferredAudioIndex' | 'avoidNativeEngine'
     >
   ): Promise<SourceCapabilityModel> {
     /**
@@ -238,6 +292,7 @@ export class PlaybackEngine {
         headers: effectiveHeaders,
         provider: request.provider,
       },
+      resolve: this.deps.refreshResolver?.(originUrl),
     });
     const resolvedUrl = await this.deps.proxy.wrapLease(lease, {
       boundedRanges: request.isDash || isYt,
@@ -254,6 +309,7 @@ export class PlaybackEngine {
       originUrl,
       JSON.stringify(effectiveHeaders),
       request.preferredAudioLanguage ?? '',
+      request.preferredAudioIndex ?? '',
       request.avoidNativeEngine ? 'in-app' : '',
     ].join(' ');
 
@@ -266,6 +322,10 @@ export class PlaybackEngine {
       ...request,
       headers: effectiveHeaders,
     });
+
+    // Not remembered when the languages could not be read: asking again, a
+    // moment later, is how a slow first answer gets corrected.
+    if (model.languagesUnverified) return model;
 
     if (this.cache.size >= MAX_CACHED_CAPABILITIES) {
       const oldest = this.cache.keys().next().value;
@@ -334,7 +394,7 @@ export class PlaybackEngine {
   private async measure(
     resolvedUrl: string,
     originUrl: string,
-    request: Pick<PlaybackStreamRequest, 'isM3u8' | 'isDash' | 'drm' | 'headers' | 'preferredAudioLanguage' | 'avoidNativeEngine'>
+    request: Pick<PlaybackStreamRequest, 'isM3u8' | 'isDash' | 'drm' | 'headers' | 'preferredAudioLanguage' | 'preferredAudioIndex' | 'avoidNativeEngine'>
   ): Promise<SourceCapabilityModel> {
     const host = await this.hostCapability();
     const { isM3u8 } = request;
@@ -407,7 +467,10 @@ export class PlaybackEngine {
       ? { ...remembered, error: undefined, timedOut: false, latencyMs: 0 }
       : await this.inspectWithRetry(resolvedUrl, isM3u8);
 
-    if (!remembered && inspection.metadata) {
+    // A playlist whose segments could not be read is a guess, not a measurement
+    // (see `InspectionResult.segmentsUnread`); keeping it would answer "one
+    // language" for this source on every later prepare.
+    if (!remembered && inspection.metadata && !inspection.segmentsUnread) {
       this.deps.inspections?.write(
         originUrl,
         inspection.metadata,
@@ -501,7 +564,8 @@ export class PlaybackEngine {
       host,
       inspection.drm,
       this.deps.nativeEngine(),
-      request.preferredAudioLanguage
+      request.preferredAudioLanguage,
+      request.preferredAudioIndex
     );
 
     return {
@@ -518,6 +582,7 @@ export class PlaybackEngine {
       requiresEmeDecryption: requiresEme,
       explanation: decision.explanation,
       probeLatencyMs: inspection.latencyMs,
+      ...(inspection.segmentsUnread ? { languagesUnverified: true } : {}),
     };
   }
 
@@ -699,13 +764,14 @@ export class PlaybackEngine {
       strategy === 'EME_NATIVE' ||
       strategy === 'NATIVE_MPV'
     ) {
-      this.record(request, capability, strategy, startedAt);
       const sessionMatch = capability.resolvedUrl.match(/\/media\/([^/?#]+)/);
       const sessionId = sessionMatch ? sessionMatch[1] : '';
+      const telemetryId = this.record(request, capability, strategy, startedAt, undefined, sessionId);
       return {
         ok: true,
         playbackUrl: capability.resolvedUrl,
         sessionId,
+        telemetryId,
         capability,
         subtitles: [],
       };
@@ -753,11 +819,12 @@ export class PlaybackEngine {
 
     const sessionId = streamUrl.split('/').pop() ?? '';
     this.sessionTracks.set(sessionId, capability.metadata?.audio ?? []);
-    this.record(request, capability, strategy, startedAt);
+    const telemetryId = this.record(request, capability, strategy, startedAt, undefined, sessionId);
     return {
       ok: true,
       playbackUrl: streamUrl,
       sessionId,
+      telemetryId,
       capability,
       subtitles: this.subtitleTracks(sessionId, capability),
     };
@@ -832,6 +899,7 @@ export class PlaybackEngine {
 
   public close(sessionId: string): void {
     if (!sessionId) return;
+    this.finishTelemetry(sessionId, 'user-abort');
     this.sessionTracks.delete(sessionId);
     this.deps.transcoder.closeSession(sessionId);
   }
@@ -843,8 +911,9 @@ export class PlaybackEngine {
     capability: SourceCapabilityModel,
     strategy: PlaybackDiagnosticEvent['selectedStrategy'],
     startedAt: number,
-    error?: { stage: PlaybackDiagnosticEvent['errorStage']; message: string }
-  ): void {
+    error?: { stage: PlaybackDiagnosticEvent['errorStage']; message: string },
+    sessionId = ''
+  ): string {
     const video = capability.metadata?.video;
     const audio = capability.metadata?.audio.find(
       (track) => track.index === capability.transformationPlan.selectedAudioIndex
@@ -898,6 +967,34 @@ export class PlaybackEngine {
       errorStage: error?.stage,
       errorMessage: error?.message,
     };
+
+    for (const key of [...this.openTelemetry.keys()]) this.finishTelemetry(key, 'engine-switch');
+    const telemetry = sessionTelemetry({
+      sessionId: sessionId || `prepare-${event.sessionId}`,
+      url: request.url,
+      strategy,
+      transport: capability.transport,
+      container: event.container,
+      probeError: capability.failure?.reason ?? null,
+      probeLatencyMs: capability.probeLatencyMs,
+      totalMs: Date.now() - startedAt,
+      appVersion: this.deps.appVersion ?? 'unknown',
+      hevcSupported: this.capabilities?.video.hevc === true,
+      fatalError: error?.message ?? null,
+    });
+    if (error) this.telemetry.record(telemetry);
+    else this.openTelemetry.set(telemetry.sessionId, telemetry);
+    this.recordDiagnostics(request, capability, strategy, event, error);
+    return telemetry.sessionId;
+  }
+
+  private recordDiagnostics(
+    request: PlaybackStreamRequest,
+    capability: SourceCapabilityModel,
+    strategy: PlaybackDiagnosticEvent['selectedStrategy'],
+    event: PlaybackDiagnosticEvent,
+    error?: { stage: PlaybackDiagnosticEvent['errorStage']; message: string }
+  ): void {
 
     // Bounded: this is playback exhaust, and an app left open for days would
     // otherwise accumulate one record per source it ever considered.

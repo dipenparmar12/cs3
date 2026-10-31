@@ -1,3 +1,4 @@
+import { planNewExtensions } from './newExtensions.ts';
 import type { SitePlugin } from '../../src/types/plugin.ts';
 import type { DatastoreManager } from '../datastore.ts';
 import type { PluginManager } from '../pluginManager.ts';
@@ -113,11 +114,20 @@ export interface UpdateCheckResult {
   notices: ExtensionNotice[];
   /** Repositories that could not be reached; their plugins are simply unchanged. */
   warnings: string[];
+  /**
+   * Extensions newly published to a repository already in use
+   * (`cs3/newExtensions.ts`). Installed by the scheduled check under the same
+   * automatic-update setting; a manual check reports them.
+   */
+  newExtensions?: Array<{ internalName: string; name: string; repositoryUrl: string; plugin: SitePlugin }>;
   repositoriesChecked: number;
 }
 
 /** The maintainer status values upstream defines, and what each one means here. */
 const STATUS_DOWN = 0;
+
+/** Per repository, the plugin names seen at the last check (`cs3/newExtensions.ts`). */
+const KNOWN_PLUGINS_KEY = 'extension_known_plugins';
 
 export interface UpdateOutcome {
   internalName: string;
@@ -231,10 +241,23 @@ export class ExtensionUpdater {
    * the pass installs in sequence itself.
    */
   private installer: ((updates: AvailableUpdate[]) => Promise<UpdateOutcome[]>) | null = null;
+  private newInstaller:
+    | ((extensions: NonNullable<UpdateCheckResult['newExtensions']>) => Promise<UpdateOutcome[]>)
+    | null = null;
+  private adultAllowed: () => boolean = () => false;
 
   constructor(datastore: DatastoreManager, plugins: PluginManager) {
     this.datastore = datastore;
     this.plugins = plugins;
+  }
+
+  /** Installs newly published extensions (main: the job queue, as for updates). */
+  public setNewExtensionInstaller(
+    installer: (extensions: NonNullable<UpdateCheckResult['newExtensions']>) => Promise<UpdateOutcome[]>,
+    adultAllowed: () => boolean
+  ): void {
+    this.newInstaller = installer;
+    this.adultAllowed = adultAllowed;
   }
 
   public setInstaller(installer: (updates: AvailableUpdate[]) => Promise<UpdateOutcome[]>): void {
@@ -420,6 +443,16 @@ export class ExtensionUpdater {
         this.emit('extension:autoUpdateCompleted', { result, outcomes });
       } else if (wanted.length > 0) {
         this.emit('extension:updatesAvailable', result);
+      }
+
+      const fresh = result.newExtensions ?? [];
+      if (settings.autoInstall && fresh.length > 0 && this.newInstaller) {
+        const outcomes = await this.newInstaller(fresh);
+        logger.info('extension_new_installed', {
+          installed: outcomes.filter((o) => o.ok).map((o) => o.internalName),
+          failed: outcomes.filter((o) => !o.ok).map((o) => ({ name: o.internalName, reason: o.message })),
+        });
+        this.emit('extension:newInstalled', { extensions: fresh, outcomes });
       }
     } catch (error) {
       // A failed background check is not worth interrupting the user over; the
@@ -618,6 +651,29 @@ export class ExtensionUpdater {
     });
 
     const updates = [...candidates.values()].sort((a, b) => a.name.localeCompare(b.name));
+
+    // Newly published extensions in repositories already in use. Only reached
+    // repositories count: one that failed to answer keeps its known list.
+    const listings = fetched.flatMap((outcome, index) =>
+      outcome.status === 'fulfilled' ? [{ url: repoUrls[index], plugins: outcome.value.plugins }] : []
+    );
+    const plan = planNewExtensions({
+      listings,
+      installed: new Set(installed.keys()),
+      usedRepositories: new Set(
+        [...installed.values()].map((record) => record.meta?.repositoryUrl).filter((url): url is string => Boolean(url))
+      ),
+      known: this.datastore.getObject<Record<string, string[]>>(KNOWN_PLUGINS_KEY, {}) ?? {},
+      adultAllowed: this.adultAllowed(),
+    });
+    this.datastore.setObject(KNOWN_PLUGINS_KEY, plan.known);
+    if (plan.install.length > 0 || plan.skipped.length > 0) {
+      logger.info('extension_new_found', {
+        install: plan.install.map((entry) => entry.plugin.internalName),
+        skipped: plan.skipped,
+      });
+    }
+
     const result: UpdateCheckResult = {
       checkedAt: Date.now(),
       updates,
@@ -625,6 +681,12 @@ export class ExtensionUpdater {
       notices: [...notices.values()].sort((a, b) => a.name.localeCompare(b.name)),
       warnings,
       repositoriesChecked: repoUrls.length,
+      newExtensions: plan.install.map(({ plugin, repositoryUrl }) => ({
+        internalName: plugin.internalName,
+        name: plugin.name ?? plugin.internalName,
+        repositoryUrl,
+        plugin,
+      })),
     };
 
     this.datastore.setObject(CACHED_UPDATES_KEY, updates);

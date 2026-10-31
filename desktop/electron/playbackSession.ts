@@ -5,6 +5,7 @@ import type { StreamHandle } from './torrent/torrentEngine';
 import type { SourceDiagnosis } from '../src/types/diagnostics';
 import type { BufferHealthMetrics } from '../src/types/media';
 import { describeError } from '../src/utils/errors.ts';
+import type { SourceVerdict } from '../src/utils/sourceVerdict.ts';
 
 /**
  * Owns one "the user pressed play" interaction, from the first click to the
@@ -110,7 +111,7 @@ export interface PlaybackSnapshot {
   title: string;
   episodeTitle?: string;
   /** Per source (by infoHash): played or failed in this session. */
-  sourceStates?: Record<string, { state: 'played' | 'failed'; reason?: string }>;
+  sourceStates?: Record<string, { state: 'played' | 'failed'; reason?: string; verdict?: SourceVerdict }>;
 }
 
 interface Session {
@@ -187,6 +188,8 @@ interface Session {
 export interface SourceState {
   state: 'played' | 'failed';
   reason?: string;
+  /** Why it was left, when the player knew (`sourceVerdict.ts`). */
+  verdict?: SourceVerdict;
 }
 
 /**
@@ -202,6 +205,16 @@ export interface ResumePreference {
   match?: (candidates: TorrentResult[]) => TorrentResult | null;
 }
 
+/**
+ * One step wider than a query already is: its own providers, then a ranked
+ * walk of every provider (`all`), then every provider with no budget and no
+ * early stop (`exhaustive`, the second "Find more sources"). Each press asks
+ * something the last one did not.
+ */
+function widened(request: SourceQuery): SourceQuery {
+  return request.scope === 'all' ? { ...request, exhaustive: true } : { ...request, scope: 'all' };
+}
+
 export class PlaybackSessionManager {
   private sessions = new Map<string, Session>();
   private content: ContentService;
@@ -213,6 +226,12 @@ export class PlaybackSessionManager {
 
   public setNotifier(notify: (snapshot: PlaybackSnapshot) => void): void {
     this.notify = notify;
+  }
+
+  /** Told the provider and the verdict when a source is left for a known reason. */
+  private verdictListener: (provider: string, verdict: SourceVerdict) => void = () => {};
+  public onVerdict(listener: (provider: string, verdict: SourceVerdict) => void): void {
+    this.verdictListener = listener;
   }
 
   private snapshot(session: Session): PlaybackSnapshot {
@@ -429,7 +448,9 @@ export class PlaybackSessionManager {
          * back to the originating provider on the next refresh would discard
          * what they just asked for.
          */
-        options.widen ? { ...session.request, scope: 'all' as const } : session.request,
+        // Callers have already stepped the retained query (`widened`); this only
+        // makes sure the run itself is at `all`, and never steps it again.
+        options.widen && session.request.scope !== 'all' ? { ...session.request, scope: 'all' as const } : session.request,
         (progress) => {
           if (session.disposed || controller.signal.aborted) return;
           session.sources = this.keepPinned(session, progress.results);
@@ -507,9 +528,14 @@ export class PlaybackSessionManager {
     const session = this.sessions.get(sessionId);
     if (!session) return null;
     if (session.started) return this.snapshot(session);
-    if (session.sources.length === 0) return this.snapshot(session);
+    // After a widened offer the list still holds the sources that already
+    // failed here; pressing Play must not start the walk over with them.
+    const untried = session.sources.filter(
+      (source) => !source.infoHash || !session.unplayable.has(source.infoHash)
+    );
+    if (untried.length === 0) return this.snapshot(session);
 
-    await this.beginStream(session, session.sources);
+    await this.beginStream(session, untried);
     return this.snapshot(session);
   }
 
@@ -561,7 +587,8 @@ export class PlaybackSessionManager {
    */
   public async skipCurrentSource(
     sessionId: string,
-    reason: string
+    reason: string,
+    verdict?: SourceVerdict
   ): Promise<PlaybackSnapshot | null> {
     const session = this.sessions.get(sessionId);
     if (!session) return null;
@@ -577,7 +604,7 @@ export class PlaybackSessionManager {
     const current = session.activeInfoHash;
     if (current) {
       session.unplayable.add(current);
-      session.sourceStates.set(current, { state: 'failed', reason });
+      session.sourceStates.set(current, { state: 'failed', reason, verdict });
       const source = session.sources.find((s) => s.infoHash === current);
       if (source) {
         session.attempts.push({
@@ -585,6 +612,7 @@ export class PlaybackSessionManager {
           indexerName: source.indexerName,
           error: reason,
         });
+        if (verdict && source.providerName) this.verdictListener(source.providerName, verdict);
       }
 
       /**
@@ -663,7 +691,7 @@ export class PlaybackSessionManager {
   ): Promise<PlaybackSnapshot | null> {
     const session = this.sessions.get(sessionId);
     if (!session) return null;
-    if (options.widen) session.request = { ...session.request, scope: 'all' };
+    if (options.widen) session.request = widened(session.request);
     await this.discover(session, {
       autoStartWhenDone: false,
       bypassCache: true,
@@ -721,7 +749,7 @@ export class PlaybackSessionManager {
 
   /**
    * Asks every provider and indexer, once the sources where the title was
-   * found have all failed — and keeps going with whatever that finds.
+   * found have all failed — and offers whatever that finds, without starting it.
    *
    * This is the "Find more sources" button, pressed for the viewer. The
    * narrow default stays right while it is paying for itself (fewer sites
@@ -731,9 +759,9 @@ export class PlaybackSessionManager {
    * (`shouldEscalateScope`); this is the other case, sources that exist and
    * do not play.
    *
-   * The walk starts as the new sources arrive, after a moment's settle, rather
-   * than when the slowest of two hundred sites has answered; later arrivals
-   * join the list the walk continues through.
+   * The offer is made as the new sources arrive, after a moment's settle,
+   * rather than when the slowest of two hundred sites has answered; later
+   * arrivals join the list the viewer chooses from.
    *
    * Answers whether it took over. False means there was nothing wider to ask,
    * or asking found nothing new, and the caller reports the failure.
@@ -782,7 +810,17 @@ export class PlaybackSessionManager {
       return false;
     }
 
-    await this.beginStream(session, candidates, { failover: true });
+    // Offered, never started (Playback Source Resolution, Phase 1). The wider
+    // search matched by title alone, and a provider's first hits for a title it
+    // does not carry are often a sequel or whatever is trending: started
+    // automatically, the wrong film played and counted as a success. This is
+    // the state an empty origin search already ends in when it widens
+    // (`discover`), so the overlay's "Play now" and "Choose source" apply.
+    session.widened = true;
+    session.retryingElsewhere = false;
+    session.started = false;
+    session.phase = 'searching';
+    this.emit(session);
     return true;
   }
 

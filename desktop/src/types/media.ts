@@ -298,6 +298,12 @@ export interface SourceCapabilityModel {
   /** Plain-language account of the decision, for the player and the clipboard. */
   explanation: string;
   probeLatencyMs: number;
+  /**
+   * An HLS playlist with no declared audio renditions whose first segment could
+   * not be read: the track list is the manifest's single-track guess, so a
+   * stream carrying several languages looks like one. Never cached.
+   */
+  languagesUnverified?: boolean;
 }
 
 /** Why a probe produced nothing. */
@@ -306,6 +312,12 @@ export interface ProbeFailure {
   reason: string;
   /** True when the source is gone rather than merely undecodable. */
   dead: boolean;
+  /**
+   * What answered instead of media, when it was recognised
+   * (`electron/media/nonMediaResponse.ts`): a sign-in page, an "update the
+   * app" notice, another web page, or a rate limit.
+   */
+  kind?: 'login' | 'update-required' | 'html' | 'rate-limited';
 }
 
 /** What the renderer measured about its own decoders. Believed over any table. */
@@ -389,6 +401,12 @@ export interface PlaybackStreamRequest {
   provider?: string;
   preferredAudioLanguage?: string;
   /**
+   * The track picked from the player's menu, as an index into the inspection's
+   * audio list. Outranks `preferredAudioLanguage`: two tracks can share a
+   * language, or carry none.
+   */
+  preferredAudioIndex?: number;
+  /**
    * Never route to mpv: the viewer pressed "Play in this window" on the native
    * engine. The stream is converted for the built-in player instead.
    */
@@ -404,9 +422,29 @@ export interface PlaybackStreamResponse {
   playbackUrl: string;
   /** Token for `closePlaybackStream` / `switchAudioTrack`; empty for DIRECT. */
   sessionId: string;
+  /** This session's PRD-40.1 telemetry record; hand it to `reportPlayback`. */
+  telemetryId?: string;
   capability: SourceCapabilityModel;
   subtitles: EmbeddedSubtitleTrack[];
 }
+
+/** What the element measured for one prepared stream (`player/playbackStats.ts`). */
+export interface PlaybackRuntimeReport {
+  /** From the stream being handed over to the first presented frame; 0 if none. */
+  firstFrameMs: number;
+  playbackSeconds: number;
+  seekCount: number;
+  stallCount: number;
+  stallTotalMs: number;
+  ended: boolean;
+  /**
+   * What the viewer did with a possible-mismatch warning on this stream
+   * (Content Validation PRD §11); absent when none was shown.
+   */
+  mismatchWarning?: MismatchWarningAnswer;
+}
+
+export type MismatchWarningAnswer = 'kept-watching' | 'chose-another' | 'unanswered';
 
 export interface PlaybackDiagnosticEvent {
   timestamp: string;

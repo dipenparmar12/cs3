@@ -137,6 +137,11 @@ export interface TorrentResult {
   torrentUrl?: string;
   sizeBytes: number;
   seeders: number;
+  /**
+   * The indexer did not report a swarm count; `seeders` is then 0 by
+   * convention and means nothing. Never rejected for it, ranked as uncertain.
+   */
+  seedersUnknown?: boolean;
   leechers: number;
   indexerId: string;
   indexerName: string;
@@ -286,6 +291,8 @@ export interface TorrentStreamStats {
   readyBytes: number;
   /** True once enough leading data exists to begin playback. */
   isPlayable: boolean;
+  /** How many leading bytes `isPlayable` waits for. */
+  readyTargetBytes?: number;
   timeRemainingMs: number;
   isPaused: boolean;
   /** Milliseconds since the selected file last gained a byte. */

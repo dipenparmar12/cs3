@@ -56,7 +56,7 @@ import { detailFromSnapshot, mergeDetail, savedCopyAge } from '../utils/savedPag
 import { FranchiseRail } from '../components/detail/FranchiseRail';
 import { distinctRecommendations } from '../utils/relatedRails';
 import { filterAdultItems, isAdultMedia } from '../utils/adultContent';
-import { useAdultMode } from '../utils/useAdultMode';
+import { revealAdultForSession, useAdultMode } from '../utils/useAdultMode';
 
 /** Cards the rail is sized for before "Show all" is worth offering. */
 const RAIL_PREVIEW = 8;
@@ -733,7 +733,7 @@ export const DetailView: React.FC<DetailViewProps> = ({
             ]);
             if (cancelled) return;
             setRecovering(null);
-            for (const match of sameWorkMatches(reply?.results ?? [], wanted, mediaItem.year)) {
+            for (const match of sameWorkMatches(reply?.results ?? [], wanted, mediaItem.year, mediaItem.type)) {
               if (routes.includes(match.url)) continue;
               routes.push(match.url);
               recoveredNames.set(match.url, match.apiName);
@@ -1961,6 +1961,14 @@ export const DetailView: React.FC<DetailViewProps> = ({
           <button className="btn" onClick={onBack}>
             <ArrowLeft size={16} /> Back
           </button>
+          <button
+            className="btn btn-primary"
+            onClick={async () => {
+              await revealAdultForSession(true, { blurred: false });
+            }}
+          >
+            Enable for Session
+          </button>
         </div>
       </div>
     );
@@ -2017,22 +2025,47 @@ export const DetailView: React.FC<DetailViewProps> = ({
       loadError && /playback handle|not a page it can open/i.test(loadError)
     );
 
+    // Every route's own reason, not a summary of them.
+    const reason = [
+      loadError ?? 'No details available.',
+      isPlaybackHandle
+        ? "This link can't be opened as a page any more, and no other source answered with the same title. A search may find it under a slightly different name."
+        : '',
+      (mediaItem.alternates?.length ?? 0) > 0
+        ? `Tried ${(mediaItem.alternates?.length ?? 0) + 1} sources for “${displayTitle || mediaItem.name}”.`
+        : '',
+    ]
+      .filter(Boolean)
+      .join(' ');
+
+    /**
+     * The page keeps what the search card showed.
+     *
+     * The provider answered the search with this title, so its name, poster,
+     * year and genres are known even when its page then fails (a reset
+     * connection, a page the site has since removed). Replacing all of that with
+     * a bare error lost the poster the viewer had just clicked.
+     */
     return (
-      <div className="detail-view detail-view--state">
-        <AlertTriangle size={32} />
-        {/* Every route's own reason, not a summary of them. */}
-        <p>{loadError ?? 'No details available.'}</p>
-        {isPlaybackHandle && (
-          <p style={{ color: 'var(--text-muted)', fontSize: '0.85rem', maxWidth: '480px' }}>
-            This link can't be opened as a page any more, and no other source answered with the same title. A search may find it under a slightly different name.
-          </p>
-        )}
-        {(mediaItem.alternates?.length ?? 0) > 0 && (
-          <p className="detail-view__tried">
-            Tried {(mediaItem.alternates?.length ?? 0) + 1} sources for “{displayTitle || mediaItem.name}”.
-          </p>
-        )}
-        <div className="detail-view__actions">
+      <div className="detail-view">
+        <div className="detail-view__topbar">
+          <button className="detail-view__back" onClick={onBack} title="Back (Alt+←)">
+            <ArrowLeft size={16} /> Back
+          </button>
+        </div>
+        <DetailHeroSkeleton
+          title={displayTitle || mediaItem.name}
+          posterUrl={mediaItem.posterUrl}
+          year={mediaItem.year}
+          type={mediaItem.type}
+          sensitive={isAdult}
+          itemKey={mediaItem.url}
+          unavailable={{
+            reason: `${mediaItem.apiName ? `${mediaItem.apiName}: ` : ''}${reason}`,
+            genres: mediaItem.genres,
+            quality: mediaItem.quality,
+            actions: (
+        <>
           {/*
             The way back for a page that can no longer be opened.
 
@@ -2070,7 +2103,10 @@ export const DetailView: React.FC<DetailViewProps> = ({
               message: loadError ?? undefined,
             }}
           />
-        </div>
+        </>
+            ),
+          }}
+        />
       </div>
     );
   }

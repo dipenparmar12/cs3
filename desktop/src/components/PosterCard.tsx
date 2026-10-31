@@ -1,3 +1,4 @@
+import { attemptMark } from '../utils/attemptMark';
 import React, { useRef, useState } from 'react';
 import { Poster } from './Poster';
 import {
@@ -11,6 +12,7 @@ import {
   Zap,
 } from 'lucide-react';
 import type { SearchResponse } from '../types/api';
+import type { MatchReason } from '../utils/matchReasons';
 import type { TitleInteraction } from '../types/interactions';
 import { CardBadge, badgeLabel, badgeTooltip, cardStateFor, primaryBadge } from '../utils/cardState';
 import { ContentHoverCard } from './ContentHoverCard';
@@ -20,6 +22,9 @@ import type { VariantInfo } from '../utils/variantGroups';
 import { VariantChip } from './search/VariantChip';
 import { isAdultMedia } from '../utils/adultContent';
 import { isAdultItemBlurred, useAdultState } from '../utils/useAdultMode';
+
+/** When this window loaded: a "sources found" mark is only for answers since. */
+const LAUNCHED_AT = Date.now() - performance.now();
 
 interface PosterCardProps {
   item: SearchResponse;
@@ -59,6 +64,8 @@ interface PosterCardProps {
   variantsIdentical?: boolean;
   /** The caption to show instead of `item.name` — the title without file tags. */
   displayName?: string;
+  /** Why a person's or company's search found this title ("Cast: John Cena"). */
+  matchReason?: MatchReason;
 }
 
 /** The glyph for each state. Small, monochrome, and never a colour on its own. */
@@ -75,7 +82,7 @@ const BADGE_ICONS: Record<CardBadge, React.ReactNode> = {
 /** Feature flag to control hover preview popups on cards. Set to true to enable. */
 const ENABLE_HOVER_CARD_PREVIEW = false;
 
-export const PosterCard: React.FC<PosterCardProps> = ({
+export const PosterCard: React.FC<PosterCardProps> = React.memo(({
   item,
   onSelectMedia,
   onPlayDirectly,
@@ -88,6 +95,7 @@ export const PosterCard: React.FC<PosterCardProps> = ({
   variantSummary,
   variantsIdentical = false,
   displayName,
+  matchReason,
 }) => {
   const cardRef = useRef<HTMLDivElement | null>(null);
   const [hoverCardOpen, setHoverCardOpen] = useState(false);
@@ -171,9 +179,13 @@ export const PosterCard: React.FC<PosterCardProps> = ({
   // their own position — and the record's otherwise.
   const bar = progressPercent ?? state.progressPercent;
 
+  // What this card's provider answered last time; never a mark on the work.
+  const mark = item?.apiName ? attemptMark(interaction?.attempt, item.apiName, LAUNCHED_AT) : null;
+
   return (
     <div
       ref={cardRef}
+      data-url={item?.url}
       className={`poster-card${
         state.visited ? ' poster-card--visited' : ''
       }${ENABLE_HOVER_CARD_PREVIEW && hoverCardOpen ? ' poster-card--active-hover' : ''}`}
@@ -204,6 +216,11 @@ export const PosterCard: React.FC<PosterCardProps> = ({
           itemKey={item?.url || item?.name}
           showRevealControl={isAdult}
         />
+        {matchReason && (
+          <span className="poster-reason" title={`${matchReason.label} (${matchReason.detail})`}>
+            {matchReason.label}
+          </span>
+        )}
         {item?.isExactMatch ? (
           <span className="poster-badge poster-badge--match">
             <Target size={11} aria-hidden /> Best match
@@ -288,6 +305,14 @@ export const PosterCard: React.FC<PosterCardProps> = ({
             many other providers had it too, which is otherwise invisible until
             the details page — the tooltip names them.
           */}
+          {mark && (
+            <span
+              className={`poster-attempt poster-attempt--${mark.kind}`}
+              role="img"
+              aria-label={mark.label}
+              title={mark.tooltip}
+            />
+          )}
           {sources.length > 0 && (
             <span
               className="poster-source"
@@ -330,4 +355,6 @@ export const PosterCard: React.FC<PosterCardProps> = ({
       )}
     </div>
   );
-};
+});
+
+PosterCard.displayName = 'PosterCard';

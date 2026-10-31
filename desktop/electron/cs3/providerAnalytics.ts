@@ -13,6 +13,8 @@ import {
 } from '../../src/types/analytics';
 import { classifyFailure, isScoredFailure } from './failureTaxonomy';
 import { isPrivateSession } from './privacyMode.ts';
+import { countVerdict } from './validationCounts.ts';
+import type { SourceVerdict } from '../../src/utils/sourceVerdict.ts';
 
 /**
  * How every provider has actually behaved, counted.
@@ -312,6 +314,16 @@ export class ProviderAnalytics {
     }
 
     this.scheduleWrite();
+  }
+
+  /**
+   * Why a source from this provider was left (Content Validation PRD §11).
+   * Only for a provider already seen: a skip follows a start, which recorded it.
+   */
+  public observeValidation(provider: string, verdict: SourceVerdict): void {
+    if (!this.settings.enabled || isPrivateSession()) return;
+    const record = this.records.get(provider);
+    if (record && countVerdict(record, verdict)) this.scheduleWrite();
   }
 
   /** Convenience for the common "one call, one outcome" shape. */

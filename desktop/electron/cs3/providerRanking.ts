@@ -6,6 +6,8 @@ import type {
   RecommendationBand,
 } from '../../src/types/analytics';
 import { PRIOR_RATE, PRIOR_WEIGHT, ProviderAnalytics } from './providerAnalytics';
+import { languageScore } from './languageMatch.ts';
+import { rightContentRate } from './validationCounts.ts';
 
 /**
  * Turns measured behaviour into an order.
@@ -95,7 +97,16 @@ export interface RankingContext {
    * did not say, which is a real and common answer.
    */
   declaredStatus?: (extensionInternalName: string) => number | undefined;
+  /** The language an extension's repository index declares (`SitePlugin.language`). */
+  declaredLanguage?: (extensionInternalName: string) => string | undefined;
+  /**
+   * The languages the viewer's regions cover (first-run region choice,
+   * `regions.wantedLanguages`); `null` for every language. A declaration by
+   * the viewer, not a measurement of them.
+   */
+  viewerLanguages?: () => string[] | null;
 }
+
 
 /**
  * The criteria, in the order they are shown.
@@ -214,6 +225,28 @@ const CRITERIA: CriterionDefinition[] = [
     },
   },
   {
+    id: 'right-content',
+    label: 'Right content',
+    description:
+      'Whether what this provider played was the title asked for, rather than an advert or a notice ' +
+      'the player recognised by its length and skipped.',
+    defaultWeight: 1,
+    minSamples: 2,
+    available: true,
+    evaluate(record) {
+      const { rate, samples, mismatches } = rightContentRate(record, PRIOR_WEIGHT, PRIOR_RATE);
+      if (rate === null) return { score: null, samples: 0, detail: 'Nothing played from this provider yet.' };
+      return {
+        score: rate,
+        samples,
+        detail:
+          mismatches === 0
+            ? `None of ${samples} plays was skipped as the wrong content.`
+            : `${mismatches} of ${samples} plays were not the title.`,
+      };
+    },
+  },
+  {
     id: 'download-success',
     label: 'Downloads',
     description:
@@ -314,11 +347,19 @@ const CRITERIA: CriterionDefinition[] = [
   {
     id: 'language-availability',
     label: 'Matches your languages',
-    description: 'Whether the audio and subtitle languages match your preferences. Not yet measured.',
+    description:
+      'Whether the extension declares a language your regions cover. An extension that declares ' +
+      'none, or many, is neither raised nor lowered.',
     defaultWeight: 0.3,
-    minSamples: 5,
-    available: false,
-    evaluate: () => ({ score: null, samples: 0, detail: 'Not measured yet.' }),
+    // A declaration, like the maintainer's status: no samples to wait for.
+    minSamples: 0,
+    available: true,
+    evaluate(record, _analytics, context) {
+      const declared = record.extensionInternalName
+        ? context.declaredLanguage?.(record.extensionInternalName)
+        : undefined;
+      return languageScore(declared, context.viewerLanguages?.());
+    },
   },
   {
     /**

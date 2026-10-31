@@ -1,7 +1,7 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { Bookmark, BookmarkCheck, Check, ChevronDown, ListChecks, ListPlus, Trash2 } from 'lucide-react';
 import { isPlaceholderOrigin } from '../utils/originName';
-import { BUCKET_LABELS, WatchStatus, type SearchResponse } from '../types/api';
+import { BUCKET_LABELS, BUCKET_ORDER, WatchStatus, type SearchResponse } from '../types/api';
 import type { TorrentResult } from '../types/torrent';
 import { torrentResultToStoredSource } from '../../electron/cs3/libraryStore';
 
@@ -42,13 +42,7 @@ interface LibraryBucketSelectorProps {
   variant?: 'default' | 'detail-action' | 'poster' | 'icon';
 }
 
-const BUCKETS: Array<{ status: WatchStatus; label: string }> = [
-  { status: WatchStatus.Watching, label: 'Watching' },
-  { status: WatchStatus.Completed, label: 'Completed' },
-  { status: WatchStatus.OnHold, label: 'On hold' },
-  { status: WatchStatus.PlanToWatch, label: 'Plan to watch' },
-  { status: WatchStatus.Dropped, label: 'Dropped' },
-];
+const BUCKETS = BUCKET_ORDER.map((status) => ({ status, label: BUCKET_LABELS[status] }));
 
 export const LibraryBucketSelector: React.FC<LibraryBucketSelectorProps> = ({
   item,

@@ -1,3 +1,5 @@
+import { etaSeconds, smoothSpeed } from './download/progressSmoothing.ts';
+import { AttemptTokens } from './download/attemptTokens.ts';
 import fs from 'fs';
 import path from 'path';
 import type { DownloadRequestResult, DownloadTask } from '../src/types/download';
@@ -19,6 +21,7 @@ import { containersAgree, overlapWindow, planResume } from './download/resumePla
 import { fetchRemoteWindow, readLocalWindow } from './download/resumeWindow.ts';
 import { reconcileRestoredTask } from './download/restoredTask.ts';
 import type { TorrentEngine } from './torrent/torrentEngine';
+import { isInside } from './storage/appStorage.ts';
 import type { ContentService } from './contentService';
 import type { AnalyticsSink } from './pluginManager';
 import type { TorrentResult } from '../src/types/torrent';
@@ -75,6 +78,8 @@ export class DownloadService {
   private gidToTaskId: Map<string, string> = new Map();
   /** taskId → infoHash, for downloads served by the torrent engine. */
   private torrentTasks: Map<string, string> = new Map();
+  /** Which file of its torrent each task downloads (season packs share a torrent). */
+  private torrentTaskFile: Map<string, number | undefined> = new Map();
   /** taskId → canceller, for the built-in HTTP downloader and yt-dlp. */
   private handles: Map<string, ActiveHandle> = new Map();
   private pollInterval: NodeJS.Timeout | null = null;
@@ -219,16 +224,11 @@ export class DownloadService {
         }
 
         task.bytesDownloaded = status.completedLength;
-        task.totalBytes = status.totalLength;
-        task.downloadSpeed = status.downloadSpeed;
-
-        if (status.downloadSpeed > 0 && status.totalLength > status.completedLength) {
-          task.etaSeconds = Math.ceil(
-            (status.totalLength - status.completedLength) / status.downloadSpeed
-          );
-        } else {
-          task.etaSeconds = 0;
-        }
+        // aria2 reports 0 until the server has answered; an unknown size is
+        // not a reason to forget the one already known.
+        if (status.totalLength > 0) task.totalBytes = status.totalLength;
+        task.downloadSpeed = smoothSpeed(task.downloadSpeed, status.downloadSpeed);
+        task.etaSeconds = etaSeconds(status.completedLength, task.totalBytes, task.downloadSpeed);
 
         if (status.status === 'complete') {
           /**
@@ -282,24 +282,25 @@ export class DownloadService {
     for (const [taskId, infoHash] of this.torrentTasks.entries()) {
       const task = this.queue.get(taskId);
       if (!task) {
-        this.torrentTasks.delete(taskId);
+        this.torrentTasks.delete(taskId); this.torrentTaskFile.delete(taskId);
         continue;
       }
 
-      const stats = await this.torrentEngine.getStats(infoHash);
+      const stats = await this.torrentEngine.getStats(infoHash, this.torrentTaskFile.get(taskId));
       if (!stats) continue;
 
       task.bytesDownloaded = stats.downloaded;
       task.totalBytes = stats.fileSize;
-      task.downloadSpeed = stats.downloadSpeed;
-      task.etaSeconds = Math.round(stats.timeRemainingMs / 1000) || 0;
+      task.downloadSpeed = smoothSpeed(task.downloadSpeed, stats.downloadSpeed);
+      // This file's remaining bytes, not the torrent's `timeRemaining`.
+      task.etaSeconds = etaSeconds(stats.downloaded, stats.fileSize, task.downloadSpeed);
 
       if (stats.error) {
         task.state = DownloadState.Failed;
         task.errorMessage = stats.error;
-        this.torrentTasks.delete(taskId);
+        this.torrentTasks.delete(taskId); this.torrentTaskFile.delete(taskId);
       } else if (stats.progress >= 1) {
-        this.torrentTasks.delete(taskId);
+        this.torrentTasks.delete(taskId); this.torrentTaskFile.delete(taskId);
         this.finalizeCompletion(task, stats.fileSize);
       } else if (stats.isStalled && !stats.isPaused) {
         // Say so rather than showing 0 B/s forever with no explanation.
@@ -601,10 +602,8 @@ export class DownloadService {
         mode: 'download',
       });
 
-      // The torrent may already be live from a stream the user was watching,
-      // in which case `add` never ran and the strategy is still sequential.
-      await this.torrentEngine.setMode(handle.infoHash, 'download');
       this.torrentTasks.set(task.id, handle.infoHash);
+      this.torrentTaskFile.set(task.id, handle.fileIndex);
       task.totalBytes = handle.fileSize;
       // Multi-file releases nest the episode inside the torrent's own folder,
       // so the real path comes from the engine rather than being guessed.
@@ -615,28 +614,37 @@ export class DownloadService {
     }
   }
 
+  /** Which transfer of a task may still report (`download/attemptTokens.ts`). */
+  private readonly attempts = new AttemptTokens();
+
   private startSegmentedTask(task: DownloadTask): void {
+    const attempt = this.attempts.begin(task.id);
     const handle = this.ytdlp.download({
       url: task.link.url,
       targetPath: task.targetFilePath,
       headers: task.headers,
       referer: task.link.referer,
-      onProgress: (downloaded, total, speed) => this.applyProgress(task, downloaded, total, speed),
-      onComplete: (total) => this.markCompleted(task, total),
-      onError: (message) => this.markFailed(task, message),
+      onProgress: this.attempts.guard(task.id, attempt, (downloaded: number, total: number, speed: number) =>
+        this.applyProgress(task, downloaded, total, speed)
+      ),
+      onComplete: this.attempts.guard(task.id, attempt, (total: number) => this.markCompleted(task, total)),
+      onError: this.attempts.guard(task.id, attempt, (message: string) => void this.markFailed(task, message)),
     });
     this.handles.set(task.id, handle);
   }
 
   private startHttpTask(task: DownloadTask): void {
+    const attempt = this.attempts.begin(task.id);
     const handle = startHttpDownload({
       url: task.link.url,
       targetPath: task.targetFilePath,
       headers: task.headers,
       referer: task.link.referer,
-      onProgress: (downloaded, total, speed) => this.applyProgress(task, downloaded, total, speed),
-      onComplete: (total) => this.markCompleted(task, total),
-      onError: (message) => this.markFailed(task, message),
+      onProgress: this.attempts.guard(task.id, attempt, (downloaded: number, total: number, speed: number) =>
+        this.applyProgress(task, downloaded, total, speed)
+      ),
+      onComplete: this.attempts.guard(task.id, attempt, (total: number) => this.markCompleted(task, total)),
+      onError: this.attempts.guard(task.id, attempt, (message: string) => void this.markFailed(task, message)),
     });
     this.handles.set(task.id, handle);
   }
@@ -655,11 +663,8 @@ export class DownloadService {
 
     task.bytesDownloaded = downloaded;
     if (total > 0) task.totalBytes = total;
-    task.downloadSpeed = speed;
-    task.etaSeconds =
-      speed > 0 && task.totalBytes > downloaded
-        ? Math.ceil((task.totalBytes - downloaded) / speed)
-        : 0;
+    task.downloadSpeed = smoothSpeed(task.downloadSpeed, speed);
+    task.etaSeconds = etaSeconds(downloaded, task.totalBytes, task.downloadSpeed);
     this.saveQueueToStorage();
   }
 
@@ -1304,6 +1309,7 @@ export class DownloadService {
     }
 
     // The `.part` file stays on disk; resuming continues from it.
+    this.attempts.withdraw(id);
     this.handles.get(id)?.cancel();
     this.handles.delete(id);
 
@@ -1361,6 +1367,18 @@ export class DownloadService {
   }
 
   /**
+   * Whether a listed download's file is at or under `target`. The torrent
+   * cache asks before deleting anything: a download started while its torrent
+   * was already streaming writes into that cache.
+   */
+  public holdsPath(target: string): boolean {
+    for (const task of this.queue.values()) {
+      if (task.targetFilePath && isInside(target, task.targetFilePath)) return true;
+    }
+    return false;
+  }
+
+  /**
    * Removes a download from the list, and optionally the file it produced.
    *
    * Two genuinely different actions behind one word, which is why `deleteFile`
@@ -1377,12 +1395,14 @@ export class DownloadService {
     const infoHash = this.torrentTasks.get(id);
     if (infoHash && this.torrentEngine) {
       // Keep completed files unless the caller asked for them to go; a finished
-      // download must survive removal from the queue by default.
-      await this.torrentEngine.stopStream(
+      // download must survive removal from the queue by default. A stream of
+      // the same torrent keeps it in the client.
+      await this.torrentEngine.stopDownload(
         infoHash,
+        this.torrentTaskFile.get(id),
         task.state === DownloadState.Completed && !deleteFile
       );
-      this.torrentTasks.delete(id);
+      this.torrentTasks.delete(id); this.torrentTaskFile.delete(id);
     }
 
     for (const [gid, taskId] of this.gidToTaskId.entries()) {
@@ -1392,6 +1412,7 @@ export class DownloadService {
       }
     }
 
+    this.attempts.withdraw(id);
     this.handles.get(id)?.cancel();
     this.handles.delete(id);
 

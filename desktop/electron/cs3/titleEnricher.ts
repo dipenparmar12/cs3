@@ -1,6 +1,7 @@
 import { fetchJson } from '../torrent/http.ts';
 import { TvType, type SearchResponse } from '../../src/types/api.ts';
 import { normaliseTitleForMatch, titleSimilarity } from '../torrent/releaseParser.ts';
+import { isAdultGenreOrTag, isSensitiveTitle } from '../../src/utils/adultContent.ts';
 
 /**
  * Turns a provider's release name into the title it is actually about.
@@ -121,7 +122,9 @@ export function parseReleaseTitle(raw: string): { title: string; year?: number }
     )
     // A trailing release group after a dash.
     .replace(/-\s*[A-Za-z0-9]+$/, ' ')
-    .replace(/\b(19\d{2}|20\d{2})\b/g, ' ')
+    // Only the year taken above. Any other four-digit number is the title's own
+    // (*Blade Runner 2049*), and dropping it read a sequel as the film it follows.
+    .replace(year ? new RegExp(`\\b${year}\\b`, 'g') : /$^/, ' ')
     .replace(/\s{2,}/g, ' ')
     .trim();
 
@@ -291,6 +294,9 @@ export class TitleEnricher {
             year: result.year,
           });
           if (!metadata) continue;
+          const isAdult =
+            metadata.genres?.some((g) => isAdultGenreOrTag(g)) ||
+            isSensitiveTitle(metadata.title);
           out[index] = {
             ...result,
             // The address is untouched. Only what the user reads changes.
@@ -298,6 +304,8 @@ export class TitleEnricher {
             name: metadata.title,
             year: metadata.year ?? result.year,
             posterUrl: metadata.posterUrl ?? result.posterUrl,
+            genres: metadata.genres,
+            adult: isAdult || result.adult,
           };
         } catch {
           // Enrichment is an improvement, never a requirement.

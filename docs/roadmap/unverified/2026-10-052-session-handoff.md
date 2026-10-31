@@ -1,4 +1,4 @@
-> **Filed 2026-10-20: Unverified.** Not yet checked against the code. Treat as a proposal until it is.
+> **Checked 2026-10-28: verified, historical.** All 15 commits in the Done table exist and every file it names is present (ScrollToTop, timeDisplay, subtitleDuration, durableAddress, companion, FranchiseRail). Still open from its Remaining list: companion subtitles from online search (2), the subtitle confidence score (3), trailer seeking (4), a visible provider-verification window (5). Nothing here is current status; ROADMAP.md is.
 
 # Session handoff — 2026-10-06
 

@@ -1,13 +1,21 @@
-import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { useTitleInteractions } from '../components/useTitleInteractions';
 import { EmptyState } from '../components/EmptyState';
-import type { SearchHistoryEntry, SearchResponse } from '../types/api';
-import { TYPE_TABS, matchesTab, tabsFor } from '../utils/contentTypes';
+import type { EntitySuggestion, SearchHistoryEntry, SearchResponse } from '../types/api';
+import { TYPE_TABS, allCount, ownTabRowsBelongInAll, matchesTab, tabsFor } from '../utils/contentTypes';
+import {
+  ResultContextMenuProvider,
+  useOpenResultMenu,
+  type ResultMenuActions,
+} from '../components/search/ResultContextMenu';
+import { useFlash } from '../utils/useFlash';
 import { groupResults, type ResultGroup, type ResultGroupId } from '../utils/resultGroups';
 import type { SearchSnapshot, SearchSourceOutcome } from '../../electron/searchSession';
 import { AlertTriangle, Bookmark, BookmarkCheck, CheckCircle2, ChevronDown, ChevronRight, Filter, Loader2, MoreHorizontal, RotateCw, Search, SearchX, Server, Target, Trash2, Wrench, X } from 'lucide-react';
 import { PosterCard } from '../components/PosterCard';
+import { Poster } from '../components/Poster';
 import { partitionDeadRows } from '../utils/deadRows';
+import { cardKeyOf, calculateVirtualWindow, gridColumns, rowPitch } from './searchVirtualGrid';
 import { resultSources } from '../utils/resultSources';
 import { FacetMenu, type FacetOption } from '../components/FacetMenu';
 import { CopyErrorButton } from '../components/CopyErrorButton';
@@ -19,6 +27,13 @@ import { type SearchUiState } from './searchUiState';
 import { Button, Menu } from '../components/ui';
 import { filterAdultItems, isSensitiveTitle } from '../utils/adultContent';
 import { useAdultMode } from '../utils/useAdultMode';
+import { useCreditsForQuery } from '../components/search/useCreditsForQuery';
+import { matchReasons, reasonFor, workAsItem } from '../utils/matchReasons';
+import { HomeRow } from '../components/home/HomeRow';
+import type { Filmography } from '../types/filmography';
+
+/** The credited work of the person or company the query names; cards say which credit put them here. */
+const CreditsContext = React.createContext<Filmography | null>(null);
 
 interface SearchViewProps {
   query: string;
@@ -72,6 +87,8 @@ interface SearchViewProps {
   onClearResults?: () => void;
   /** Runs a query; the idle screen's recent searches use it. */
   onSearch?: (query: string) => void;
+  /** Opens a person's or company's whole filmography (the "With <name>" row's Show all). */
+  onOpenEntity?: (entity: EntitySuggestion) => void;
 }
 
 /** "3 Sep 2026, 14:05" — a date a person reads, not a relative age that drifts. */
@@ -329,9 +346,12 @@ export const SearchView: React.FC<SearchViewProps> = ({
   onSaveResults,
   onClearResults,
   onSearch,
+  onOpenEntity,
 }) => {
   const { sourceFilter, typeTab, openGroups } = ui;
   const adult = useAdultMode();
+  const named = useCreditsForQuery(search?.query ?? query);
+  const credits = named?.credits ?? null;
   /** The provider names the fix modal is open for, or null when it is closed. */
   const [fixing, setFixing] = useState<string[] | null>(null);
   const missingCount =
@@ -361,9 +381,66 @@ export const SearchView: React.FC<SearchViewProps> = ({
    * are both called *Avengers: Endgame*.
    */
   const rawResults = useTitleEnrichment(search?.results ?? []);
+  /** Providers hidden from this search by the card menu; a new query shows them again. */
+  const [hiddenProviders, setHiddenProviders] = useState<ReadonlySet<string>>(new Set());
+  useEffect(() => setHiddenProviders(new Set()), [query]);
   const results = useMemo(
-    () => filterAdultItems(rawResults, adult.allowed, adult.adultProviders),
-    [rawResults, adult.allowed, adult.adultProviders]
+    () =>
+      filterAdultItems(rawResults, adult.allowed, adult.adultProviders).filter(
+        (item) => !hiddenProviders.has(item.apiName)
+      ),
+    [rawResults, adult.allowed, adult.adultProviders, hiddenProviders]
+  );
+  const { message: menuNotice, flash: setMenuNotice } = useFlash<string>(4000);
+
+  const menuActions = useMemo<ResultMenuActions>(
+    () => ({
+      async save(item) {
+        await window.cloudstream?.upsertLibraryEntry({
+          title: item.name,
+          year: item.year,
+          type: item.type,
+          posterUrl: item.posterUrl,
+          mediaUrl: item.url,
+          status: 'PlanToWatch',
+          metadata: { provider: item.apiName },
+        });
+        setMenuNotice(`Saved “${item.name}” to Plan to watch.`);
+      },
+      async askAgain(item, provider) {
+        await window.cloudstream?.forgetProviderAttempt?.(item.name, item.year, provider);
+        onSelectMedia(item);
+      },
+      hideProvider(provider) {
+        setHiddenProviders((current) => new Set([...current, provider]));
+        setMenuNotice(`Hiding results from ${provider} in this search.`);
+      },
+      async excludeProvider(provider) {
+        // Scope selections are provider names. Leaving one out of "everything"
+        // means selecting every other enabled provider, which the sources menu
+        // then shows as a hand-picked set.
+        const options = await window.cloudstream?.getSearchScopeOptions(false);
+        if (!options?.ok) return;
+        const disabled = new Set(options.disabledProviders);
+        const names = options.repositories
+          .flatMap((repo) => repo.extensions.flatMap((ext) => ext.providers))
+          .map((p) => p.name)
+          .filter((name) => !disabled.has(name));
+        const current = options.scope.providers.length > 0 ? options.scope.providers : names;
+        await window.cloudstream?.setSearchScope({
+          providers: current.filter((name) => name !== provider),
+          indexers: options.scope.indexers,
+        });
+        setHiddenProviders((now) => new Set([...now, provider]));
+        setMenuNotice(`${provider} is left out of your searches. Change it under Search sources.`);
+      },
+      async disableProvider(provider) {
+        await window.cloudstream?.setProviderEnabled(provider, false);
+        setHiddenProviders((now) => new Set([...now, provider]));
+        setMenuNotice(`${provider} is turned off. Turn it back on in Extensions.`);
+      },
+    }),
+    [setMenuNotice, onSelectMedia]
   );
 
   /**
@@ -374,6 +451,7 @@ export const SearchView: React.FC<SearchViewProps> = ({
    * that lead to an empty grid is worse than offering none.
    */
   const typeTabs = useMemo(() => tabsFor(results), [results]);
+  const ownTabRowsInAll = useMemo(() => ownTabRowsBelongInAll(results), [results]);
 
   // A tab that stops matching as results stream in must not strand the grid.
   const activeTab = typeTabs.some((tab) => tab.id === typeTab) ? typeTab : 'all';
@@ -398,9 +476,9 @@ export const SearchView: React.FC<SearchViewProps> = ({
     () =>
       results.filter((item) => {
         if (sourceFilter !== 'all' && !sourcesOf(item).includes(sourceFilter)) return false;
-        return matchesTab(item, activeTab);
+        return matchesTab(item, activeTab, { ownTabRowsInAll });
       }),
-    [results, sourceFilter, activeTab]
+    [results, sourceFilter, activeTab, ownTabRowsInAll]
   );
 
   /**
@@ -461,7 +539,14 @@ export const SearchView: React.FC<SearchViewProps> = ({
   }
 
   return (
+    <CreditsContext.Provider value={credits}>
+    <ResultContextMenuProvider actions={menuActions}>
     <div style={{ display: 'flex', flexDirection: 'column', gap: '0.85rem' }}>
+      {menuNotice && (
+        <p className="settings-note" role="status">
+          {menuNotice}
+        </p>
+      )}
       {/*
         One quiet toolbar instead of a heading, a scope paragraph and three
         buttons. The query is already in the search box, so "Search Results for
@@ -481,7 +566,7 @@ export const SearchView: React.FC<SearchViewProps> = ({
                 className={`type-tabs__tab${activeTab === 'all' ? ' type-tabs__tab--on' : ''}`}
                 onClick={() => setTypeTab('all')}
               >
-                All <span>{results.length}</span>
+                All <span>{allCount(results)}</span>
               </button>
               {typeTabs.map((tab) => (
                 <button
@@ -611,6 +696,18 @@ export const SearchView: React.FC<SearchViewProps> = ({
         />
       )}
 
+      {named && (
+        <CreditedRow
+          entity={named.entity}
+          credits={named.credits}
+          tab={activeTab}
+          onSelectMedia={onSelectMedia}
+          onPlayDirectly={onPlayDirectly}
+          onSearch={onSearch}
+          onOpenEntity={onOpenEntity}
+        />
+      )}
+
       {filtered.length === 0 ? (
         <div className="search-empty">
           {sourceFilter !== 'all' || activeTab !== 'all' ? (
@@ -676,6 +773,8 @@ export const SearchView: React.FC<SearchViewProps> = ({
         />
       )}
     </div>
+    </ResultContextMenuProvider>
+    </CreditsContext.Provider>
   );
 };
 
@@ -703,7 +802,11 @@ const ResultGrid: React.FC<{
       {groups.map((group) => {
         const open = openGroups[group.id] ?? group.defaultOpen;
         return (
-          <section key={group.id} style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+          <section
+            key={group.id}
+            className={group.id === 'other' && !open ? 'search-other' : undefined}
+            style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}
+          >
             <div className="search-section">
               <button
                 className="search-group__toggle"
@@ -717,7 +820,7 @@ const ResultGrid: React.FC<{
                 ) : (
                   <Search size={15} style={{ color: 'var(--text-subtle)' }} />
                 )}
-                <h3 className={group.id === 'other' ? 'search-section__muted' : undefined}>
+                <h3 className={group.id === 'other' && open ? 'search-section__muted' : undefined}>
                   {group.label}
                 </h3>
                 <span className="search-group__count">{group.items.length}</span>
@@ -733,6 +836,39 @@ const ResultGrid: React.FC<{
               )}
             </div>
 
+            {/*
+              Folded by default, but not out of sight. A bare collapsed heading
+              read as the end of the results, and most viewers never opened it:
+              a preview of what is inside and a plain "Show all" is what makes
+              these rows (often the same work under another name) reachable.
+            */}
+            {group.id === 'other' && !open && (
+              <div className="search-other__body">
+                <p className="search-other__note">
+                  These sources answered with titles that don&apos;t match what you typed. Often the
+                  same film or show under another name, a translation or a related release.
+                </p>
+                <div className="search-other__preview" aria-label="Preview">
+                  {[...group.items.filter((i) => i.posterUrl), ...group.items.filter((i) => !i.posterUrl)]
+                    .slice(0, 6)
+                    .map((item) => (
+                    <button
+                      key={item.url}
+                      type="button"
+                      className="search-other__thumb"
+                      title={`${item.name}${item.apiName ? ` · ${item.apiName}` : ''}`}
+                      onClick={() => onSelectMedia(item)}
+                    >
+                      <Poster src={item.posterUrl} title={item.name} sensitive={item.adult} itemKey={item.url} />
+                    </button>
+                  ))}
+                </div>
+                <Button onClick={() => onToggleGroup(group.id)} icon={ChevronDown}>
+                  Show all {group.items.length}
+                </Button>
+              </div>
+            )}
+
             {open && (
               <div id={`group-${group.id}`}>
                 <Grid
@@ -743,6 +879,248 @@ const ResultGrid: React.FC<{
               </div>
             )}
           </section>
+        );
+      })}
+    </div>
+  );
+};
+
+/**
+ * Last-time outcomes for every title, fetched once per mount.
+ *
+ * Per-card lookups would be one IPC round trip per poster on screen; the whole
+ * map is small and the grid needs most of it anyway.
+ */
+function useTitleOutcomes(): Record<string, { kind: 'played' | 'no-sources' | 'app-error'; reason?: string }> {
+  const [outcomes, setOutcomes] = useState<
+    Record<string, { kind: 'played' | 'no-sources' | 'app-error'; reason?: string }>
+  >({});
+  useEffect(() => {
+    window.cloudstream?.getTitleOutcomes?.().then((value) => setOutcomes(value ?? {}));
+  }, []);
+  return outcomes;
+}
+
+/**
+ * "With John Cena": the credited work of the person or company the query names.
+ *
+ * Title search finds what is *called* the name, so a person's own films rarely
+ * reach the grid below ("John Cena" gave 30 titles named after him and none he
+ * is in). This row is where they are, each card saying which credit, and Show
+ * all opens the whole filmography with its role filters.
+ */
+const CreditedRow: React.FC<{
+  entity: EntitySuggestion;
+  credits: Filmography;
+  tab: string;
+  onSelectMedia: (item: SearchResponse) => void;
+  onPlayDirectly?: (item: SearchResponse) => void;
+  onSearch?: (query: string) => void;
+  onOpenEntity?: (entity: EntitySuggestion) => void;
+}> = ({ entity, credits, tab, onSelectMedia, onPlayDirectly, onSearch, onOpenEntity }) => {
+  const cards = useMemo(
+    () =>
+      credits.works
+        .map((work) => {
+          const reason = reasonFor(credits.name, work);
+          // The heading names them, so each card names only the credit.
+          return { item: workAsItem(work), reason: reason ? { ...reason, label: reason.role } : undefined };
+        })
+        .filter(({ item }) => matchesTab(item, tab)),
+    [credits, tab]
+  );
+  if (cards.length === 0) return null;
+  // A work with no IMDb id has no page to open; searching its title is the next best thing.
+  const open = (item: SearchResponse) =>
+    item.url.startsWith('search://') ? onSearch?.(item.name) : onSelectMedia(item);
+  return (
+    <HomeRow
+      title={`With ${credits.name}`}
+      subtitle={entity.kind === 'company' ? 'Produced films and series' : 'Credited films and series'}
+      items={cards.map(({ item }) => item)}
+      hasMore={false}
+      onShowAll={() => onOpenEntity?.(entity)}
+      renderCard={(item, index) => (
+        <PosterCard
+          key={`${item.url}-${index}`}
+          item={item}
+          onSelectMedia={open}
+          onPlayDirectly={item.url.startsWith('search://') ? undefined : onPlayDirectly}
+          matchReason={cards[index].reason}
+        />
+      )}
+    />
+  );
+};
+
+/**
+ * Renders the visible window of cards based on container scroll and responsive column metrics.
+ * Isolating scroll state here ensures that scroll events re-render ONLY this component,
+ * without re-running dead-row partitioning or title interaction summaries in Grid.
+ */
+interface VirtualCardGridProps {
+  items: SearchResponse[];
+  interactionFor: (item: { url?: string } | null | undefined) => import('../types/interactions').TitleInteraction | undefined;
+  onSelectMedia: (item: SearchResponse) => void;
+  onPlayDirectly?: (item: SearchResponse) => void;
+}
+
+const VirtualCardGrid: React.FC<VirtualCardGridProps> = ({
+  items,
+  interactionFor,
+  onSelectMedia,
+  onPlayDirectly,
+}) => {
+  const gridRef = useRef<HTMLDivElement | null>(null);
+  const [width, setWidth] = useState(0);
+  const [scroller, setScroller] = useState<HTMLElement | null>(null);
+  const [gridTop, setGridTop] = useState(0);
+  const [scrollTop, setScrollTop] = useState(0);
+  const [viewportHeight, setViewportHeight] = useState(0);
+  const [focusedUrl, setFocusedUrl] = useState<string | null>(null);
+  const openMenu = useOpenResultMenu();
+  const credits = React.useContext(CreditsContext);
+  const reasons = useMemo(() => (credits ? matchReasons(items, credits) : null), [items, credits]);
+
+  // Layout effect measures container metrics and grid offset once on mount,
+  // and updates when container resizes or item count changes.
+  // Scrolling updates scrollTop passively without layout thrashing.
+  useLayoutEffect(() => {
+    const el = gridRef.current;
+    if (!el) return;
+    const found = el.closest<HTMLElement>('.view-viewport');
+    setScroller(found);
+
+    const updateGeometry = () => {
+      if (!el) return;
+      const w = el.clientWidth;
+      if (w > 0) setWidth(w);
+      if (found) {
+        setScrollTop(found.scrollTop);
+        setViewportHeight(found.clientHeight);
+        const scrollerRect = found.getBoundingClientRect();
+        const gridRect = el.getBoundingClientRect();
+        const top = Math.round(gridRect.top - scrollerRect.top + found.scrollTop);
+        setGridTop((prev) => (Math.abs(prev - top) >= 2 ? top : prev));
+      } else {
+        setScrollTop(window.scrollY);
+        setViewportHeight(window.innerHeight);
+        const gridRect = el.getBoundingClientRect();
+        const top = Math.round(gridRect.top + window.scrollY);
+        setGridTop((prev) => (Math.abs(prev - top) >= 2 ? top : prev));
+      }
+    };
+
+    updateGeometry();
+    const observer = new ResizeObserver(updateGeometry);
+    observer.observe(el);
+    if (found) observer.observe(found);
+    return () => observer.disconnect();
+  }, [items.length]);
+
+  // Bound to the scroller that was found, and rebound if it changes. Passive,
+  // and coalesced to one read per frame.
+  useEffect(() => {
+    const target: HTMLElement | Window = scroller ?? window;
+    let frame: number | null = null;
+    const read = () => {
+      frame = null;
+      // Content above the grid (progress strip, summaries) can change height
+      // without resizing the grid, so its offset is re-read here, once per
+      // scroll frame, rather than on every render.
+      const el = gridRef.current;
+      if (scroller) {
+        setScrollTop(scroller.scrollTop);
+        setViewportHeight(scroller.clientHeight);
+        if (el) {
+          const top = Math.round(
+            el.getBoundingClientRect().top - scroller.getBoundingClientRect().top + scroller.scrollTop
+          );
+          setGridTop((prev) => (Math.abs(prev - top) >= 2 ? top : prev));
+        }
+      } else {
+        setScrollTop(window.scrollY);
+        setViewportHeight(window.innerHeight);
+      }
+    };
+    const onScroll = () => {
+      if (frame === null) frame = requestAnimationFrame(read);
+    };
+    target.addEventListener('scroll', onScroll, { passive: true });
+    window.addEventListener('resize', onScroll, { passive: true });
+    return () => {
+      target.removeEventListener('scroll', onScroll);
+      window.removeEventListener('resize', onScroll);
+      if (frame !== null) cancelAnimationFrame(frame);
+    };
+  }, [scroller]);
+
+  const columns = gridColumns(width);
+  const focusedIndex = focusedUrl ? items.findIndex((item) => item.url === focusedUrl) : -1;
+
+  const windowResult = calculateVirtualWindow({
+    itemCount: items.length,
+    columns,
+    rowHeight: rowPitch(width, columns),
+    viewportHeight,
+    scrollTop,
+    gridTop,
+    focusedIndex: focusedIndex >= 0 ? focusedIndex : undefined,
+  });
+
+  const windowedItems = windowResult.shouldVirtualize
+    ? items.slice(windowResult.startIndex, windowResult.endIndex)
+    : items;
+
+  return (
+    <div
+      ref={gridRef}
+      role="grid"
+      aria-label="Search results"
+      aria-rowcount={windowResult.totalRows}
+      aria-colcount={columns}
+      style={{
+        display: 'grid',
+        gridTemplateColumns: `repeat(${columns}, minmax(0, 1fr))`,
+        gap: '1.25rem',
+        paddingTop: windowResult.paddingTop > 0 ? `${windowResult.paddingTop}px` : undefined,
+        paddingBottom: windowResult.paddingBottom > 0 ? `${windowResult.paddingBottom}px` : undefined,
+        overflowAnchor: 'none',
+      }}
+      onFocusCapture={(e) => {
+        const card = (e.target as HTMLElement)?.closest<HTMLElement>('.poster-card');
+        if (card?.dataset.url) setFocusedUrl(card.dataset.url);
+      }}
+      onBlurCapture={() => setFocusedUrl(null)}
+    >
+      {windowedItems.map((item, localIdx) => {
+        const globalIdx = windowResult.startIndex + localIdx;
+        const rowIndex = Math.floor(globalIdx / columns) + 1;
+        const colIndex = (globalIdx % columns) + 1;
+        return (
+          <div
+            key={cardKeyOf(item, globalIdx)}
+            role="row"
+            aria-rowindex={rowIndex}
+            style={{ display: 'contents' }}
+          >
+            <div
+              role="gridcell"
+              aria-colindex={colIndex}
+              aria-posinset={globalIdx + 1}
+              aria-setsize={items.length}
+              style={{ height: '100%' }}
+              onContextMenu={openMenu ? (event) => openMenu(item, event) : undefined}
+            >
+              <PosterCard
+                item={item}
+                onSelectMedia={onSelectMedia}
+                onPlayDirectly={onPlayDirectly}
+                interaction={interactionFor(item)}
+                matchReason={item.url ? reasons?.get(item.url) : undefined}
+              />
+            </div>
+          </div>
         );
       })}
     </div>
@@ -772,28 +1150,19 @@ const Grid: React.FC<{
    * longer.
    */
   const [showDead, setShowDead] = useState(false);
-  const { visible, hidden } = partitionDeadRows(items, outcomes, {
-    hideDeadRows: !showDead,
-  });
+  const { visible, hidden } = useMemo(
+    () => partitionDeadRows(items, outcomes, { hideDeadRows: !showDead }),
+    [items, outcomes, showDead]
+  );
+
   return (
     <>
-      <div
-        style={{
-          display: 'grid',
-          gridTemplateColumns: 'repeat(auto-fill, minmax(180px, 1fr))',
-          gap: '1.25rem',
-        }}
-      >
-        {visible.map((item, index) => (
-          <PosterCard
-            key={`${item.url}-${index}`}
-            item={item}
-            onSelectMedia={onSelectMedia}
-            onPlayDirectly={onPlayDirectly}
-            interaction={interactionFor(item)}
-          />
-        ))}
-      </div>
+      <VirtualCardGrid
+        items={visible}
+        interactionFor={interactionFor}
+        onSelectMedia={onSelectMedia}
+        onPlayDirectly={onPlayDirectly}
+      />
 
       {/*
         Says what is being held back, and offers it.
@@ -805,7 +1174,7 @@ const Grid: React.FC<{
       */}
       {hidden.length > 0 && (
         <button type="button" className="search-dead-rows" onClick={() => setShowDead(true)}>
-          {hidden.length} result{hidden.length === 1 ? '' : 's'} hidden — {' '}
+          {hidden.length} result{hidden.length === 1 ? '' : 's'} hidden —{' '}
           {hidden.length === 1 ? 'it had' : 'they had'} no playable source last time. Show{' '}
           {hidden.length === 1 ? 'it' : 'them'} anyway
         </button>
@@ -813,22 +1182,6 @@ const Grid: React.FC<{
     </>
   );
 };
-
-/**
- * Last-time outcomes for every title, fetched once per mount.
- *
- * Per-card lookups would be one IPC round trip per poster on screen; the whole
- * map is small and the grid needs most of it anyway.
- */
-function useTitleOutcomes(): Record<string, { kind: 'played' | 'no-sources' | 'app-error'; reason?: string }> {
-  const [outcomes, setOutcomes] = useState<
-    Record<string, { kind: 'played' | 'no-sources' | 'app-error'; reason?: string }>
-  >({});
-  useEffect(() => {
-    window.cloudstream?.getTitleOutcomes?.().then((value) => setOutcomes(value ?? {}));
-  }, []);
-  return outcomes;
-}
 
 /**
  * What each source actually contributed, once the search is over.

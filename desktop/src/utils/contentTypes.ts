@@ -1,4 +1,4 @@
-import { TvType, type SearchResponse } from '../types/api';
+import { TvType, type SearchResponse } from '../types/api.ts';
 
 /**
  * Content-type tabs, as CloudStream has on Android.
@@ -25,7 +25,7 @@ export const TYPE_TABS: Array<{ id: string; label: string; types: TvType[] }> = 
   { id: 'series', label: 'Series & Shows', types: [TvType.TvSeries, TvType.AsianDrama] },
   { id: 'anime', label: 'Anime', types: [TvType.Anime, TvType.AnimeMovie, TvType.OVA] },
   { id: 'documentary', label: 'Documentaries', types: [TvType.Documentary] },
-  { id: 'live', label: 'Live', types: [TvType.Live] },
+  { id: 'live', label: 'Live TV', types: [TvType.Live] },
   { id: 'torrent', label: 'Torrents', types: [TvType.Torrent] },
   // Last, so that it is never the tab beside "All" on a screen where it does
   // appear. `tabsFor` removes it entirely when nothing is filed under it.
@@ -37,8 +37,35 @@ export function typesOf(item: SearchResponse): TvType[] {
   return item.type ? [item.type] : [];
 }
 
-export function matchesTab(item: SearchResponse, tabId: string): boolean {
-  if (tabId === 'all') return true;
+/** Rows that only make sense in their own tab: live channels and raw torrents. */
+function hasOwnTab(item: SearchResponse): boolean {
+  return item.type === TvType.Live || item.type === TvType.Torrent;
+}
+
+/**
+ * Live channels (IPTV, radio) and raw torrent releases have their own tabs and
+ * are left out of All.
+ *
+ * A search for a film that also matched forty channel names, or returned forty
+ * indexer release names, buried the film among them. When such rows are all
+ * there is (a search for a channel, torrents only), All keeps them, or it would
+ * be an empty grid beside a tab that has everything.
+ */
+export function ownTabRowsBelongInAll(items: SearchResponse[]): boolean {
+  return items.every(hasOwnTab);
+}
+
+/** What the All tab holds, under {@link ownTabRowsBelongInAll}. */
+export function allCount(items: SearchResponse[]): number {
+  return ownTabRowsBelongInAll(items) ? items.length : items.filter((item) => !hasOwnTab(item)).length;
+}
+
+export function matchesTab(
+  item: SearchResponse,
+  tabId: string,
+  options: { ownTabRowsInAll?: boolean } = {}
+): boolean {
+  if (tabId === 'all') return options.ownTabRowsInAll === true || !hasOwnTab(item);
   const tab = TYPE_TABS.find((entry) => entry.id === tabId);
   if (!tab) return true;
   return typesOf(item).some((type) => tab.types.includes(type));

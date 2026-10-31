@@ -27,9 +27,11 @@ import { FirstRunBanner } from './components/FirstRunBanner';
 import { RegionOnboarding } from './components/regions/RegionOnboarding';
 import { AdultSessionPrompt } from './components/AdultSessionPrompt';
 import { ExtensionUpdateNotice } from './components/extensions/ExtensionUpdateNotice';
+import { AppUpdateNotice } from './components/AppUpdateNotice';
 import type { ExtensionsTab } from './components/extensions/ExtensionsScreen';
 
-import { TvType, type Episode, type SearchOptions, type SearchResponse } from './types/api';
+import { TvType, type EntitySuggestion, type Episode, type SearchCategory, type SearchOptions, type SearchResponse } from './types/api';
+import { filmographyRoles } from './utils/searchCategories';
 import type { HistoryEvent } from './types/history';
 import type { DownloadRequestResult, DownloadTask } from './types/download';
 import { buildDownloadTask } from './utils/downloadIdentity';
@@ -46,6 +48,8 @@ import { episodeKey, loadWatchState } from './components/player/seriesContext';
 import { usePrivacy } from './utils/usePrivacy';
 import { ScrollToTop } from './components/ScrollToTop';
 import { durableAddress } from './utils/durableAddress';
+import type { SourceVerdict } from './utils/sourceVerdict';
+import { parseTorrentAddress, torrentAddress } from './utils/torrentAddress';
 import { canonicalKey } from '../electron/cs3/libraryStore';
 import { SCREEN_SEARCH_FOCUS_EVENT, screenSearchAvailable } from './utils/screenSearch';
 import { classifyDroppedPaths, droppedLinkKind, isSupportedDrag } from './utils/dropSupport';
@@ -78,6 +82,14 @@ import {
  * imports above stay static and cost nothing — types are erased, and a
  * `import type` does not pull the module in.
  */
+/** A person or company picked in the search box: their films and series. */
+const FilmographyDialog = lazy(() =>
+  import('./components/detail/FilmographyDialog').then((m) => ({ default: m.FilmographyDialog }))
+);
+/** A search for people or studios only: who matches, and their work in that credit. */
+const PeopleResults = lazy(() =>
+  import('./components/search/PeopleResults').then((m) => ({ default: m.PeopleResults }))
+);
 const TrailerPopup = lazy(() =>
   import('./components/detail/TrailerPopup').then((m) => ({ default: m.TrailerPopup }))
 );
@@ -118,6 +130,9 @@ const DownloadCenter = lazy(() =>
 
 
 /** The year `canonicalKey` appended, for rows (Continue watching) that carry only the key. */
+/** How long a resume waits for the provider page before starting without it. */
+const RESUME_DETAIL_WAIT_MS = 4000;
+
 function yearFromKey(key: string | undefined): number | undefined {
   const match = key?.match(/:(\d{4})$/);
   return match ? Number(match[1]) : undefined;
@@ -452,6 +467,10 @@ export const App: React.FC = () => {
   }, []);
 
   const [isInspectorOpen, setIsInspectorOpen] = useState(false);
+  /** A person or studio picked from the search box, with the chips in force when it was picked. */
+  const [openEntity, setOpenEntity] = useState<{ entity: EntitySuggestion; categories: SearchCategory[] } | null>(null);
+  /** The last search was for people or studios only (no Titles chip): shown by PeopleResults, not SearchView. */
+  const [peopleSearch, setPeopleSearch] = useState<{ query: string; categories: SearchCategory[] } | null>(null);
   /** Which Settings pane to open on, when something deep-links into it. */
   const [settingsTab, setSettingsTab] = useState<'general' | 'about'>('general');
   /** Which Extensions tab opens next — Updates when the update notice is followed. */
@@ -826,6 +845,17 @@ export const App: React.FC = () => {
       return;
     }
     const handle = result.handle;
+    // Resumed from what this file last reached (Torrent PRD §2.6): progress is
+    // kept under the file's torrent address, whichever screen opened it.
+    const address = torrentAddress(request.infoHash, request.fileIndex);
+    const watchState = await loadWatchState(address, { title: request.title }).catch(() => undefined);
+    const knowsEpisode = request.season !== undefined && request.episode !== undefined;
+    const resumeAt = resumeSeconds(
+      watchState,
+      knowsEpisode
+        ? ({ season: request.season, episode: request.episode, name: request.fileName, url: '' } as Episode)
+        : null
+    );
     setPlayerHidden(false);
     setPlayback({
       streamUrl: handle.streamUrl,
@@ -846,9 +876,10 @@ export const App: React.FC = () => {
          * record would miss on every restart while looking as though it should
          * hit — the same trap the probe cache was keyed into.
          */
-        mediaUrl: `torrent://${request.infoHash}/${request.fileIndex}`,
+        mediaUrl: address,
         season: request.season,
         episode: request.episode,
+        resumeAt,
       },
     });
   }, []);
@@ -1074,6 +1105,7 @@ export const App: React.FC = () => {
       return;
     }
     lastQuery.current = { query, options };
+    setPeopleSearch(null);
     setSavedView(null);
     setSearchQuery(query);
     setSearch(null); // Instantly clear old search results
@@ -1127,9 +1159,26 @@ export const App: React.FC = () => {
     setSavedView(null);
     setSearchError(null);
     setSearchUi(EMPTY_SEARCH_UI);
+    setPeopleSearch(null);
   }, [search]);
 
-  const hasSearchResults = Boolean(search && (search.results.length > 0 || !search.done));
+  /** Enter with only people or studio chips: no provider search runs, only the lookup. */
+  const handleSearchPeople = useCallback(
+    async (query: string, categories: SearchCategory[]) => {
+      if (search && !search.done) await window.cloudstream?.cancelSearch(search.id);
+      setSearch(null);
+      setSavedView(null);
+      setSearchError(null);
+      setSearchQuery(query);
+      setPeopleSearch({ query, categories });
+      resetScreen('search');
+      switchTab('search');
+      scrollAfterPaint(0);
+    },
+    [search, resetScreen, switchTab, scrollAfterPaint]
+  );
+
+  const hasSearchResults = Boolean((search && (search.results.length > 0 || !search.done)) || peopleSearch);
 
   /**
    * Opens a saved search as it was saved.
@@ -1508,7 +1557,15 @@ export const App: React.FC = () => {
 
         // The detail is needed only to choose an episode, and costs a provider
         // round trip — a row that already names its episode skips it.
-        const response = knowsEpisode ? null : await window.cloudstream?.loadMedia(target.mediaUrl);
+        // Bounded: a provider resetting connections held a film's resume for as
+        // long as it took to fail, and without the page the resume still works
+        // (the episode comes from history, the source from the played record).
+        const response = knowsEpisode
+          ? null
+          : await Promise.race([
+              window.cloudstream?.loadMedia(target.mediaUrl),
+              new Promise<null>((resolve) => setTimeout(() => resolve(null), RESUME_DETAIL_WAIT_MS)),
+            ]);
         const detail = response?.ok ? response.detail : null;
         const title = detail?.name ?? target.title;
         const year = detail?.year ?? target.year ?? yearFromKey(target.key);
@@ -1630,7 +1687,33 @@ export const App: React.FC = () => {
   );
 
   const handlePlayFromHistory = useCallback(
-    (item: HistoryEvent) =>
+    (item: HistoryEvent) => {
+      // A file inside an imported torrent is reopened as that file (Torrent
+      // PRD §2.6): searching for its name would start some other release. The
+      // player resumes it from the progress kept under the same address.
+      const torrent = parseTorrentAddress(item.mediaUrl);
+      if (torrent) {
+        void (async () => {
+          // A torrent removed from the import list since is imported again
+          // from its magnet (a bare infohash finds it through the DHT), rather
+          // than answering "not imported" (Torrent PRD §2.6).
+          const imports = await window.cloudstream?.listTorrentImports?.();
+          const known = imports?.records?.some((record) => record.infoHash === torrent.infoHash);
+          if (imports?.ok && !known) {
+            await window.cloudstream?.importMagnet?.(
+              item.source?.magnet || `magnet:?xt=urn:btih:${torrent.infoHash}`
+            );
+          }
+          await handlePlayTorrentFile({
+          ...torrent,
+          fileName: item.episodeTitle || item.title,
+          title: item.parentTitle || item.title,
+          season: item.season,
+          episode: item.episode,
+          });
+        })();
+        return;
+      }
       handleResume({
         // Rows written before loopback addresses were refused still carry
         // one; the parent page is the durable route back.
@@ -1649,8 +1732,9 @@ export const App: React.FC = () => {
           extensionName: item.source?.extension,
           indexerName: item.source?.indexerName,
         },
-      }),
-    [handleResume]
+      });
+    },
+    [handleResume, handlePlayTorrentFile]
   );
 
   /**
@@ -1692,10 +1776,10 @@ export const App: React.FC = () => {
    * behave differently.
    */
   const handleSourceUnplayable = useCallback(
-    async (reason: string) => {
+    async (reason: string, verdict?: SourceVerdict) => {
       const id = sessionRef.current?.id;
       if (!id) return;
-      const response = await window.cloudstream?.skipPlaybackSource?.(id, reason);
+      const response = await window.cloudstream?.skipPlaybackSource?.(id, reason, verdict);
       if (response?.snapshot) {
         setSession((current) =>
           current && current.id === response.snapshot!.sessionId
@@ -2107,6 +2191,8 @@ export const App: React.FC = () => {
           isSearching={Boolean(search && !search.done)}
           onScopeChange={handleScopeChange}
           onOpenInspector={() => setIsInspectorOpen(true)}
+          onOpenEntity={(entity, categories) => setOpenEntity({ entity, categories })}
+          onSearchPeople={(query, categories) => void handleSearchPeople(query, categories)}
           // So a search started from the details page shows in the bar that
           // claims to say what is being searched.
           externalQuery={searchQuery}
@@ -2480,7 +2566,21 @@ export const App: React.FC = () => {
                   })()}
                 </ErrorBoundary>
               )}
-              {!openTorrent && activeTab === 'search' && (
+              {!openTorrent && activeTab === 'search' && peopleSearch && (
+                <ErrorBoundary>
+                  <Suspense fallback={null}>
+                    <PeopleResults
+                      key={`${peopleSearch.query}|${peopleSearch.categories.join(',')}`}
+                      query={peopleSearch.query}
+                      categories={peopleSearch.categories}
+                      onSelectMedia={handleSelectMedia}
+                      onPlayDirectly={handleQuickPlay}
+                      onSearchTitles={(query) => void handleSearch(query)}
+                    />
+                  </Suspense>
+                </ErrorBoundary>
+              )}
+              {!openTorrent && activeTab === 'search' && !peopleSearch && (
                 <ErrorBoundary>
                   <SearchView
                     query={searchQuery}
@@ -2497,6 +2597,7 @@ export const App: React.FC = () => {
                     onSaveResults={handleSaveSearch}
                     onClearResults={handleClearSearchResults}
                     onSearch={(query) => void handleSearch(query)}
+                    onOpenEntity={(entity) => setOpenEntity({ entity, categories: [] })}
                   />
                 </ErrorBoundary>
               )}
@@ -2650,6 +2751,8 @@ export const App: React.FC = () => {
         />
       )}
 
+      <AppUpdateNotice held={playerInFront} />
+
       {/* Dismissed by clicking it, because it reports something the viewer
           asked for and may want to read twice — not a status that ages out. */}
       <ExtensionUpdateNotice
@@ -2668,6 +2771,25 @@ export const App: React.FC = () => {
         >
           {actionNotice}
         </div>
+      )}
+
+      {openEntity && (
+        <Suspense fallback={null}>
+          <FilmographyDialog
+            key={openEntity.entity.id}
+            request={{
+              kind: openEntity.entity.kind === 'company' ? 'studio' : 'person',
+              name: openEntity.entity.name,
+              profileUrl: openEntity.entity.profileUrl,
+            }}
+            hint={{ imageUrl: openEntity.entity.imageUrl, subtitle: openEntity.entity.description }}
+            initialRole={filmographyRoles(openEntity.categories)?.[0]}
+            onClose={() => setOpenEntity(null)}
+            onSelectMedia={handleSelectMedia}
+            onPlayDirectly={handleQuickPlay}
+            onSearch={handleSearchFromDetail}
+          />
+        </Suspense>
       )}
 
       {trailer && (

@@ -3,6 +3,8 @@ import { Download, Loader2, AlertTriangle, CheckCircle2 } from 'lucide-react';
 import type { Episode } from '../types/api';
 import type { BatchProgress } from '../../electron/cs3/batchDownloader';
 import { Button, Dialog, DialogActions } from './ui';
+import { EpisodePicker } from './downloads/EpisodePicker';
+import { batchEpisodes, episodeKey } from './downloads/episodeSelection';
 
 /**
  * One decision, then a whole season downloads.
@@ -47,7 +49,10 @@ export const SeasonDownloadDialog: React.FC<SeasonDownloadDialogProps> = ({
   activeSeason,
   onClose,
 }) => {
-  const [scope, setScope] = useState<'season' | 'all'>('season');
+  const [scope, setScope] = useState<'season' | 'all' | 'pick'>('season');
+  // "Choose episodes": the picked keys and any per-episode quality.
+  const [picked, setPicked] = useState<Set<string>>(() => new Set());
+  const [episodeQuality, setEpisodeQuality] = useState<Map<string, number>>(() => new Map());
   const [quality, setQuality] = useState(1080);
   const [skipExisting, setSkipExisting] = useState(true);
   const [progress, setProgress] = useState<BatchProgress | null>(null);
@@ -59,8 +64,13 @@ export const SeasonDownloadDialog: React.FC<SeasonDownloadDialogProps> = ({
   );
 
   const selected = useMemo(
-    () => (scope === 'all' ? episodes : episodes.filter((e) => (e.season ?? 1) === activeSeason)),
-    [scope, episodes, activeSeason]
+    () =>
+      scope === 'all'
+        ? episodes
+        : scope === 'pick'
+          ? episodes.filter((e) => picked.has(episodeKey(e)))
+          : episodes.filter((e) => (e.season ?? 1) === activeSeason),
+    [scope, episodes, activeSeason, picked]
   );
 
   useEffect(() => {
@@ -86,12 +96,15 @@ export const SeasonDownloadDialog: React.FC<SeasonDownloadDialogProps> = ({
       providerName,
       mediaType,
       year,
-      episodes: selected.map((e) => ({
-        url: e.url,
-        name: e.name,
-        season: e.season,
-        episode: e.episode,
-      })),
+      episodes:
+        scope === 'pick'
+          ? batchEpisodes(episodes, picked, episodeQuality)
+          : selected.map((e) => ({
+              url: e.url,
+              name: e.name,
+              season: e.season,
+              episode: e.episode,
+            })),
       maxResolution: quality || undefined,
       skipExisting,
     });
@@ -115,9 +128,9 @@ export const SeasonDownloadDialog: React.FC<SeasonDownloadDialogProps> = ({
       makes the accessible dialog region the whole screen.
     */
     <Dialog
-      title={`Download ${scope === 'all' ? 'entire series' : `season ${activeSeason}`}`}
+      title={`Download ${scope === 'all' ? 'entire series' : scope === 'pick' ? 'episodes' : `season ${activeSeason}`}`}
       icon={<Download size={18} />}
-      size="md"
+      size={scope === 'pick' ? 'lg' : 'md'}
       onClose={onClose}
       dismissable={!running}
       footer={
@@ -172,11 +185,39 @@ export const SeasonDownloadDialog: React.FC<SeasonDownloadDialogProps> = ({
                   All seasons
                   <em>{episodes.length} episodes</em>
                 </button>
+                <button
+                  className={`btn ${scope === 'pick' ? 'btn-primary' : 'btn-secondary'}`}
+                  onClick={() => {
+                    // Starts from the active season ticked, the commonest pick.
+                    if (scope !== 'pick' && picked.size === 0) {
+                      setPicked(
+                        new Set(episodes.filter((e) => (e.season ?? 1) === activeSeason).map((e) => episodeKey(e)))
+                      );
+                    }
+                    setScope('pick');
+                  }}
+                  disabled={running}
+                >
+                  Choose episodes
+                  <em>{scope === 'pick' ? `${picked.size} selected` : 'any season, any quality'}</em>
+                </button>
               </div>
             </div>
 
+            {scope === 'pick' && (
+              <EpisodePicker
+                episodes={episodes}
+                activeSeason={activeSeason}
+                selected={picked}
+                onSelectedChange={setPicked}
+                quality={episodeQuality}
+                onQualityChange={setEpisodeQuality}
+                disabled={running}
+              />
+            )}
+
             <div className="modal__field">
-              <span className="modal__label">Quality</span>
+              <span className="modal__label">{scope === 'pick' ? 'Default quality' : 'Quality'}</span>
               <div className="modal__choices modal__choices--wrap">
                 {QUALITIES.map((q) => (
                   <button

@@ -46,7 +46,21 @@ interface EntryInfo {
   newestMs: number;
 }
 
-/** Size and newest mtime of a file or directory, without following links. */
+/**
+ * Bytes a file really occupies, not its length.
+ *
+ * The torrent cache writes sparse files: an 18 GB film with 40 MB fetched
+ * reports `size` 18 GB and occupies 40 MB, so the storage report and the
+ * size cap read `blocks` (allocated 512-byte units; on Windows libuv fills it
+ * from the file's allocation size). Below 64 KB the length is used: NTFS keeps
+ * small files inside the MFT and reports 0 blocks for them. Pure.
+ */
+export function bytesOnDisk(stat: { size: number; blocks?: number }): number {
+  if (stat.size < 64 * 1024 || typeof stat.blocks !== 'number' || !Number.isFinite(stat.blocks)) return stat.size;
+  return Math.min(stat.size, stat.blocks * 512);
+}
+
+/** On-disk size and newest mtime of a file or directory, without following links. */
 export async function measure(target: string): Promise<EntryInfo> {
   let bytes = 0;
   let newestMs = 0;
@@ -69,7 +83,7 @@ export async function measure(target: string): Promise<EntryInfo> {
       for (const name of names) await visit(path.join(current, name));
       return;
     }
-    bytes += stat.size;
+    bytes += bytesOnDisk(stat);
   };
   await visit(target);
   return { path: target, bytes, newestMs };

@@ -1,3 +1,6 @@
+import { ProviderCooldown } from './cs3/providerCooldown.ts';
+import { ProviderSlots } from './cs3/providerSlots.ts';
+import { serviceOf, servicesOff } from './cs3/sharedServices.ts';
 import fs from 'fs';
 // Address helpers live in a pure module so they can be tested; this file
 // imports `electron` and cannot be loaded under Node's type stripping.
@@ -26,7 +29,7 @@ import { fetchBuffer, fetchJson } from './torrent/http';
 import type { DatastoreManager } from './datastore';
 import { DisabledSet } from './util/disabledSet';
 import { SidecarSupervisor } from './cs3/sidecarSupervisor';
-import { isTransportFailure } from './cs3/rpcResult.ts';
+import { isTransportFailure, providerLatencyMs, type RpcResult } from './cs3/rpcResult.ts';
 import { OFFICIAL_REPOSITORIES, type OfficialRepository } from './officialRepositories';
 import { getIssueLog } from './cs3/extensionIssues';
 import { scopedLogger } from './logging/logger';
@@ -648,6 +651,8 @@ export interface ProviderSearchOutcome {
   latencyMs: number;
   /** Set when this provider failed; the others are unaffected. */
   error?: string;
+  /** Not asked: paused after repeated transient failures (`cs3/providerCooldown.ts`). */
+  cooling?: boolean;
 }
 
 /**
@@ -3392,9 +3397,22 @@ export class PluginManager {
   }
 
   private adultGate: (() => boolean) | null = null;
+  /** Per-launch backoff for providers that keep answering "not now". */
+  private readonly cooldown = new ProviderCooldown();
+  /** Services switched off among the built-in providers (`cs3/sharedServices.ts`). */
+  private serviceGate: (() => Set<string>) | null = null;
 
   public setAdultGate(gate: () => boolean): void {
     this.adultGate = gate;
+  }
+
+  public setServiceGate(gate: () => Set<string>): void {
+    this.serviceGate = gate;
+  }
+
+  /** Services an extension provider switch has turned off, for the built-in side. */
+  public switchedOffServices(): Set<string> {
+    return servicesOff(this.getDisabledProviders());
   }
 
   public listAdultOnlyProviderNames(): string[] {
@@ -3461,9 +3479,16 @@ export class PluginManager {
     const disabledExtensions = new Set(this.getDisabledExtensions());
     const disabledRepositories = new Set(this.getDisabledRepositories());
     const allowAdult = this.adultAllowed();
+    // Off anywhere is off everywhere: the built-in Internet Archive switched
+    // off also withdraws an extension's provider of the same service.
+    const offServices = new Set([...servicesOff(disabled), ...(this.serviceGate?.() ?? [])]);
 
     return [...this.providers.values()]
       .filter((provider) => !disabled.has(provider.name))
+      .filter((provider) => {
+        const service = serviceOf(provider.name);
+        return !service || !offServices.has(service);
+      })
       .filter((provider) => !disabledExtensions.has(provider.pluginInternalName))
       .filter((provider) => !disabledRepositories.has(this.repositoryIdOf(provider.pluginInternalName)))
       .filter((provider) => allowAdult || !isAdultOnlyProvider(provider))
@@ -3583,6 +3608,11 @@ export class PluginManager {
    * A named provider that is disabled is dropped rather than re-enabled, which
    * is what keeps the extensions screen authoritative over the scope picker.
    */
+  /** The enabled providers (narrowed to `only`), best first: the order a search asks them in. */
+  public rankForSearch(only?: string[]): string[] {
+    return applySearchOrder(this.narrowToEnabled(only), this.searchOrder);
+  }
+
   public narrowToEnabled(only?: string[]): string[] {
     const enabled = this.enabledProviderNames();
     if (!only) return enabled;
@@ -3610,7 +3640,8 @@ export class PluginManager {
     query: string,
     only: string[] | undefined,
     onProvider: (outcome: ProviderSearchOutcome) => void,
-    signal?: AbortSignal
+    signal?: AbortSignal,
+    options: { ignoreCooldown?: boolean } = {}
   ): Promise<void> {
     await this.ensureProvidersLoaded();
     if (signal?.aborted) return;
@@ -3624,7 +3655,21 @@ export class PluginManager {
      * not spent on one that answers in three hundred milliseconds, and the app
      * has been measuring which is which all along without using it here.
      */
-    const targets = applySearchOrder(this.narrowToEnabled(only), this.searchOrder);
+    const ordered = applySearchOrder(this.narrowToEnabled(only), this.searchOrder);
+    // A provider paused after repeated rate limits or timeouts is reported, not
+    // asked; an exhaustive search (the viewer's "ask everyone") still asks it.
+    const { ask: targets, cooling } = options.ignoreCooldown
+      ? { ask: ordered, cooling: [] }
+      : this.cooldown.partition(ordered);
+    for (const entry of cooling) {
+      onProvider({
+        provider: entry.provider,
+        results: [],
+        latencyMs: 0,
+        cooling: true,
+        error: `Paused after repeated failures; asked again in ${Math.ceil(entry.ms / 60_000)} min.`,
+      });
+    }
     if (targets.length === 0) return;
 
     this.liveSearches += 1;
@@ -3634,6 +3679,7 @@ export class PluginManager {
         if (signal?.aborted) return;
         const name = targets[next++];
         const outcome = await this.searchOne(query, name);
+        this.cooldown.record(name, outcome.error);
         // A cancelled search must not keep mutating the caller's snapshot;
         // the reply that was already in flight is simply dropped.
         if (signal?.aborted) return;
@@ -3700,12 +3746,8 @@ export class PluginManager {
      * `false` here would replace that explanation with silence.
      */
     await this.ensureProviderActive(name);
-    const response = await this.sidecar.call(
-      'providerSearch',
-      { query, providers: [name] },
-      PROVIDER_CALL_TIMEOUT_MS
-    );
-    const latencyMs = Date.now() - started;
+    const response = await this.providerCall(name, 'providerSearch', { query, providers: [name] });
+    const latencyMs = providerLatencyMs(started, response);
 
     if (!response.ok) {
       const error = response.error ?? 'The extension runtime did not answer.';
@@ -3818,11 +3860,7 @@ export class PluginManager {
     }
 
     await this.ensureProviderActive(providerName);
-    const response = await this.sidecar.call(
-      'providerMainPageSections',
-      { provider: providerName },
-      PROVIDER_CALL_TIMEOUT_MS
-    );
+    const response = await this.providerCall(providerName, 'providerMainPageSections', { provider: providerName });
 
     if (!response.ok) {
       const reason =
@@ -3894,18 +3932,14 @@ export class PluginManager {
 
     await this.ensureProviderActive(providerName);
     const started = Date.now();
-    const response = await this.sidecar.call(
-      'providerMainPage',
-      {
-        provider: providerName,
-        section: section.name,
-        data: section.data,
-        page: requested,
-        horizontalImages: section.horizontalImages === true,
-      },
-      PROVIDER_CALL_TIMEOUT_MS
-    );
-    const latencyMs = Date.now() - started;
+    const response = await this.providerCall(providerName, 'providerMainPage', {
+      provider: providerName,
+      section: section.name,
+      data: section.data,
+      page: requested,
+      horizontalImages: section.horizontalImages === true,
+    });
+    const latencyMs = providerLatencyMs(started, response);
 
     const fail = (message: string): ProviderCatalogPage => {
       this.diagnostics?.record({
@@ -4038,12 +4072,13 @@ export class PluginManager {
     await this.ensureProviderActive(ref.provider);
 
     const startedAt = Date.now();
-    const response = await this.sidecar.call(
+    const response = await this.providerCall(
+      ref.provider,
       'providerLoad',
       { provider: ref.provider, url: ref.target },
-      PROVIDER_CALL_TIMEOUT_MS
+      { urgent: true }
     );
-    const latencyMs = Date.now() - startedAt;
+    const latencyMs = providerLatencyMs(startedAt, response);
 
     /**
      * Every way this can fail says which way it was.
@@ -4231,6 +4266,52 @@ export class PluginManager {
     url: string,
     options: { speculative?: boolean } = {}
   ): Promise<{ links: ExtractorLink[]; diagnosis?: SourceDiagnosis }> {
+    // One provider request per handle at a time (Content Validation PRD
+    // Phase 4): the detail page's prefetch and a Play press, or two episodes'
+    // walks, ask for the same links within seconds, and each extra call is one
+    // more chance of a rate limit. Callers get their own copy of the list.
+    const key = `${options.speculative === true ? 's' : 'f'}|${url}`;
+    let pending = this.linksInFlight.get(key);
+    if (!pending) {
+      pending = this.loadLinksOnce(url, options).finally(() => this.linksInFlight.delete(key));
+      this.linksInFlight.set(key, pending);
+    }
+    const result = await pending;
+    return { ...result, links: [...result.links] };
+  }
+
+  private readonly linksInFlight = new Map<string, Promise<{ links: ExtractorLink[]; diagnosis?: SourceDiagnosis }>>();
+
+  /** At most a few background requests per provider at once (`cs3/providerSlots.ts`). */
+  private readonly providerSlots = new ProviderSlots();
+
+  /**
+   * One provider request, through that provider's slots. The wait for a slot
+   * is added to `queuedMs`, so `providerLatencyMs` never scores a provider
+   * for the app's own queue, as it already does for the JVM's.
+   */
+  private providerCall(
+    provider: string,
+    method: string,
+    params: Record<string, unknown>,
+    options: { urgent?: boolean } = {}
+  ): Promise<RpcResult> {
+    const asked = Date.now();
+    return this.providerSlots.run(
+      provider,
+      async () => {
+        const waited = Date.now() - asked;
+        const response = await this.sidecar.call(method, params, PROVIDER_CALL_TIMEOUT_MS);
+        return waited > 0 ? { ...response, queuedMs: (response.queuedMs ?? 0) + waited } : response;
+      },
+      options
+    );
+  }
+
+  private async loadLinksOnce(
+    url: string,
+    options: { speculative?: boolean }
+  ): Promise<{ links: ExtractorLink[]; diagnosis?: SourceDiagnosis }> {
     const ref = parseExtensionUrl(url);
     if (!ref) {
       return {
@@ -4249,12 +4330,13 @@ export class PluginManager {
     const speculative = options.speculative === true;
 
     const startedAt = Date.now();
-    const response = await this.sidecar.call(
+    const response = await this.providerCall(
+      ref.provider,
       'providerLoadLinks',
       { provider: ref.provider, data: ref.target },
-      PROVIDER_CALL_TIMEOUT_MS
+      { urgent: !speculative }
     );
-    const latencyMs = Date.now() - startedAt;
+    const latencyMs = providerLatencyMs(startedAt, response);
 
     /** Shared shape for the four ways this ends with nothing. */
     const nothing = (

@@ -1,3 +1,5 @@
+> **Superseded by [41](./41-desktop-extension-platform-and-community-standard.md) (2026-10-23).** Kept because `AGENTS.md` and older PRDs cite it; implement 41, not this.
+>
 > **Filed 2026-10-20: Partial / pending.** Some parts are built; the rest is roadmap. See [docs-audit-2026-10-20](../roadmap/docs-audit-2026-10-20.md).
 
 # 39 — Our own extension standard, and the playback contract behind it

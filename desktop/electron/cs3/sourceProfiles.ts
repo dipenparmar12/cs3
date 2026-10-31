@@ -73,6 +73,12 @@ export interface ProfileState {
   activeId: string;
   /** The unnamed selection. Preserved across every switch — that is the point. */
   draft: { providers: string[]; indexers: string[]; languages: string[]; contentTypes: string[] };
+  /**
+   * The profile a new search starts from (decided 2026-10-23): applied at
+   * launch. A profile picked in the menu stays until the next launch.
+   * Absent means All sources.
+   */
+  defaultId?: string;
 }
 
 export const EMPTY_DRAFT: ProfileState['draft'] = {
@@ -310,7 +316,23 @@ export function remove(state: ProfileState, id: string): ProfileState {
     profiles,
     draft: state.draft,
     activeId: state.activeId === id ? ALL_SOURCES_ID : state.activeId,
+    ...(state.defaultId && state.defaultId !== id ? { defaultId: state.defaultId } : {}),
   };
+}
+
+/**
+ * Makes `id` the profile new searches start from. All sources, or an id that
+ * names nothing, clears it: the draft is never a default, because it changes
+ * with every tick and a default that moves is not one.
+ */
+export function setDefault(state: ProfileState, id: string): ProfileState {
+  const { defaultId: _previous, ...rest } = state;
+  return findProfile(state, id) ? { ...rest, defaultId: id } : rest;
+}
+
+/** The state a launch opens with: the default profile active, when one is set. */
+export function atLaunch(state: ProfileState): ProfileState {
+  return state.defaultId ? activate(state, state.defaultId) : state;
 }
 
 /**
@@ -350,5 +372,9 @@ export function hydrate(stored: unknown): ProfileState {
   const known = activeId === ALL_SOURCES_ID || activeId === DRAFT_ID
     || profiles.some((profile) => profile.id === activeId);
 
-  return { profiles, draft, activeId: known ? activeId : ALL_SOURCES_ID };
+  const defaultId = typeof record.defaultId === 'string' && profiles.some((profile) => profile.id === record.defaultId)
+    ? record.defaultId
+    : undefined;
+
+  return { profiles, draft, activeId: known ? activeId : ALL_SOURCES_ID, ...(defaultId ? { defaultId } : {}) };
 }

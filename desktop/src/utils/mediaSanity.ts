@@ -1,3 +1,5 @@
+import { validateContent } from './contentValidation.ts';
+
 /**
  * Whether a stream is plainly not the title it was offered as.
  *
@@ -13,8 +15,10 @@
  * two-hour film is not. The thresholds are deliberately loose — a wrong
  * verdict skips a working source, which is worse than letting a bad one play.
  *
- * Applied after the stream has started and reported a duration, never before:
- * it never delays a working source.
+ * Applied after the stream has started and reported a duration, and before it
+ * when the probe already measured the source (`wrongMediaBeforePlay`); never
+ * by asking for a length nothing has measured, so it never delays a working
+ * source.
  */
 export interface MediaSanityInput {
   /** The stream's duration in seconds, as the player reports it. */
@@ -24,19 +28,17 @@ export interface MediaSanityInput {
   isLive?: boolean;
 }
 
-/** Titles shorter than this are not judged at all: shorts and clips vary too much. */
-const MIN_EXPECTED_SECONDS = 20 * 60;
-/** Nothing above this many seconds is called a placeholder, whatever the ratio. */
-const PLACEHOLDER_CEILING_SECONDS = 6 * 60;
-/** The stream must be shorter than this share of the expected length. */
-const MAX_RATIO = 0.15;
-
+/**
+ * The confirmed-mismatch half of `contentValidation.ts`, whose movie row holds
+ * this rule's thresholds (judged from 20 min expected; under 6 min and under
+ * 15%). Kind is always "movie" here so an episode is judged as it always was.
+ */
 export function looksLikeWrongMedia(input: MediaSanityInput): boolean {
-  const { actualSeconds, expectedSeconds, isLive } = input;
-  if (isLive) return false;
-  if (!Number.isFinite(actualSeconds) || actualSeconds <= 0) return false;
-  if (!expectedSeconds || !Number.isFinite(expectedSeconds) || expectedSeconds < MIN_EXPECTED_SECONDS) return false;
-  return actualSeconds < PLACEHOLDER_CEILING_SECONDS && actualSeconds < expectedSeconds * MAX_RATIO;
+  if (input.isLive) return false;
+  return (
+    validateContent({ kind: 'movie', expectedSeconds: input.expectedSeconds, detectedSeconds: input.actualSeconds })
+      .identity === 'confirmed-mismatch'
+  );
 }
 
 /**
@@ -61,6 +63,23 @@ export function judgeableDuration(input: {
   if (input.isLive) return undefined;
   const seconds = input.converted ? input.sourceSeconds : input.reportedSeconds;
   return seconds !== undefined && Number.isFinite(seconds) && seconds > 0 ? seconds : undefined;
+}
+
+/**
+ * The same verdict before anything is attached, from the length the probe
+ * measured while preparing (ffprobe's format duration, or a finished HLS
+ * playlist's `#EXTINF` sum). That measurement was already paid for, so a clip
+ * is skipped without the viewer watching its first seconds (Content Validation
+ * PRD §5.4: never probe again just to learn a length). `null` when either
+ * length is missing or the stream is not plainly wrong; the after-start check
+ * still runs.
+ */
+export function wrongMediaBeforePlay(input: { sourceSeconds?: number; expectedSeconds?: number }): string | null {
+  const actual = judgeableDuration({ reportedSeconds: 0, converted: true, sourceSeconds: input.sourceSeconds });
+  if (actual === undefined || input.expectedSeconds === undefined) return null;
+  return looksLikeWrongMedia({ actualSeconds: actual, expectedSeconds: input.expectedSeconds })
+    ? wrongMediaReason(actual, input.expectedSeconds)
+    : null;
 }
 
 /** The sentence shown on the source that was skipped. */

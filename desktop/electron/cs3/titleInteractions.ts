@@ -38,6 +38,7 @@
  * `extensionIssues.ts` makes for keeping URLs out of a durable ledger.
  */
 
+import type { ProviderAttempt } from './providerAttempts.ts';
 import type { DatastoreManager } from '../datastore.ts';
 import type { DownloadTask } from '../../src/types/download.ts';
 import { DownloadState } from '../../src/types/download.ts';
@@ -137,6 +138,12 @@ export interface TitleInteractionDeps {
   sourceReadiness: (url: string) => SourceReadiness | undefined;
   /** A thunk rather than the queue, because it changes under this file. */
   downloadTasks: () => DownloadTask[];
+  /** One lookup per batch over what each provider answered (`cs3/providerAttempts.ts`). */
+  providerAttempts?: () => (work: string, provider: string | undefined) => ProviderAttempt | undefined;
+}
+
+function attemptSummary(attempt: ProviderAttempt | undefined): TitleInteraction['attempt'] {
+  return attempt ? { outcome: attempt.outcome, at: attempt.at, detail: attempt.detail } : undefined;
 }
 
 export class TitleInteractionStore {
@@ -265,6 +272,7 @@ export class TitleInteractionStore {
       else downloadsByKey.set(key, [task]);
     }
 
+    const attemptFor = this.deps.providerAttempts?.();
     const out: Record<string, TitleInteraction> = {};
     for (const query of queries) {
       if (!query?.url) continue;
@@ -292,6 +300,7 @@ export class TitleInteractionStore {
         sources: query.url ? this.deps.sourceReadiness(query.url) : undefined,
         lastProvider: (watchSummary || entryMatches) ? (played?.source?.providerName ?? undefined) : undefined,
         library: entryMatches && entry ? { key: entry.key, status: entry.status } : undefined,
+        attempt: attemptSummary(attemptFor?.(key, query.apiName)),
       };
     }
     return out;

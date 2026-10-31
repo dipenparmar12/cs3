@@ -129,6 +129,15 @@ test('adult genre, tag, description, and media classification across sources', (
   assert.equal(isAdultGenreOrTag('Erotica'), true);
   assert.equal(isAdultGenreOrTag('Action'), false);
   assert.equal(isAdultGenreOrTag('Drama'), false);
+  assert.equal(isAdultGenreOrTag('Ecchi'), false);
+  assert.equal(isAdultMedia({ name: 'Yoasobi Gurashi!', tags: ['Ecchi', 'Romance'] }), false);
+  assert.equal(isAdultMedia({ name: 'Yoasobi Gurashi!', tags: ['Hentai'] }), true);
+  assert.equal(isAdultMedia({ name: 'Animation Title', url: 'https://site.com/hentai/video' }), true);
+  assert.equal(isAdultMedia({ name: 'Animation Title', type: 'Hentai' }), true);
+
+// A row-label word in an address is not evidence: `hot` names ordinary titles.
+assert.equal(isAdultMedia({ name: 'Hot Wheels', url: 'https://site.example/series/hot-wheels-s01/' }), false);
+assert.equal(isAdultMedia({ name: 'Hot 100', url: 'https://example.com/hot-100-songs/' }), false);
 
   assert.equal(isSensitiveDescription('An explicit XXX pornographic film.'), true);
   assert.equal(isSensitiveDescription('A thriller about a detective solving a murder.'), false);

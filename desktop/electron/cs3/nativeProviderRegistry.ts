@@ -29,6 +29,7 @@
  */
 import type { DatastoreManager } from '../datastore.ts';
 import { DisabledSet } from '../util/disabledSet.ts';
+import { serviceOf, servicesOff } from './sharedServices.ts';
 import { getLogger } from '../logging/logger.ts';
 import type { SearchResponse, SubtitleFile, TvType } from '../../src/types/api.ts';
 import { InternetArchiveProvider } from './nativeProviders/internetArchive.ts';
@@ -331,8 +332,13 @@ export class NativeProviderRegistry {
   public enabledProviderNames(): string[] {
     const off = new Set(this.disabled.list());
     const allowAdult = this.adultAllowed();
+    const offServices = new Set([...this.switchedOffServices(), ...(this.serviceGate?.() ?? [])]);
     return this.all()
       .filter((p) => !off.has(p.id))
+      .filter((p) => {
+        const service = serviceOf(p.name);
+        return !service || !offServices.has(service);
+      })
       .filter((p) => allowAdult || !p.adult)
       .filter((p) => !p.requiresConfig)
       .map((p) => p.name);
@@ -342,6 +348,19 @@ export class NativeProviderRegistry {
   public enabledProviders(): NativeProvider[] {
     const names = new Set(this.enabledProviderNames());
     return this.all().filter((p) => names.has(p.name));
+  }
+
+  /** Services an extension switch has turned off (`cs3/sharedServices.ts`). */
+  private serviceGate: (() => Set<string>) | null = null;
+
+  public setServiceGate(gate: () => Set<string>): void {
+    this.serviceGate = gate;
+  }
+
+  /** Services a built-in provider switch has turned off, for the extension side. */
+  public switchedOffServices(): Set<string> {
+    const off = new Set(this.disabled.list());
+    return servicesOff(this.all().filter((p) => off.has(p.id)).map((p) => p.name));
   }
 
   public setEnabled(id: string, enabled: boolean): string[] {

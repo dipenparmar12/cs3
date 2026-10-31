@@ -304,3 +304,14 @@ for (const [name, fn] of tests) {
 }
 console.log(failed === 0 ? `\n${tests.length} passed` : `\n${failed} of ${tests.length} FAILED`);
 process.exit(failed === 0 ? 0 : 1);
+
+test('a default profile opens at launch, and deleting it leaves no default', async () => {
+  const { setDefault, atLaunch, hydrate: rehydrate, remove: drop, create: make, INITIAL_STATE: initial, activate: pick } = await import('./sourceProfiles.ts');
+  const { state: withOne, profile } = make(initial, 'Hindi');
+  const elsewhere = pick(setDefault(withOne, profile.id), 'all');
+  assert.equal(atLaunch(rehydrate(JSON.parse(JSON.stringify(elsewhere)))).activeId, profile.id);
+  assert.equal(setDefault(elsewhere, 'all').defaultId, undefined, 'All sources clears it');
+  assert.equal(setDefault(withOne, '').defaultId, undefined, 'the draft is never a default');
+  assert.equal(drop(elsewhere, profile.id).defaultId, undefined);
+  assert.equal(atLaunch(initial).activeId, 'all', 'no default: nothing changes');
+});

@@ -9,6 +9,7 @@ import { SidecarStderrReader } from './sidecarStderr';
 import { getIssueLog } from './extensionIssues';
 import { describeError } from '../../src/utils/errors.ts';
 import type { RpcResult } from './rpcResult.ts';
+import { jvmHeapMb } from './jvmHeap.ts';
 import { appStorage } from '../storage/appStorage.ts';
 import { sweepTemp } from '../storage/storageCleanup.ts';
 
@@ -58,6 +59,9 @@ interface Pending {
  * so it can be tested; this file owns the pipe and nothing else.
  */
 const sidecarLog = scopedLogger('runtime', { component: 'sidecar' });
+
+/** A wait for a JVM worker worth a log line (`rpc_queued`). */
+const QUEUED_LOG_MS = 1_000;
 
 /**
  * RPC names this build will actually call.
@@ -217,13 +221,7 @@ export class SidecarSupervisor {
       // A failed tidy never stops the runtime from starting.
     }
 
-    const totalMem = os.totalmem();
-    const maxHeapMb =
-      totalMem >= 16 * 1024 * 1024 * 1024
-        ? 4096
-        : totalMem >= 8 * 1024 * 1024 * 1024
-          ? 3072
-          : 2048;
+    const maxHeapMb = jvmHeapMb(os.totalmem());
 
     try {
       this.proc = spawn(
@@ -413,6 +411,7 @@ export class SidecarSupervisor {
       result?: Record<string, unknown>;
       error?: string;
       errorKind?: string;
+      queuedMs?: unknown;
       hostCall?: string;
       hostId?: string;
       params?: Record<string, unknown>;
@@ -438,11 +437,18 @@ export class SidecarSupervisor {
 
     this.pending.delete(id);
     clearTimeout(pending.timer);
+    const queuedMs = typeof frame.queuedMs === 'number' ? frame.queuedMs : undefined;
+    // The only record of contention for JVM workers: without it a slow source
+    // lookup cannot be told from a slow provider.
+    if (queuedMs !== undefined && queuedMs >= QUEUED_LOG_MS) {
+      sidecarLog.info('rpc_queued', { method: pending.method, queuedMs, ok: Boolean(frame.ok) });
+    }
     pending.resolve({
       ok: Boolean(frame.ok),
       result: frame.result,
       error: this.explainUnknownMethod(pending.method, frame.error),
       errorKind: frame.errorKind,
+      queuedMs,
     });
   }
 

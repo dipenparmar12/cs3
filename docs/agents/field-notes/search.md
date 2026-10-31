@@ -15,6 +15,7 @@ Dated post-mortems and measurements moved verbatim out of `AGENTS.md` (nothing r
 - Provider ranking: measured, arguable, and never silently punitive
 - Two lanes that were already paid for (2026-09-03)
 - The source cache learns from playback
+- People "sometimes appeared": Wikidata refusing a keystroke burst (2026-10-30)
 
 ---
 
@@ -459,3 +460,20 @@ Pinned by `sourceCache.test.mts` (10 cases), including that removing the last so
 the entry rather than leaving an empty shell — `hit: true` with nothing in it makes the
 caller skip the discovery it needs.
 
+---
+
+### People "sometimes appeared": Wikidata refusing a keystroke burst (2026-10-30)
+
+The report was that "John Cena" and "Christopher Nolan" offered the person
+only some of the time. Nothing in the matching was wrong. The box asked
+Wikidata twice per keystroke (a name search, then a SPARQL credit check), so
+typing "Christopher Nolan" was about 15 requests in two seconds; the API
+answered that burst with HTTP 429 and `Retry-After: 22` for every one of
+them (measured), `searchSuggestions` caught the error, and the dropdown
+showed nobody. The next name typed inside those 22 seconds was refused too.
+
+Rule: a public, keyless service is asked once per pause, not per keystroke,
+and a refusal is a state, not an empty answer. `entitySearch.ts` waits for a
+300 ms pause, shares and caches answers, and stops asking for 30 s after a
+429; the push carries `entitiesFailed`, so the screen keeps what it showed
+and says Wikidata did not answer rather than "nobody found".

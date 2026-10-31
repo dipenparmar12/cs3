@@ -61,20 +61,25 @@ import { Aria2Engine } from './aria2Engine';
 import { DownloadService } from './downloadService';
 import { resolveSafeRevealTarget } from './download/revealTarget.ts';
 import { PluginManager } from './pluginManager';
-import type { SearchScope } from './searchScope';
+import type { SearchScopeEdit } from './searchScope';
 import {
   DNS_PRESETS,
   NetworkSettingsStore,
   type NetworkSettings,
 } from './networkSettings';
-import { setChallengeSolver, setHttpFetch } from './torrent/http';
+import { rawFetch, setChallengeSolver, setHttpFetch } from './torrent/http';
+import { AppUpdateService } from './appUpdate/appUpdateService.ts';
+import { classifyNonMedia, looksLikeHtml, nonMediaReason } from './media/nonMediaResponse.ts';
 import { ResilientFetch, classifyNetworkError } from './networkResilience';
 import { BinaryDownloader } from './binaryDownloader';
+import { FastChunkDownloader, type DownloadProgress } from './fastDownloader';
+import { spawn } from 'child_process';
 import { MpvEngine } from './media/mpvEngine';
 import { TorrentEngine } from './torrent/torrentEngine';
 import { ContentService, type SourceQuery } from './contentService';
 import { PlaybackSessionManager, type ResumePreference } from './playbackSession';
 import { SearchSuggestionService } from './searchSuggestions';
+import { categoryScope } from '../src/utils/searchCategories';
 import { SearchHistoryStore } from './searchHistory';
 import { SavedSearchStore, type SaveSearchInput } from './savedSearches';
 import { SubtitleService, languageName, type SubtitleQuery, type SubtitleSearchResult } from './subtitleService';
@@ -108,6 +113,8 @@ import type {
   NativeEngineCapability,
   PlaybackStreamRequest,
   RendererCapabilities,
+  PlaybackRuntimeReport,
+  ProbeFailure,
 } from '../src/types/media';
 import type { MpvOpenRequest } from '../src/types/mpv';
 import { ExtensionUpdater, type UpdateSettings } from './cs3/extensionUpdater';
@@ -132,9 +139,11 @@ import { mediaRatingService } from './metadata/ratings/mediaRatingService.ts';
 import type { CanonicalMediaIdentity } from '../src/types/ratings.ts';
 import { OttCatalogService } from './cs3/ottCatalog';
 import { TorrentImportService, classifyDroppedPath, looksLikeMagnet } from './torrent/torrentImport';
+import { classifyTorrentFailure } from './torrent/torrentFailure.ts';
 import { parseReleaseName } from './torrent/releaseParser';
 import { buildDownloadTask } from '../src/utils/downloadIdentity';
 import { BatchDownloader, type BatchDownloadRequest } from './cs3/batchDownloader';
+import { wantedLanguages } from './cs3/regions.ts';
 import { BootstrapService } from './cs3/bootstrap';
 import { TitleOutcomeStore, type TitleOutcomeKind } from './cs3/titleOutcomes';
 import { TitleInteractionStore } from './cs3/titleInteractions';
@@ -147,7 +156,13 @@ import {
   continueWatchingEnabled,
   setContinueWatchingEnabled,
 } from './cs3/continueWatching';
-import { isLinkUsable, pickReplacement, pickSibling } from './cs3/playedSource';
+import {
+  isLinkUsable,
+  isWorthTryingFirst,
+  pickReplacement,
+  pickSibling,
+  playedThroughProvider,
+} from './cs3/playedSource';
 import {
   LibraryStore,
   type WatchStatus,
@@ -171,7 +186,7 @@ import type { DownloadTask } from '../src/types/download';
 import { DownloadState } from '../src/types/download';
 import type { SitePlugin } from '../src/types/plugin';
 import type { IndexerConfig, SourcePreferences, TorrentResult } from '../src/types/torrent';
-import type { SearchOptions } from '../src/types/api';
+import type { SearchCategory, SearchOptions } from '../src/types/api';
 import type { HistoryEvent, HistoryFilter } from '../src/types/history';
 import type {
   StoredSource,
@@ -180,6 +195,7 @@ import type {
 import type { ExternalPlaybackSnapshot } from '../src/types/player';
 import type { MpvSnapshot } from '../src/types/mpv';
 import { describeError } from '../src/utils/errors.ts';
+import { asSourceVerdict } from '../src/utils/sourceVerdict.ts';
 import type { TitleInteractionQuery } from '../src/types/interactions';
 import { SHARE_SCHEME } from '../src/utils/shareLink.ts';
 import {
@@ -187,7 +203,13 @@ import {
   type SubtitleBackground,
   type SubtitleWeight,
 } from '../src/utils/subtitleStyle.ts';
-import { activeProfileId, DEFAULT_PROFILE_ID, runAsProfile } from './profiles/profileContext.ts';
+import {
+  activeProfileId,
+  currentProfileId,
+  DEFAULT_PROFILE_ID,
+  onActiveProfileChange,
+  runAsProfile,
+} from './profiles/profileContext.ts';
 import { PREFERENCE_KEYS } from './profiles/profileKeys.ts';
 import { perProfile } from './profiles/perProfile.ts';
 import { UserProfileService } from './profiles/userProfiles.ts';
@@ -315,7 +337,7 @@ function profileDataDir(profileId: string): string {
 
 // Constructed before every store that records activity, so the first write any
 // of them makes already sees the right answer (PRD-52).
-const privacyMode = new PrivacyMode(datastore);
+const privacyMode = new PrivacyMode(datastore, currentProfileId);
 privacyMode.onChange((state) => {
   BrowserWindow.getAllWindows().forEach((w) => w.webContents.send('privacy:changed', state));
   const item = Menu.getApplicationMenu()?.getMenuItemById('incognito-toggle');
@@ -548,6 +570,15 @@ const historyProfiles = perProfile((id) => new HistoryStore(datastore.forProfile
 const bookmarkProfiles = perProfile((id) => new BookmarkStore(datastore.forProfile(id)));
 const savedSearchProfiles = perProfile((id) => new SavedSearchStore(profileDataDir(id)));
 const libraryStore = libraryProfiles.current;
+contentService.setPlayedProviders((title, year) => [
+  ...new Set(
+    libraryStore
+      .getPlayedSourcesForKey(canonicalKey(title, year))
+      .sort((a, b) => b.playedAt - a.playedAt)
+      .map((entry) => entry.origin.provider ?? entry.source.providerName)
+      .filter((name): name is string => Boolean(name))
+  ),
+]);
 const historyStore = historyProfiles.current;
 const bookmarks = bookmarkProfiles.current;
 /**
@@ -718,6 +749,7 @@ const titleInteractions = new TitleInteractionStore({
   outcomes: titleOutcomes,
   sourceReadiness: (url) => contentService.peekSourceReadiness(url),
   downloadTasks: () => downloadService.getTasks(),
+  providerAttempts: () => contentService.getProviderAttempts().lookup(),
 });
 const externalPlayers = new ExternalPlayerService();
 externalPlayers.setSnapshotListener((snapshot) =>
@@ -753,7 +785,13 @@ providerRanking.setContext({
     const status = record?.meta?.status;
     return typeof status === 'number' ? status : undefined;
   },
+  declaredLanguage: (internalName) =>
+    pluginManager.getInstalledPluginRecords().find((entry) => entry.internalName === internalName)?.meta
+      ?.language,
+  // The first-run region choice orders providers too, not only what is installed.
+  viewerLanguages: () => wantedLanguages(bootstrap.getRegionState().selected),
 });
+contentService.getRegistry().setDefaultLanguages(() => wantedLanguages(bootstrap.getRegionState().selected));
 
 /**
  * The ranking decides who a search asks first.
@@ -910,6 +948,21 @@ const CHROMIUM_FEATURES = [
 app.commandLine.appendSwitch('enable-features', CHROMIUM_FEATURES.join(','));
 
 /**
+ * `HTMLMediaElement.audioTracks`, which Chromium ships behind a Blink runtime
+ * feature (a different switch from `enable-features`, and a replacing one too).
+ *
+ * Without it a direct MP4 or WebM with several dubs exposes no tracks at all,
+ * and the element plays the first whatever the menu says. Measured on this
+ * build (Electron 43, Chromium 150, 2026-10-21) with a two-track file, 440 Hz
+ * on track 1 and 880 Hz on track 2: without the feature there is no
+ * `audioTracks` and the tone stays at 439 Hz; with it, two tracks (`eng`,
+ * `hin`), and enabling the second moves the tone to 879 Hz and back again in
+ * place, position kept, in MP4 and WebM alike. The player switches through it
+ * (`player/audioTrackSwitch.ts`) before it considers a remux.
+ */
+app.commandLine.appendSwitch('enable-blink-features', 'AudioVideoTracks');
+
+/**
  * Retries, backs off, and downgrades HTTP/2 origins to HTTP/1.1.
  *
  * Node's `fetch` is the fallback because undici speaks HTTP/1.1 only, which is
@@ -978,6 +1031,8 @@ const inspectionStore = new InspectionStore(datastore);
 privacyMode.onClearSession(() => inspectionStore.clearVolatile());
 
 const playbackEngine = new PlaybackEngine({
+  appVersion: app.getVersion(),
+  refreshResolver: (url) => contentService.linkResolver(url),
   proxy: contentService.getProxy(),
   transcoder: mediaTranscoder,
   nativeEngine: () => ({ available: mpvEngine.isAvailable(), policy: nativeEnginePolicy() }),
@@ -998,13 +1053,16 @@ const playbackEngine = new PlaybackEngine({
       return null;
     }
   },
-  // A segment's first bytes, for its program table. Short deadline: this runs
-  // before playback starts, and the manifest's answer is the fallback.
+  // A segment's first bytes, for its program table. A bounded deadline, but not
+  // a tight one: this read decides whether a stream has one language or four,
+  // and a failed read is retried once by the inspector. Castle TV's whole
+  // inspection measured 11–14 s through the loopback proxy while hls.js was
+  // already loading segments, so 4 s dropped reads that a curl finishes in <1 s.
   fetchBytes: async (url, bytes) => {
     try {
       const response = await resilientFetch.fetch(
         url,
-        { headers: { Range: `bytes=0-${bytes - 1}` }, signal: AbortSignal.timeout(4_000) },
+        { headers: { Range: `bytes=0-${bytes - 1}` }, signal: AbortSignal.timeout(8_000) },
         { operation: 'segment-sniff' }
       );
       if (!response.ok && response.status !== 206) return null;
@@ -1925,7 +1983,27 @@ app.whenReady().then(async () => {
       ...refused.map((entry) => ({ internalName: entry.target.slice('ext:'.length), ok: false, message: entry.reason })),
     ];
   });
+  // Newly published extensions in repositories already in use install as
+  // ordinary jobs, beside updates (`cs3/newExtensions.ts`).
+  extensionUpdater.setNewExtensionInstaller(
+    async (extensions) => {
+      const { ids, refused } = extensionJobs.enqueue(
+        extensions.map((entry) => ({ kind: 'install' as const, plugin: entry.plugin, repositoryUrl: entry.repositoryUrl }))
+      );
+      const finished = await extensionJobs.whenSettled(ids);
+      return [
+        ...finished.map((job) => ({
+          internalName: job.target.slice('ext:'.length),
+          ok: job.state === 'done',
+          message: job.message ?? (job.state === 'cancelled' ? 'Cancelled' : ''),
+        })),
+        ...refused.map((entry) => ({ internalName: entry.target.slice('ext:'.length), ok: false, message: entry.reason })),
+      ];
+    },
+    () => bootstrap.isAdultAllowed()
+  );
   extensionUpdater.schedule();
+  appUpdates.schedule();
 
   batchDownloader.setNotifier((progress) => {
     if (mainWindow && !mainWindow.isDestroyed()) {
@@ -1935,6 +2013,7 @@ app.whenReady().then(async () => {
 
   // The player renders from these snapshots, so they must keep flowing for the
   // whole life of a session — source discovery, failover and switching alike.
+  playbackSessions.onVerdict((provider, verdict) => providerAnalytics.observeValidation(provider, verdict));
   playbackSessions.setNotifier((snapshot) => {
     if (mainWindow && !mainWindow.isDestroyed()) {
       mainWindow.webContents.send('playback:update', snapshot);
@@ -2305,6 +2384,17 @@ ipcMain.handle('interactions:visit', async (_, title: string, year?: number) => 
 });
 
 /** Forgets which titles have been opened. The only control over this ledger. */
+ipcMain.handle('interactions:forgetAttempt', async (_, title: string, year: number | undefined, provider: string) => {
+  try {
+    const forgotten = contentService
+      .getProviderAttempts()
+      .forget(canonicalKey(String(title ?? ''), typeof year === 'number' ? year : undefined), String(provider ?? ''));
+    return { ok: true, forgotten };
+  } catch (error) {
+    return { ...fail(error), forgotten: false };
+  }
+});
+
 ipcMain.handle('interactions:clearVisits', async () => {
   try {
     return { ok: true, cleared: titleInteractions.clearVisits() };
@@ -2391,32 +2481,39 @@ let suggestRun: AbortController | null = null;
  * three catalogues answer 170–935 ms apart, so a reply that waited for all of
  * them would spend the fastest two on the slowest — see `searchSuggestions.ts`.
  */
-ipcMain.handle('api:suggest', async (event, query: string) => {
+const SEARCH_CATEGORIES: ReadonlySet<string> = new Set<SearchCategory>(['title', 'cast', 'director', 'writer', 'producer', 'composer', 'studio']);
+
+ipcMain.handle('api:suggest', async (event, query: string, requested?: unknown) => {
   suggestRun?.abort();
   const run = new AbortController();
   suggestRun = run;
 
   const trimmed = (query ?? '').trim();
-  const instant = searchSuggestions.instant(trimmed);
+  // Only names this process knows: an unknown one would quietly become a filter that matches nothing.
+  const categories = (Array.isArray(requested) ? requested : []).filter(
+    (value): value is SearchCategory => typeof value === 'string' && SEARCH_CATEGORIES.has(value)
+  );
+  const scope = categoryScope(categories);
+  const instant = searchSuggestions.instant(trimmed, categories);
 
   if (!instant.done) {
     // The asking window, not `mainWindow`: an update belongs to whoever typed.
     const webContents = event.sender;
     void searchSuggestions
-      .suggest(trimmed, run.signal, (suggestions, done) => {
+      .suggest(trimmed, run.signal, (suggestions, done, entities, entitiesFailed) => {
         // The query travels with the rows: this outlives the keystroke that
         // asked for it, and a reply landing on a box that now says something
         // else must be dropped rather than rendered.
         if (run.signal.aborted || webContents.isDestroyed()) return;
-        webContents.send('search:suggestUpdate', { query: trimmed, suggestions, done });
-      })
+        webContents.send('search:suggestUpdate', { query: trimmed, suggestions, done, entities, scope, entitiesFailed });
+      }, categories)
       .catch(() => {
         // A catalogue outage is not an error for a search box, and there is no
         // longer a caller waiting on this promise to reject to.
       });
   }
 
-  return { ok: true, suggestions: instant.suggestions, done: instant.done };
+  return { ok: true, suggestions: instant.suggestions, done: instant.done, entities: instant.entities };
 });
 
 /**
@@ -3181,6 +3278,75 @@ ipcMain.handle(
  * button, which keeps the exact playback. Pressing it again updates the
  * position rather than unsaving, so a second press can never lose the save.
  */
+/**
+ * A playback saved from the player is also a title being watched.
+ *
+ * Saving *Office Space* at a working source put it in Saved pages and nowhere
+ * else: not in Library › Watching, not in History, no resume point. A saved
+ * playback now also files the title under Watching (unless it is already on
+ * another shelf the viewer chose, other than Plan to watch), records where it
+ * stands so Continue watching resumes it, and writes a History entry with the
+ * source. Incognito is checked by the caller and by each store.
+ */
+function recordSavedPlayback(input: Parameters<BookmarkStore['save']>[0]): void {
+  const playback = input?.playback;
+  if (!playback || !input.title) return;
+  const type = input.type as Parameters<LibraryStore['upsertEntry']>[0]['type'];
+  const existing = libraryStore.getEntry(canonicalKey(input.title, input.year));
+  if (!existing || existing.status === 'PlanToWatch') {
+    libraryStore.upsertEntry({
+      title: input.title,
+      originalTitle: input.originalTitle,
+      year: input.year,
+      type,
+      posterUrl: input.posterUrl,
+      mediaUrl: input.mediaUrl,
+      status: 'Watching',
+      sources: playback.source ? [playback.source] : undefined,
+      metadata: input.origin?.provider ? { provider: input.origin.provider } : undefined,
+    });
+  }
+  if (playback.positionSeconds && playback.durationSeconds) {
+    libraryStore.recordProgress({
+      title: input.title,
+      year: input.year,
+      mediaUrl: input.mediaUrl,
+      posterUrl: input.posterUrl,
+      episodeTitle: playback.episodeTitle,
+      season: playback.season,
+      episode: playback.episode,
+      positionSeconds: playback.positionSeconds,
+      durationSeconds: playback.durationSeconds,
+      type,
+    });
+  }
+  historyStore.record({
+    title: input.title,
+    originalTitle: input.originalTitle,
+    year: input.year,
+    type,
+    posterUrl: input.posterUrl,
+    mediaUrl: input.mediaUrl,
+    season: playback.season,
+    episode: playback.episode,
+    episodeTitle: playback.episodeTitle,
+    action: 'playback_stopped',
+    status: 'Played',
+    positionSeconds: playback.positionSeconds,
+    durationSeconds: playback.durationSeconds,
+    source: playback.source
+      ? {
+          sourceName: playback.source.title,
+          providerName: playback.source.providerName ?? input.origin?.provider,
+          indexerName: playback.source.indexerName,
+          extension: input.origin?.extensionName,
+          repository: input.origin?.repositoryName,
+        }
+      : undefined,
+    metadata: { savedPage: true },
+  });
+}
+
 ipcMain.handle('bookmarks:save', async (_, input: Parameters<BookmarkStore['save']>[0]) => {
   try {
     if (isPrivateSession() && !allowsExplicitSaves()) {
@@ -3189,6 +3355,7 @@ ipcMain.handle('bookmarks:save', async (_, input: Parameters<BookmarkStore['save
     const bookmark = bookmarks.save(input);
     if (!isPrivateSession()) {
       pageSnapshots.setPinned({ url: input?.mediaUrl, title: input?.title, year: input?.year }, true);
+      recordSavedPlayback(input);
     }
     return { ok: true, bookmark };
   } catch (error) {
@@ -3718,7 +3885,7 @@ ipcMain.handle(
           resume: options?.preferSource
             ? preferenceFor(options.preferSource)
             : options?.resumeKey
-              ? resumePreference(options.resumeKey, request.season, request.episode)
+              ? resumePreference(options.resumeKey, request.season, request.episode, request.mediaUrl)
               : undefined,
         }),
       };
@@ -3735,7 +3902,7 @@ ipcMain.handle(
  * over. This is the opposite: the viewer chose nothing and the app owes them
  * the next candidate.
  */
-ipcMain.handle('playback:skipSource', async (_, sessionId: string, reason: string) => {
+ipcMain.handle('playback:skipSource', async (_, sessionId: string, reason: string, verdict?: unknown) => {
   try {
     diagnostics.record({
       level: 'warn',
@@ -3743,7 +3910,7 @@ ipcMain.handle('playback:skipSource', async (_, sessionId: string, reason: strin
       message: reason,
       detail: 'Source could not be played; advancing to the next.',
     });
-    return { ok: true, snapshot: await playbackSessions.skipCurrentSource(sessionId, reason) };
+    return { ok: true, snapshot: await playbackSessions.skipCurrentSource(sessionId, reason, asSourceVerdict(verdict)) };
   } catch (error) {
     return { ...fail(error), snapshot: null };
   }
@@ -4142,6 +4309,27 @@ ipcMain.handle('player:openExternal', async (_, playerId: string, url: string) =
   return result;
 });
 
+/** Up to `limit` bytes of a body as text, then the transfer is cancelled. */
+async function readHead(response: Response, limit: number): Promise<string> {
+  const reader = response.body?.getReader();
+  if (!reader) return '';
+  const chunks: Uint8Array[] = [];
+  let size = 0;
+  try {
+    while (size < limit) {
+      const { done, value } = await reader.read();
+      if (done || !value) break;
+      chunks.push(value);
+      size += value.length;
+    }
+  } catch {
+    // What arrived is enough to classify.
+  } finally {
+    reader.cancel().catch(() => undefined);
+  }
+  return Buffer.concat(chunks.map((c) => Buffer.from(c))).subarray(0, limit).toString('utf8');
+}
+
 /**
  * Asks the source itself why it could not be read.
  *
@@ -4149,11 +4337,7 @@ ipcMain.handle('player:openExternal', async (_, playerId: string, url: string) =
  * link is gone or refused and no decoder would have helped, while a source that
  * answers 200 and still cannot be probed is a real format problem.
  */
-async function describeUnreadableSource(url: string): Promise<{
-  status?: number;
-  reason: string;
-  dead: boolean;
-}> {
+async function describeUnreadableSource(url: string): Promise<ProbeFailure> {
   if (!/^https?:\/\//i.test(url)) {
     return { reason: 'This source could not be read.', dead: false };
   }
@@ -4183,6 +4367,15 @@ async function describeUnreadableSource(url: string): Promise<{
     let proxyReason = '';
     if (response.status === 502 && /^https?:\/\/127\.0\.0\.1[:/]/i.test(url)) {
       proxyReason = (await response.text().catch(() => '')).slice(0, 500);
+    } else if (response.status < 400 && looksLikeHtml(response.headers.get('content-type'), '')) {
+      /*
+       * A page where media was expected: a sign-in page, an "update the app"
+       * notice, a landing page (Content Validation PRD Phase 2). Its first
+       * 16 KB say which; no decoder would help, so the source is moved past.
+       */
+      const head = await readHead(response, 16_384);
+      const kind = classifyNonMedia(response.headers.get('content-type'), head) ?? 'html';
+      return { status: response.status, dead: true, kind, reason: nonMediaReason(kind) };
     } else {
       try {
         await response.body?.cancel();
@@ -4201,6 +4394,15 @@ async function describeUnreadableSource(url: string): Promise<{
         reason: unresolved
           ? "This source's server can't be found any more — its web address no longer exists. Try another source."
           : `This source's server could not be reached (${proxyReason.split('\n')[0]}). Try another source.`,
+      };
+    }
+
+    if (response.status === 429) {
+      return {
+        status: 429,
+        dead: true,
+        kind: 'rate-limited',
+        reason: 'This source is busy and asked to slow down (HTTP 429). Try another source, or this one again shortly.',
       };
     }
 
@@ -4278,9 +4480,16 @@ ipcMain.handle('media:closeStream', async (_, sessionId: string) => {
   return { ok: true };
 });
 
+ipcMain.handle('media:reportPlayback', async (_, telemetryId: string, report: PlaybackRuntimeReport) => {
+  playbackEngine.reportPlayback(String(telemetryId), report);
+  return { ok: true };
+});
+
 ipcMain.handle('media:getPlaybackDiagnostics', async (_, sessionId?: string) => ({
   ok: true,
   events: playbackEngine.getDiagnostics(sessionId),
+  telemetry: playbackEngine.getTelemetry(),
+  summary: playbackEngine.getTelemetrySummary(),
 }));
 
 // --- native playback engine (mpv) -----------------------------------------
@@ -4489,8 +4698,10 @@ storage.registerCacheArea({
   // runaway cache must not fill a disk: oldest go first beyond 20 GB.
   maxAgeMs: 7 * DAY_MS,
   maxBytes: 20 * 1024 ** 3,
-  isActive: (entry) => torrentEngine.isCacheEntryActive(path.basename(entry)),
-  clear: () => torrentEngine.clearCache(),
+  // A download started while its torrent was streaming lives here too.
+  isActive: (entry) =>
+    torrentEngine.isCacheEntryActive(path.basename(entry)) || downloadService.holdsPath(entry),
+  clear: () => torrentEngine.clearCache((entry) => downloadService.holdsPath(entry)),
 });
 storage.registerCacheArea({
   id: 'torrent-state',
@@ -4718,16 +4929,17 @@ ipcMain.handle('torrent:getContents', async (_, infoHash: string) => {
  * Joins the swarm for the sole purpose of fetching metadata.
  *
  * The engine owns every swarm timeout, the dead-swarm bail and the `xs` mirror
- * race, so this asks it rather than resolving alongside it. `mode: 'download'`
- * is deliberate: nothing is being watched yet, and the sequential piece
- * ordering a stream asks for is wrong for a metadata fetch.
+ * race, so this asks it rather than resolving alongside it. It used to start a
+ * download-mode stream, which fetched the largest file in the background for
+ * the rest of the session; `resolveMetadata` selects nothing.
  */
 ipcMain.handle('torrent:resolveMagnet', async (_, infoHash: string) => {
   try {
     const record = torrentImports.get((infoHash ?? '').toLowerCase());
     if (!record?.source) return { ok: false, error: 'That torrent has no magnet to resolve.' };
 
-    await torrentEngine.startStream({ torrentId: record.source, mode: 'download' });
+    // Metadata only: nothing is selected, so nothing is downloaded.
+    await torrentEngine.resolveMetadata(record.source);
     // The engine writes resolved metadata into the shared cache, so reading is
     // the whole handshake — see `TorrentImportService.load`.
     const contents = torrentImports.contents(record.infoHash);
@@ -4794,7 +5006,12 @@ ipcMain.handle('torrent:playFile', async (_, infoHash: string, fileIndex: number
     torrentImports.touch(hash);
     return { ok: true, handle };
   } catch (error) {
-    return fail(error);
+    // Counted by kind and stage (Torrent PRD §2.3); the hash identifies the
+    // torrent without its name or trackers.
+    const message = describeError(error);
+    const failure = classifyTorrentFailure(message);
+    logger.warn('torrent', 'torrent_play_failed', { ...failure, infoHash: String(infoHash ?? '').toLowerCase(), fileIndex });
+    return { ...fail(error), failure };
   }
 });
 
@@ -4881,13 +5098,46 @@ ipcMain.handle('torrent:getActiveStreams', async () => torrentEngine.getActiveSt
 
 ipcMain.handle('torrent:clearCache', async () => {
   try {
-    return { ok: true, removed: await torrentEngine.clearCache() };
+    return { ok: true, removed: await torrentEngine.clearCache((entry) => downloadService.holdsPath(entry)) };
   } catch (error) {
     return { ...fail(error), removed: 0 };
   }
 });
 
 ipcMain.handle('torrent:getCachePath', async () => torrentEngine.getCachePath());
+
+/**
+ * Saves a torrent's `.torrent` where the viewer chooses. Only the original
+ * metainfo (info dictionary and trackers, verified against the infohash) is
+ * written; a magnet whose metadata was never fetched has none, and is said so
+ * rather than given a made-up file.
+ */
+ipcMain.handle('torrent:exportFile', async (_, infoHash: string, name?: string) => {
+  try {
+    const hash = String(infoHash ?? '').toLowerCase();
+    if (!/^[a-f0-9]{40}$/.test(hash)) return { ok: false, error: 'That is not a torrent.' };
+    const bytes = await torrentEngine.torrentFileFor(hash);
+    if (!bytes) {
+      return {
+        ok: false,
+        unavailable: true,
+        error: 'Its file list has not been fetched yet, so there is no .torrent to save. Copy the magnet link instead.',
+      };
+    }
+    if (!mainWindow) return { ok: false, error: 'No window to ask from.' };
+    const base = (String(name ?? '').replace(/[<>:"/\\|?*\x00-\x1f]+/g, ' ').trim() || hash).slice(0, 120);
+    const result = await dialog.showSaveDialog(mainWindow, {
+      title: 'Save .torrent file',
+      defaultPath: path.join(app.getPath('downloads'), `${base}.torrent`),
+      filters: [{ name: 'Torrent', extensions: ['torrent'] }],
+    });
+    if (result.canceled || !result.filePath) return { ok: false, cancelled: true };
+    await fs.promises.writeFile(result.filePath, bytes);
+    return { ok: true, path: result.filePath };
+  } catch (error) {
+    return fail(error);
+  }
+});
 
 /**
  * Why this torrent is as fast or as slow as it is.
@@ -5440,6 +5690,18 @@ bootstrap.onAdultChange(() => {
   const state = bootstrap.adultState();
   BrowserWindow.getAllWindows().forEach((w) => w.webContents.send('adult:changed', state));
 });
+
+/**
+ * The adult gate and incognito are per viewer profile, and the renderer keeps
+ * one copy of each that outlives the remount a switch causes: both are pushed
+ * again, as the profile now open sees them.
+ */
+onActiveProfileChange((next) =>
+  runAsProfile(next, () => {
+    bootstrap.notifyAdultChange();
+    privacyMode.announce();
+  })
+);
 
 /**
  * Turning adult content off must take effect at once, not at next launch: the
@@ -6069,9 +6331,17 @@ ipcMain.handle('search:getScopeOptions', async (_, ensureLoaded = true) => {
  * "tick a box" and "switch profile" the same kind of event, and is why the
  * five paths that read scope did not have to change.
  */
-ipcMain.handle('search:setScope', async (_, scope: Partial<SearchScope>) => {
+ipcMain.handle('search:setScope', async (_, scope: SearchScopeEdit) => {
   const profiles = contentService.getProfiles();
-  profiles.edit({ providers: scope.providers, indexers: scope.indexers });
+  // The quick-setup chips travel with the selection they produced, so the
+  // picker can show what was asked for instead of guessing it back from the
+  // providers. Omitted means "unchanged" (`edit` keeps the stored value).
+  profiles.edit({
+    providers: scope.providers,
+    indexers: scope.indexers,
+    languages: scope.languages,
+    contentTypes: scope.contentTypes,
+  });
   return contentService.getScope().get();
 });
 
@@ -6094,6 +6364,7 @@ function profileSnapshot() {
     profiles: state.profiles,
     activeId: state.activeId,
     draft: state.draft,
+    defaultId: state.defaultId,
     label: profiles.activeLabel(),
     narrowed: profiles.isNarrowed(),
   };
@@ -6124,6 +6395,11 @@ ipcMain.handle('profiles:rename', async (_, id: string, name: string) => {
 
 ipcMain.handle('profiles:duplicate', async (_, id: string) => {
   contentService.getProfiles().duplicate(String(id ?? ''));
+  return profileSnapshot();
+});
+
+ipcMain.handle('profiles:setDefault', async (_, id: string) => {
+  contentService.getProfiles().setDefault(String(id ?? ''));
   return profileSnapshot();
 });
 
@@ -6596,11 +6872,18 @@ function preferenceFor(source: StoredSource): ResumePreference {
   };
 }
 
-function resumePreference(key: string, season?: number, episode?: number): ResumePreference | undefined {
+function resumePreference(
+  key: string,
+  season?: number,
+  episode?: number,
+  requestUrl?: string
+): ResumePreference | undefined {
   const record = libraryStore.getPlayedSource(key, season, episode);
-  if (record && record.source.status !== 'Unavailable') {
+  // Only what played through the provider being asked (`playedThroughProvider`).
+  if (record && record.source.status !== 'Unavailable' && playedThroughProvider(record, requestUrl)) {
     return {
-      start: isLinkUsable(record.source) ? storedSourceToTorrentResult(record.source) : undefined,
+      // Tried first even without a stated deadline; discovery runs alongside.
+      start: isWorthTryingFirst(record.source) ? storedSourceToTorrentResult(record.source) : undefined,
       match: (candidates) => pickReplacement(record.source, candidates),
     };
   }
@@ -6613,7 +6896,7 @@ function resumePreference(key: string, season?: number, episode?: number): Resum
    */
   const sibling = libraryStore
     .getPlayedSourcesForKey(key)
-    .filter((entry) => entry.source.status !== 'Unavailable')
+    .filter((entry) => entry.source.status !== 'Unavailable' && playedThroughProvider(entry, requestUrl))
     .sort((a, b) => b.playedAt - a.playedAt)[0];
   if (!sibling) return undefined;
   return { match: (candidates) => pickSibling(sibling.source, candidates) };
@@ -7080,12 +7363,13 @@ const userDataAreas: ResetAreaDefinition[] = [
   {
     id: 'activity',
     label: 'Viewed titles and results',
-    description: 'Which titles you opened, and which had nothing to play.',
+    description: 'Which titles you opened, which had nothing to play, and what each source answered.',
     defaultSelected: true,
-    count: () => Object.keys(titleOutcomes.list()).length,
+    count: () => Object.keys(titleOutcomes.list()).length + contentService.getProviderAttempts().count(),
     clear: () => {
       titleInteractions.clearVisits();
       titleOutcomes.clear();
+      contentService.getProviderAttempts().clear();
     },
   },
   {
@@ -7269,6 +7553,77 @@ ipcMain.handle('app:relaunch', async () => {
  * that never arrived are the same report, and splitting them across two
  * channels would mean the panel could show one without the other.
  */
+/**
+ * Whether a newer CloudStream 3 Desktop is published (App Update PRD Phase 1).
+ * GitHub's release list through Electron's fetch (system proxy, DoH); never in
+ * a development build or a smoke run. Phase 1 opens the download in the browser.
+ */
+const appUpdates = new AppUpdateService({
+  store: datastore,
+  fetch: (url, init) => rawFetch(url, init),
+  currentVersion: app.getVersion(),
+  platform: {
+    os: process.platform,
+    arch: process.arch,
+    kind: process.env.PORTABLE_EXECUTABLE_DIR
+      ? 'portable'
+      : process.env.APPIMAGE
+        ? 'appimage'
+        : process.platform === 'win32' || process.platform === 'darwin'
+          ? 'installed'
+          : 'other',
+    hasDpkg: process.platform === 'linux' && fs.existsSync('/usr/bin/dpkg'),
+  },
+  // CS3_FORCE_UPDATE_CHECK=1 exercises the check from an unpackaged build.
+  enabled: (app.isPackaged || process.env.CS3_FORCE_UPDATE_CHECK === '1') && !process.env.CS3_SMOKE_REPORT,
+  openExternal: (url) => shell.openExternal(url),
+  log: (event, data) => logger.info('app', event, data),
+  // Phase 3: through FastChunkDownloader with the published digest; a file that
+  // does not match is deleted there and never reaches launchInstaller.
+  downloadVerified: async ({ url, sha256, targetPath, onProgress }) =>
+    FastChunkDownloader.download({
+      mirrors: [{ url, sha256 }],
+      targetPath,
+      onProgress: (progress: DownloadProgress) => onProgress(progress.downloadedBytes, progress.totalBytes),
+    }),
+  downloadDir: () => app.getPath('downloads'),
+  launchInstaller: async (file) => {
+    if (process.platform === 'linux' && file.endsWith('.AppImage')) {
+      // A new AppImage replaces nothing: it is made runnable, started, and this copy quits.
+      fs.chmodSync(file, 0o755);
+      spawn(file, [], { detached: true, stdio: 'ignore' }).on('error', () => undefined).unref();
+      setTimeout(() => app.quit(), 1_000);
+      return;
+    }
+    const error = await shell.openPath(file);
+    if (error) throw new Error(error);
+    // The Windows installer replaces the running program, so this copy steps
+    // aside; a disk image or a package manager is the viewer's to finish.
+    if (process.platform === 'win32' && /-installer\.exe$/i.test(file)) setTimeout(() => app.quit(), 1_500);
+  },
+});
+appUpdates.onChange((state) => {
+  BrowserWindow.getAllWindows().forEach((w) => w.webContents.send('appUpdate:changed', state));
+});
+app.on('before-quit', () => appUpdates.dispose());
+
+ipcMain.handle('appUpdate:getState', async () => appUpdates.getState());
+ipcMain.handle('appUpdate:check', async () => appUpdates.check());
+ipcMain.handle('appUpdate:setSettings', async (_, patch: Parameters<AppUpdateService['setSettings']>[0]) =>
+  appUpdates.setSettings(patch ?? {})
+);
+ipcMain.handle('appUpdate:skip', async (_, version: string) => appUpdates.skip(String(version)));
+ipcMain.handle('appUpdate:unskip', async () => appUpdates.unskip());
+ipcMain.handle('appUpdate:openDownload', async () => ({ ok: await appUpdates.openDownload() }));
+ipcMain.handle('appUpdate:download', async () => appUpdates.downloadUpdate());
+ipcMain.handle('appUpdate:install', async () => {
+  try {
+    return { ok: await appUpdates.installUpdate() };
+  } catch (error) {
+    return fail(error);
+  }
+});
+
 ipcMain.handle('app:getStartupProfile', async () => {
   try {
     return { ok: true, profile: startup.snapshot(), tasks: background.report() };

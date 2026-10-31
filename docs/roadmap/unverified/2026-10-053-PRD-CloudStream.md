@@ -1,4 +1,4 @@
-> **Filed 2026-10-20: Unverified.** Not yet checked against the code. Treat as a proposal until it is.
+> **Checked 2026-10-28: a working todo list; 13 of 18 checkbox items are ticked.** Sections 119–124 are cited from code (SubtitlePanel, relatedRails, externalPlayer, resolutionVariants; §122 is `storage/storageCleanup.ts`, §124 is `player/audioTrackSwitch.ts`). Open: signing (line 9; `docs/release/distribution.md`, unverified); trying the next search result when one yields nothing (line 30; persistent playback walks sources, not other search rows); request priority (line 137; RPC lanes and the discovery walk cover it in part); donation details (line 259; `config/publicInfo.ts` ships GitHub links only, by rule).
 
 ---
 type: "Todo"

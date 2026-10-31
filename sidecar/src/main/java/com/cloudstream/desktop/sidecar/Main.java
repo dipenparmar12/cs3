@@ -18,7 +18,7 @@ import java.util.concurrent.*;
  * single stray {@code println} from plugin code would otherwise desynchronise
  * the channel.
  *
- * <p>Every call runs on a bounded worker pool with a hard timeout (PLG-S-5). A
+ * <p>Every call runs on a bounded worker lane with a hard timeout (PLG-S-5). A
  * plugin that hangs fails its own call and leaves the rest of the sidecar
  * usable; a plugin that kills the JVM takes down only this process, and the
  * supervisor in the Electron main process restarts it (DROP-26, AC-D4).
@@ -29,10 +29,14 @@ public final class Main {
 
     private final PluginHost host;
 
-    /** Runs plugin code. Bounded, because plugin calls are the expensive ones. */
-    private final ExecutorService pool = Executors.newFixedThreadPool(
+    /**
+     * Runs plugin code. Bounded, because plugin calls are the expensive ones, and
+     * split in two so a source lookup never waits behind a scrape. See RpcLanes.
+     */
+    private final RpcLanes lanes = new RpcLanes(
             Math.max(2, Runtime.getRuntime().availableProcessors()),
-            daemonFactory("cs3-rpc-worker"));
+            daemonFactory("cs3-rpc-sources"),
+            daemonFactory("cs3-rpc-background"));
 
     /**
      * Waits on results and enforces per-call timeouts.
@@ -133,7 +137,7 @@ public final class Main {
             Thread.currentThread().interrupt();
             waiters.shutdownNow();
         }
-        pool.shutdownNow();
+        lanes.shutdownNow();
         // Anything still waiting on the host will never be answered now.
         hostChannel.shutdown(
                 "The desktop app closed the connection while the request was in flight.");
@@ -163,7 +167,8 @@ public final class Main {
         long timeout = params.get("timeoutMs") instanceof Number n
                 ? n.longValue() : DEFAULT_TIMEOUT_MS;
 
-        Future<Map<String, Object>> future = pool.submit(() -> dispatch(method, params));
+        RpcLanes.Submitted<Map<String, Object>> call = lanes.submit(method, () -> dispatch(method, params));
+        Future<Map<String, Object>> future = call.future;
         waiters.execute(() -> {
             Map<String, Object> reply = new LinkedHashMap<>();
             reply.put("id", id);
@@ -191,6 +196,9 @@ public final class Main {
                 reply.put("errorKind", "INTERRUPTED");
                 reply.put("error", "Call interrupted.");
             }
+            // How long it waited for a worker: the host subtracts it from the
+            // provider's latency and logs it when it is long enough to matter.
+            reply.put("queuedMs", call.queuedMs());
             emit(reply);
         });
     }

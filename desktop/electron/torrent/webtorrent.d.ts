@@ -56,6 +56,13 @@ declare module 'webtorrent' {
      * reachability diagnosis. See `swarmHealth.ts`.
      */
     _peers?: Map<string, { type?: string }> | null;
+    /** Which pieces are on disk; saved so a re-add can skip re-hashing them. */
+    bitfield?: { buffer: Uint8Array };
+    /**
+     * Internal: whether any selection still has missing pieces. A stream wants
+     * only what the player reads, so `false` is idle, not stalled.
+     */
+    _amInterested?: boolean;
 
     select(start: number, end: number, priority?: number, notify?: () => void): void;
     deselect(start: number, end: number): void;
@@ -67,10 +74,17 @@ declare module 'webtorrent' {
     on(event: 'download' | 'upload', listener: (bytes: number) => void): this;
     on(event: 'wire', listener: (wire: unknown, addr?: string) => void): this;
     removeAllListeners(event?: string): this;
+    removeListener(event: string, listener: (...args: never[]) => void): this;
   }
+
+  /** A chunk store class, as `fs-chunk-store` exports it. */
+  export type ChunkStoreCtor = new (chunkLength: number, opts: Record<string, unknown>) => unknown;
 
   export interface TorrentOptions {
     path?: string;
+    store?: ChunkStoreCtor;
+    /** Pieces known to be on disk; WebTorrent spot-checks instead of re-hashing. */
+    bitfield?: Uint8Array;
     strategy?: 'rarest' | 'sequential';
     announce?: string[];
     maxWebConns?: number;
@@ -191,5 +205,23 @@ declare module 'webtorrent' {
     once(event: 'error', listener: (err: Error | string) => void): this;
     once(event: 'listening', listener: () => void): this;
     removeListener(event: string, listener: (...args: never[]) => void): this;
+  }
+}
+
+/** WebTorrent's default file store; only what `sparseStore.ts` extends. */
+declare module 'fs-chunk-store' {
+  export default class FileStore {
+    constructor(chunkLength: number, opts: Record<string, unknown>);
+    closed: boolean;
+    files: Array<{
+      path: string;
+      open: (cb: (err: Error | null, handle?: unknown) => void) => void;
+    }>;
+  }
+}
+
+declare module 'random-access-file' {
+  export default class RandomAccessFile {
+    constructor(filename: string, opts?: { sparse?: boolean });
   }
 }

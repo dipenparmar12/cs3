@@ -1,0 +1,82 @@
+# Beta: a prerelease of whatever master is now, for the app's beta channel.
+#
+# Manual only (App Update PRD §13, decided 2026-10-23): five platform builds
+# cost real Actions minutes, so nothing runs unasked. Run it from the Actions
+# tab ("Beta" → Run workflow) on master.
+#
+# The version is the next minor after the newest stable tag, with the date and
+# this run's number, e.g. 1.1.0-beta.20261023.7: semver orders betas by date and
+# run, and below the stable release they lead to. release.yml does the building,
+# checking and publishing exactly as for a tagged release; it publishes this as
+# a prerelease because the version has a prerelease part. Only the newest five
+# betas are kept, so the list the app reads stays short.
+
+name: Beta
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: beta
+  cancel-in-progress: false
+
+jobs:
+  version:
+    name: Beta version
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.v.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - id: v
+        shell: bash
+        run: |
+          if [ "${GITHUB_REF_NAME}" != "master" ]; then
+            echo "::error::Betas are built from master (this run is on ${GITHUB_REF_NAME})."
+            exit 1
+          fi
+          # The newest plain vX.Y.Z tag; a prerelease tag never counts as the base.
+          LAST=$(git tag --list 'v[0-9]*' | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | sort -V | tail -1)
+          LAST=${LAST:-v0.0.0}
+          IFS=. read -r MAJOR MINOR PATCH <<< "${LAST#v}"
+          VERSION="${MAJOR}.$((MINOR + 1)).0-beta.$(date -u +%Y%m%d).${GITHUB_RUN_NUMBER}"
+          echo "Base ${LAST}, beta ${VERSION}"
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+
+  release:
+    name: Build and publish
+    needs: version
+    # The called workflow's publish job writes the release; its build jobs stay
+    # read-only (release.yml sets that per job).
+    permissions:
+      contents: write
+    uses: ./.github/workflows/release.yml
+    with:
+      version: ${{ needs.version.outputs.version }}
+      publish: true
+    secrets: inherit
+
+  prune:
+    name: Keep the newest five betas
+    needs: release
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Delete older betas and their tags
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          gh release list --repo "${{ github.repository }}" --limit 100 --json tagName,publishedAt \
+            --jq '[.[] | select(.tagName | test("-beta\\."))] | sort_by(.publishedAt) | reverse | .[5:] | .[].tagName' |
+          while read -r TAG; do
+            [ -n "$TAG" ] || continue
+            echo "Removing ${TAG}"
+            gh release delete "$TAG" --repo "${{ github.repository }}" --yes --cleanup-tag
+          done

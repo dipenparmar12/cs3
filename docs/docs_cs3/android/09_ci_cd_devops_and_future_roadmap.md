@@ -12,12 +12,12 @@ CloudStream uses GitHub Actions to automate build, testing, localization, docume
 
 | Workflow File | Trigger / Schedule | Purpose & Actions Performed |
 |---|---|---|
-| [`.github/workflows/prerelease.yml`](.github/workflows/prerelease.yml) | Push to `master` / Nightly | Compiles `prerelease` APK flavor, signs it using keystore secrets, extracts short git commit hash, and creates an automated GitHub Pre-release. |
-| [`.github/workflows/build_to_archive.yml`](.github/workflows/build_to_archive.yml) | Tag creation / Release | Builds production release APK and App Bundle (`.aab`), stripped of dependency metadata. |
-| [`.github/workflows/update_locales.yml`](.github/workflows/update_locales.yml) | Scheduled / Webhook | Runs `.github/locales.py` to pull updated translation strings from Hosted Weblate and commit updated `strings.xml` resources. |
-| [`.github/workflows/generate_dokka.yml`](.github/workflows/generate_dokka.yml) | Release / Dispatch | Runs Dokka documentation engine on `:app` and `:library` modules to output HTML API reference docs. |
-| [`.github/workflows/instrumented-tests.yml`](.github/workflows/instrumented-tests.yml) | Pull Request | Runs automated Android UI and unit test suites on Android emulators. |
-| [`.github/workflows/pull_request.yml`](.github/workflows/pull_request.yml) | PR submission | Validates Kotlin code style, linting rules, and compilation checks. |
+| [`.github/workflows/prerelease.yml`](https://github.com/recloudstream/cloudstream/blob/eb962b4fb7b1387b8de42ec58000cee0a01fe741/.github/workflows/prerelease.yml) | Push to `master` / Nightly | Compiles `prerelease` APK flavor, signs it using keystore secrets, extracts short git commit hash, and creates an automated GitHub Pre-release. |
+| [`.github/workflows/build_to_archive.yml`](https://github.com/recloudstream/cloudstream/blob/eb962b4fb7b1387b8de42ec58000cee0a01fe741/.github/workflows/build_to_archive.yml) | Tag creation / Release | Builds production release APK and App Bundle (`.aab`), stripped of dependency metadata. |
+| [`.github/workflows/update_locales.yml`](https://github.com/recloudstream/cloudstream/blob/eb962b4fb7b1387b8de42ec58000cee0a01fe741/.github/workflows/update_locales.yml) | Scheduled / Webhook | Runs `.github/locales.py` to pull updated translation strings from Hosted Weblate and commit updated `strings.xml` resources. |
+| [`.github/workflows/generate_dokka.yml`](https://github.com/recloudstream/cloudstream/blob/eb962b4fb7b1387b8de42ec58000cee0a01fe741/.github/workflows/generate_dokka.yml) | Release / Dispatch | Runs Dokka documentation engine on `:app` and `:library` modules to output HTML API reference docs. |
+| [`.github/workflows/instrumented-tests.yml`](https://github.com/recloudstream/cloudstream/blob/eb962b4fb7b1387b8de42ec58000cee0a01fe741/.github/workflows/instrumented-tests.yml) | Pull Request | Runs automated Android UI and unit test suites on Android emulators. |
+| [`.github/workflows/pull_request.yml`](https://github.com/recloudstream/cloudstream/blob/eb962b4fb7b1387b8de42ec58000cee0a01fe741/.github/workflows/pull_request.yml) | PR submission | Validates Kotlin code style, linting rules, and compilation checks. |
 
 ---
 
@@ -30,15 +30,15 @@ CloudStream uses GitHub Actions to automate build, testing, localization, docume
 
 ## 4. Repository Policies & Guidelines
 
-* **AI Usage Policy ([`AI-POLICY.md`](AI-POLICY.md))**:
+* **AI Usage Policy ([`AI-POLICY.md`](https://github.com/recloudstream/cloudstream/blob/eb962b4fb7b1387b8de42ec58000cee0a01fe741/AI-POLICY.md))**:
   1. Contributors must explicitly disclose any AI tools used in Pull Requests or issues.
   2. All AI-generated code must be thoroughly tested before submitting PRs.
   3. Strict code reviews reject low-effort automated submissions.
-* **Fastlane Publishing ([`fastlane/`](fastlane/))**): Contains localized metadata, store listings, and changelogs for automated distribution.
+* **Fastlane Publishing ([`fastlane/`](https://github.com/recloudstream/cloudstream/tree/eb962b4fb7b1387b8de42ec58000cee0a01fe741/fastlane))**): Contains localized metadata, store listings, and changelogs for automated distribution.
 
 ---
 
-## 5. Future Architectural Roadmap ([`COMPOSE.md`](COMPOSE.md))
+## 5. Future Architectural Roadmap ([`COMPOSE.md`](https://github.com/recloudstream/cloudstream/blob/eb962b4fb7b1387b8de42ec58000cee0a01fe741/COMPOSE.md))
 
 CloudStream is actively transitioning toward a modern, cross-platform architecture:
 

@@ -5,7 +5,7 @@
  *   node --experimental-strip-types src/utils/mediaSanity.test.mts
  */
 import assert from 'node:assert/strict';
-import { judgeableDuration, looksLikeWrongMedia, wrongMediaReason } from './mediaSanity.ts';
+import { judgeableDuration, looksLikeWrongMedia, wrongMediaBeforePlay, wrongMediaReason } from './mediaSanity.ts';
 
 const tests: Array<[string, () => void]> = [];
 const test = (name: string, fn: () => void) => tests.push([name, fn]);
@@ -52,6 +52,19 @@ test('a live window is not a length; a stream the element plays is', () => {
   assert.equal(judgeableDuration({ reportedSeconds: 100, converted: false, isLive: true }), undefined);
   assert.equal(judgeableDuration({ reportedSeconds: 45, converted: false }), 45);
   assert.equal(judgeableDuration({ reportedSeconds: Infinity, converted: false }), undefined);
+});
+
+test('a measured clip is refused before it plays, with the reason', () => {
+  assert.match(wrongMediaBeforePlay({ sourceSeconds: 45, expectedSeconds: 120 * 60 })!, /45 s clip/);
+});
+
+test('before playback, nothing unmeasured or merely short is refused', () => {
+  assert.equal(wrongMediaBeforePlay({ expectedSeconds: 120 * 60 }), null);
+  assert.equal(wrongMediaBeforePlay({ sourceSeconds: 45 }), null);
+  assert.equal(wrongMediaBeforePlay({}), null);
+  assert.equal(wrongMediaBeforePlay({ sourceSeconds: 0, expectedSeconds: 7200 }), null);
+  assert.equal(wrongMediaBeforePlay({ sourceSeconds: 22 * 60, expectedSeconds: 45 * 60 }), null);
+  assert.equal(wrongMediaBeforePlay({ sourceSeconds: 116 * 60, expectedSeconds: 120 * 60 }), null);
 });
 
 test('the reason states both lengths', () => {

@@ -7,12 +7,17 @@ import { setAdultVisualBlurred, useAdultMode } from '../utils/useAdultMode';
 import { useIsDeveloper } from '../utils/ExperienceModeContext';
 import { SearchScopePicker } from './SearchScopePicker';
 import type {
+  EntitySuggestion,
   ExactMedia,
+  SearchCategory,
   SearchHistoryEntry,
   SearchOptions,
   SearchSuggestion,
 } from '../types/api';
 import { SearchSuggestions } from './SearchSuggestions';
+import { blockOrder, suggestionRows, type SuggestionRow } from '../utils/suggestionLayout';
+import { categoryPlaceholder, categoryScope, SEARCH_CATEGORIES, wantsEntities, wantsTitles } from '../utils/searchCategories';
+import { useSessionState } from '../utils/useSessionState';
 import type { SavedSearchSummary } from '../../electron/savedSearches';
 import { mergeHistoryAndSaved } from '../utils/searchHistoryMerge';
 import { ProfileMenu } from './profiles/ProfileMenu';
@@ -60,6 +65,13 @@ interface NavbarProps {
   onOpenSavedSearch?: (id: string) => void;
   /** Whether the current screen is a content-browsing context where the adult blur toggle is relevant. */
   contentContext?: boolean;
+  /** A person or company picked from the dropdown: show their films and series (in the selected roles). */
+  onOpenEntity?: (entity: EntitySuggestion, categories: SearchCategory[]) => void;
+  /**
+   * Enter with only people or studio categories selected. Not a title search:
+   * a category never falls back to one.
+   */
+  onSearchPeople?: (query: string, categories: SearchCategory[]) => void;
 }
 
 /**
@@ -98,6 +110,8 @@ export const Navbar: React.FC<NavbarProps> = ({
   externalQuery,
   onOpenSavedSearch,
   contentContext = true,
+  onOpenEntity,
+  onSearchPeople,
 }) => {
   const isDeveloper = useIsDeveloper();
   const [query, setQuery] = useState('');
@@ -138,10 +152,17 @@ export const Navbar: React.FC<NavbarProps> = ({
   }, [externalQuery]);
 
   const [suggestions, setSuggestions] = useState<SearchSuggestion[]>([]);
+  const [entities, setEntities] = useState<EntitySuggestion[]>([]);
   const [history, setHistory] = useState<SearchHistoryEntry[]>([]);
   const [suggestOpen, setSuggestOpen] = useState(false);
   const [suggestLoading, setSuggestLoading] = useState(false);
-  const [highlightedIndex, setHighlightedIndex] = useState(-1);
+  /**
+   * The highlighted row by identity, not position: people land above titles
+   * a moment after them, and an index would then point at another row.
+   */
+  const [highlightedKey, setHighlightedKey] = useState<string | null>(null);
+  /** The category chips. Kept for the session, so a search for directors stays one until changed. */
+  const [categories, setCategories] = useSessionState<SearchCategory[]>('navbar.searchCategories', []);
   const inputRef = useRef<HTMLInputElement | null>(null);
 
   const [saved, setSaved] = useState<SavedSearchSummary[]>([]);
@@ -180,6 +201,7 @@ export const Navbar: React.FC<NavbarProps> = ({
   }, [mergedHistory, trimmedQuery]);
 
   const visibleSuggestions = useMemo(() => {
+    if (!wantsTitles(categories)) return [];
     if (adult.allowed) return suggestions;
     return suggestions.filter(
       (s) =>
@@ -196,7 +218,7 @@ export const Navbar: React.FC<NavbarProps> = ({
           adult.adultProviders
         )
     );
-  }, [suggestions, adult.allowed, adult.adultProviders]);
+  }, [suggestions, adult.allowed, adult.adultProviders, categories]);
 
   /**
    * Fetches suggestions for the current query, debounced.
@@ -214,13 +236,17 @@ export const Navbar: React.FC<NavbarProps> = ({
    * keystroke — the same arrangement `DetailView` uses for late metadata.
    */
   const activeQuery = useRef('');
+  /** The chips the rows on screen were asked for, for the same reason. */
+  const activeScope = useRef('');
 
   useEffect(() => {
     const trimmed = query.trim();
     activeQuery.current = trimmed;
+    activeScope.current = categoryScope(categories);
 
     if (trimmed.length < SUGGEST_MIN_LENGTH) {
       setSuggestions([]);
+      setEntities([]);
       setSuggestLoading(false);
       return;
     }
@@ -228,7 +254,7 @@ export const Navbar: React.FC<NavbarProps> = ({
     const id = ++requestId.current;
 
     const timer = window.setTimeout(async () => {
-      const response = await window.cloudstream?.suggestTitles(trimmed);
+      const response = await window.cloudstream?.suggestTitles(trimmed, categories);
       if (id !== requestId.current) return;
 
       /**
@@ -241,13 +267,15 @@ export const Navbar: React.FC<NavbarProps> = ({
        * until the catalogues answer with better ones.
        */
       if (response?.suggestions?.length) setSuggestions(response.suggestions);
+      // People are replaced outright: a name that stopped matching must go.
+      setEntities(response?.entities ?? []);
       // Only claim to be finished when the main process says it is. An empty
       // instant answer with `done: false` is work in progress, not a result.
       setSuggestLoading(!response?.done);
     }, SUGGEST_DEBOUNCE_MS);
 
     return () => window.clearTimeout(timer);
-  }, [query]);
+  }, [query, categories]);
 
   /**
    * Catalogues landing behind the instant answer.
@@ -258,15 +286,16 @@ export const Navbar: React.FC<NavbarProps> = ({
    */
   useEffect(() => {
     const dispose = window.cloudstream?.onSuggestionUpdate?.((update) => {
-      if (update.query !== activeQuery.current) return;
+      if (update.query !== activeQuery.current || (update.scope ?? '') !== activeScope.current) return;
       setSuggestions(update.suggestions);
+      setEntities(update.entities ?? []);
       if (update.done) setSuggestLoading(false);
     });
     return () => dispose?.();
   }, []);
 
   // A fresh query means the previous highlight points at a different row.
-  useEffect(() => setHighlightedIndex(-1), [query]);
+  useEffect(() => setHighlightedKey(null), [query, categories]);
 
   const runSearch = useCallback(
     (text: string, exact?: ExactMedia) => {
@@ -274,7 +303,7 @@ export const Navbar: React.FC<NavbarProps> = ({
       if (!trimmed) return;
       setQuery(trimmed);
       setSuggestOpen(false);
-      setHighlightedIndex(-1);
+      setHighlightedKey(null);
       inputRef.current?.blur();
       onSearch(trimmed, exact ? { exact } : undefined);
       /**
@@ -322,22 +351,61 @@ export const Navbar: React.FC<NavbarProps> = ({
     [runSearch]
   );
 
-  const historyFirst = query.trim().length < SUGGEST_MIN_LENGTH;
-  const orderedRows: Array<{ kind: 'suggestion' | 'history'; index: number }> = historyFirst
-    ? [
-        ...displayHistory.map((_, index) => ({ kind: 'history' as const, index })),
-        ...visibleSuggestions.map((_, index) => ({ kind: 'suggestion' as const, index })),
-      ]
-    : [
-        ...visibleSuggestions.map((_, index) => ({ kind: 'suggestion' as const, index })),
-        ...displayHistory.map((_, index) => ({ kind: 'history' as const, index })),
-      ];
+  const pickEntity = useCallback(
+    (entity: EntitySuggestion) => {
+      setSuggestOpen(false);
+      setHighlightedKey(null);
+      inputRef.current?.blur();
+      onOpenEntity?.(entity, categories);
+    },
+    [onOpenEntity, categories]
+  );
+
+  /**
+   * Enter or the Search button. With only people or studio chips selected it
+   * looks those up instead of searching titles: a category never quietly
+   * becomes a title search.
+   */
+  const submit = useCallback(
+    (text: string) => {
+      const trimmed = text.trim();
+      if (!trimmed) return;
+      if (wantsTitles(categories) || !onSearchPeople) {
+        runSearch(trimmed);
+        return;
+      }
+      setSuggestOpen(false);
+      setHighlightedKey(null);
+      inputRef.current?.blur();
+      onSearchPeople(trimmed, categories);
+    },
+    [categories, onSearchPeople, runSearch]
+  );
+
+  // Without a handler there is nowhere to open a person, so none are offered.
+  const visibleEntities = onOpenEntity && wantsEntities(categories) ? entities : [];
+  const historyFirst = trimmedQuery.length < SUGGEST_MIN_LENGTH;
+  const order = blockOrder(historyFirst);
+  const orderedRows = suggestionRows(order, {
+    history: displayHistory.length,
+    entity: visibleEntities.length,
+    suggestion: visibleSuggestions.length,
+  });
+  const keyOf = (row: SuggestionRow): string =>
+    row.kind === 'entity'
+      ? `e:${visibleEntities[row.index]?.id}`
+      : row.kind === 'suggestion'
+        ? `s:${visibleSuggestions[row.index]?.url}|${visibleSuggestions[row.index]?.title}`
+        : `h:${displayHistory[row.index]?.query}`;
+  const rowKeys = orderedRows.map(keyOf);
+  const highlightedIndex = highlightedKey ? rowKeys.indexOf(highlightedKey) : -1;
+  const setHighlightedIndex = (index: number) => setHighlightedKey(rowKeys[index] ?? null);
 
   const handleClear = useCallback(() => {
     setQuery('');
     lastExternal.current = '';
     setSuggestOpen(false);
-    setHighlightedIndex(-1);
+    setHighlightedKey(null);
     inputRef.current?.focus();
     onClearSearch?.();
     if (isSearching) {
@@ -349,7 +417,7 @@ export const Navbar: React.FC<NavbarProps> = ({
     if (e.key === 'Escape') {
       if (suggestOpen) {
         setSuggestOpen(false);
-        setHighlightedIndex(-1);
+        setHighlightedKey(null);
       } else if (query) {
         handleClear();
       } else if (isSearching) {
@@ -363,12 +431,8 @@ export const Navbar: React.FC<NavbarProps> = ({
       e.preventDefault();
       setSuggestOpen(true);
       const step = e.key === 'ArrowDown' ? 1 : -1;
-      setHighlightedIndex((current) => {
-        const next = current + step;
-        if (next < 0) return orderedRows.length - 1;
-        if (next >= orderedRows.length) return -1;
-        return next;
-      });
+      const next = highlightedIndex + step;
+      setHighlightedIndex(next < -1 ? orderedRows.length - 1 : next >= orderedRows.length ? -1 : next);
       return;
     }
 
@@ -379,6 +443,8 @@ export const Navbar: React.FC<NavbarProps> = ({
         // it carries the same identity rather than degrading to a text search.
         if (row.kind === 'suggestion') {
           pickSuggestion(visibleSuggestions[row.index]);
+        } else if (row.kind === 'entity') {
+          pickEntity(visibleEntities[row.index]);
         } else {
           const entry = displayHistory[row.index];
           if (entry?.isSaved && entry.savedId && onOpenSavedSearch) {
@@ -390,7 +456,7 @@ export const Navbar: React.FC<NavbarProps> = ({
         }
         return;
       }
-      runSearch(query);
+      submit(query);
     }
   };
 
@@ -438,7 +504,10 @@ export const Navbar: React.FC<NavbarProps> = ({
           ref={inputRef}
           type="text"
           className="search-input"
-          placeholder={incognito ? "Search — incognito, searches aren't saved" : 'Search titles, or paste a link'}
+          placeholder={
+            categoryPlaceholder(categories) ??
+            (incognito ? "Search — incognito, searches aren't saved" : 'Search titles, people, or paste a link')
+          }
           aria-label="Search movies, shows and anime"
           value={query}
           onChange={(e) => setQuery(e.target.value)}
@@ -452,6 +521,21 @@ export const Navbar: React.FC<NavbarProps> = ({
           aria-expanded={suggestOpen}
           aria-autocomplete="list"
         />
+
+        {/* The chips in force, said where the search is typed, so a filter is never invisible. */}
+        {categories.length > 0 && (
+          <button
+            type="button"
+            className="search-bar__scope"
+            onMouseDown={(e) => e.preventDefault()}
+            onClick={() => setCategories([])}
+            title="Searching only these. Click to search everything."
+            aria-label={`Searching ${SEARCH_CATEGORIES.filter((c) => categories.includes(c.id)).map((c) => c.label).join(', ')}. Clear`}
+          >
+            {SEARCH_CATEGORIES.filter((c) => categories.includes(c.id)).map((c) => c.label).join(' · ')}
+            <X size={12} aria-hidden />
+          </button>
+        )}
 
         {query.length > 0 && (
           <button
@@ -507,20 +591,25 @@ export const Navbar: React.FC<NavbarProps> = ({
             <span>Stop</span>
           </button>
         ) : (
-          <Button size="compact" variant="prominent" icon={Search} onClick={() => runSearch(query)}>
+          <Button size="compact" variant="prominent" icon={Search} onClick={() => submit(query)}>
             Search
           </Button>
         )}
 
         <SearchSuggestions
           open={suggestOpen}
-          query={query}
           suggestions={visibleSuggestions}
+          entities={visibleEntities}
           history={displayHistory}
+          order={order}
+          categories={categories}
+          onCategoriesChange={setCategories}
+          chipsEnabled={Boolean(onOpenEntity)}
           loading={suggestLoading}
           highlightedIndex={highlightedIndex}
           onHighlight={setHighlightedIndex}
           onPickSuggestion={pickSuggestion}
+          onPickEntity={pickEntity}
           onPickHistory={(entry) => {
             if (entry.isSaved && entry.savedId && onOpenSavedSearch) {
               setSuggestOpen(false);

@@ -43,6 +43,18 @@ export const BUCKET_LABELS: Record<WatchStatus, string> = {
 };
 
 /**
+ * The order shelves are offered in, everywhere: a title's life from start to
+ * finish (watching, then queued, then done), with the two set-aside states last.
+ */
+export const BUCKET_ORDER: readonly WatchStatus[] = [
+  WatchStatus.Watching,
+  WatchStatus.PlanToWatch,
+  WatchStatus.Completed,
+  WatchStatus.OnHold,
+  WatchStatus.Dropped,
+];
+
+/**
  * One provider's route to a title, kept alongside the merged row that won.
  *
  * Two providers naming the same work produce one row, but the losing row's URL
@@ -68,6 +80,8 @@ export interface SearchResponse {
   year?: number;
   quality?: string;
   id?: number;
+  /** Canonical genres if enriched by metadata catalogues. */
+  genres?: string[];
   /** Present when the identity is known; the strongest merge key there is. */
   imdbId?: string;
   /** Present when the item is the exact selection chosen from search suggestions. */
@@ -131,11 +145,46 @@ export interface SearchSuggestion {
  * `query` is echoed because a reply can outlive the keystroke that asked for
  * it; the renderer drops anything that no longer names what is in the box.
  */
+/**
+ * A person or company the query names, offered beside the title rows.
+ * Found by name on Wikidata and kept only with credits on record
+ * (`metadata/entitySearch.ts`); picking one opens their work.
+ */
+/**
+ * What the search box looks for. None selected means everything ("All").
+ * `title` is the catalogues' titles; the rest are people by a credit they
+ * actually hold, and studios by what they produced (`metadata/entitySearch.ts`).
+ */
+export type SearchCategory = 'title' | 'cast' | 'director' | 'writer' | 'producer' | 'composer' | 'studio';
+
+/** The credits a person is found to hold, on works with an IMDb id. */
+export type EntityRole = 'cast' | 'director' | 'writer' | 'producer' | 'composer';
+
+export interface EntitySuggestion {
+  kind: 'person' | 'company';
+  /** Wikidata QID. */
+  id: string;
+  name: string;
+  /** Wikidata's one-line description: "American actor and professional wrestler (born 1977)". */
+  description?: string;
+  imageUrl?: string;
+  /** The Wikidata page; `metadata:filmography` resolves the person from it. */
+  profileUrl: string;
+  /** People only: the credits they hold, which the category chips filter on. */
+  roles?: EntityRole[];
+}
+
 export interface SuggestionUpdate {
   query: string;
   suggestions: SearchSuggestion[];
+  /** People and companies the query names; absent while none are known. */
+  entities?: EntitySuggestion[];
   /** False while a catalogue is still expected. */
   done: boolean;
+  /** The categories asked for, sorted and joined (`''` is All): a reply for another selection is stale. */
+  scope?: string;
+  /** The people lookup was refused or failed: `entities` is what was shown before, not "nobody". */
+  entitiesFailed?: boolean;
 }
 
 /**

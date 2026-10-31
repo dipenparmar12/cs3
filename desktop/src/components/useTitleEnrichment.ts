@@ -125,6 +125,8 @@ export function useTitleEnrichment(results: SearchResponse[], enabled = true): S
       year: enriched.year ?? item.year,
       posterUrl: enriched.posterUrl ?? item.posterUrl,
       originalTitle: item.originalTitle ?? (enriched.name !== item.name ? item.name : undefined),
+      genres: enriched.genres ?? item.genres,
+      adult: enriched.adult ?? item.adult,
     };
   });
 }

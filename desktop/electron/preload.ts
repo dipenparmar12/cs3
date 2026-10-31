@@ -8,8 +8,12 @@ import type {
   SearchResponse,
   SearchSuggestion,
   SuggestionUpdate,
+  EntitySuggestion,
+  SearchCategory,
 } from '../src/types/api';
 import type { OttPlatformView } from './cs3/ottPlatforms';
+import type { AppUpdateState } from './appUpdate/appUpdateService';
+import type { PlaybackTelemetryRecord, TelemetrySummary } from './media/playbackTelemetry';
 import type { ProfileState, SourceProfile } from './cs3/sourceProfiles.ts';
 import type {
   ProfileActionResult,
@@ -32,6 +36,8 @@ export interface SourceProfileSnapshot {
   profiles: SourceProfile[];
   activeId: string;
   draft: ProfileState['draft'];
+  /** The profile new searches start from; absent means All sources. */
+  defaultId?: string;
   label: string;
   narrowed: boolean;
 }
@@ -39,6 +45,7 @@ import type { NativeProviderSummary } from './cs3/nativeProviderRegistry';
 import type { DownloadRequestResult, DownloadTask } from '../src/types/download';
 import type { BackupAnalysis, RestorePlan, RestoreSummary } from '../src/types/backup';
 import type { SwarmReport } from '../src/types/torrent';
+import type { SourceVerdict } from '../src/utils/sourceVerdict';
 import type { TorrentContents } from './torrent/torrentContents';
 import type { TorrentImportRecord } from './torrent/torrentImport';
 import type { StorageReport } from './storage/appStorage.ts';
@@ -75,7 +82,7 @@ import type {
 import type { StartupProfile } from './startupProfile.ts';
 import type { StartupTaskReport } from './util/startupQueue.ts';
 import type { ProbeConfig } from './media/mediaInspector';
-import type { SearchScope } from './searchScope';
+import type { SearchScope, SearchScopeEdit } from './searchScope';
 import type { SearchSnapshot } from './searchSession';
 import type { DnsPreset, NetworkSettings } from './networkSettings';
 import type { SystemRuntimeStatus, RuntimeProgress } from './cs3/runtimeProvisioner';
@@ -143,6 +150,7 @@ import type {
   PlaybackStreamResponse,
   RendererCapabilities,
   SourceCapabilityModel,
+  PlaybackRuntimeReport,
 } from '../src/types/media';
 import type {
   MpvCommandResult,
@@ -299,6 +307,8 @@ export interface CloudStreamElectronAPI {
   ) => Promise<Envelope & { visit: VisitRecord | null }>;
   /** Forgets which titles have been opened. Returns how many there were. */
   clearTitleVisits: () => Promise<Envelope & { cleared: number }>;
+  /** Forgets what one provider answered for one work (the card's mark), so it is asked fresh. */
+  forgetProviderAttempt: (title: string, year: number | undefined, provider: string) => Promise<Envelope & { forgotten: boolean }>;
   /** Drops every cached record. Returns how many there were. */
   clearExtendedMetadata: () => Promise<Envelope & { cleared: number }>;
   /** Searches public repositories (YouTube) keylessly for trailers and promos of any content. */
@@ -351,8 +361,10 @@ export interface CloudStreamElectronAPI {
    * carries each catalogue as it lands.
    */
   suggestTitles: (
-    query: string
-  ) => Promise<Envelope & { suggestions: SearchSuggestion[]; done: boolean }>;
+    query: string,
+    /** What to look for; empty or omitted is everything. */
+    categories?: SearchCategory[]
+  ) => Promise<Envelope & { suggestions: SearchSuggestion[]; done: boolean; entities?: EntitySuggestion[] }>;
   /**
    * Fuller suggestion lists, as each catalogue answers.
    *
@@ -463,7 +475,8 @@ export interface CloudStreamElectronAPI {
   /** Abandons a source that started but will not play, and tries the next. */
   skipPlaybackSource: (
     sessionId: string,
-    reason: string
+    reason: string,
+    verdict?: SourceVerdict
   ) => Promise<Envelope & { snapshot: PlaybackSnapshot | null }>;
   playbackPlayNow: (
     sessionId: string
@@ -645,7 +658,7 @@ export interface CloudStreamElectronAPI {
       progress: ProviderLoadProgress;
     }
   >;
-  setSearchScope: (scope: Partial<SearchScope>) => Promise<SearchScope>;
+  setSearchScope: (scope: SearchScopeEdit) => Promise<SearchScope>;
 
   /**
    * Named search configurations.
@@ -664,6 +677,8 @@ export interface CloudStreamElectronAPI {
   createSourceProfile: (name: string) => Promise<SourceProfileSnapshot>;
   renameSourceProfile: (id: string, name: string) => Promise<SourceProfileSnapshot>;
   duplicateSourceProfile: (id: string) => Promise<SourceProfileSnapshot>;
+  /** Makes a profile the one new searches start from; `all` clears it. */
+  setDefaultSourceProfile: (id: string) => Promise<SourceProfileSnapshot>;
   deleteSourceProfile: (id: string) => Promise<SourceProfileSnapshot>;
   /**
    * Viewer profiles: separate libraries, histories and preferences. Optional —
@@ -728,10 +743,19 @@ export interface CloudStreamElectronAPI {
     positionSeconds: number
   ) => Promise<Envelope & { url?: string }>;
   closePlaybackStream: (sessionId: string) => Promise<Envelope>;
+  /** What the element measured for a prepared stream, sent once when it is left. */
+  reportPlayback: (telemetryId: string, report: PlaybackRuntimeReport) => Promise<Envelope>;
   /** Strategy, codecs and encoder timings for every playback attempt. */
   getPlaybackDiagnostics: (
     sessionId?: string
-  ) => Promise<Envelope & { events: PlaybackDiagnosticEvent[] }>;
+  ) => Promise<
+    Envelope & {
+      events: PlaybackDiagnosticEvent[];
+      /** PRD-40.1 records of this launch, oldest first. */
+      telemetry?: PlaybackTelemetryRecord[];
+      summary?: TelemetrySummary;
+    }
+  >;
   /** Codec strings to hand `canPlayType`, keyed by ffprobe's name for each. */
   getCodecProbes: () => Promise<Record<string, string>>;
   /**
@@ -1003,6 +1027,14 @@ export interface CloudStreamElectronAPI {
   getActiveStreams: () => Promise<TorrentStreamStats[]>;
   clearTorrentCache: () => Promise<Envelope & { removed: number }>;
   getTorrentCachePath: () => Promise<string>;
+  /**
+   * Saves the torrent's original `.torrent` through a save dialog.
+   * `unavailable` when its metadata was never fetched (copy the magnet instead).
+   */
+  exportTorrentFile: (
+    infoHash: string,
+    name?: string
+  ) => Promise<Envelope & { path?: string; unavailable?: boolean; cancelled?: boolean }>;
   /**
    * Why this torrent is as fast or as slow as it is, including the part no
    * setting can change. See `torrent/swarmHealth.ts`.
@@ -1944,6 +1976,18 @@ export interface CloudStreamElectronAPI {
    * where the main thread stopped answering, which a list of stage durations
    * cannot distinguish from an app that was merely busy.
    */
+  /** App update notifications (App Update PRD). Whole state every time. */
+  getAppUpdateState: () => Promise<AppUpdateState>;
+  checkAppUpdate: () => Promise<AppUpdateState>;
+  setAppUpdateSettings: (patch: { channel?: 'stable' | 'beta'; autoCheck?: boolean }) => Promise<AppUpdateState>;
+  skipAppUpdate: (version: string) => Promise<AppUpdateState>;
+  unskipAppUpdate: () => Promise<AppUpdateState>;
+  openAppUpdateDownload: () => Promise<{ ok: boolean }>;
+  /** Downloads and verifies the offered file (SHA256SUMS.txt); progress arrives on the push. */
+  downloadAppUpdate: () => Promise<AppUpdateState>;
+  /** Runs the verified file; refused for anything not verified this launch. */
+  installAppUpdate: () => Promise<{ ok: boolean; error?: string }>;
+  onAppUpdateChanged: (callback: (state: AppUpdateState) => void) => () => void;
   getStartupProfile: () => Promise<
     | { ok: true; profile: StartupProfile; tasks: StartupTaskReport[] }
     | { ok: false; error: string }
@@ -2140,6 +2184,7 @@ const api: CloudStreamElectronAPI = {
   summariseInteractions: (queries) => ipcRenderer.invoke('interactions:summarise', queries),
   recordTitleVisit: (title, year) => ipcRenderer.invoke('interactions:visit', title, year),
   clearTitleVisits: () => ipcRenderer.invoke('interactions:clearVisits'),
+  forgetProviderAttempt: (title, year, provider) => ipcRenderer.invoke('interactions:forgetAttempt', title, year, provider),
   clearExtendedMetadata: () => ipcRenderer.invoke('metadata:clearCache'),
   findTrailers: (title, year) => ipcRenderer.invoke('metadata:findTrailers', title, year),
   findRelatedMedia: (request) => ipcRenderer.invoke('metadata:findRelatedMedia', request),
@@ -2151,7 +2196,7 @@ const api: CloudStreamElectronAPI = {
   getSources: (request) => ipcRenderer.invoke('api:getSources', request),
   getPluginRuntimeStatus: () => ipcRenderer.invoke('api:getPluginRuntimeStatus'),
 
-  suggestTitles: (query) => ipcRenderer.invoke('api:suggest', query),
+  suggestTitles: (query, categories) => ipcRenderer.invoke('api:suggest', query, categories),
   onSuggestionUpdate: (callback) => subscribe('search:suggestUpdate', callback),
   findSubtitles: (query) => ipcRenderer.invoke('subtitles:find', query),
   fetchSubtitle: (url) => ipcRenderer.invoke('subtitles:fetch', url),
@@ -2182,8 +2227,8 @@ const api: CloudStreamElectronAPI = {
   startPlayback: (request, title, episodeTitle, options) =>
     ipcRenderer.invoke('playback:start', request, title, episodeTitle, options),
   playbackPlayNow: (sessionId) => ipcRenderer.invoke('playback:playNow', sessionId),
-  skipPlaybackSource: (sessionId, reason) =>
-    ipcRenderer.invoke('playback:skipSource', sessionId, reason),
+  skipPlaybackSource: (sessionId, reason, verdict) =>
+    ipcRenderer.invoke('playback:skipSource', sessionId, reason, verdict),
   playbackSelectSource: (sessionId, infoHash) =>
     ipcRenderer.invoke('playback:selectSource', sessionId, infoHash),
   playbackRefreshSources: (sessionId, widen) =>
@@ -2243,6 +2288,7 @@ const api: CloudStreamElectronAPI = {
   switchAudioTrack: (sessionId, audioIndex, positionSeconds) =>
     ipcRenderer.invoke('media:switchAudio', sessionId, audioIndex, positionSeconds),
   closePlaybackStream: (sessionId) => ipcRenderer.invoke('media:closeStream', sessionId),
+  reportPlayback: (telemetryId, report) => ipcRenderer.invoke('media:reportPlayback', telemetryId, report),
   getPlaybackDiagnostics: (sessionId) =>
     ipcRenderer.invoke('media:getPlaybackDiagnostics', sessionId),
   getCodecProbes: () => ipcRenderer.invoke('media:getCodecProbes'),
@@ -2343,6 +2389,7 @@ const api: CloudStreamElectronAPI = {
   getActiveStreams: () => ipcRenderer.invoke('torrent:getActiveStreams'),
   clearTorrentCache: () => ipcRenderer.invoke('torrent:clearCache'),
   getTorrentCachePath: () => ipcRenderer.invoke('torrent:getCachePath'),
+  exportTorrentFile: (infoHash, name) => ipcRenderer.invoke('torrent:exportFile', infoHash, name),
   getSwarmReport: (infoHash) => ipcRenderer.invoke('torrent:getSwarmReport', infoHash),
 
   getIndexerConfigs: () => ipcRenderer.invoke('indexer:getConfigs'),
@@ -2374,6 +2421,7 @@ const api: CloudStreamElectronAPI = {
   createSourceProfile: (name) => ipcRenderer.invoke('profiles:create', name),
   renameSourceProfile: (id, name) => ipcRenderer.invoke('profiles:rename', id, name),
   duplicateSourceProfile: (id) => ipcRenderer.invoke('profiles:duplicate', id),
+  setDefaultSourceProfile: (id) => ipcRenderer.invoke('profiles:setDefault', id),
   deleteSourceProfile: (id) => ipcRenderer.invoke('profiles:delete', id),
   getUserProfiles: () => ipcRenderer.invoke('userProfiles:get'),
   verifyUserProfile: (id, secret) => ipcRenderer.invoke('userProfiles:verify', id, secret),
@@ -2616,6 +2664,15 @@ const api: CloudStreamElectronAPI = {
   selectDirectory: () => ipcRenderer.invoke('dialog:selectDirectory'),
   reloadApp: () => ipcRenderer.invoke('app:reload'),
   relaunchApp: () => ipcRenderer.invoke('app:relaunch'),
+  getAppUpdateState: () => ipcRenderer.invoke('appUpdate:getState'),
+  checkAppUpdate: () => ipcRenderer.invoke('appUpdate:check'),
+  setAppUpdateSettings: (patch) => ipcRenderer.invoke('appUpdate:setSettings', patch),
+  skipAppUpdate: (version) => ipcRenderer.invoke('appUpdate:skip', version),
+  unskipAppUpdate: () => ipcRenderer.invoke('appUpdate:unskip'),
+  openAppUpdateDownload: () => ipcRenderer.invoke('appUpdate:openDownload'),
+  downloadAppUpdate: () => ipcRenderer.invoke('appUpdate:download'),
+  installAppUpdate: () => ipcRenderer.invoke('appUpdate:install'),
+  onAppUpdateChanged: (callback) => subscribe('appUpdate:changed', callback),
   getStartupProfile: () => ipcRenderer.invoke('app:getStartupProfile'),
   exportUserData: (only) => ipcRenderer.invoke('backup:export', only),
   inspectBackup: () => ipcRenderer.invoke('backup:inspect'),

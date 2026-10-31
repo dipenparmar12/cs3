@@ -52,6 +52,13 @@ const STRONG = [
  */
 const ROW_ONLY = [/\bhot\b/i, /\b(adult|sexy|sensual)\b/i, /\b18[-_ ]?(plus|movies?|adult)\b/i];
 
+/**
+ * A page address names adult content only with an explicit marker as a whole
+ * path segment. The row-label words (`hot`, `sexy`…) are not used here: they
+ * match ordinary addresses (`/hot-wheels/`).
+ */
+const ADULT_ADDRESS = /(^|[/_.-])(hentai|porn\w*|xxx|nsfw|adult|onlyfans|brazzers|18[-_]?(plus|movies?|adult))([/_.-]|$)/i;
+
 export function isSensitiveTitle(text: string | undefined): boolean {
   if (!text) return false;
   return STRONG.some((pattern) => pattern.test(text));
@@ -122,7 +129,7 @@ export function isSensitiveRow(row: {
 }
 
 const ADULT_TAG_PATTERNS = [
-  /^(?:18\s*[+＋]|nsfw|xxx|adult|erotica|erotic|hentai|porn|pornography|uncensored|ecchi|jav)$/i,
+  /^(?:18\s*[+＋]|nsfw|xxx|adult|erotica|erotic|hentai|porn|pornography|uncensored|jav|r18|r-18)$/i,
 ];
 
 /** True when a genre or tag string explicitly classifies a title as 18+/NSFW. */
@@ -180,7 +187,9 @@ export function isAdultMedia(
   if (item.adult === true) return true;
   if (
     String(item.type ?? '').toUpperCase() === 'NSFW' ||
-    String(item.mediaType ?? '').toUpperCase() === 'NSFW'
+    String(item.mediaType ?? '').toUpperCase() === 'NSFW' ||
+    isAdultGenreOrTag(item.type) ||
+    isAdultGenreOrTag(item.mediaType)
   ) {
     return true;
   }
@@ -203,6 +212,7 @@ export function isAdultMedia(
       const extProvider = decodeURIComponent(slash >= 0 ? rest.slice(0, slash) : rest);
       if (adultProviders.has(extProvider) || isSensitiveTitle(extProvider)) return true;
     }
+    if (ADULT_ADDRESS.test(u)) return true;
   }
 
   if (

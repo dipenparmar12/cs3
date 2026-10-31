@@ -55,6 +55,9 @@ import type { WatchStatus } from './api';
  */
 export type TitleOutcomeKind = 'played' | 'no-sources' | 'app-error';
 
+/** What one provider answered when the work was last looked for through it. */
+export type ProviderAttemptOutcome = 'sources' | 'no-sources' | 'wrong-match' | 'error';
+
 /** How a title's downloads are going, collapsed across every variant of it. */
 export const DownloadSummaryState = {
   Queued: 'queued',
@@ -138,6 +141,12 @@ export interface TitleInteraction {
    * 834 posters was 834 round trips to read one in-memory map.
    */
   library?: { key: string; status: WatchStatus };
+  /**
+   * What this card's provider (`apiName`) answered when the work was last
+   * looked for through it (`cs3/providerAttempts.ts`). About the provider's row,
+   * never the work: a wrong match here does not mark the title.
+   */
+  attempt?: { outcome: ProviderAttemptOutcome; at: number; detail?: string };
 }
 
 /** What a caller knows about a card before anything is looked up. */

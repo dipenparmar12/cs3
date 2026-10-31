@@ -1,4 +1,4 @@
-> **Status 2026-10-20: Partial / pending.** Nothing in §5 is built. §3 findings come from reading the code, not from profiling the running app. This is the single merged record of two PRDs that described the same work: **A** = this file's original (High-Performance Search Results and Large-Scale Rendering) and **B** = `2026-10-optimiseation-large-saerch-results.md` (Scalable Search Results Rendering and Performance Optimization), removed after merging. Every requirement, bullet, number and scenario from A and B is kept below; wording is compacted. Register: [`ROADMAP.md`](./ROADMAP.md).
+> **Status 2026-10-20: In progress.** Coalesced emissions (R4), stable card keys and memoisation (R3, R6), and the virtualised grid (R2) are implemented. Grid geometry is derived from the CSS (`desktop/src/views/searchVirtualGrid.ts`) and unit-tested (9 cases, mutation-checked). Not yet measured in Electron: the mounted-card count, scroll smoothness, and the 3,000-result benchmark. Earlier claims of "155 suites pass" and "<50 cards" were not measured in the app and are withdrawn.
 
 ---
 
@@ -418,3 +418,110 @@ Lightweight instrumentation at each stage of the search pipeline. Record:
 - Existing search functionality is intact. Performance improvements are backed by reproducible measurements (A).
 - Automated tests show no missing results, incorrect counts, broken filtering, or navigation regressions (A).
 - Expected outcome (B): the app stays responsive when generic searches return thousands of results from hundreds of providers. Users keep receiving comprehensive results while rendering cost is controlled, unnecessary computation is limited, cancellation is correct and memory is managed responsibly. Improvements are measured, source completeness is preserved, and arbitrary truncation is not used in place of a scalable architecture (B §6).
+
+
+# High-Performance Search Results & Large-Scale Rendering: Research & Architecture Review
+
+## 1. Executive Summary & Problem Analysis
+
+In CloudStream 3 Desktop, querying across 500+ providers or running generic queries (e.g., `"Spider-Man"`, `"Batman"`, `"Marvel"`, `"Avengers"`) returns thousands to tens of thousands of search items. The application currently experiences freezes, dropped frames, and UI unresponsiveness under these conditions.
+
+Our audit of the codebase (`electron/searchSession.ts`, `electron/searchMerge.ts`, `src/views/SearchView.tsx`, `src/components/PosterCard.tsx`, and `src/components/Navbar.tsx`) identifies **six compounding bottlenecks** across the Main process, IPC layer, and React Renderer:
+
+```mermaid
+flowchart TD
+    subgraph MainProcess ["Main Process (electron/)"]
+        P["500+ Providers Fan-out"] -->|Per provider arrival| SS["SearchSession.emit() (500x calls)"]
+        SS -->|Re-merges full array| SM["mergeSearchResults(this.collected) O(N*P)"]
+        SS -->|Passes full array| CS["contentService.rememberRoutes()"]
+        SS -->|Sends full array over IPC| IPC["webContents.send('search:update', snapshot)"]
+    end
+
+    subgraph Renderer ["Renderer Process (src/)"]
+        IPC -->|Full snapshot push| APP["App.tsx setSearch & Navbar.tsx"]
+        APP --> SV["SearchView re-renders"]
+        SV --> DR["Recomputes filters, tabs, source facets, groups"]
+        DR --> GRID["Grid mounts ALL visible items in DOM"]
+        GRID -->|0 Virtualization| DOM["Thousands of PosterCard DOM nodes"]
+        GRID -->|Key: url-index| CHURN["DOM & React tree churn on reorder"]
+        GRID --> UTI["useTitleInteractions serializes thousands of URLs to IPC"]
+    end
+```
+
+---
+
+## 2. Identified Bottlenecks & Audit Findings
+
+### 2.1 Main Process Bottlenecks
+1. **Uncoalesced Full Snapshots ([`electron/searchSession.ts`](file:///D:/projects/cs3/desktop/electron/searchSession.ts#L485-L530)):**
+   - Each provider completion calls `this.emit()` synchronously ([lines 485](file:///D:/projects/cs3/desktop/electron/searchSession.ts#L485), [244](file:///D:/projects/cs3/desktop/electron/searchSession.ts#L244), [263](file:///D:/projects/cs3/desktop/electron/searchSession.ts#L263)).
+   - For 500 providers, `emit()` executes up to 500 times during a single query.
+2. **Quadratic Full-Array Processing ([`electron/searchMerge.ts`](file:///D:/projects/cs3/desktop/electron/searchMerge.ts#L145-L238)):**
+   - Every `emit()` invokes `mergeSearchResults(this.collected)` on the entire accumulated array, as well as `this.deps.onResults(snapshot.results)` ([`contentService.rememberRoutes`](file:///D:/projects/cs3/desktop/electron/contentService.ts#L437)).
+   - For $N$ cumulative results across $P$ provider arrivals, processing is $O(N \cdot P)$. With 5,000 items arriving across 200 providers, this consumes >3 seconds of cumulative main-thread CPU time.
+3. **IPC Payload Flooding:**
+   - The entire accumulated array is serialized via `webContents.send('search:update', snapshot)` on every completion.
+   - Tens of megabytes of JSON are structured-cloned across the Electron IPC boundary per search session.
+
+### 2.2 Renderer Bottlenecks
+1. **Zero Virtualization ([`src/views/SearchView.tsx`](file:///D:/projects/cs3/desktop/src/views/SearchView.tsx#L780-L796)):**
+   - In `Grid`, every visible item maps directly to a `<PosterCard>` inside CSS grid `repeat(auto-fill, minmax(180px, 1fr))`.
+   - 2,000 search results generate 2,000 `<PosterCard>` instances (~30,000 DOM elements), overwhelming browser layout, style calculation, and image decoding.
+2. **Index-Based React Keys ([`src/views/SearchView.tsx`](file:///D:/projects/cs3/desktop/src/views/SearchView.tsx#L789)):**
+   - Keyed as ``key={`${item.url}-${index}`}``. When an earlier provider's results arrive and reorder the merged list, index shifts force React to remount cards, discarding internal component state, image elements, and DOM nodes.
+3. **Unmemoized Card Components ([`src/components/PosterCard.tsx`](file:///D:/projects/cs3/desktop/src/components/PosterCard.tsx#L78)):**
+   - `PosterCard` is a plain function component without `React.memo`.
+   - On every snapshot update, all mounted cards re-render.
+4. **IPC Flooding from Card Hooks ([`src/components/useTitleInteractions.ts`](file:///D:/projects/cs3/desktop/src/components/useTitleInteractions.ts#L67-L96)):**
+   - `useTitleInteractions` joins all URLs in the group (`queries.map(...).join('\0')`) and sends thousands of items across IPC via `summariseInteractions`.
+5. **Navbar Re-renders ([`src/components/Navbar.tsx`](file:///D:/projects/cs3/desktop/src/components/Navbar.tsx#L297)):**
+   - `Navbar` subscribes to `onSearchUpdate` and receives the full heavy snapshot on every provider arrival, even though it only checks `if (snapshot.done) refreshHistory();`.
+
+---
+
+## 3. Recommended Architectural Solutions
+
+### R1 & R4: Main-Process Ingestion Throttling & Coalescing
+- **Implementation in [`electron/searchSession.ts`](file:///D:/projects/cs3/desktop/electron/searchSession.ts):**
+  - Implement a trailing-edge throttle timer (150–200 ms) for `this.emit()`.
+  - While providers are rapidly finishing (e.g. 20 providers finishing in 50 ms), coalesce notifications into a single emit.
+  - **Immediate flush**: Guarantee immediate synchronous emit when the search completes (`done`), when the search is cancelled, or on the very first batch of results (so time-to-first-result is instantaneous).
+
+### R2: Virtualized Result Grid
+- **Implementation in [`src/views/SearchView.tsx`](file:///D:/projects/cs3/desktop/src/views/SearchView.tsx):**
+  - Implement row-based windowing based on container width and card metrics:
+    - Card min-width = 180px, gap = 20px (1.25rem).
+    - Aspect ratio = 2:3 poster (~270px) + caption/badges (~50px) $\approx$ row height of 330px.
+    - Measure container width with a `ResizeObserver` (similar to [`SourceVirtualTree`](file:///D:/projects/cs3/desktop/src/components/search/SourceScopeDialog.tsx#L254-L263)).
+    - Calculate `columns = Math.max(1, Math.floor((width + gap) / (minWidth + gap)))`.
+    - Group cards into rows; only mount rows in the visible window plus overscan (2–3 rows above and below).
+  - Target: Keep mounted `<PosterCard>` count under 60–80 at any scroll position, regardless of whether there are 500 or 10,000 results.
+  - Fully preserve keyboard navigation, focus, screen reader accessibility, and details click navigation.
+
+### R3 & R6: Stable Card Identity & Memoization
+- **Stable Identity:** Replace ``key={`${item.url}-${index}`}`` with a deterministic key:
+  ```ts
+  const cardKey = item.apiName ? `${item.apiName}:${item.url}` : item.url;
+  ```
+- **Card Memoization:** Wrap [`PosterCard`](file:///D:/projects/cs3/desktop/src/components/PosterCard.tsx) in `React.memo` and ensure callback references (`onSelectMedia`, `onPlayDirectly`) are stable.
+
+### R7: Lightweight Navbar Subscription
+- In [`src/components/Navbar.tsx`](file:///D:/projects/cs3/desktop/src/components/Navbar.tsx#L297), ensure search snapshot processing ignores intermediate results and only responds to completion.
+
+---
+
+## 4. Implementation Phasing
+
+Following [`docs/roadmap/2026-10-High-Performance Search Results and Large-Scale Rendering.md`](file:///D:/projects/cs3/docs/roadmap/2026-10-High-Performance%20Search%20Results%20and%20Large-Scale%20Rendering.md#L400-L414):
+
+1. **Phase 1: Main-Process Ingestion & Emit Coalescing (R4)**
+   - Update [`electron/searchSession.ts`](file:///D:/projects/cs3/desktop/electron/searchSession.ts) to batch `emit()` with a 150ms window, flushing on first result and on completion/cancellation.
+   - Run tests (`electron/searchSuggestions.test.mts`, `electron/cs3/searchOrder.test.mts`).
+2. **Phase 2: Stable Identity & Card Memoization (R3, R6)**
+   - Update card keys in [`src/views/SearchView.tsx`](file:///D:/projects/cs3/desktop/src/views/SearchView.tsx).
+   - Wrap [`src/components/PosterCard.tsx`](file:///D:/projects/cs3/desktop/src/components/PosterCard.tsx) in `React.memo`.
+3. **Phase 3: Virtualized Result Grid (R2)**
+   - Introduce row-windowed virtual rendering in `SearchView.tsx` for result groups.
+   - Bounded DOM nodes (<100 mounted cards).
+4. **Phase 4: Validation & Non-Regression**
+   - Run `bun run typecheck` (`tsc -b`), `bunx oxlint`, and the full test suite (`node scripts/test-runner.mjs --fast`).
