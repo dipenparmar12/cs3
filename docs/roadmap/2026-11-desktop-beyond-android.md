@@ -1,6 +1,6 @@
 # CS3 Desktop beyond Android: research and roadmap
 
-> **Status (2026-11-02): Research, nothing built from it.** Written against the code on `feat/26-11-misc-updates`. It folds in an external research write-up (pasted 2026-11-02) and corrects it where the code already disagrees (§3). The first target was EXT.to ([2026-10 EXT Torrents Integration](./2026-10-EXT%20Torrents%20Integration%20as%20a%20Built-In%20CS3%20Source.md) §14). A live check on 2026-11-02 found a built-in scraper is not feasible today (a Turnstile checkbox Electron cannot pass), so Phase 1 links out to the site and relies on the existing magnet handoff.
+> **Status (2026-11-02): Research, nothing built from it.** Written against the code on `feat/26-11-misc-updates`. It folds in an external research write-up (pasted 2026-11-02) and corrects it where the code already disagrees (§3). The first target was EXT.to ([2026-10 EXT Torrents Integration](./2026-10-EXT%20Torrents%20Integration%20as%20a%20Built-In%20CS3%20Source.md) §14). A live check on 2026-11-02 found a built-in scraper is not feasible today (a Turnstile checkbox Electron cannot pass), so it is dropped and kept on record.
 
 ## 1. Why, and the one rule
 
@@ -59,7 +59,7 @@ Size: S ≤ 2 days · M ≤ 1 week · L > 1 week. "Compat" = effect on Android-c
 
 | Feature | User problem | Approach | Compat | Cost / risk | Size | Phase |
 |---|---|---|---|---|---|---|
-| **Open magnets from the browser** | A site the app cannot reach is still usable in the viewer's browser | Already shipped in packaged builds: `electron-builder.yml` registers `magnet:`; `openableFromArgv` → `app:openLocalFile` → `handleOpenMagnet`. Add "Search on <site> ↗" (`shell:openExternal`) where the site is known. Check in a packaged install that a click in Edge opens the source flow | None | Nothing scraped; the site sees the viewer's own browser | S | 1 |
+| **Open magnets from the browser** | A site the app cannot reach is still usable in the viewer's browser | Already shipped in packaged builds: `electron-builder.yml` registers `magnet:`; `openableFromArgv` → `app:openLocalFile` → `handleOpenMagnet`. Add "Search on <site> ↗" (`shell:openExternal`) where the site is known. Check in a packaged install that a click in Edge opens the source flow | None | Nothing scraped; the site sees the viewer's own browser | S | idea |
 | Person-in-the-loop verification (**spike first**) | A site behind a checkbox fails forever; the user sees "indexer failed" and cannot act | Failed its first test (ext2.to, 2026-11-02). Build only after one real site passes in a plain Electron window. When the hidden solve fails on `cloudflare-challenge`, the outcome says `needs-verification`; a press opens a visible window in the **same partition** as `webViewHost`; it closes when `cf_clearance` lands and the page is no longer a challenge; that source re-runs. Serves indexers and the JVM's `clearance.get` alike | Extensions gain it for free through `clearance.ts` | One window per press, never opened by a background search. Cookie stays in the partition (no new store) | M | 1 |
 | EXT.to indexer (**blocked**) | One more large index, with IMDb-id search (advertised) | `torrent/indexers/extTo.ts` + pure `extToParser.ts`; EXT PRD §14.3 | None | Blocked by Turnstile (EXT PRD §14.0). Retest if the site drops the checkbox or publishes an API | M | — |
 | **"Site changed" verdict** | A redesigned site reads as "nothing found" | A parser returns `{rows, markers}`; markers present and zero rows → `site-changed`, shown and counted apart from empty | None | Pure; per adapter | S | 2 |
@@ -115,7 +115,7 @@ Size: S ≤ 2 days · M ≤ 1 week · L > 1 week. "Compat" = effect on Android-c
 
 | Phase | Contents | Exit check |
 |---|---|---|
-| **1 — inside the current architecture** | "Search on EXT Torrents ↗" + magnet handoff check · bandwidth limit · playback info panel (+ copy) · torrent read-ahead cap · swarm numbers in the panel | Each with tests; a magnet clicked in Edge opens in an installed CS3 |
+| **1 — inside the current architecture** | Bandwidth limit · playback info panel (+ copy) · torrent read-ahead cap · swarm numbers in the panel | Each with tests |
 | **2 — first native integration** | `site-changed` verdict and fixture tests for the existing HTML adapters (1337x, BitSearch, TheRARBG); verification spike on a second protected site; a built-in EXT.to indexer only if its check changes | Fixtures in CI; spike result written down |
 | **3 — torrents, downloads, playback** | Schedule · keep next N · season-pack pick · frame step · A-B loop · notifications · downloads by series | Checked in the app |
 | **4 — ecosystem** | Sidecar sandbox · tray · new-episode watch · command palette · EXT.to catalogue · debrid · local API | Each decided on its own |
@@ -163,7 +163,7 @@ Current:
 │ ▸ 1080p  WEB   Dune.2021.1080p.WEB…        👥 812  💾 2.1 GB │
 ```
 
-Changed (Phase 1): a quiet link at the end of the list, beside the existing "Find more sources":
+Idea, not scheduled: a quiet link at the end of the list, beside the existing "Find more sources":
 
 ```
 │ ▸ 1080p  WEB   Dune.2021.1080p.WEB…        👥 812  💾 2.1 GB │

@@ -1,6 +1,6 @@
 # PRD: EXT Torrents Integration as a Built-In CS3 Source
 
-**Status:** Built-in indexer **not feasible today** (live check 2026-11-02, §14.0): the site sits behind a Cloudflare Turnstile checkbox that Electron cannot pass, even with a person ticking it. Replaced by a link-out plus the existing magnet handoff (§14.0). §14.1–14.7 stay as the design if the check changes  
+**Status:** **Dropped (2026-11-02), kept on record.** Attempted: the live check (§14.0) found a Cloudflare Turnstile checkbox that Electron cannot pass, even with a person ticking it. §14.1–14.7 stay as the design in case the site drops the check or publishes an API  
 **Priority:** High  
 **Platform:** CS3 Desktop  
 **Integration type:** Built-in torrent indexer and metadata source  
@@ -445,7 +445,7 @@ How to build §1–13 in this codebase. Strategy and phasing: [2026-11 Desktop b
 - Making Electron imitate Chrome more closely (client hints, brand lists, fingerprints) to get through Turnstile would be evading bot detection. **Out of scope.**
 - Reusing a clearance or session cookie copied from Edge is out of scope for the same reason: Cloudflare binds a clearance to the browser that earned it.
 
-**What ships instead (small, legitimate):**
+**Not scheduled, if wanted later (small, legitimate):**
 
 | Piece | State |
 |---|---|
