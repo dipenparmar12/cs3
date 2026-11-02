@@ -456,7 +456,7 @@ Nothing below is built until this is done. Two ways to do it; either is enough.
 4. Note: does the listing carry a magnet, or only the detail page? Does "Download .torrent" work signed out? What did the check look like (spinner, or a checkbox)?
 5. Do **not** send cookie values. Put the folder path in chat.
 
-**B. Let the agent look**: allow the agent's built-in browser to open ext.to (the agent's direct fetch was refused as a DNS-block workaround on 2026-11-02). You complete any check in that pane; the agent only reads pages.
+**B. Let the agent look**: tried 2026-11-02 and unavailable. The agent's direct fetch was refused as a DNS-block workaround, and the desktop app's built-in browser refused `https://ext.to/` ("denied or failed", no reason given) while `example.com` opened. Use A.
 
 Output of Phase 0, committed with the adapter:
 
