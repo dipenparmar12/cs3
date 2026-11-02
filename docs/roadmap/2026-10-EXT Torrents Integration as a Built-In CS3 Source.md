@@ -1,6 +1,6 @@
 # PRD: EXT Torrents Integration as a Built-In CS3 Source
 
-**Status:** Proposed; implementation design in §14 (2026-11-02). Blocked on the Phase 0 live check (§14.2), nothing built  
+**Status:** Built-in indexer **not feasible today** (live check 2026-11-02, §14.0): the site sits behind a Cloudflare Turnstile checkbox that Electron cannot pass, even with a person ticking it. Replaced by a link-out plus the existing magnet handoff (§14.0). §14.1–14.7 stay as the design if the check changes  
 **Priority:** High  
 **Platform:** CS3 Desktop  
 **Integration type:** Built-in torrent indexer and metadata source  
@@ -428,6 +428,33 @@ This separation keeps the integration maintainable, allows torrent handling to i
 
 How to build §1–13 in this codebase. Strategy and phasing: [2026-11 Desktop beyond Android](./2026-11-desktop-beyond-android.md).
 
+### 14.0 Live check result and decision (2026-11-02)
+
+| Tried | Result |
+|---|---|
+| `ext.to` from Node | ISP DNS answers with a block address (49.44.79.236). Connecting to the DoH address was refused as working around the block |
+| `ext.to` in the agent's browser pane | Refused ("denied or failed", no reason); `example.com` opened |
+| Mirror `ext2.to` in the agent's browser pane | Opens. Cloudflare "Performing security verification" with a Turnstile **"Verify you are human" checkbox**; still there after 8 s, so not an automatic check |
+| A person ticks it in that pane | **Failed.** Inconclusive: the pane is driven by automation |
+| A person ticks it in a plain Electron 43 window (Chromium 150), the app's reshaped UA (`browserUserAgent`), no automation, its own partition | **Failed.** This is the window CS3's verification would use |
+| The same person in Edge | Passes (the user's report); no `cf_clearance` among the cookies they shared, only an anonymous `PHPSESSID` |
+
+**Decision.**
+
+- No built-in EXT.to indexer for now. Every search would end in a check nobody can pass inside the app.
+- Making Electron imitate Chrome more closely (client hints, brand lists, fingerprints) to get through Turnstile would be evading bot detection. **Out of scope.**
+- Reusing a clearance or session cookie copied from Edge is out of scope for the same reason: Cloudflare binds a clearance to the browser that earned it.
+
+**What ships instead (small, legitimate):**
+
+| Piece | State |
+|---|---|
+| CS3 opens `magnet:` links from other apps | **Already built**: `electron-builder.yml` `protocols: magnet`; `main.ts` `openableFromArgv` → `app:openLocalFile` → `App.tsx` `handleOpenMagnet`. Not checked from Edge in a packaged install |
+| "Search on EXT Torrents ↗" in the source picker | New: opens the viewer's browser on the site's search for this title (`shell:openExternal`). Search URL to confirm from Edge (copy one search page's address) |
+| Mirror list | `ext.to` and `ext2.to` known; the link tries neither, it opens the one in settings (default `ext2.to`) |
+
+Retest the built-in indexer if the site drops the checkbox or publishes an API. The rest of §14 is the design for that day.
+
 ### 14.1 What is known, and what is not
 
 | Fact | Status |
@@ -456,7 +483,7 @@ Nothing below is built until this is done. Two ways to do it; either is enough.
 4. Note: does the listing carry a magnet, or only the detail page? Does "Download .torrent" work signed out? What did the check look like (spinner, or a checkbox)?
 5. Do **not** send cookie values. Put the folder path in chat.
 
-**B. Let the agent look**: tried 2026-11-02 and unavailable. The agent's direct fetch was refused as a DNS-block workaround, and the desktop app's built-in browser refused `https://ext.to/` ("denied or failed", no reason given) while `example.com` opened. Use A.
+**B. Let the agent look**: tried 2026-11-02 and unavailable (§14.0). The agent's direct fetch was refused as a DNS-block workaround, and the desktop app's built-in browser refused `https://ext.to/` ("denied or failed", no reason given) while `example.com` opened. Use A.
 
 Output of Phase 0, committed with the adapter:
 
