@@ -29,6 +29,16 @@ import {
 } from '../../utils/trailerQueue';
 import { describeError } from '../../utils/errors';
 import { formatTimecode } from '../../utils/format';
+import {
+  SEEK_COMMIT_MS,
+  clampSeek,
+  controlsFor,
+  isLiveConversionUrl,
+  playheadSeconds,
+  recoveryPlan,
+  seekBase,
+  timeAtPointer,
+} from '../../utils/trailerPlayback';
 
 /**
  * Points a conversion URL at a timestamp, replacing any it already carries.
@@ -91,7 +101,6 @@ export const TrailerPopup: React.FC<{
   // Playback & UI state
   const [isPlaying, setIsPlaying] = useState(false);
   const [currentTime, setCurrentTime] = useState(0);
-  const [playbackOffset, setPlaybackOffset] = useState(0);
   const [volume, setVolume] = useState(1);
   const [muted, setMuted] = useState(false);
   const [isFullscreen, setIsFullscreen] = useState(false);
@@ -104,6 +113,18 @@ export const TrailerPopup: React.FC<{
   const scrubberRef = useRef<HTMLDivElement>(null);
   const activeSessionIdRef = useRef<string | null>(null);
   const controlsTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  /**
+   * Read inside element listeners and timers, so they hold refs, not state.
+   * `offsetRef` is where the current live conversion started; `pendingSeekRef`
+   * a target the stream has not been restarted at yet.
+   */
+  const offsetRef = useRef(0);
+  const pendingSeekRef = useRef<number | null>(null);
+  const seekTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const currentTimeRef = useRef(0);
+  /** Frames were presented for this entry; recoveries spent on it. */
+  const hasPlayedRef = useRef(false);
+  const recoveriesRef = useRef(0);
 
   const [elementDuration, setElementDuration] = useState(0);
 
@@ -121,9 +142,14 @@ export const TrailerPopup: React.FC<{
     setQueue((held) => step(held, delta) ?? held);
     setCountdown(null);
     setAttempt(0);
-    setPlaybackOffset(0);
     setCurrentTime(0);
     setIsPlaying(false);
+    offsetRef.current = 0;
+    pendingSeekRef.current = null;
+    currentTimeRef.current = 0;
+    hasPlayedRef.current = false;
+    recoveriesRef.current = 0;
+    if (seekTimerRef.current) clearTimeout(seekTimerRef.current);
   }, []);
 
   // Escape closes or exits fullscreen
@@ -175,6 +201,7 @@ export const TrailerPopup: React.FC<{
         activeSessionIdRef.current = null;
       }
       if (controlsTimeoutRef.current) clearTimeout(controlsTimeoutRef.current);
+      if (seekTimerRef.current) clearTimeout(seekTimerRef.current);
     };
   }, []);
 
@@ -195,9 +222,14 @@ export const TrailerPopup: React.FC<{
 
     setStage({ phase: 'resolving' });
     setCountdown(null);
-    setPlaybackOffset(0);
     setCurrentTime(0);
     setIsPlaying(false);
+    offsetRef.current = 0;
+    pendingSeekRef.current = null;
+    currentTimeRef.current = 0;
+    hasPlayedRef.current = false;
+    recoveriesRef.current = 0;
+    if (seekTimerRef.current) clearTimeout(seekTimerRef.current);
 
     void (async () => {
       const api = window.cloudstream;
@@ -330,17 +362,22 @@ export const TrailerPopup: React.FC<{
   const handleTimeUpdate = useCallback(() => {
     const element = videoRef.current;
     if (!element) return;
-    const now =
-      stage.phase === 'ready' && stage.url.includes('/media/')
-        ? playbackOffset + element.currentTime
-        : element.currentTime;
-    setCurrentTime(now);
+    const isConv = stage.phase === 'ready' && isLiveConversionUrl(stage.url);
+    const now = playheadSeconds(element.currentTime, offsetRef.current, isConv);
+    currentTimeRef.current = now;
+
+    if (pendingSeekRef.current === null && !isScrubbing) {
+      setCurrentTime(now);
+    }
+    if (element.currentTime > 0) {
+      hasPlayedRef.current = true;
+    }
 
     // If near duration on fragmented live pipe, advance cleanly
     if (duration > 0 && now >= duration - 0.5 && !element.paused) {
       handleEnded();
     }
-  }, [playbackOffset, stage, duration, handleEnded]);
+  }, [stage, duration, handleEnded, isScrubbing]);
 
   const togglePlay = useCallback(() => {
     const element = videoRef.current;
@@ -352,40 +389,89 @@ export const TrailerPopup: React.FC<{
     }
   }, []);
 
-  const seekTo = useCallback(
+  const commitSeek = useCallback(
     (targetSeconds: number) => {
       const element = videoRef.current;
       if (!element || stage.phase !== 'ready') return;
-      const target = Math.max(0, Math.min(targetSeconds, duration > 0 ? duration : targetSeconds));
+      const target = clampSeek(targetSeconds, duration);
+      offsetRef.current = target;
+      setCurrentTime(target);
+      currentTimeRef.current = target;
 
+      const isConv = isLiveConversionUrl(stage.url);
       if (stage.isHls) {
         element.currentTime = target;
-        setCurrentTime(target);
-        return;
-      }
-
-      if (stage.url.includes('/media/')) {
-        setPlaybackOffset(target);
-        setCurrentTime(target);
+      } else if (isConv) {
         const wasPlaying = !element.paused;
         element.src = atTime(stage.url, target);
         element.load();
         if (wasPlaying) void element.play().catch(() => undefined);
-        return;
+      } else {
+        element.currentTime = target;
       }
 
-      element.currentTime = target;
-      setCurrentTime(target);
+      if (seekTimerRef.current) clearTimeout(seekTimerRef.current);
+      seekTimerRef.current = setTimeout(() => {
+        pendingSeekRef.current = null;
+      }, 350);
     },
     [stage, duration]
   );
 
   const seekBy = useCallback(
     (delta: number) => {
-      seekTo(currentTime + delta);
+      const base = seekBase(pendingSeekRef.current, currentTimeRef.current);
+      const target = clampSeek(base + delta, duration);
+      pendingSeekRef.current = target;
+      setCurrentTime(target);
+      currentTimeRef.current = target;
+
+      if (seekTimerRef.current) clearTimeout(seekTimerRef.current);
+      seekTimerRef.current = setTimeout(() => {
+        commitSeek(target);
+      }, SEEK_COMMIT_MS);
     },
-    [currentTime, seekTo]
+    [duration, commitSeek]
   );
+
+  const handleVideoError = useCallback(() => {
+    const plan = recoveryPlan({
+      hasPlayed: hasPlayedRef.current,
+      recoveries: recoveriesRef.current,
+      position: currentTimeRef.current,
+      duration,
+    });
+
+    if (plan.action === 'ended') {
+      handleEnded();
+      return;
+    }
+
+    if (plan.action === 'restart') {
+      recoveriesRef.current += 1;
+      const element = videoRef.current;
+      if (element && stage.phase === 'ready') {
+        const isConv = isLiveConversionUrl(stage.url);
+        if (isConv) {
+          offsetRef.current = plan.at;
+          element.src = atTime(stage.url, plan.at);
+          element.load();
+          void element.play().catch(() => undefined);
+          return;
+        } else {
+          element.currentTime = plan.at;
+          element.load();
+          void element.play().catch(() => undefined);
+          return;
+        }
+      }
+    }
+
+    setStage({
+      phase: 'error',
+      message: 'This trailer could not be played in the player.',
+    });
+  }, [duration, handleEnded, stage]);
 
   const handleVolumeChange = useCallback((newVol: number) => {
     const element = videoRef.current;
@@ -477,32 +563,40 @@ export const TrailerPopup: React.FC<{
   const handleScrubberMouseDown = useCallback(
     (e: React.MouseEvent<HTMLDivElement>) => {
       e.preventDefault();
-      if (!scrubberRef.current || duration <= 0) return;
+      const ctrl = controlsFor(stage.phase);
+      if (!ctrl.transport || !scrubberRef.current || duration <= 0) return;
       setIsScrubbing(true);
 
-      const applySeek = (clientX: number) => {
-        if (!scrubberRef.current || duration <= 0) return;
+      const computeTime = (clientX: number) => {
+        if (!scrubberRef.current || duration <= 0) return 0;
         const rect = scrubberRef.current.getBoundingClientRect();
-        const fraction = Math.max(0, Math.min(1, (clientX - rect.left) / rect.width));
-        seekTo(fraction * duration);
+        return timeAtPointer(clientX, rect.left, rect.width, duration);
       };
 
-      applySeek(e.clientX);
+      const initialTarget = computeTime(e.clientX);
+      pendingSeekRef.current = initialTarget;
+      setCurrentTime(initialTarget);
+      currentTimeRef.current = initialTarget;
 
       const onMouseMove = (moveEvent: MouseEvent) => {
-        applySeek(moveEvent.clientX);
+        const nextTarget = computeTime(moveEvent.clientX);
+        pendingSeekRef.current = nextTarget;
+        setCurrentTime(nextTarget);
+        currentTimeRef.current = nextTarget;
       };
 
       const onMouseUp = () => {
         setIsScrubbing(false);
         window.removeEventListener('mousemove', onMouseMove);
         window.removeEventListener('mouseup', onMouseUp);
+        const finalTarget = pendingSeekRef.current ?? currentTimeRef.current;
+        commitSeek(finalTarget);
       };
 
       window.addEventListener('mousemove', onMouseMove);
       window.addEventListener('mouseup', onMouseUp);
     },
-    [duration, seekTo]
+    [stage.phase, duration, commitSeek]
   );
 
   if (!video) return null;
@@ -512,6 +606,7 @@ export const TrailerPopup: React.FC<{
   const context = [titleName, position].filter(Boolean).join(' · ');
   const progressPercent = duration > 0 ? Math.min(100, Math.max(0, (currentTime / duration) * 100)) : 0;
   const showOverlayControls = showControls || !isPlaying || isScrubbing;
+  const ctrl = controlsFor(stage.phase);
 
   return (
     <div
@@ -599,12 +694,7 @@ export const TrailerPopup: React.FC<{
             onEnded={handleEnded}
             onClick={togglePlay}
             onDoubleClick={toggleFullscreen}
-            onError={() => {
-              setStage({
-                phase: 'error',
-                message: 'This trailer could not be played in the player.',
-              });
-            }}
+            onError={handleVideoError}
           >
             {stage.phase === 'ready' &&
               stage.subtitles?.map((sub, i) => (
@@ -618,6 +708,31 @@ export const TrailerPopup: React.FC<{
               ))}
           </video>
 
+          {/* Fullscreen top HUD */}
+          {isFullscreen && (
+            <div
+              className={`trailer-popup__fullscreen-head ${
+                showOverlayControls ? '' : 'trailer-popup__controls--hidden'
+              }`}
+            >
+              <div className="trailer-popup__titles">
+                <strong className="trailer-popup__label" title={video.title}>
+                  {video.label}
+                </strong>
+                {context && <span className="trailer-popup__context">{context}</span>}
+              </div>
+              <button
+                type="button"
+                className="btn btn-secondary btn-icon"
+                onClick={toggleFullscreen}
+                title="Exit Fullscreen (F)"
+                aria-label="Exit Fullscreen"
+              >
+                <Minimize2 size={16} />
+              </button>
+            </div>
+          )}
+
           {/* Center Play button when paused */}
           {stage.phase === 'ready' && !isPlaying && countdown === null && (
             <button
@@ -630,124 +745,127 @@ export const TrailerPopup: React.FC<{
             </button>
           )}
 
-          {/* Custom Player Controls */}
-          {stage.phase === 'ready' && (
+          {/* Custom Player Controls - mounted across all phases */}
+          <div
+            className={`trailer-popup__controls ${
+              showOverlayControls ? '' : 'trailer-popup__controls--hidden'
+            }`}
+            onClick={(e) => e.stopPropagation()}
+          >
+            {/* Scrubber bar */}
             <div
-              className={`trailer-popup__controls ${
-                showOverlayControls ? '' : 'trailer-popup__controls--hidden'
+              ref={scrubberRef}
+              className={`trailer-popup__scrubber ${
+                !ctrl.transport ? 'trailer-popup__scrubber--disabled' : ''
               }`}
-              onClick={(e) => e.stopPropagation()}
+              onMouseDown={handleScrubberMouseDown}
+              role="slider"
+              aria-label="Seek timeline"
+              aria-valuemin={0}
+              aria-valuemax={duration}
+              aria-valuenow={currentTime}
             >
-              {/* Scrubber bar */}
-              <div
-                ref={scrubberRef}
-                className="trailer-popup__scrubber"
-                onMouseDown={handleScrubberMouseDown}
-                role="slider"
-                aria-label="Seek timeline"
-                aria-valuemin={0}
-                aria-valuemax={duration}
-                aria-valuenow={currentTime}
-              >
-                <div className="trailer-popup__scrubber-track">
-                  <div
-                    className="trailer-popup__scrubber-fill"
-                    style={{ width: `${progressPercent}%` }}
-                  />
-                  <div
-                    className="trailer-popup__scrubber-handle"
-                    style={{ left: `${progressPercent}%` }}
-                  />
-                </div>
-              </div>
-
-              {/* Controls bar */}
-              <div className="trailer-popup__bar">
-                <div className="trailer-popup__bar-group">
-                  <button
-                    type="button"
-                    className="trailer-popup__btn"
-                    onClick={togglePlay}
-                    title={isPlaying ? 'Pause (Space)' : 'Play (Space)'}
-                    aria-label={isPlaying ? 'Pause' : 'Play'}
-                  >
-                    {isPlaying ? <Pause size={18} fill="currentColor" /> : <Play size={18} fill="currentColor" />}
-                  </button>
-
-                  <button
-                    type="button"
-                    className="trailer-popup__btn"
-                    onClick={() => seekBy(-10)}
-                    title="Skip back 10s (Left Arrow)"
-                    aria-label="Skip back 10 seconds"
-                  >
-                    <RotateCcw size={15} />
-                  </button>
-
-                  <button
-                    type="button"
-                    className="trailer-popup__btn"
-                    onClick={() => seekBy(10)}
-                    title="Skip forward 10s (Right Arrow)"
-                    aria-label="Skip forward 10 seconds"
-                  >
-                    <RotateCw size={15} />
-                  </button>
-
-                  <button
-                    type="button"
-                    className="trailer-popup__btn"
-                    onClick={toggleMute}
-                    title={muted ? 'Unmute (M)' : 'Mute (M)'}
-                    aria-label={muted ? 'Unmute' : 'Mute'}
-                  >
-                    {muted || volume === 0 ? <VolumeX size={17} /> : <Volume2 size={17} />}
-                  </button>
-
-                  <input
-                    type="range"
-                    min="0"
-                    max="1"
-                    step="0.05"
-                    value={muted ? 0 : volume}
-                    onChange={(e) => handleVolumeChange(parseFloat(e.target.value))}
-                    className="trailer-popup__volume-slider"
-                    aria-label="Volume"
-                  />
-
-                  <span className="trailer-popup__time">
-                    {formatTimecode(currentTime)} / {formatTimecode(duration)}
-                  </span>
-                </div>
-
-                <div className="trailer-popup__bar-group">
-                  {Boolean(stage.subtitles && stage.subtitles.length > 0) && (
-                    <button
-                      type="button"
-                      className={`trailer-popup__btn ${
-                        subtitlesEnabled ? 'trailer-popup__btn--active' : ''
-                      }`}
-                      onClick={() => setSubtitlesEnabled((prev) => !prev)}
-                      title="Subtitles"
-                      aria-label="Toggle subtitles"
-                    >
-                      <Subtitles size={16} />
-                    </button>
-                  )}
-
-                  <button
-                    type="button"
-                    className="trailer-popup__btn"
-                    onClick={toggleFullscreen}
-                    title={isFullscreen ? 'Exit Fullscreen (F)' : 'Fullscreen (F)'}
-                    aria-label={isFullscreen ? 'Exit Fullscreen' : 'Fullscreen'}
-                  >
-                    {isFullscreen ? <Minimize2 size={16} /> : <Maximize2 size={16} />}
-                  </button>
-                </div>
+              <div className="trailer-popup__scrubber-track">
+                <div
+                  className="trailer-popup__scrubber-fill"
+                  style={{ width: `${progressPercent}%` }}
+                />
+                <div
+                  className="trailer-popup__scrubber-handle"
+                  style={{ left: `${progressPercent}%` }}
+                />
               </div>
             </div>
-          )}
+
+            {/* Controls bar */}
+            <div className="trailer-popup__bar">
+              <div className="trailer-popup__bar-group">
+                <button
+                  type="button"
+                  className="trailer-popup__btn"
+                  onClick={togglePlay}
+                  disabled={!ctrl.transport}
+                  title={isPlaying ? 'Pause (Space)' : 'Play (Space)'}
+                  aria-label={isPlaying ? 'Pause' : 'Play'}
+                >
+                  {isPlaying ? <Pause size={18} fill="currentColor" /> : <Play size={18} fill="currentColor" />}
+                </button>
+
+                <button
+                  type="button"
+                  className="trailer-popup__btn"
+                  onClick={() => seekBy(-10)}
+                  disabled={!ctrl.transport}
+                  title="Skip back 10s (Left Arrow)"
+                  aria-label="Skip back 10 seconds"
+                >
+                  <RotateCcw size={15} />
+                </button>
+
+                <button
+                  type="button"
+                  className="trailer-popup__btn"
+                  onClick={() => seekBy(10)}
+                  disabled={!ctrl.transport}
+                  title="Skip forward 10s (Right Arrow)"
+                  aria-label="Skip forward 10 seconds"
+                >
+                  <RotateCw size={15} />
+                </button>
+
+                <button
+                  type="button"
+                  className="trailer-popup__btn"
+                  onClick={toggleMute}
+                  title={muted ? 'Unmute (M)' : 'Mute (M)'}
+                  aria-label={muted ? 'Unmute' : 'Mute'}
+                >
+                  {muted || volume === 0 ? <VolumeX size={17} /> : <Volume2 size={17} />}
+                </button>
+
+                <input
+                  type="range"
+                  min="0"
+                  max="1"
+                  step="0.05"
+                  value={muted ? 0 : volume}
+                  onChange={(e) => handleVolumeChange(parseFloat(e.target.value))}
+                  className="trailer-popup__volume-slider"
+                  aria-label="Volume"
+                />
+
+                <span className="trailer-popup__time">
+                  {formatTimecode(currentTime)} / {duration > 0 ? formatTimecode(duration) : '--:--'}
+                </span>
+              </div>
+
+              <div className="trailer-popup__bar-group">
+                {Boolean(stage.phase === 'ready' && stage.subtitles && stage.subtitles.length > 0) && (
+                  <button
+                    type="button"
+                    className={`trailer-popup__btn ${
+                      subtitlesEnabled ? 'trailer-popup__btn--active' : ''
+                    }`}
+                    onClick={() => setSubtitlesEnabled((prev) => !prev)}
+                    title="Subtitles"
+                    aria-label="Toggle subtitles"
+                  >
+                    <Subtitles size={16} />
+                  </button>
+                )}
+
+                <button
+                  type="button"
+                  className="trailer-popup__btn"
+                  onClick={toggleFullscreen}
+                  title={isFullscreen ? 'Exit Fullscreen (F)' : 'Fullscreen (F)'}
+                  aria-label={isFullscreen ? 'Exit Fullscreen' : 'Fullscreen'}
+                >
+                  {isFullscreen ? <Minimize2 size={16} /> : <Maximize2 size={16} />}
+                </button>
+              </div>
+            </div>
+          </div>
 
           {stage.phase === 'resolving' && (
             <div className="trailer-popup__overlay" role="status">
