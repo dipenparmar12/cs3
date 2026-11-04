@@ -313,6 +313,8 @@ export interface CloudStreamElectronAPI {
   clearExtendedMetadata: () => Promise<Envelope & { cleared: number }>;
   /** Searches public repositories (YouTube) keylessly for trailers and promos of any content. */
   findTrailers: (title: string, year?: number) => Promise<Envelope & { videos: TitleVideo[] }>;
+  /** Discovers open trailers, teasers, and clips for any search query across public sources. */
+  searchTrailers: (query: string, options?: { maxResults?: number }) => Promise<Envelope & { videos: TitleVideo[] }>;
   /** Discovers on-demand reviews, explanations, recaps, and related media from public sources. */
   /** Everything else a person or studio made — see `metadata/filmography.ts`. */
   getFilmography: (request: FilmographyRequest) => Promise<Envelope & { filmography: Filmography | null }>;
@@ -2187,6 +2189,7 @@ const api: CloudStreamElectronAPI = {
   forgetProviderAttempt: (title, year, provider) => ipcRenderer.invoke('interactions:forgetAttempt', title, year, provider),
   clearExtendedMetadata: () => ipcRenderer.invoke('metadata:clearCache'),
   findTrailers: (title, year) => ipcRenderer.invoke('metadata:findTrailers', title, year),
+  searchTrailers: (query, options) => ipcRenderer.invoke('metadata:searchTrailers', query, options),
   findRelatedMedia: (request) => ipcRenderer.invoke('metadata:findRelatedMedia', request),
   forgetRelatedMedia: (request) => ipcRenderer.invoke('metadata:forgetRelatedMedia', request),
   getFilmography: (request) => ipcRenderer.invoke('metadata:filmography', request),

@@ -155,7 +155,7 @@ export interface SearchSuggestion {
  * `title` is the catalogues' titles; the rest are people by a credit they
  * actually hold, and studios by what they produced (`metadata/entitySearch.ts`).
  */
-export type SearchCategory = 'title' | 'cast' | 'director' | 'writer' | 'producer' | 'composer' | 'studio';
+export type SearchCategory = 'title' | 'cast' | 'director' | 'writer' | 'producer' | 'composer' | 'studio' | 'trailer';
 
 /** The credits a person is found to hold, on works with an IMDb id. */
 export type EntityRole = 'cast' | 'director' | 'writer' | 'producer' | 'composer';

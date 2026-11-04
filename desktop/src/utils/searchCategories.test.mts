@@ -9,6 +9,7 @@ import {
   toggleCategory,
   wantsEntities,
   wantsTitles,
+  wantsTrailers,
 } from './searchCategories.ts';
 
 test('All clears the chips; a chip toggles; the last one off is All again', () => {
@@ -18,6 +19,7 @@ test('All clears the chips; a chip toggles; the last one off is All again', () =
   assert.deepEqual(toggleCategory(['director', 'writer'], 'director'), ['writer']);
   assert.deepEqual(toggleCategory(['writer'], 'writer'), []);
   assert.deepEqual(toggleCategory(['director', 'writer'], 'all'), []);
+  assert.deepEqual(toggleCategory([], 'trailer'), ['trailer']);
 });
 
 test('the scope key ignores order and repeats; All is empty', () => {
@@ -31,6 +33,10 @@ test('Titles alone asks for no people, a person category asks for no titles, All
   assert.deepEqual([wantsTitles(['title']), wantsEntities(['title'])], [true, false]);
   assert.deepEqual([wantsTitles(['director']), wantsEntities(['director'])], [false, true]);
   assert.deepEqual([wantsTitles(['title', 'cast']), wantsEntities(['title', 'cast'])], [true, true]);
+  assert.deepEqual([wantsTitles(['trailer']), wantsEntities(['trailer']), wantsTrailers(['trailer'])], [false, false, true]);
+  assert.equal(wantsTrailers([]), false);
+  assert.equal(wantsTrailers(['title']), false);
+  assert.equal(wantsTrailers(['title', 'trailer']), true);
 });
 
 test('a category keeps its credits in a filmography; All and Studio keep every role', () => {
@@ -39,11 +45,14 @@ test('a category keeps its credits in a filmography; All and Studio keep every r
   assert.equal(filmographyRoles([]), null);
   assert.equal(filmographyRoles(['studio']), null);
   assert.equal(filmographyRoles(['title']), null);
+  assert.equal(filmographyRoles(['trailer']), null);
 });
 
 test('headings and placeholders name what is searched for', () => {
   assert.equal(categoryHeading(['director', 'writer'], ' Christopher '), 'Directors or writers named “Christopher”');
   assert.equal(categoryHeading(['studio'], 'Yash'), 'Studios named “Yash”');
+  assert.equal(categoryHeading(['trailer'], 'Spider-Man'), 'Trailers & promotional videos for “Spider-Man”');
   assert.equal(categoryPlaceholder(['cast']), 'Search cast members');
+  assert.equal(categoryPlaceholder(['trailer']), 'Search trailers, teasers, clips, or any title/keyword...');
   assert.equal(categoryPlaceholder([]), null);
 });

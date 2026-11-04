@@ -131,6 +131,7 @@ import {
   type EnrichmentRequest,
 } from './metadata/enrichmentService';
 import { searchYouTubeTrailers } from './metadata/youtube';
+import { discoverTrailers } from './metadata/trailerDiscovery.ts';
 import { relatedMediaService } from './metadata/relatedMedia/relatedMediaService.ts';
 import { fetchFilmography } from './metadata/filmography.ts';
 import type { FilmographyRequest } from '../src/types/filmography';
@@ -2481,7 +2482,7 @@ let suggestRun: AbortController | null = null;
  * three catalogues answer 170–935 ms apart, so a reply that waited for all of
  * them would spend the fastest two on the slowest — see `searchSuggestions.ts`.
  */
-const SEARCH_CATEGORIES: ReadonlySet<string> = new Set<SearchCategory>(['title', 'cast', 'director', 'writer', 'producer', 'composer', 'studio']);
+const SEARCH_CATEGORIES: ReadonlySet<string> = new Set<SearchCategory>(['title', 'cast', 'director', 'writer', 'producer', 'composer', 'studio', 'trailer']);
 
 ipcMain.handle('api:suggest', async (event, query: string, requested?: unknown) => {
   suggestRun?.abort();
@@ -3769,6 +3770,15 @@ ipcMain.handle('metadata:findTrailers', async (_, title: string, year?: number) 
   try {
     const query = `${title || ''} ${year ? year : ''} official trailer`.trim();
     const videos = await searchYouTubeTrailers(query, { maxResults: 8 });
+    return { ok: true, videos };
+  } catch (error) {
+    return { ...fail(error), videos: [] };
+  }
+});
+
+ipcMain.handle('metadata:searchTrailers', async (_, query: string, options?: { maxResults?: number }) => {
+  try {
+    const videos = await discoverTrailers(query, options);
     return { ok: true, videos };
   } catch (error) {
     return { ...fail(error), videos: [] };

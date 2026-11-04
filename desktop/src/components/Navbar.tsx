@@ -16,7 +16,7 @@ import type {
 } from '../types/api';
 import { SearchSuggestions } from './SearchSuggestions';
 import { blockOrder, suggestionRows, type SuggestionRow } from '../utils/suggestionLayout';
-import { categoryPlaceholder, categoryScope, SEARCH_CATEGORIES, wantsEntities, wantsTitles } from '../utils/searchCategories';
+import { categoryPlaceholder, categoryScope, SEARCH_CATEGORIES, wantsEntities, wantsTitles, wantsTrailers } from '../utils/searchCategories';
 import { useSessionState } from '../utils/useSessionState';
 import type { SavedSearchSummary } from '../../electron/savedSearches';
 import { mergeHistoryAndSaved } from '../utils/searchHistoryMerge';
@@ -72,6 +72,11 @@ interface NavbarProps {
    * a category never falls back to one.
    */
   onSearchPeople?: (query: string, categories: SearchCategory[]) => void;
+  /**
+   * Enter with the Trailers chip selected. Not a title search:
+   * discovers promotional videos directly.
+   */
+  onSearchTrailers?: (query: string, categories: SearchCategory[]) => void;
 }
 
 /**
@@ -112,6 +117,7 @@ export const Navbar: React.FC<NavbarProps> = ({
   contentContext = true,
   onOpenEntity,
   onSearchPeople,
+  onSearchTrailers,
 }) => {
   const isDeveloper = useIsDeveloper();
   const [query, setQuery] = useState('');
@@ -370,6 +376,13 @@ export const Navbar: React.FC<NavbarProps> = ({
     (text: string) => {
       const trimmed = text.trim();
       if (!trimmed) return;
+      if (wantsTrailers(categories) && onSearchTrailers) {
+        setSuggestOpen(false);
+        setHighlightedKey(null);
+        inputRef.current?.blur();
+        onSearchTrailers(trimmed, categories);
+        return;
+      }
       if (wantsTitles(categories) || !onSearchPeople) {
         runSearch(trimmed);
         return;
@@ -379,7 +392,7 @@ export const Navbar: React.FC<NavbarProps> = ({
       inputRef.current?.blur();
       onSearchPeople(trimmed, categories);
     },
-    [categories, onSearchPeople, runSearch]
+    [categories, onSearchPeople, onSearchTrailers, runSearch]
   );
 
   // Without a handler there is nowhere to open a person, so none are offered.

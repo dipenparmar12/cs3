@@ -12,6 +12,7 @@ import type { FilmographyRole } from '../types/filmography';
 
 export const SEARCH_CATEGORIES: ReadonlyArray<{ id: SearchCategory; label: string; plural: string }> = [
   { id: 'title', label: 'Titles', plural: 'titles' },
+  { id: 'trailer', label: 'Trailers & Clips', plural: 'trailers & clips' },
   { id: 'cast', label: 'Cast', plural: 'cast members' },
   { id: 'director', label: 'Director', plural: 'directors' },
   { id: 'writer', label: 'Writer', plural: 'writers' },
@@ -33,14 +34,21 @@ export function categoryScope(categories: readonly SearchCategory[] = []): strin
   return [...new Set(categories)].sort().join(',');
 }
 
-/** Whether a selection asks for catalogue titles. All does. */
+/** Whether a selection asks for catalogue titles. All does. Trailers alone does not. */
 export function wantsTitles(categories: readonly SearchCategory[]): boolean {
-  return categories.length === 0 || categories.includes('title');
+  if (categories.length === 0) return true;
+  return categories.includes('title');
 }
 
-/** Whether a selection asks for people or companies. All does; Titles alone does not. */
+/** Whether a selection asks for people or companies. All does; Titles and Trailers alone do not. */
 export function wantsEntities(categories: readonly SearchCategory[]): boolean {
-  return categories.length === 0 || categories.some((category) => category !== 'title');
+  if (categories.length === 0) return true;
+  return categories.some((category) => category !== 'title' && category !== 'trailer');
+}
+
+/** Whether a selection asks for promotional trailers, teasers, and clips. Only when explicitly selected. */
+export function wantsTrailers(categories: readonly SearchCategory[]): boolean {
+  return categories.includes('trailer');
 }
 
 const CREDITS: Partial<Record<SearchCategory, FilmographyRole[]>> = {
@@ -59,7 +67,10 @@ export function filmographyRoles(categories: readonly SearchCategory[]): Filmogr
 
 /** "Christopher" as directors or writers: the heading of a submitted category search. */
 export function categoryHeading(categories: readonly SearchCategory[], query: string): string {
-  const names = SEARCH_CATEGORIES.filter((category) => categories.includes(category.id) && category.id !== 'title').map(
+  if (categories.includes('trailer') && categories.length === 1) {
+    return `Trailers & promotional videos for “${query.trim()}”`;
+  }
+  const names = SEARCH_CATEGORIES.filter((category) => categories.includes(category.id) && category.id !== 'title' && category.id !== 'trailer').map(
     (category) => category.plural
   );
   const kind = names.length ? names.join(' or ') : 'people and studios';
@@ -69,6 +80,9 @@ export function categoryHeading(categories: readonly SearchCategory[], query: st
 /** The input's placeholder for a selection. */
 export function categoryPlaceholder(categories: readonly SearchCategory[]): string | null {
   if (categories.length === 0) return null;
+  if (categories.length === 1 && categories[0] === 'trailer') {
+    return 'Search trailers, teasers, clips, or any title/keyword...';
+  }
   const names = SEARCH_CATEGORIES.filter((category) => categories.includes(category.id)).map((category) => category.plural);
   return `Search ${names.join(' or ')}`;
 }
