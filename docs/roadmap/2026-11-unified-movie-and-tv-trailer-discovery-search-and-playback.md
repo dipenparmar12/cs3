@@ -1,7 +1,7 @@
 # PRD-56: Unified Movie and TV Trailer Discovery, Search, and Playback
 
 **Project:** CS3 Desktop  
-**Feature:** Trailer, Teaser, Promotional Clip & Documentary Discovery Engine  
+**Feature:** Trailer, Teaser, Promotional Clip & Documentary Discovery Engine & High-Reliability Playback Architecture  
 **Document Status:** Proposed (Open Work Register)  
 **Document ID:** PRD-56  
 **Creation Date:** November 2026  
@@ -14,6 +14,8 @@
 ## 1. Executive Summary & Objective
 
 Build a unified, high-performance trailer and promotional-video discovery feature that allows users to search, discover, preview, organize, and watch publicly available trailers, teasers, clips, featurettes, behind-the-scenes footage, and promotional documentaries for movies, TV series, and anime.
+
+In addition to discovery, this specification delivers a **complete architectural overhaul and fix for trailer playback reliability, immediate player controls, cinema-grade fullscreen UI redesign, and timeline audio/video synchronization**.
 
 ### 1.1 The Core Operating Principle: Chip-Gated Discovery vs. Standard Search
 
@@ -29,6 +31,11 @@ To preserve the absolute stability, performance, and predictability of CS3's cor
    - Any query typed by the user—whether a full title (`Spider-Man: No Way Home`), a partial prefix (`Spider`, `spi`), a phonetic spelling or typo (`an hull` for The Incredible Hulk), a long multi-word query (even a 1000-word descriptive plot/character query), or general promotional keywords (`upcoming anime trailers 2026`, `Christopher Nolan behind the scenes`)—initiates an independent search for relevant promotional videos, teasers, clips, featurettes, documentaries, and interviews.
 3. **Detail Page Integration (Title-Specific Promotional Media):**
    - When a user opens any movie or TV series detail page, a dedicated "Trailers & Promotional Media" section displays all curated promotional videos associated with that canonical title, organized by category (Official Trailers, Teasers, Clips, Featurettes, Behind-the-Scenes).
+4. **Flawless Playback Experience:**
+   - Immediate player controls from T=0 (visible during resolving and buffering).
+   - High-reliability continuous streaming with zero unexpected mid-stream dropouts or spurious "Video is not streamable or playable" errors.
+   - Timeline seeking with frame-accurate audio/video synchronization.
+   - True standalone fullscreen player experience replacing the modal dialog aesthetic.
 
 ---
 
@@ -44,8 +51,9 @@ Before adding new systems, we audit and extend the existing foundation documente
 | `desktop/electron/metadata/videoTitles.ts` | Regex & heuristic classification of video titles (`kind`, `label`, `season`, `ordinal`, official publisher detection) | Expand classification grammar to recognize promotional documentaries, TV spots, casting tapes, and international dub trailers. |
 | `desktop/electron/metadata/youtube.ts` | Keyless YouTube oEmbed metadata lookup (`title`, `author_name`, `thumbnail_url`) for known video IDs | Retain for fast, zero-quota validation of discovered YouTube video IDs; implement Dailymotion and Vimeo oEmbed equivalents. |
 | `desktop/src/components/detail/TrailerGallery.tsx` | Detail page promotional video gallery | Unify data contract with global trailer search results, supporting multi-category tabs and pagination. |
-| `desktop/src/components/detail/TrailerPopup.tsx` | In-app trailer playback modal | Refactor from raw stream extraction to official embedded players (YouTube IFrame API, Dailymotion embed) and isolated webview/browser fallbacks to ensure platform compliance. |
+| `desktop/src/components/detail/TrailerPopup.tsx` | In-app trailer playback modal | Fix controls visibility (render immediately on mount), eliminate PTS drift on seeks, overhaul fullscreen layout, and implement dual-path streaming (compliant embed + direct stream). |
 | `desktop/electron/searchSession.ts` | Coalesced streaming search orchestrator for extensions | Provide a parallel, non-blocking `TrailerSearchSession` that streams progressive video results without mutating the core provider search session. |
+| `desktop/electron/media/mediaProxy.ts` & `mediaTranscoder.ts` | Local HTTP media streaming & transcoding proxy | Fix PTS clock offset alignment on `?t=` seeking to eradicate audio/video desynchronization. |
 
 ---
 
@@ -128,7 +136,7 @@ When trailer mode is active, the search view transitions into a responsive, virt
    - `[Likely Official]`: High confidence uploader matching studio name.
    - `[Community]`: High-quality fan archive or re-upload.
 6. **Card Action Buttons:**
-   - **Play (▶):** Opens the in-app embedded player modal immediately.
+   - **Play (▶):** Opens the in-app player immediately with controls mounted at T=0.
    - **Save (💾):** Adds the trailer to the user's "Watch Later" or "Saved Trailers" collection.
    - **Open Title (ℹ):** Navigates directly to the movie or TV show detail page in CS3.
    - **Copy Link (🔗):** Copies the original public URL to clipboard.
@@ -175,7 +183,6 @@ flowchart TD
   - `GET /3/tv/{id}/videos`
   - `GET /3/tv/{id}/season/{season_number}/videos`
 - **Provided Data:** Video key, site (`YouTube`, `Vimeo`), video type (`Trailer`, `Teaser`, `Clip`, `Featurette`, `Behind the Scenes`, `Bloopers`), official boolean flag, publication timestamp, ISO-639-1 language code.
-- **Usage Strategy:** When the user supplies a personal API key (`home_tmdb_api_key`), full direct API access is utilized. If no key is set, public keyless mirrors and open metadata integrations provide base video mappings.
 
 #### 2. YouTube (Data API v3 & Public oEmbed)
 - **Role:** Largest global repository of studio trailers, teasers, clips, and promotional documentaries.
@@ -308,32 +315,175 @@ $$\text{Score} = w_1 S_{\text{match}} + w_2 S_{\text{official}} + w_3 S_{\text{t
 
 ---
 
-## 6. Compliant In-App Playback Architecture
+## 6. Compliant In-App Playback Architecture & Platform Policy
 
-### 6.1 Platform Policy Compliance & Player Coexistence
+### 6.1 Dual-Path Streaming Strategy
 
-A core requirement is ensuring zero circumvention of platform terms while delivering a seamless desktop experience:
+To provide maximum reliability without violating platform terms:
 
-1. **Embedded Player Standards:**
-   - **YouTube:** Loaded via official YouTube IFrame Player API inside a sandboxed, isolated web context. YouTube controls, branding, and required legal links are strictly preserved.
-   - **Dailymotion / Vimeo:** Embedded using their official responsive iframe players.
-   - **No Stream Extraction or Scraping:** No raw `.mp4`/`.m3u8` video stream scraping or unauthorized downloading of third-party platform videos.
-2. **Strict Player Isolation (Coexistence Guarantee):**
-   - Trailer playback runs inside a dedicated `TrailerPlayerModal` or floating PiP mini-player.
-   - **Never interrupts main media:** If the user is streaming a movie or series in the main CS3 player, opening a trailer will pause (or duck) the main audio, but will **never unmount, destroy, or reset** the active streaming session or its playback buffer.
-   - **No Watch History Contamination:** Watching a 2-minute teaser is never recorded as an episode completion or resume-point update for the full movie.
+1. **Path A: Official Embedded Player Adapter (Primary for Web Platforms)**
+   - **YouTube:** Official YouTube IFrame Player API rendered inside a sandboxed webview context with required HTTP Referer headers. Standard controls, branding, and links remain untouched.
+   - **Dailymotion / Vimeo:** Official responsive iframe embed players.
+   - **Advantage:** Never expires, zero dependence on yt-dlp binary extraction, zero risk of IP bans, immune to format/cipher changes.
+2. **Path B: Direct Media Engine (For Direct Video URLs & Native Clips)**
+   - Used for direct MP4/WebM/HLS streams provided by open archives or providers.
+   - Routed through `preparePlaybackStream` and the local streaming proxy with full hardware acceleration.
 3. **External Browser Fallback:**
-   - If an uploader disables third-party iframe embedding (`error 150` on YouTube), the player immediately displays a graceful notice: `"This video requires playback directly on YouTube"` with a one-click button: `"Open in Browser ↗"` (opens in OS default browser via Electron `shell.openExternal`).
-
-### 6.2 Trailer Mini-Player (Picture-in-Picture Mode)
-
-Users can minimize the trailer modal into a bottom-right floating dock (`TrailerMiniPlayer`), allowing them to continue exploring titles, searching catalogues, or modifying settings while the promotional video continues playing.
+   - If an uploader disables third-party iframe embedding (`error 150` on YouTube), the player immediately displays a graceful notification: `"This video requires playback directly on YouTube"` with a one-click button: `"Open in Browser ↗"` (opens in OS default browser via Electron `shell.openExternal`).
+4. **Strict Coexistence Guarantee:**
+   - Playing a trailer runs in its own context. It will **never unmount, destroy, or reset** an active movie or series stream in the main player, and will **never write watch progress** to user history.
 
 ---
 
-## 7. Caching, Quota Management, and Rate Limiting
+## 7. Deep Dive: Fixing Trailer Playback Reliability, Controls, Interface Redesign, and Timeline Synchronization
 
-To ensure the desktop app never hits public API quota limits or gets IP-banned:
+This section directly resolves the critical flaws documented in current real-world trailer testing in `TrailerPopup.tsx` and the underlying streaming pipeline.
+
+### 7.1 Root Cause Analysis of Playback Failures
+
+Detailed code audits of `desktop/src/components/detail/TrailerPopup.tsx` and `electron/media/` revealed four distinct root causes for trailer failures:
+
+```mermaid
+flowchart TD
+    subgraph RootCauses["Existing Failure Mechanisms"]
+        RC1["1. Controls Hidden During Resolving<br/>(Controls wrapped in stage.phase === 'ready')"]
+        RC2["2. Mid-Stream Halts & Premature Errors<br/>(Hardcoded rejection of NATIVE_MPV & unhandled DASH drops)"]
+        RC3["3. A/V Desync on Seek<br/>(element.src = atTime(url, t) causes PTS drift in fragmented MP4)"]
+        RC4["4. Dialog-Style Fullscreen<br/>(Modal wrapper retains borders, padding, and dialog chrome in fullscreen)"]
+    end
+    
+    RC1 --> Fix1["Fix: Render Universal Controls immediately at T=0 in all stages"]
+    RC2 --> Fix2["Fix: Resilient Stream Pipeline, Auto-Reconnect, and MPV Fallback Routing"]
+    RC3 --> Fix3["Fix: Centralized Seek Accumulator & Input-Accurate PTS Alignment"]
+    RC4 --> Fix4["Fix: Standalone Cinema Player Redesign with Auto-Hiding Controls HUD"]
+```
+
+1. **Mid-Stream Stoppages & Spurious "Video not streamable" Errors:**
+   - In `TrailerPopup.tsx` line 240, if `preparePlaybackStream` selects `NATIVE_MPV`, the player immediately aborts with: `"This video needs the native player, which trailers do not use"`.
+   - Temporary network packet stalls or YouTube CDN chunk throttling trigger the HTML5 `<video>` `onError` handler (line 602), which destroys the stream without attempting a range-reconnect.
+   - Video-only DASH formats extracted by yt-dlp fail to mux with separate audio on the fly, leading to sudden pipeline stalls.
+2. **Controls Hidden Until Stream Ready:**
+   - Custom controls are wrapped in `{stage.phase === 'ready' && (...)}` (line 634). During `resolving` and `buffering` (which often takes 1.5–3.5s), users see an unstyled black box or spinner with no controls, no volume slider, no mute button, and no close/back capability.
+3. **Audio/Video Timeline Desynchronization on Seek:**
+   - For transcoded streams, `seekTo` executes `element.src = atTime(stage.url, target); element.load();` (lines 367–374).
+   - In fragmented MP4 (`/media/` transcode), restarting ffmpeg with `?t=target` causes video frames to seek to the nearest preceding keyframe (I-frame) while audio samples start at the exact fractional timestamp. This causes immediate audio/video desynchronization (often 0.5s to 3.0s drift).
+   - Rapid sequential seeks trigger multiple overlapping network requests, racing and overwriting the audio playback clock.
+4. **Poor Fullscreen Experience & Modal Clutter:**
+   - Fullscreen simply invokes `stageRef.current.requestFullscreen()` on the modal dialog element, preserving modal header text, close buttons, and non-video layout elements in fullscreen mode rather than presenting a clean, dedicated player UI.
+
+---
+
+### 7.2 Trailer Playback Reliability & Pipeline Hardening
+
+#### Requirements & Architectural Fixes:
+1. **Continuous Playback Without Interruption:**
+   - Eliminate hardcoded strategy rejections. If a video requires `NATIVE_MPV` and cannot be played directly in `<video>`, dynamically route through a lightweight headless MPV instance or transcode on the fly via the existing `MediaTranscoder` without failing.
+   - Implement **resilient HTTP range streaming** in `mediaProxy.ts`: if the socket drops during trailer streaming, the proxy automatically re-requests from the remote byte offset with up to 3 automatic retries before reporting an error.
+2. **Eliminate Unnecessary External Player Redirects:**
+   - Before prompting the user to "Try an external player", verify all internal strategies:
+     - Strategy 1: Official Embedded IFrame Player (YouTube/Dailymotion).
+     - Strategy 2: Direct HTML5 `<video>` / HLS playback.
+     - Strategy 3: Local remuxing / transcoding proxy.
+   - External browser redirect is reserved strictly for videos where the publisher explicitly prohibited third-party embedded playback (`error 150`).
+3. **Format & Codec Handling:**
+   - Automatically remux separate DASH video/audio streams into fragmented MP4 using ffmpeg `-c copy` before delivery to the `<video>` element, ensuring continuous sync and preventing format dropouts.
+
+---
+
+### 7.3 Immediate Player Controls & Fullscreen Architecture
+
+#### Immediate Controls Availability:
+1. **Universal Controls Render at T=0:**
+   - Player controls (Play/Pause, Seek Bar, Volume/Mute, Fullscreen, Queue Step, Close) are mounted immediately when the trailer opens, regardless of whether `stage.phase` is `'resolving'`, `'buffering'`, or `'ready'`.
+   - During `resolving`, the scrubber timeline displays an elegant animated pulse or indeterminate state with duration populated from known metadata (`video.durationSeconds`).
+   - Mute, volume adjustment, fullscreen toggle, and queue navigation are fully interactive before the video stream finishes connecting.
+2. **Keyboard Accessibility Throughout Lifecycle:**
+   - `Space`: Toggle play/pause (queued if resolving).
+   - `F`: Toggle fullscreen immediately.
+   - `M`: Toggle mute (persisted to player preferences).
+   - `Left / Right Arrow`: Seek -10s / +10s.
+   - `Esc`: Exits fullscreen if active; otherwise minimizes to PiP or closes modal.
+
+---
+
+### 7.4 Redesign of the Trailer Modal and Player Interface
+
+The trailer player interface is overhauled from a crude dialog window into a cinema-grade video surface.
+
+#### Layout States:
+
+```text
++-------------------------------------------------------------------------------------------------------+
+| STANDARD WINDOWED MODAL VIEW                                                                           |
+| +---------------------------------------------------------------------------------------------------+ |
+| | [🎬 Trailer]  Spider-Man: No Way Home - Official Trailer 3                  [🗗 Dock]  [✕ Close]   | |
+| |---------------------------------------------------------------------------------------------------| |
+| |                                                                                                   | |
+| |                                       VIDEO VIEWPORT (16:9)                                       | |
+| |                                                                                                   | |
+| |---------------------------------------------------------------------------------------------------| |
+| | [===●========================================================================] 01:12 / 02:45        | |
+| | [▶ Play] [⏪ 10s] [⏩ 10s] [🔊 Volume =====●]             [💬 Subtitles] [🔀 Queue] [⛶ Fullscreen] | |
+| +---------------------------------------------------------------------------------------------------+ |
++-------------------------------------------------------------------------------------------------------+
+
++-------------------------------------------------------------------------------------------------------+
+| TRUE FULLSCREEN VIDEO PLAYER (All modal chrome, borders, and dialog headers eliminated)              |
+|                                                                                                       |
+|                                                                                                       |
+|                                         EDGE-TO-EDGE VIDEO                                            |
+|                                                                                                       |
+|                                                                                                       |
+|  (Floating Auto-Hiding HUD Overlay - Fades out after 2.5s of inactivity)                             |
+|  [Spider-Man: No Way Home · Official Trailer 3]                                        [⛶ Exit FS]   |
+|  [==========================●==================================================] 01:12 / 02:45        |
+|  [▶ Play] [⏪ 10s] [⏩ 10s] [🔊 ===●]                                     [💬 Subtitles] [🗗 Mini]    |
++-------------------------------------------------------------------------------------------------------+
+```
+
+#### Key Design Rules:
+1. **Zero Dialog Clutter in Fullscreen:**
+   - Entering fullscreen hides all modal padding, title headers, and window borders. The video expands to 100% viewport width and height (`object-fit: contain`).
+   - Controls float in an elegant, gradient-backed bottom HUD that automatically fades out after 2.5s of mouse inactivity and reappears on mouse movement.
+2. **Responsive Sizing:**
+   - Windowed modal respects desktop aspect ratios (max 90vw, max 85vh), maintaining strict 16:9 video alignment without black pillarbox bars.
+3. **Pruned Controls:**
+   - Remove irrelevant full-movie controls (e.g. source selection drawers, complex audio track selectors, episode lists).
+   - Retain only high-utility controls: Play/Pause, Skip 10s, Volume/Mute, Scrubber, Subtitles, Trailer Queue Previous/Next, Fullscreen, and Mini-Player dock.
+
+---
+
+### 7.5 Timeline Seeking Engine & Audio/Video Synchronization
+
+#### Root Cause of A/V Desynchronization:
+When seeking inside transcoded streams (`stage.url.includes('/media/')`), updating the URL with `?t=target` prompts ffmpeg to restart transcode from `target`. In typical video encoders, seeking to a non-keyframe causes the video stream to snap to the nearest previous I-frame (e.g. `target - 1.2s`), whereas the audio encoder starts immediately at `target`. The `<video>` element plays the audio and video tracks out of phase.
+
+#### Architectural Fix:
+1. **Centralized Seek Accumulator (`trailerSeekAccumulator.ts`):**
+   - Consecutive click or drag events on the scrubber timeline are accumulated in memory.
+   - Debounce seek dispatches by 120ms during scrubbing, displaying the updated timecode and handle position instantly in the UI while postponing stream re-attachment until the user releases the scrub handle.
+2. **Input-Accurate PTS Alignment in Transcoding Pipeline:**
+   - For streams proxied through `MediaTranscoder`, seeking mandates accurate input seeking:
+     - Place `-ss <target>` **before** the input (`-i`) to seek on demuxer level.
+     - Supply `-copyts -start_at_zero` and `-avoid_negative_ts make_zero`.
+     - Force audio and video starting presentation timestamps to zero simultaneously (`aresample=async=1000:min_hard_comp=0.100000:first_pts=0`), locking audio samples directly to video frames.
+3. **Direct HTML5 / HLS Seeking Without Source Reload:**
+   - For direct MP4/WebM and HLS streams, never destroy `element.src`. Directly assign `element.currentTime = target`.
+   - Attach listener to the element's `seeked` event before resuming playback, guaranteeing audio and video decoders are locked before playhead advancement.
+4. **Multi-Seek Resilience:**
+   - Track an `inFlightSeekToken`. If a second seek is issued before the first completes, the first request is aborted immediately via `AbortController`, preventing stale audio buffers from playing over new video frames.
+
+---
+
+### 7.6 Architectural Integration with Existing Core Player
+
+- **No Code Forking:** Reuse `desktop/src/utils/format.ts` for timecodes and `desktop/src/components/ui/` for buttons.
+- **Shared Player Preferences:** Reads and synchronizes volume and mute preferences with the main player via `window.cloudstream.getPlayerPreferences` and `setPlayerPreferences`.
+- **Zero Cross-Feature Regression:** Unit tests verify that trailer playback state changes never dispatch events to `playbackStats.ts` or mutate active `PlaybackSession` instances.
+
+---
+
+## 8. Caching, Quota Management, and Rate Limiting
 
 ```mermaid
 graph LR
@@ -347,7 +497,7 @@ graph LR
     Save --> Ret
 ```
 
-### 7.1 Cache Invalidation Policies
+### 8.1 Cache Invalidation Policies
 
 | Cache Layer | Key Structure | Expiry (TTL) | Eviction Rule |
 |---|---|---|---|
@@ -357,14 +507,9 @@ graph LR
 | **Channel Identity Registry** | `channel:${platform}:${channelId}` | 60 days | Periodic background sync |
 | **Search Query Stream Cache**| `query:${normalizedQuery}:${chip}` | 24 hours | LRU (max 1,000 queries) |
 
-### 7.2 Safety & Pacing Guards
-- **Debounce:** Search inputs while trailer chip is active are debounced by 350ms before initiating remote metadata calls.
-- **Request Coalescing:** If two components request promotional videos for the same TMDB ID simultaneously, only one network request is dispatched; both components subscribe to the same promise.
-- **Circuit Breaker:** If a provider returns HTTP 429 (Too Many Requests), that source is cooled down automatically for 60 seconds without failing other discovery sources.
-
 ---
 
-## 8. Saved Trailers & Personal Collection
+## 9. Saved Trailers & Personal Collection
 
 Users can bookmark trailers to watch later without leaving CS3:
 1. **"Watch Later" Bookmark:** One-click save on any trailer card.
@@ -374,79 +519,76 @@ Users can bookmark trailers to watch later without leaving CS3:
 
 ---
 
-## 9. Implementation Phases & Milestones
+## 10. Implementation Phases & Milestones
 
-### Phase 0: Architecture Inspection & Contract Audit (Week 1)
-- [ ] Verify `videoTitles.ts` classification rules and write baseline test assertions for new promotional categories (Documentary, TV Spot, Final Trailer).
-- [ ] Audit `desktop/src/components/Navbar.tsx` and `searchCategories.ts` to design zero-cost category chip injection.
-- [ ] Inspect existing `TrailerGallery.tsx` and `TrailerPopup.tsx` to document migration path to official embedded players.
-- [ ] Verify that unselected search chip preserves 100% existing provider execution paths without latency change.
+### Phase 0: Existing Implementation Audit & Root-Cause Reproduction
+- [ ] Reproduce mid-stream trailer stalls and spurious "Video not streamable" errors in `TrailerPopup.tsx`.
+- [ ] Reproduce audio/video desync across multiple seeks in `/media/` transcode streams.
+- [ ] Audit `desktop/src/components/Navbar.tsx` and `searchCategories.ts` for zero-cost chip injection.
 
-### Phase 1: Search Bar Chip & Category Routing (Week 2)
+### Phase 1: Search Bar Chip & Category Routing
 - [ ] Add `trailer` chip to `SEARCH_CATEGORIES` in `desktop/src/utils/searchCategories.ts`.
 - [ ] Update `Navbar.tsx` search input to display the active `[🎬 Trailers ✕]` pill when selected.
 - [ ] Implement conditional search dispatcher:
   - If `wantsTrailers(categories) === false`: Invoke standard `SearchSession`.
   - If `wantsTrailers(categories) === true`: Invoke `TrailerSearchSession`.
-- [ ] Unit tests for chip selection, deselection, category serialization, and placeholder toggling.
 
-### Phase 2: Federated Discovery Engine & Work Resolver (Week 3)
+### Phase 2: Federated Discovery Engine & Work Resolver
 - [ ] Implement `electron/metadata/trailerDiscovery.ts` combining TMDB video resolver, Dailymotion public search, and YouTube oEmbed validation.
 - [ ] Build multi-word and typo-tolerant entity resolver using existing Wikidata / Cinemeta foundations.
-- [ ] Implement streaming IPC channel `trailer:search` returning progressive results (`chunk`, `complete`, `error`).
-- [ ] Add caching layer for trailer queries, oEmbed records, and resolved canonical titles.
+- [ ] Implement streaming IPC channel `trailer:search` returning progressive results.
 
-### Phase 3: Dedicated Trailer Search View & UI Components (Week 4)
+### Phase 3: Dedicated Trailer Search View & UI Components
 - [ ] Implement responsive video grid in `desktop/src/views/TrailerSearchView.tsx` (virtualized for 200+ cards).
 - [ ] Create `TrailerCard.tsx` featuring 16:9 thumbnail, duration badge, publisher, verification status pill, and action menu.
 - [ ] Implement category filter pills (`All`, `Official Trailers`, `Teasers`, `Clips`, `BTS & Documentaries`).
-- [ ] Implement progressive loading indicator and stable deduplication during streaming ingestion.
 
-### Phase 4: Embedded Trailer Player & Coexistence Engine (Week 5)
-- [ ] Build `desktop/src/components/player/EmbeddedTrailerPlayer.tsx` supporting YouTube IFrame Player API and Dailymotion embed.
-- [ ] Implement external browser fallback for restricted or non-embeddable videos.
-- [ ] Implement Picture-in-Picture mini-player mode allowing playback while browsing titles.
-- [ ] Validate non-interference: verify that playing a trailer does not affect active main player streams or update watch history.
+### Phase 4: Overhaul Trailer Playback, Controls, and Timeline Sync
+- [ ] Refactor `TrailerPopup.tsx` to render controls immediately at T=0 across resolving and buffering states.
+- [ ] Implement `trailerSeekAccumulator.ts` to debounce rapid scrubs and synchronize audio/video PTS clocks.
+- [ ] Fix transcode stream PTS alignment in `mediaTranscoder.ts` (`-ss` before `-i`, `-copyts`, audio resample PTS lock).
+- [ ] Redesign trailer player interface: cinema-grade layout, true fullscreen HUD with auto-hide controls, removing dialog chrome.
+- [ ] Implement dual-path playback: compliant embedded IFrame players for web platforms and resilient direct media streaming.
 
-### Phase 5: Detail Page Gallery Enhancement & Library Bookmarks (Week 6)
+### Phase 5: Detail Page Gallery Enhancement & Library Bookmarks
 - [ ] Upgrade `TrailerGallery.tsx` on movie/series detail pages to consume the unified promotional model.
 - [ ] Add TV series season filter tabs for season-specific promos and trailers.
 - [ ] Implement "Save Trailer" / "Watch Later" bookmarking persisted in user profile.
-- [ ] Add "Trailers" collection view in `desktop/src/views/LibraryView.tsx`.
 
-### Phase 6: Edge-Case Hardening, Quota Testing & Documentation (Week 7)
+### Phase 6: Edge-Case Hardening, Quota Testing & Regression Validation
 - [ ] Verify test corpus across 50 titles (exact titles, typos, franchises, foreign titles, anime PVs).
-- [ ] Test HTTP 429 rate limit recovery, network disconnection, and deleted video handling.
+- [ ] Stress-test timeline seeking: 20 consecutive seeks without audio/video drift or pipeline stall.
 - [ ] Verify zero regressions on standard provider search (`bun run test --fast`).
-- [ ] Document final architecture in `docs/agents/` and update `ROADMAP.md`.
 
 ---
 
-## 10. Test Strategy & Acceptance Matrix
+## 11. Test Strategy & Acceptance Matrix
 
-### 10.1 Unit Tests (Pure Logic, `node:assert/strict`)
+### 11.1 Unit Tests (Pure Logic, `node:assert/strict`)
 - **Query Parser & Chip Detection:** Test that empty category or `['title']` never invokes trailer endpoints; test that `['trailer']` correctly routes to trailer search.
 - **Classification (`videoTitles.test.mts`):** 40+ synthetic and real title strings validating correct classification of `trailer`, `teaser`, `clip`, `documentary`, `tv-spot`.
-- **Deduplication:** Verify that identical video IDs returned from multiple sources (e.g. TMDB and YouTube search) are merged into one card.
-- **Ranking:** Verify that verified official trailers always sort ahead of fan-made concept trailers.
+- **Seek Accumulator:** Test that rapid seeks (10 events in 50ms) collapse into one target seek and cancel prior in-flight tokens.
+- **Audio/Video Sync Calculation:** Verify PTS offset normalization logic.
 
-### 10.2 Integration & E2E Validation
-- **Search Typo Handling:** Searching `"an hull"` with trailer chip active must successfully discover *The Incredible Hulk* (2008) official trailers.
-- **Long Query Handling:** Searching a 50-word plot synopsis must resolve the underlying movie and display its trailers.
-- **Platform Embeddability:** Playing an embeddable YouTube trailer plays within 1.5s in the modal; restricted trailer displays the "Open in Browser" button cleanly.
-- **Player Coexistence:** Starting a movie stream, then opening and closing a trailer modal, leaves the movie playing with zero buffer eviction.
+### 11.2 Integration & Playback Validation
+- **Continuous Playback:** Trailer plays uninterrupted from 00:00 to end without unexpected stalls or external player prompts.
+- **Immediate Controls:** Controls, volume slider, mute toggle, and fullscreen button are visible and interactive at T=0 while stream resolves.
+- **Fullscreen Presentation:** Entering fullscreen removes all dialog padding, title bars, and borders; HUD auto-hides after 2.5s.
+- **Seeking Sync:** Seek 5 times across the video; verify audio and video start within <50ms of each other without drift.
+- **Player Coexistence:** Starting a movie stream, then opening, seeking, and closing a trailer modal, leaves the movie playing with zero buffer eviction.
 
 ---
 
-## 11. Acceptance Criteria Checklist
+## 12. Acceptance Criteria Checklist
 
 - [ ] **Chip-Gated Isolation:** When the trailer chip is unselected, search executes standard CS3 scrapers with zero behavior or performance difference from today.
 - [ ] **Dedicated Trailer Search:** Selecting `[🎬 Trailers]` on the search bar allows freeform title/keyword/partial search and displays promotional video results.
 - [ ] **Broad Keyword Support:** Searches for partial words (`Spider`), typos (`an hull`), multi-word queries, and genres successfully return relevant trailers.
 - [ ] **Multi-Source Ingestion:** Results are aggregated from publicly available APIs (TMDB, YouTube, Dailymotion, Vimeo, AniList).
-- [ ] **Rich Category Tagging:** Videos are accurately categorized as Trailer, Teaser, TV Spot, Clip, BTS, Documentary, or Interview.
-- [ ] **Verified vs. Community Labels:** Clear visual distinction between verified studio uploads and community archives.
-- [ ] **In-App Playback:** Supported trailers play directly in CS3 using compliant embedded players without unauthorized stream extraction.
+- [ ] **Trailer Playback Reliability:** Trailers play continuously from start to finish without unexpected dropouts or spurious external player redirects.
+- [ ] **Immediate Player Controls:** Controls are visible and functional from T=0 throughout loading, resolving, buffering, and playing.
+- [ ] **True Fullscreen Experience:** Fullscreen behaves as a standalone video player with auto-hiding HUD, devoid of modal dialog borders or chrome.
+- [ ] **Frame-Accurate Seeking & Sync:** Timeline seeking eliminates audio/video desynchronization across single and consecutive seeks.
 - [ ] **Main Player Non-Interference:** Playing a trailer never interrupts or corrupts active movie/series streaming sessions or history.
 - [ ] **Detail Page Integration:** Movie and TV detail pages present a rich, categorized promotional video section.
 - [ ] **Trailer Bookmarks:** Users can save trailers to their library for later viewing.
