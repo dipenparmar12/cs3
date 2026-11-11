@@ -5349,31 +5349,36 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
         */}
         <div className="player__titles">
           <div className="player__title-row">
-            <h2>{title}</h2>
-            {onOpenDetail && progress?.mediaUrl && (
+            {onOpenDetail && progress?.mediaUrl ? (
               <button
                 type="button"
-                className="player__title-search"
+                className="player__title-btn"
                 onClick={onOpenDetail}
                 title="Open title details"
                 aria-label={`Open details for ${title}`}
               >
-                <Info size={15} />
+                <h2>{title}</h2>
+                <span className="player__title-info-icon" aria-hidden="true">
+                  <Info size={14} />
+                </span>
               </button>
+            ) : (
+              <h2>{title}</h2>
             )}
             {progress?.mediaUrl && (
               <button
                 type="button"
-                className={`player__title-search${playbackSaved ? ' player__title-search--on' : ''}`}
+                className={`player__title-search player__title-save-btn${playbackSaved ? ' player__title-search--on' : ''}`}
                 onClick={() => void savePlayback()}
                 title={
                   playbackSaved
                     ? 'Saved — press again to update the place'
                     : 'Keep this playback: the source, the tracks and where you are'
                 }
-                aria-label="Save this playback"
+                aria-label={playbackSaved ? 'Saved playback' : 'Save playback'}
               >
-                {playbackSaved ? <BookmarkCheck size={15} /> : <BookmarkPlus size={15} />}
+                {playbackSaved ? <BookmarkCheck size={14} /> : <BookmarkPlus size={14} />}
+                <span>{playbackSaved ? 'Saved' : 'Save'}</span>
               </button>
             )}
             {onSearchTitle && (
