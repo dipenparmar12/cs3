@@ -4667,19 +4667,23 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
       } else {
         // Default: volume control
         // Scaling with scroll intensity:
-        // Slow tick (~2 to ~30): 0.02 - 0.03
+        // Slow tick (~2 to ~30): 0.02 - 0.03 for fine adjustments
         // Normal tick (~30 to ~100): 0.05
-        // Fast/vigorous scroll (>100): scales up to 0.15 - 0.25+ allowing quick mute or 100%
+        // Fast/vigorous flick (>150): scales rapidly so a single vigorous scroll
+        // can sweep straight from 0 to 100% or 100% to 0 (mute).
         const absDelta = Math.abs(e.deltaY);
         let step = 0.05;
         if (absDelta < 25) {
           step = 0.02;
         } else if (absDelta < 60) {
           step = 0.03;
+        } else if (absDelta >= 450) {
+          step = 1.0; // Instant 0 <-> 100% on a full flick
         } else if (absDelta > 200) {
-          step = Math.min(0.30, Math.round((absDelta / 1000) * 100) / 100);
+          // Quadratic scaling for strong flicks (e.g. delta 300 gives step ~0.65, delta 400 gives step ~0.9)
+          step = Math.min(1.0, Math.round((Math.pow(absDelta / 450, 1.8)) * 100) / 100);
         } else if (absDelta > 100) {
-          step = Math.min(0.15, Math.round((absDelta / 1200) * 100) / 100);
+          step = Math.min(0.25, Math.round((absDelta / 600) * 100) / 100);
         }
         const change = e.deltaY < 0 ? step : -step;
         const currentVol = isMuted ? 0 : volume;
