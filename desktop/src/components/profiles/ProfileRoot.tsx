@@ -42,20 +42,37 @@ const ProfileLockScreen: React.FC<{ state: UserProfilesState }> = ({ state }) =>
   const [secret, setSecret] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [shaking, setShaking] = useState(false);
+  const lastFailedAttempt = React.useRef<string | null>(null);
+
   const chosen = state.profiles.find((profile) => profile.id === chosenId) ?? state.profiles[0];
   const others = state.profiles.filter((profile) => profile.id !== chosen.id);
 
+  const triggerShake = () => {
+    setShaking(false);
+    requestAnimationFrame(() => setShaking(true));
+  };
+
   const open = async (profileId: string, withSecret?: string) => {
+    if (!withSecret) return;
     setBusy(true);
     setError(null);
     const result = await switchProfile(profileId, withSecret);
     setBusy(false);
-    if (!result.ok) setError(result.error);
+    if (!result.ok) {
+      lastFailedAttempt.current = withSecret;
+      setError(result.error);
+      triggerShake();
+      setSecret('');
+    } else {
+      lastFailedAttempt.current = null;
+    }
   };
 
   // Windows PIN auto-unlock: automatically triggers unlock when user enters a 4-digit or 6-digit PIN
   useEffect(() => {
     if (!chosen.locked || busy || !secret) return;
+    if (secret === lastFailedAttempt.current) return;
     if (/^\d{4}$/.test(secret) || /^\d{6}$/.test(secret)) {
       void open(chosen.id, secret);
     }
@@ -68,7 +85,8 @@ const ProfileLockScreen: React.FC<{ state: UserProfilesState }> = ({ state }) =>
         <h1 className="profile-screen__name">{chosen.name}</h1>
         {chosen.locked ? (
           <form
-            className="profile-screen__form"
+            className={`profile-screen__form${shaking ? ' profile-screen__form--shake' : ''}`}
+            onAnimationEnd={() => setShaking(false)}
             onSubmit={(event) => {
               event.preventDefault();
               if (secret && !busy) void open(chosen.id, secret);
