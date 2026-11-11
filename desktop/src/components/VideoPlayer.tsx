@@ -481,6 +481,9 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
   const [floatingMode, setFloatingMode] = useState<FloatingMode>('mini');
   const [backgroundPlayback, setBackgroundPlayback] = useState<BackgroundPlayback>('continue');
   const [alwaysOnTop, setAlwaysOnTop] = useState(false);
+  const [wheelAction, setWheelAction] = useState<'volume' | 'seek'>('volume');
+  const wheelActionRef = useRef<'volume' | 'seek'>('volume');
+  wheelActionRef.current = wheelAction;
 
   /**
    * Fullscreen is the window's (see `useWindowFullScreen`), never the HTML API
@@ -1022,14 +1025,61 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
    * Keeps this exact playback: the page, the episode, the place, the source
    * and the tracks — the bookmark beside the title. It lands in Library ›
    * Saved pages with a Resume button that plays it back exactly, re-finding
-   * the same release when its link has expired. Pressing it again updates
-   * the saved place rather than unsaving it.
+   * the same release when its link has expired.
+   *
+   * Toggles save / unsave when the playing title & source match the stored
+   * bookmark. If a different source or title is playing, clicking saves/updates it.
    */
   const [playbackSaved, setPlaybackSaved] = useState(false);
-  useEffect(() => setPlaybackSaved(false), [title, progress?.season, progress?.episode]);
-  const savePlayback = useCallback(async () => {
+  const [savedSourceId, setSavedSourceId] = useState<string | null>(null);
+
+  // Check saved state whenever title, mediaUrl, season or episode changes
+  useEffect(() => {
+    let cancelled = false;
     const pageUrl = progress?.mediaUrl;
-    if (!pageUrl || !window.cloudstream?.saveBookmark) return;
+    if (!pageUrl || !window.cloudstream?.getBookmark) {
+      setPlaybackSaved(false);
+      setSavedSourceId(null);
+      return;
+    }
+    void window.cloudstream.getBookmark(pageUrl).then((res) => {
+      if (cancelled) return;
+      if (res?.bookmark) {
+        setPlaybackSaved(true);
+        setSavedSourceId(res.bookmark.playback?.source?.id ?? null);
+      } else {
+        setPlaybackSaved(false);
+        setSavedSourceId(null);
+      }
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [title, progress?.mediaUrl, progress?.season, progress?.episode]);
+
+  const toggleSavePlayback = useCallback(async () => {
+    const pageUrl = progress?.mediaUrl;
+    if (!pageUrl || !window.cloudstream) return;
+
+    // Current source identifier (or empty string if none)
+    const currentSrcId = activeSource?.infoHash || activeSource?.title || '';
+    const isSameSource = !savedSourceId || !currentSrcId || savedSourceId === currentSrcId;
+
+    // If currently saved and same source, clicking unsaves it
+    if (playbackSaved && isSameSource) {
+      const res = await window.cloudstream.removeBookmark?.(pageUrl);
+      if (res?.ok || res?.removed) {
+        setPlaybackSaved(false);
+        setSavedSourceId(null);
+        notify('Removed from Saved pages', 'good');
+      } else {
+        notify('Could not remove bookmark', 'bad');
+      }
+      return;
+    }
+
+    // Otherwise, save or update with current playback & source
+    if (!window.cloudstream.saveBookmark) return;
     const response = await window.cloudstream.saveBookmark({
       mediaUrl: pageUrl,
       title,
@@ -1055,8 +1105,9 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
       },
     });
     if (response?.ok) {
-      notify(playbackSaved ? 'Saved playback updated' : 'Playback saved — Library › Saved pages', 'good');
+      notify(playbackSaved ? 'Saved playback updated with new source' : 'Playback saved — Library › Saved pages', 'good');
       setPlaybackSaved(true);
+      setSavedSourceId(currentSrcId || null);
     } else {
       notify(response?.error ?? 'Could not save this playback', 'bad');
     }
@@ -1072,6 +1123,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
     duration,
     notify,
     playbackSaved,
+    savedSourceId,
   ]);
 
   /**
@@ -2900,6 +2952,9 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
       setFloatingMode(preferences.floatingMode ?? 'mini');
       setBackgroundPlayback(preferences.backgroundPlayback ?? 'continue');
       setAlwaysOnTop(preferences.alwaysOnTop === true);
+      const action = preferences.wheelAction === 'seek' ? 'seek' : 'volume';
+      setWheelAction(action);
+      wheelActionRef.current = action;
       setSubtitleStyle({
         scale: preferences.subtitleScale ?? DEFAULT_SUBTITLE_STYLE.scale,
         color: preferences.subtitleColor ?? DEFAULT_SUBTITLE_STYLE.color,
@@ -2926,6 +2981,11 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
       if (prefs.floatingMode) setFloatingMode(prefs.floatingMode);
       if (prefs.backgroundPlayback) setBackgroundPlayback(prefs.backgroundPlayback);
       if (typeof prefs.alwaysOnTop === 'boolean') setAlwaysOnTop(prefs.alwaysOnTop);
+      if (prefs.wheelAction) {
+        const action = prefs.wheelAction === 'seek' ? 'seek' : 'volume';
+        setWheelAction(action);
+        wheelActionRef.current = action;
+      }
       if (prefs.audioLanguage) preferredAudioLanguage.current = prefs.audioLanguage;
       if (prefs.subtitleLanguage) {
         preferredSubtitleLanguage.current = prefs.subtitleLanguage;
@@ -4578,6 +4638,65 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
 
   const miniFrame = useMiniFrame(mini);
 
+  const handlePlayerWheel = useCallback(
+    (e: React.WheelEvent<HTMLDivElement>) => {
+      // Don't intercept scroll inside menus or panels (e.g. subtitle track list, episodes list, source list)
+      const target = e.target as HTMLElement | null;
+      if (
+        target?.closest('.player-panel') ||
+        target?.closest('.player-copy__menu') ||
+        target?.closest('.hover-menu') ||
+        target?.closest('.player__menu')
+      ) {
+        return;
+      }
+
+      if (Math.abs(e.deltaY) < 2) return;
+      e.preventDefault();
+
+      if (wheelActionRef.current === 'seek') {
+        // Scrolling up -> forward (fast-forward); scrolling down -> backward
+        const forward = e.deltaY < 0;
+        // Scale seek jump with scroll intensity for fast scrubbing, minimum SKIP_SECONDS
+        const absDelta = Math.abs(e.deltaY);
+        const multiplier = absDelta > 100 ? Math.min(6, Math.floor(absDelta / 50)) : 1;
+        const delta = (forward ? SKIP_SECONDS : -SKIP_SECONDS) * multiplier;
+        const position = seekBy(delta);
+        showOsd({ kind: 'seek', delta, position, duration });
+        revealControls();
+      } else {
+        // Default: volume control
+        // Scaling with scroll intensity:
+        // Slow tick (~2 to ~30): 0.02 - 0.03
+        // Normal tick (~30 to ~100): 0.05
+        // Fast/vigorous scroll (>100): scales up to 0.15 - 0.25+ allowing quick mute or 100%
+        const absDelta = Math.abs(e.deltaY);
+        let step = 0.05;
+        if (absDelta < 25) {
+          step = 0.02;
+        } else if (absDelta < 60) {
+          step = 0.03;
+        } else if (absDelta > 200) {
+          step = Math.min(0.30, Math.round((absDelta / 1000) * 100) / 100);
+        } else if (absDelta > 100) {
+          step = Math.min(0.15, Math.round((absDelta / 1200) * 100) / 100);
+        }
+        const change = e.deltaY < 0 ? step : -step;
+        const currentVol = isMuted ? 0 : volume;
+        const next = Math.max(0, Math.min(1, Math.round((currentVol + change) * 100) / 100));
+        setVolume(next);
+        if (next > 0 && isMuted) {
+          setIsMuted(false);
+        } else if (next === 0 && !isMuted) {
+          setIsMuted(true);
+        }
+        showOsd({ kind: 'volume', volume: next, muted: next === 0 });
+        revealControls();
+      }
+    },
+    [duration, isMuted, revealControls, seekBy, showOsd, volume]
+  );
+
   /**
    * Geometry for the floating window.
    *
@@ -4632,6 +4751,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
       onMouseMove={revealControls}
       onMouseEnter={handlePlayerEnter}
       onMouseLeave={handlePlayerLeave}
+      onWheel={handlePlayerWheel}
       onPointerDown={mini ? miniFrame.startDrag : handlePlayerPointerDown}
     >
       {/*
@@ -5365,22 +5485,32 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
             ) : (
               <h2>{title}</h2>
             )}
-            {progress?.mediaUrl && (
-              <button
-                type="button"
-                className={`player__title-search player__title-save-btn${playbackSaved ? ' player__title-search--on' : ''}`}
-                onClick={() => void savePlayback()}
-                title={
-                  playbackSaved
-                    ? 'Saved — press again to update the place'
-                    : 'Keep this playback: the source, the tracks and where you are'
-                }
-                aria-label={playbackSaved ? 'Saved playback' : 'Save playback'}
-              >
-                {playbackSaved ? <BookmarkCheck size={14} /> : <BookmarkPlus size={14} />}
-                <span>{playbackSaved ? 'Saved' : 'Save'}</span>
-              </button>
-            )}
+            {progress?.mediaUrl && (() => {
+              const currentSrcId = activeSource?.infoHash || activeSource?.title || '';
+              const isDifferentSource = Boolean(playbackSaved && savedSourceId && currentSrcId && savedSourceId !== currentSrcId);
+              return (
+                <button
+                  type="button"
+                  className={`player__title-search player__title-save-btn${playbackSaved ? ' player__title-search--on' : ''}`}
+                  onClick={() => void toggleSavePlayback()}
+                  title={
+                    playbackSaved
+                      ? isDifferentSource
+                        ? 'Saved with another source — click to update with this source'
+                        : 'Saved — click to remove from saved pages'
+                      : 'Keep this playback: the source, the tracks and where you are'
+                  }
+                  aria-label={playbackSaved ? (isDifferentSource ? 'Update saved source' : 'Saved playback') : 'Save playback'}
+                >
+                  {playbackSaved ? (
+                    isDifferentSource ? <BookmarkPlus size={14} /> : <BookmarkCheck size={14} />
+                  ) : (
+                    <BookmarkPlus size={14} />
+                  )}
+                  <span>{playbackSaved ? (isDifferentSource ? 'Update' : 'Saved') : 'Save'}</span>
+                </button>
+              );
+            })()}
             {onSearchTitle && (
               <button
                 type="button"

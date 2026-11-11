@@ -5353,6 +5353,7 @@ interface StoredPlayerPreferences {
    * launch is one people stop using.
    */
   alwaysOnTop: boolean;
+  wheelAction?: 'volume' | 'seek';
 }
 
 const DEFAULT_PLAYER_PREFERENCES: StoredPlayerPreferences = {
@@ -5373,10 +5374,12 @@ const DEFAULT_PLAYER_PREFERENCES: StoredPlayerPreferences = {
   floatingMode: 'mini',
   backgroundPlayback: 'continue',
   alwaysOnTop: false,
+  wheelAction: 'volume',
 };
 
 const FLOATING_MODES = new Set(['mini', 'floating', 'pip', 'background']);
 const BACKGROUND_MODES = new Set(['continue', 'audio-only', 'pause']);
+const WHEEL_ACTIONS = new Set(['volume', 'seek']);
 
 /** Only these values mean anything to either renderer. */
 const SUBTITLE_BACKGROUNDS = new Set(['none', 'shadow', 'outline', 'box']);
@@ -5413,6 +5416,9 @@ function sanitizePlayerPreferences(
     preferences.backgroundPlayback = DEFAULT_PLAYER_PREFERENCES.backgroundPlayback;
   }
   preferences.alwaysOnTop = preferences.alwaysOnTop === true;
+  if (!WHEEL_ACTIONS.has(String(preferences.wheelAction))) {
+    preferences.wheelAction = DEFAULT_PLAYER_PREFERENCES.wheelAction;
+  }
   return preferences;
 }
 

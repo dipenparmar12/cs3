@@ -64,6 +64,8 @@ export interface ExternalPlaybackSnapshot {
   error: string | null;
 }
 
+export type WheelAction = 'volume' | 'seek';
+
 export interface StoredPlayerPreferences {
   volume: number;
   muted: boolean;
@@ -78,6 +80,7 @@ export interface StoredPlayerPreferences {
   floatingMode: 'mini' | 'floating' | 'pip' | 'background';
   backgroundPlayback: 'continue' | 'audio-only' | 'pause';
   alwaysOnTop: boolean;
+  wheelAction?: WheelAction;
 }
 
 /**

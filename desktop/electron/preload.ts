@@ -1104,6 +1104,8 @@ export interface CloudStreamElectronAPI {
         backgroundPlayback: 'continue' | 'audio-only' | 'pause';
         /** Pin the app above other windows while a floating player is showing. */
         alwaysOnTop: boolean;
+        /** Mouse wheel scroll action in player: 'volume' (default) or 'seek' (timeline). */
+        wheelAction?: 'volume' | 'seek';
       };
     }
   >;
@@ -1121,6 +1123,7 @@ export interface CloudStreamElectronAPI {
     floatingMode?: 'mini' | 'floating' | 'pip' | 'background';
     backgroundPlayback?: 'continue' | 'audio-only' | 'pause';
     alwaysOnTop?: boolean;
+    wheelAction?: 'volume' | 'seek';
   }) => Promise<Envelope>;
   onPlayerPreferencesChanged: (
     callback: (preferences: StoredPlayerPreferences) => void

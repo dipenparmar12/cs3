@@ -88,6 +88,21 @@ const BUCKETS: Array<{ status: WatchStatus; label: string }> = BUCKET_ORDER.map(
   label: BUCKET_LABELS[status],
 }));
 
+/**
+ * Resolves an addressable URL for a shelf entry.
+ *
+ * Entries collapse every provider URL seen for a title. If `entry.urls` is
+ * empty (e.g. non-reopenable links handle), fall back to known source addresses,
+ * or construct a synthetic library URI (`cs3ext://<Provider>/<Title>`) so the
+ * card click never fails silently.
+ */
+function resolveEntryUrl(entry: LibraryEntry): string {
+  if (entry.urls?.[0]) return entry.urls[0];
+  if (entry.sourceAddresses?.[0]) return entry.sourceAddresses[0];
+  const provider = entry.metadata?.provider ?? 'Library';
+  return `cs3ext://${encodeURIComponent(provider)}/${encodeURIComponent(entry.key || entry.title)}`;
+}
+
 /** What a shelf entry is found by: the names it goes by and what it is. */
 const entryMatches = (entry: LibraryEntry, query: string) =>
   matchesScreenQuery(query, [
@@ -330,8 +345,7 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
     (document.activeElement as HTMLElement)?.blur();
     // Entries collapse every provider URL seen for a title. The first is the one
     // it was originally added from, which is the most likely to still resolve.
-    const url = entry.urls[0];
-    if (!url) return;
+    const url = resolveEntryUrl(entry);
     onSelectMedia({
       name: entry.title,
       url,
@@ -352,8 +366,7 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
   const playEntry = (entry: LibraryEntry, e?: React.MouseEvent) => {
     e?.stopPropagation();
     (document.activeElement as HTMLElement)?.blur();
-    const url = entry.urls[0];
-    if (!url) return;
+    const url = resolveEntryUrl(entry);
     if (!onResume) {
       openEntry(entry);
       return;
