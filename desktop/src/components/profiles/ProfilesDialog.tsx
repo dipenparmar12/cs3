@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { Copy, Lock, Pencil, Trash2, UserPlus } from 'lucide-react';
 import { Button, Checkbox, Dialog, DialogActions, FormField, Input, SecretInput } from '../ui';
 import { ProfileAvatar, PROFILE_AVATARS } from './ProfileAvatar';
@@ -291,6 +291,15 @@ const UnlockView: React.FC<{
   onUnlock: (secret: string) => void | Promise<void>;
 }> = ({ profile, busy, error, onCancel, onUnlock }) => {
   const [secret, setSecret] = useState('');
+
+  // Windows PIN auto-unlock: automatically triggers unlock when user enters a 4-digit or 6-digit PIN
+  useEffect(() => {
+    if (busy || !secret) return;
+    if (/^\d{4}$/.test(secret) || /^\d{6}$/.test(secret)) {
+      void onUnlock(secret);
+    }
+  }, [secret, busy, onUnlock]);
+
   return (
     <Dialog
       size="sm"

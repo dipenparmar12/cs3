@@ -90,7 +90,7 @@ const DEFAULT_NAME = 'Default';
  * Wrong guesses allowed before the profile pauses, and the first pause.
  * Each further run of failures doubles it, to {@link MAX_BACKOFF_MS}.
  */
-const FREE_ATTEMPTS = 5;
+const FREE_ATTEMPTS = 60;
 const FIRST_BACKOFF_MS = 30_000;
 const MAX_BACKOFF_MS = 5 * 60_000;
 

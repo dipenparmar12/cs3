@@ -53,6 +53,14 @@ const ProfileLockScreen: React.FC<{ state: UserProfilesState }> = ({ state }) =>
     if (!result.ok) setError(result.error);
   };
 
+  // Windows PIN auto-unlock: automatically triggers unlock when user enters a 4-digit or 6-digit PIN
+  useEffect(() => {
+    if (!chosen.locked || busy || !secret) return;
+    if (/^\d{4}$/.test(secret) || /^\d{6}$/.test(secret)) {
+      void open(chosen.id, secret);
+    }
+  }, [secret, chosen.id, chosen.locked, busy]);
+
   return (
     <div className="profile-screen">
       <div className="profile-screen__card">
