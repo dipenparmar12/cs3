@@ -493,7 +493,9 @@ export const DetailView: React.FC<DetailViewProps> = ({
    * of them — a direct reference would be circular, and capturing the value
    * would freeze it at the first call.
    */
-  const playSourceRef = useRef<(source: TorrentResult) => void>(() => {});
+  const playSourceRef = useRef<(source: TorrentResult, options?: { autoAdvance?: boolean }) => void>(
+    () => {}
+  );
   const downloadSourceRef = useRef<(source: TorrentResult, episode: Episode | null) => void>(
     () => {}
   );
@@ -1849,24 +1851,45 @@ export const DetailView: React.FC<DetailViewProps> = ({
   }, [detail?.name, detail?.year, flash]);
 
   const handlePlaySource = useCallback(
-    async (source: TorrentResult) => {
+    async (source: TorrentResult, options?: { autoAdvance?: boolean }) => {
       if (!window.cloudstream || !detail) return;
 
+      const others = pickerData?.sources ?? [];
+      let activeSource = source;
+      let response: Awaited<ReturnType<typeof window.cloudstream.startStream>> | undefined;
+
       setStartingStream(true);
-      const response = await window.cloudstream.startStream(
-        source,
-        pendingEpisode?.season,
-        pendingEpisode?.episode
-      );
+      while (true) {
+        response = await window.cloudstream.startStream(
+          activeSource,
+          pendingEpisode?.season,
+          pendingEpisode?.episode
+        );
+        if (response.ok && response.handle) break;
+
+        if (options?.autoAdvance) {
+          unplayableSources.current.add(activeSource.infoHash);
+          const next = others.find(
+            (candidate) => !unplayableSources.current.has(candidate.infoHash)
+          );
+          if (next) {
+            activeSource = next;
+            continue;
+          }
+        }
+        break;
+      }
       setStartingStream(false);
 
-      if (!response.ok || !response.handle) {
-        // The user picked this source deliberately, so it is not silently
-        // swapped for another — but the picker is still open behind this
-        // message, with the next-best entries one click away.
-        setPickerError(
-          `${response.error ?? 'Could not start the stream.'} Try another source from the list.`
-        );
+      if (!response?.ok || !response.handle) {
+        if (!options?.autoAdvance) {
+          // The user picked this source deliberately, so it is not silently
+          // swapped for another — but the picker is still open behind this
+          // message, with the next-best entries one click away.
+          setPickerError(
+            `${response?.error ?? 'Could not start the stream.'} Try another source from the list.`
+          );
+        }
         return;
       }
 
@@ -1885,11 +1908,9 @@ export const DetailView: React.FC<DetailViewProps> = ({
             }
           : undefined,
       });
-      rememberChoice(source, pendingEpisode);
+      rememberChoice(activeSource, pendingEpisode);
 
       const watchState = await loadWatchState(detail.url, { title: detail.name, year: detail.year });
-
-      const others = pickerData?.sources ?? [];
 
       onPlay({
         streamUrl: response.handle.streamUrl,
@@ -1906,11 +1927,11 @@ export const DetailView: React.FC<DetailViewProps> = ({
           onSelect: (next) => void playSourceRef.current(next),
           onDownload: (next) => downloadSourceRef.current(next, pendingEpisode),
           onUnplayable: () => {
-            unplayableSources.current.add(source.infoHash);
+            unplayableSources.current.add(activeSource.infoHash);
             const next = others.find(
               (candidate) => !unplayableSources.current.has(candidate.infoHash)
             );
-            if (next) void playSourceRef.current(next);
+            if (next) void playSourceRef.current(next, { autoAdvance: true });
           },
         },
         progress: {
@@ -1932,7 +1953,8 @@ export const DetailView: React.FC<DetailViewProps> = ({
   // Assigned after definition: `handlePlaySource` hands these to the player and
   // is itself one of them.
   useEffect(() => {
-    playSourceRef.current = (source: TorrentResult) => void handlePlaySource(source);
+    playSourceRef.current = (source: TorrentResult, options?: { autoAdvance?: boolean }) =>
+      void handlePlaySource(source, options);
   }, [handlePlaySource]);
 
   useEffect(() => {

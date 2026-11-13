@@ -341,6 +341,35 @@ test('a second Find more sources asks every provider, without the walk limits', 
   assert.deepEqual(widenings[1], { scope: 'all', exhaustive: true }, 'second: everyone');
 });
 
+test('skipping a direct source does not re-try the skipped source during recovery and walks to the next playable one', async () => {
+  const direct = (n: number): TorrentResult =>
+    ({
+      title: `Stream ${n}`,
+      infoHash: `dhash${n}`,
+      directUrl: `https://cdn.example/${n}.mp4`,
+      seeders: 100 - n,
+      indexerName: 'Direct',
+    }) as TorrentResult;
+
+  const list = [direct(0), direct(1), direct(2), direct(3)];
+  const { content, offered } = stubContent(new Set(['dhash3']));
+  Object.assign(content, {
+    getSources: () => Promise.resolve({ sources: list, canWiden: false }),
+  });
+
+  const manager = new PlaybackSessionManager(content);
+  const id = persistentSessionWith(manager, list);
+
+  const after = await manager.skipCurrentSource(id, 'HTTP 404');
+
+  assert.equal(after?.phase, 'playing');
+  assert.equal(after?.activeInfoHash, 'dhash3');
+  assert.ok(
+    !offered.flat().includes('dhash0'),
+    `skipped source dhash0 must never be retried; passes were ${JSON.stringify(offered)}`
+  );
+});
+
 let failed = 0;
 for (const [name, fn] of tests) {
   try {

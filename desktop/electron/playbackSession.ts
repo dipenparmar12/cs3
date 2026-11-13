@@ -976,8 +976,11 @@ export class PlaybackSessionManager {
         await this.discover(session, { autoStartWhenDone: false, bypassCache: true });
         if (session.disposed || generation !== session.generation) return;
 
-        if (session.sources.length > 0) {
-          await this.beginStream(session, this.preferResumed(session, session.sources), {
+        const recoverable = session.sources.filter(
+          (source) => !source.infoHash || !session.unplayable.has(source.infoHash)
+        );
+        if (recoverable.length > 0) {
+          await this.beginStream(session, this.preferResumed(session, recoverable), {
             ...options,
             isRecovery: true,
           });
