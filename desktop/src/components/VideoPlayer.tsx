@@ -406,6 +406,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
 
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const containerRef = useRef<HTMLDivElement | null>(null);
+  const controlsRef = useRef<HTMLElement | null>(null);
   const seekBarRef = useRef<HTMLDivElement | null>(null);
   const hlsRef = useRef<Hls | null>(null);
   const shakaRef = useRef<ShakaAttachment | null>(null);
@@ -537,16 +538,43 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
     if (mismatchWarning) warningAnswerRef.current ??= 'unanswered';
   }, [mismatchWarning]);
   const [subtitlePanelOpen, setSubtitlePanelOpen] = useState(false);
+  const [downloadPanelOpen, setDownloadPanelOpen] = useState(false);
+
+  const openSidePanel = useCallback(
+    (target: 'episodes' | 'sources' | 'subtitles' | 'downloads', toggle = false) => {
+      setPanelOpen((prev) => (target === 'episodes' ? (toggle ? !prev : true) : false));
+      setSourcePanelOpen((prev) => (target === 'sources' ? (toggle ? !prev : true) : false));
+      setSubtitlePanelOpen((prev) => (target === 'subtitles' ? (toggle ? !prev : true) : false));
+      setDownloadPanelOpen((prev) => (target === 'downloads' ? (toggle ? !prev : true) : false));
+    },
+    []
+  );
+
+  // Measure the bottom control bar so side panels stop cleanly above the
+  // timeline seek track and never hide controls or other panel toggles.
+  useEffect(() => {
+    const controls = controlsRef.current;
+    const container = containerRef.current;
+    if (!controls || !container) return;
+    const syncHeight = () => {
+      const height = Math.ceil(controls.getBoundingClientRect().height);
+      if (height > 0) container.style.setProperty('--player-controls-height', `${height}px`);
+    };
+    syncHeight();
+    if (typeof ResizeObserver === 'undefined') return;
+    const observer = new ResizeObserver(syncHeight);
+    observer.observe(controls);
+    return () => observer.disconnect();
+  }, []);
 
   // `s` in mpv's own window asks for the subtitle search, which lives here.
   useEffect(
     () =>
       window.cloudstream?.onMpvAction?.((action) => {
-        if (action === 'subtitles') setSubtitlePanelOpen(true);
+        if (action === 'subtitles') openSidePanel('subtitles');
       }),
-    []
+    [openSidePanel]
   );
-  const [downloadPanelOpen, setDownloadPanelOpen] = useState(false);
   const [downloadQueue, setDownloadQueue] = useState<DownloadTask[]>([]);
 
   const activeSource = useMemo(() => {
@@ -2896,10 +2924,10 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
         : subtitleStyle.background === 'shadow'
           ? '0 2px 4px rgba(0, 0, 0, 0.9)'
           : 'none';
-    const bgColor =
-      subtitleStyle.background === 'box'
-        ? 'rgba(0, 0, 0, 0.85)'
-        : 'transparent';
+    const bgColor = vars['--cue-bg'];
+    const lineHeight = vars['--cue-line-height'] ?? '1.3';
+    const shiftX = vars['--cue-shift-x'] ?? '0%';
+    const textAlign = vars['--cue-align'] ?? 'center';
 
     styleTag.textContent = `
       .player video::cue,
@@ -2910,15 +2938,16 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
         background: ${bgColor} !important;
         text-shadow: ${shadow} !important;
         font-weight: ${subtitleStyle.weight === 'bold' ? '700' : '400'} !important;
-        line-height: 1.18 !important;
+        line-height: ${lineHeight} !important;
+        text-align: ${textAlign} !important;
         white-space: normal !important;
         padding: 0.1em 0.35em !important;
       }
       .player video::-webkit-media-text-track-container {
-        transform: translateY(-${subtitleStyle.position}%) !important;
+        transform: translate(${shiftX}, -${subtitleStyle.position}%) !important;
       }
       .player video::-webkit-media-text-track-display {
-        line-height: 1.18 !important;
+        line-height: ${lineHeight} !important;
       }
     `;
 
@@ -4331,6 +4360,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
     setSourcePanelOpen,
     setSubtitlePanelOpen,
     setDownloadPanelOpen,
+    openSidePanel,
     volume,
     setVolume,
     isMuted,
@@ -4368,6 +4398,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
     setSourcePanelOpen,
     setSubtitlePanelOpen,
     setDownloadPanelOpen,
+    openSidePanel,
     volume,
     setVolume,
     isMuted,
@@ -4553,14 +4584,14 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
         case 's':
         case 'S':
           e.preventDefault();
-          state.setSubtitlePanelOpen((v) => !v);
+          state.openSidePanel('subtitles', true);
           state.revealControls();
           break;
         case 'e':
         case 'E':
           if (state.series) {
             e.preventDefault();
-            state.setPanelOpen((v) => !v);
+            state.openSidePanel('episodes', true);
             state.revealControls();
           }
           break;
@@ -5694,6 +5725,8 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
         releaseName={activeSource?.title}
         delay={subtitleDelay}
         onDelayChange={setSubtitleDelay}
+        currentTime={currentTime}
+        onStyleChange={setSubtitleStyle}
       />
 
       <PlayerDownloadPanel
@@ -5724,6 +5757,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
       />
 
       <footer
+        ref={controlsRef}
         className={`player__controls${controlsVisible || keepControls ? '' : ' hidden'}`}
         onPointerDown={(e) => e.stopPropagation()}
         onClick={(e) => e.stopPropagation()}
@@ -5946,11 +5980,11 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
 
           {series && (
             <button
-              className="icon-button"
+              className={`icon-button${panelOpen ? ' active' : ''}`}
               data-panel-toggle
               onClick={(e) => {
                 e.stopPropagation();
-                setPanelOpen((v) => !v);
+                openSidePanel('episodes', true);
                 revealControls();
               }}
               aria-label="Episodes"
@@ -5962,11 +5996,11 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
 
           {sourceSession && (
             <button
-              className="icon-button"
+              className={`icon-button${sourcePanelOpen ? ' active' : ''}`}
               data-panel-toggle
               onClick={(e) => {
                 e.stopPropagation();
-                setSourcePanelOpen((v) => !v);
+                openSidePanel('sources', true);
                 revealControls();
               }}
               aria-label="Sources"
@@ -5991,7 +6025,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
             data-panel-toggle
             onClick={(e) => {
               e.stopPropagation();
-              setDownloadPanelOpen((v) => !v);
+              openSidePanel('downloads', true);
               revealControls();
             }}
             aria-label="Downloads"
@@ -6051,7 +6085,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
                       type="button"
                       className="hover-menu__footer-action"
                       onClick={() => {
-                        setSubtitlePanelOpen(true);
+                        openSidePanel('subtitles');
                         revealControls();
                       }}
                     >
@@ -6067,7 +6101,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
                   data-panel-toggle
                   onClick={(e) => {
                     e.stopPropagation();
-                    setSubtitlePanelOpen((v) => !v);
+                    openSidePanel('subtitles', true);
                     revealControls();
                   }}
                   aria-label="Search subtitles"

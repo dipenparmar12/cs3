@@ -443,23 +443,25 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ initialTab }) => {
 
           <div role="tablist" aria-orientation="vertical" className="settings__nav-list">
             {tabs.map((entry) => (
-              <button
-                key={entry.id}
-                role="tab"
-                aria-selected={!searching && tab === entry.id}
-                className={`settings__nav-item${
-                  !searching && tab === entry.id ? ' settings__nav-item--on' : ''
-                }`}
-                onClick={() => {
-                  setQuery('');
-                  setTab(entry.id);
-                  if (entry.id === 'components') void checkComponentStatus();
-                }}
-              >
-                {entry.icon}
-                <span className="settings__nav-label">{entry.label}</span>
-                {entry.badge}
-              </button>
+              <React.Fragment key={entry.id}>
+                {entry.id === 'advanced' && <div className="settings__nav-divider" role="separator" />}
+                <button
+                  role="tab"
+                  aria-selected={!searching && tab === entry.id}
+                  className={`settings__nav-item${
+                    !searching && tab === entry.id ? ' settings__nav-item--on' : ''
+                  }`}
+                  onClick={() => {
+                    setQuery('');
+                    setTab(entry.id);
+                    if (entry.id === 'components') void checkComponentStatus();
+                  }}
+                >
+                  {entry.icon}
+                  <span className="settings__nav-label">{entry.label}</span>
+                  {entry.badge}
+                </button>
+              </React.Fragment>
             ))}
           </div>
         </nav>
@@ -476,9 +478,9 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ initialTab }) => {
           <SearchX size={20} />
           <span>Nothing matches “{query.trim()}”.</span>
           {level === 'simple' ? (
-            <button type="button" className="btn btn-secondary btn-sm" onClick={() => changeLevel('everything')}>
+            <Button size="compact" onClick={() => changeLevel('everything')}>
               Search technical settings too
-            </button>
+            </Button>
           ) : null}
         </div>
       ) : null}
@@ -928,9 +930,9 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ initialTab }) => {
               label="Import an Android backup"
               hint="Reads a CloudStream Android .txt backup and restores watch history, bookmarks and settings from it. Existing entries with the same key are overwritten; device-specific values such as tokens and cache paths are skipped."
             >
-              <button onClick={handleImportBackup} className="btn btn-secondary">
+              <Button onClick={handleImportBackup}>
                 Choose file…
-              </button>
+              </Button>
             </SettingRow>
           </SettingGroup>
 
