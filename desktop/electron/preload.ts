@@ -1150,6 +1150,10 @@ export interface CloudStreamElectronAPI {
   closeFloatingPlayer: (opts?: { restoreMain?: boolean }) => Promise<Envelope>;
   setFloatingPlayerOnTop: (onTop: boolean) => Promise<Envelope & { alwaysOnTop: boolean }>;
   floatingPlayerReady: () => Promise<Envelope>;
+  getFloatingPlayerBounds: () => Promise<
+    Envelope & { bounds: { x: number; y: number; width: number; height: number } | null }
+  >;
+  setFloatingPlayerBounds: (bounds: { x: number; y: number; width: number; height: number }) => void;
   reportFloatingPlayerState: (state: FloatingPlayerStateSnapshot) => void;
   sendFloatingPlayerAction: (action: FloatingPlayerAction) => void;
   onFloatingPlayerPayload: (callback: (payload: FloatingPlayerPayload) => void) => () => void;
@@ -2440,6 +2444,8 @@ const api: CloudStreamElectronAPI = {
   closeFloatingPlayer: (opts) => ipcRenderer.invoke('floating:close', opts),
   setFloatingPlayerOnTop: (onTop) => ipcRenderer.invoke('floating:setOnTop', onTop),
   floatingPlayerReady: () => ipcRenderer.invoke('floating:ready'),
+  getFloatingPlayerBounds: () => ipcRenderer.invoke('floating:getBounds'),
+  setFloatingPlayerBounds: (bounds) => ipcRenderer.send('floating:setBounds', bounds),
   reportFloatingPlayerState: (state) => ipcRenderer.send('floating:reportState', state),
   sendFloatingPlayerAction: (action) => ipcRenderer.send('floating:action', action),
   onFloatingPlayerPayload: (callback) => subscribe('floating:payload', callback),

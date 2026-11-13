@@ -7146,6 +7146,12 @@
   user-select: none;
   outline: none;
   font-family: inherit;
+  cursor: grab;
+}
+
+.floating-player-win--dragging,
+.floating-player-win--dragging * {
+  cursor: grabbing !important;
 }
 
 .floating-player-win .player__video {
@@ -7196,8 +7202,7 @@
   height: 100%;
   display: flex;
   align-items: center;
-  -webkit-app-region: drag;
-  cursor: move;
+  cursor: inherit;
 }
 
 .floating-player-win__title {

@@ -50,7 +50,17 @@ export const FloatingPlayerWindow: React.FC = () => {
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const hlsRef = useRef<Hls | null>(null);
   const containerRef = useRef<HTMLDivElement | null>(null);
-  const pointerDownRef = useRef<{ x: number; y: number } | null>(null);
+  const pointerDownRef = useRef<{
+    pointerId: number;
+    startScreenX: number;
+    startScreenY: number;
+    startClientX: number;
+    startClientY: number;
+    startBounds: { x: number; y: number; width: number; height: number } | null;
+    dragging: boolean;
+    allowTap: boolean;
+  } | null>(null);
+  const [isDragging, setIsDragging] = useState(false);
   const clickTimerRef = useRef<number | null>(null);
   const osdTimerRef = useRef<number | null>(null);
   const hideControlsTimerRef = useRef<number | null>(null);
@@ -515,29 +525,87 @@ export const FloatingPlayerWindow: React.FC = () => {
     <div
       ref={containerRef}
       tabIndex={-1}
-      className={`floating-player-win${controlsVisible ? ' floating-player-win--controls' : ''}`}
+      className={
+        'floating-player-win' +
+        (controlsVisible ? ' floating-player-win--controls' : '') +
+        (isDragging ? ' floating-player-win--dragging' : '')
+      }
       style={subtitleVars}
       onMouseMove={revealControls}
       onMouseLeave={() => setControlsVisible(false)}
       onWheel={handleWheel}
       onPointerDown={(e) => {
-        pointerDownRef.current = { x: e.clientX, y: e.clientY };
         containerRef.current?.focus({ preventScroll: true });
+        if (e.button !== 0) return;
+        const target = e.target as HTMLElement | null;
+        if (target?.closest('button, input, .floating-player-win__bottom')) return;
+
+        const allowTap = !target?.closest('.floating-player-win__top');
+        const session = {
+          pointerId: e.pointerId,
+          startScreenX: e.screenX,
+          startScreenY: e.screenY,
+          startClientX: e.clientX,
+          startClientY: e.clientY,
+          startBounds: null as { x: number; y: number; width: number; height: number } | null,
+          dragging: false,
+          allowTap,
+        };
+        pointerDownRef.current = session;
+        e.currentTarget.setPointerCapture?.(e.pointerId);
+        void window.cloudstream?.getFloatingPlayerBounds?.().then((res) => {
+          if (pointerDownRef.current === session && res?.ok && res.bounds) {
+            session.startBounds = res.bounds;
+          }
+        });
+      }}
+      onPointerMove={(e) => {
+        const session = pointerDownRef.current;
+        if (!session || e.pointerId !== session.pointerId) return;
+        if (!session.dragging && !isPointerTap(session.startClientX, session.startClientY, e.clientX, e.clientY)) {
+          session.dragging = true;
+          setIsDragging(true);
+        }
+        if (session.dragging && session.startBounds) {
+          window.cloudstream?.setFloatingPlayerBounds?.({
+            x: session.startBounds.x + (e.screenX - session.startScreenX),
+            y: session.startBounds.y + (e.screenY - session.startScreenY),
+            width: session.startBounds.width,
+            height: session.startBounds.height,
+          });
+        }
       }}
       onPointerUp={(e) => {
-        const target = e.target as HTMLElement | null;
-        if (target?.closest('.floating-player-win__top, .floating-player-win__bottom')) return;
-        const down = pointerDownRef.current;
-        if (!down || !isPointerTap(down.x, down.y, e.clientX, e.clientY)) return;
-        if (e.button !== 0) return;
+        const session = pointerDownRef.current;
+        if (!session || e.pointerId !== session.pointerId) return;
+        pointerDownRef.current = null;
+        if (e.currentTarget.hasPointerCapture?.(e.pointerId)) {
+          e.currentTarget.releasePointerCapture?.(e.pointerId);
+        }
+        const wasDragging = session.dragging;
+        setIsDragging(false);
+        if (
+          wasDragging ||
+          !session.allowTap ||
+          e.button !== 0 ||
+          !isPointerTap(session.startClientX, session.startClientY, e.clientX, e.clientY)
+        ) {
+          return;
+        }
         if (clickTimerRef.current) window.clearTimeout(clickTimerRef.current);
         clickTimerRef.current = window.setTimeout(() => {
           togglePlay();
         }, 190);
       }}
+      onPointerCancel={(e) => {
+        if (pointerDownRef.current?.pointerId === e.pointerId) {
+          pointerDownRef.current = null;
+          setIsDragging(false);
+        }
+      }}
       onDoubleClick={(e) => {
         const target = e.target as HTMLElement | null;
-        if (target?.closest('.floating-player-win__top, .floating-player-win__bottom')) return;
+        if (target?.closest('button, input, .floating-player-win__top, .floating-player-win__bottom')) return;
         if (clickTimerRef.current) {
           window.clearTimeout(clickTimerRef.current);
           clickTimerRef.current = null;

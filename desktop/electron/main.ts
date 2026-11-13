@@ -4758,6 +4758,34 @@ ipcMain.handle('floating:ready', async () => {
   return { ok: true };
 });
 
+ipcMain.handle('floating:getBounds', async () => {
+  if (!floatingPlayerWindow || floatingPlayerWindow.isDestroyed()) {
+    return { ok: false, error: 'Floating player window is not open.', bounds: null };
+  }
+  return { ok: true, bounds: floatingPlayerWindow.getBounds() };
+});
+
+ipcMain.on('floating:setBounds', (_, bounds: Electron.Rectangle) => {
+  if (!floatingPlayerWindow || floatingPlayerWindow.isDestroyed()) return;
+  if (
+    !bounds ||
+    !Number.isFinite(bounds.x) ||
+    !Number.isFinite(bounds.y) ||
+    !Number.isFinite(bounds.width) ||
+    !Number.isFinite(bounds.height)
+  ) {
+    return;
+  }
+  const next = {
+    x: Math.round(bounds.x),
+    y: Math.round(bounds.y),
+    width: Math.max(280, Math.round(bounds.width)),
+    height: Math.max(158, Math.round(bounds.height)),
+  };
+  floatingPlayerWindow.setBounds(next);
+  floatingPlayerBounds = floatingPlayerWindow.getBounds();
+});
+
 ipcMain.on('floating:reportState', (_, state: FloatingPlayerStateSnapshot) => {
   floatingLastState = state;
   if (mainWindow && !mainWindow.isDestroyed()) {
