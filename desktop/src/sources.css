@@ -1223,6 +1223,12 @@
   z-index: 9000;
   cursor: grab;
   user-select: none;
+  outline: none;
+  transition: border-color 0.15s ease;
+}
+
+.player--mini:focus-within {
+  border-color: rgba(255, 255, 255, 0.34);
 }
 
 .player--mini.player--dragging {
@@ -7118,7 +7124,182 @@
   overflow: hidden;
 }
 .player__osd-level > span { display: block; height: 100%; background: #fff; }
-.player--mini .player__osd { display: none; }
+.player--mini .player__osd {
+  top: 36px;
+  padding: 0.24rem 0.6rem;
+  font-size: 0.74rem;
+  gap: 0.35rem;
+}
+
+.player--mini .player__osd-level {
+  width: 48px;
+}
+
+/* ---- detached Windows-level floating mini player --------------------------- */
+.floating-player-win {
+  position: fixed;
+  inset: 0;
+  width: 100vw;
+  height: 100vh;
+  background: #000;
+  overflow: hidden;
+  user-select: none;
+  outline: none;
+  font-family: inherit;
+}
+
+.floating-player-win .player__video {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  display: block;
+}
+
+.floating-player-win__top {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 32px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding-left: 10px;
+  background: linear-gradient(to bottom, rgba(0, 0, 0, 0.84) 0%, rgba(0, 0, 0, 0.35) 75%, transparent 100%);
+  opacity: 0;
+  transition: opacity 0.16s ease;
+  z-index: 6;
+}
+
+.floating-player-win__bottom {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  padding-top: 16px;
+  background: linear-gradient(to top, rgba(0, 0, 0, 0.88) 0%, rgba(0, 0, 0, 0.45) 72%, transparent 100%);
+  opacity: 0;
+  transition: opacity 0.16s ease;
+  z-index: 6;
+}
+
+.floating-player-win--controls .floating-player-win__top,
+.floating-player-win--controls .floating-player-win__bottom,
+.floating-player-win:hover .floating-player-win__top,
+.floating-player-win:hover .floating-player-win__bottom {
+  opacity: 1;
+}
+
+.floating-player-win__drag {
+  flex: 1;
+  min-width: 0;
+  height: 100%;
+  display: flex;
+  align-items: center;
+  -webkit-app-region: drag;
+  cursor: move;
+}
+
+.floating-player-win__title {
+  font-size: 0.74rem;
+  font-weight: 500;
+  color: rgba(255, 255, 255, 0.9);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.floating-player-win__top-actions {
+  display: flex;
+  align-items: center;
+  height: 100%;
+  -webkit-app-region: no-drag;
+}
+
+.floating-player-win__progress {
+  position: relative;
+  height: 3px;
+  background: rgba(255, 255, 255, 0.22);
+  margin: 0 8px;
+  border-radius: 2px;
+  transition: height 0.12s ease;
+}
+
+.floating-player-win__bottom:hover .floating-player-win__progress {
+  height: 5px;
+}
+
+.floating-player-win__progress input {
+  position: absolute;
+  inset: -6px 0;
+  width: 100%;
+  height: 15px;
+  margin: 0;
+  opacity: 0;
+  cursor: pointer;
+  z-index: 2;
+}
+
+.floating-player-win__controls {
+  display: flex;
+  align-items: center;
+  gap: 0.15rem;
+  padding: 0.25rem 0.5rem 0.35rem;
+}
+
+.floating-player-win__controls button {
+  display: grid;
+  place-items: center;
+  width: 26px;
+  height: 26px;
+  border: none;
+  border-radius: 5px;
+  background: transparent;
+  color: rgba(255, 255, 255, 0.9);
+  cursor: pointer;
+}
+
+.floating-player-win__controls button:hover {
+  background: rgba(255, 255, 255, 0.16);
+  color: #fff;
+}
+
+.floating-player-win__badge {
+  font-size: 0.68rem;
+  font-weight: 600;
+  color: rgba(255, 255, 255, 0.78);
+  padding: 0 0.3rem;
+}
+
+.floating-player-win__osd {
+  top: 38px;
+  padding: 0.24rem 0.6rem;
+  font-size: 0.74rem;
+}
+
+.floating-player-win__loading {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  pointer-events: none;
+  z-index: 4;
+}
+
+.floating-player-win__spinner {
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  border: 2px solid rgba(255, 255, 255, 0.22);
+  border-top-color: #fff;
+  animation: floating-spin 0.75s linear infinite;
+}
+
+@keyframes floating-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
 
 /* --- player copy menu -----------------------------------------------------
    One quiet affordance for everything technical. Seven copy buttons along the

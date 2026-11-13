@@ -43,6 +43,12 @@ import { appMayUse } from './security/permissions.ts';
 import { BackupService } from './cs3/backupService.ts';
 import { runReset, summarise, type ResetAreaDefinition } from './cs3/userDataReset.ts';
 import type { UserDataResetRequest } from '../src/types/userData';
+import type {
+  FloatingPlayerAction,
+  FloatingPlayerPayload,
+  FloatingPlayerStateSnapshot,
+} from '../src/types/player';
+import { computeFloatingWindowBounds } from '../src/components/player/miniPlayerModel.ts';
 import { createBackupSections } from './cs3/backupSections.ts';
 import type { RestorePlan } from '../src/types/backup.ts';
 import fs from 'fs';
@@ -1606,6 +1612,10 @@ function createWindow() {
   mainWindow.on('close', () => {
     if (boundsTimer) clearTimeout(boundsTimer);
     saveWindowBounds();
+    if (floatingPlayerWindow && !floatingPlayerWindow.isDestroyed()) {
+      floatingPlayerWindow.destroy();
+      floatingPlayerWindow = null;
+    }
   });
 
   Menu.setApplicationMenu(buildApplicationMenu());
@@ -4599,6 +4609,187 @@ ipcMain.handle('window:getAlwaysOnTop', async () => ({
   ok: true,
   alwaysOnTop: Boolean(mainWindow && !mainWindow.isDestroyed() && mainWindow.isAlwaysOnTop()),
 }));
+
+let floatingPlayerWindow: BrowserWindow | null = null;
+let floatingPlayerBounds: Electron.Rectangle | null = null;
+let floatingLastPayload: FloatingPlayerPayload | null = null;
+let floatingLastState: FloatingPlayerStateSnapshot | null = null;
+let floatingWindowReady = false;
+let pendingFloatingRestoreMain = false;
+
+function openOrUpdateFloatingPlayerWindow(payload: FloatingPlayerPayload): void {
+  floatingLastPayload = payload;
+  floatingLastState = {
+    currentTime: payload.currentTime,
+    duration: payload.duration,
+    paused: payload.paused,
+    volume: payload.volume,
+    muted: payload.muted,
+    speed: payload.speed,
+    ended: false,
+    activeSubtitleUrl: payload.activeSubtitleUrl,
+  };
+
+  if (floatingPlayerWindow && !floatingPlayerWindow.isDestroyed()) {
+    if (floatingWindowReady) {
+      floatingPlayerWindow.webContents.send('floating:payload', payload);
+    }
+    floatingPlayerWindow.show();
+    floatingPlayerWindow.focus();
+    return;
+  }
+
+  floatingWindowReady = false;
+  pendingFloatingRestoreMain = false;
+  const primaryWorkArea = screen.getPrimaryDisplay().workArea;
+  const bounds = computeFloatingWindowBounds(primaryWorkArea, floatingPlayerBounds);
+
+  const win = new BrowserWindow({
+    x: bounds.x,
+    y: bounds.y,
+    width: bounds.width,
+    height: bounds.height,
+    minWidth: 280,
+    minHeight: 158,
+    frame: false,
+    transparent: false,
+    backgroundColor: '#000000',
+    alwaysOnTop: true,
+    skipTaskbar: true,
+    resizable: true,
+    minimizable: false,
+    maximizable: false,
+    autoHideMenuBar: true,
+    show: false,
+    title: payload.title || APP_TITLE,
+    webPreferences: {
+      preload: path.join(__dirname, 'preload.cjs'),
+      contextIsolation: true,
+      nodeIntegration: false,
+      sandbox: true,
+      autoplayPolicy: 'no-user-gesture-required',
+    },
+  });
+
+  floatingPlayerWindow = win;
+  win.setAlwaysOnTop(true, 'floating');
+  win.setAspectRatio(16 / 9);
+  win.setMenuBarVisibility(false);
+
+  win.webContents.setWindowOpenHandler(({ url }) => {
+    if (/^https?:\/\//.test(url)) shell.openExternal(url);
+    return { action: 'deny' };
+  });
+
+  const rememberFloatingBounds = () => {
+    if (!win.isDestroyed()) floatingPlayerBounds = win.getBounds();
+  };
+  win.on('move', rememberFloatingBounds);
+  win.on('resize', rememberFloatingBounds);
+
+  win.once('ready-to-show', () => {
+    if (!win.isDestroyed()) {
+      win.show();
+      win.focus();
+    }
+  });
+
+  win.on('closed', () => {
+    const restoreMain = pendingFloatingRestoreMain;
+    const state = floatingLastState;
+    pendingFloatingRestoreMain = false;
+    floatingWindowReady = false;
+    if (floatingPlayerWindow === win) {
+      floatingPlayerWindow = null;
+    }
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.send('floating:closed', { restoreMain, state });
+    }
+  });
+
+  if (process.env.VITE_DEV_SERVER_URL) {
+    const devUrl = new URL(process.env.VITE_DEV_SERVER_URL);
+    devUrl.searchParams.set('floatingPlayer', '1');
+    void win.loadURL(devUrl.toString());
+  } else {
+    void win.loadFile(path.join(__dirname, '../dist/index.html'), {
+      search: 'floatingPlayer=1',
+    });
+  }
+}
+
+ipcMain.handle('floating:open', async (_, payload: FloatingPlayerPayload) => {
+  openOrUpdateFloatingPlayerWindow(payload);
+  return { ok: true };
+});
+
+ipcMain.handle('floating:update', async (_, payload: FloatingPlayerPayload) => {
+  floatingLastPayload = payload;
+  if (floatingPlayerWindow && !floatingPlayerWindow.isDestroyed() && floatingWindowReady) {
+    floatingPlayerWindow.webContents.send('floating:payload', payload);
+  }
+  return { ok: true };
+});
+
+ipcMain.handle('floating:close', async (_, opts?: { restoreMain?: boolean }) => {
+  pendingFloatingRestoreMain = Boolean(opts?.restoreMain);
+  if (floatingPlayerWindow && !floatingPlayerWindow.isDestroyed()) {
+    floatingPlayerWindow.close();
+  }
+  return { ok: true };
+});
+
+ipcMain.handle('floating:setOnTop', async (_, onTop: boolean) => {
+  if (!floatingPlayerWindow || floatingPlayerWindow.isDestroyed()) {
+    return { ok: false, error: 'Floating player window is not open.', alwaysOnTop: false };
+  }
+  floatingPlayerWindow.setAlwaysOnTop(onTop === true, 'floating');
+  const next = floatingPlayerWindow.isAlwaysOnTop();
+  floatingPlayerWindow.webContents.send('floating:onTopChanged', next);
+  return { ok: true, alwaysOnTop: next };
+});
+
+ipcMain.handle('floating:ready', async () => {
+  floatingWindowReady = true;
+  if (floatingPlayerWindow && !floatingPlayerWindow.isDestroyed() && floatingLastPayload) {
+    floatingPlayerWindow.webContents.send('floating:payload', floatingLastPayload);
+    floatingPlayerWindow.webContents.send('floating:onTopChanged', floatingPlayerWindow.isAlwaysOnTop());
+  }
+  return { ok: true };
+});
+
+ipcMain.on('floating:reportState', (_, state: FloatingPlayerStateSnapshot) => {
+  floatingLastState = state;
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    mainWindow.webContents.send('floating:state', state);
+  }
+});
+
+ipcMain.on('floating:action', (_, action: FloatingPlayerAction) => {
+  if (action === 'expand' || action === 'protect') {
+    pendingFloatingRestoreMain = action === 'expand';
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      if (mainWindow.isMinimized()) mainWindow.restore();
+      mainWindow.show();
+      mainWindow.focus();
+      mainWindow.webContents.send('floating:actionEvent', action);
+    }
+    if ((action === 'expand' || action === 'protect') && floatingPlayerWindow && !floatingPlayerWindow.isDestroyed()) {
+      floatingPlayerWindow.close();
+    }
+    return;
+  }
+  if (action === 'close') {
+    pendingFloatingRestoreMain = false;
+    if (floatingPlayerWindow && !floatingPlayerWindow.isDestroyed()) {
+      floatingPlayerWindow.close();
+    }
+    return;
+  }
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    mainWindow.webContents.send('floating:actionEvent', action);
+  }
+});
 
 /**
  * The one fullscreen: the window's.

@@ -1505,6 +1505,7 @@ export const App: React.FC = () => {
     // session owns its own stream, so it is ended explicitly instead.
     if (session) window.cloudstream?.stopPlayback(session.id, true);
     void window.cloudstream?.mpvStop?.();
+    void window.cloudstream?.closeFloatingPlayer?.({ restoreMain: false });
     setSession(null);
     setPreparing(null);
     setPlayback(null);
@@ -1531,6 +1532,16 @@ export const App: React.FC = () => {
     setPlayerMini(false);
     setPlayerHidden(false);
   };
+
+  /**
+   * Hides the in-app overlay completely while a Windows-level floating window
+   * owns playback, so the user never sees both a Windows floating window and
+   * an app-level `.player--mini` card at the same time.
+   */
+  const handleHideForFloating = useCallback(() => {
+    setPlayerMini(false);
+    setPlayerHidden(true);
+  }, []);
 
   /**
    * Steps out of the player without ending it.
@@ -2319,6 +2330,7 @@ export const App: React.FC = () => {
               mini={playerMini}
               onMinimize={handleMinimizePlayer}
               onExpand={handleExpandPlayer}
+              onHideForFloating={handleHideForFloating}
               onOpenDownloads={() => handleLeavePlayer('downloads')}
               series={session.context.series}
               progress={session.context.progress}
@@ -2395,6 +2407,7 @@ export const App: React.FC = () => {
               mini={playerMini}
               onMinimize={handleMinimizePlayer}
               onExpand={handleExpandPlayer}
+              onHideForFloating={handleHideForFloating}
               onOpenDownloads={() => handleLeavePlayer('downloads')}
               sourceSession={{
                 phase: 'searching',
@@ -2423,6 +2436,7 @@ export const App: React.FC = () => {
               mini={playerMini}
               onMinimize={handleMinimizePlayer}
               onExpand={handleExpandPlayer}
+              onHideForFloating={handleHideForFloating}
               onOpenDownloads={() => handleLeavePlayer('downloads')}
               series={playback.series}
               progress={playback.progress}
@@ -2504,7 +2518,7 @@ export const App: React.FC = () => {
             <MiniPlayerBar
               title={session?.context.title ?? playback?.title ?? preparing?.title ?? 'Playing'}
               episodeTitle={session?.context.episodeTitle ?? playback?.episodeTitle}
-              onReturn={() => setPlayerHidden(false)}
+              onReturn={handleExpandPlayer}
               onStop={handleClosePlayer}
             />
           )}

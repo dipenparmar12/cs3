@@ -21,6 +21,12 @@ import type {
   ProfileDraft,
   UserProfilesState,
 } from '../src/types/profiles';
+import type {
+  FloatingPlayerAction,
+  FloatingPlayerClosedEvent,
+  FloatingPlayerPayload,
+  FloatingPlayerStateSnapshot,
+} from '../src/types/player';
 
 /**
  * The whole profile picture, answered by every profile call.
@@ -1139,6 +1145,18 @@ export interface CloudStreamElectronAPI {
    */
   setWindowAlwaysOnTop: (onTop: boolean) => Promise<Envelope & { alwaysOnTop: boolean }>;
   getWindowAlwaysOnTop: () => Promise<Envelope & { alwaysOnTop: boolean }>;
+  openFloatingPlayer: (payload: FloatingPlayerPayload) => Promise<Envelope>;
+  updateFloatingPlayer: (payload: FloatingPlayerPayload) => Promise<Envelope>;
+  closeFloatingPlayer: (opts?: { restoreMain?: boolean }) => Promise<Envelope>;
+  setFloatingPlayerOnTop: (onTop: boolean) => Promise<Envelope & { alwaysOnTop: boolean }>;
+  floatingPlayerReady: () => Promise<Envelope>;
+  reportFloatingPlayerState: (state: FloatingPlayerStateSnapshot) => void;
+  sendFloatingPlayerAction: (action: FloatingPlayerAction) => void;
+  onFloatingPlayerPayload: (callback: (payload: FloatingPlayerPayload) => void) => () => void;
+  onFloatingPlayerState: (callback: (state: FloatingPlayerStateSnapshot) => void) => () => void;
+  onFloatingPlayerClosed: (callback: (event: FloatingPlayerClosedEvent) => void) => () => void;
+  onFloatingPlayerAction: (callback: (action: FloatingPlayerAction) => void) => () => void;
+  onFloatingPlayerOnTopChanged: (callback: (onTop: boolean) => void) => () => void;
   /**
    * The window's fullscreen — the only fullscreen the app has. The player
    * drives this rather than the HTML Fullscreen API so the two never stack;
@@ -2417,6 +2435,18 @@ const api: CloudStreamElectronAPI = {
   onPlayerPreferencesChanged: (callback) => subscribe('player:preferencesChanged', callback),
   setWindowAlwaysOnTop: (onTop) => ipcRenderer.invoke('window:setAlwaysOnTop', onTop),
   getWindowAlwaysOnTop: () => ipcRenderer.invoke('window:getAlwaysOnTop'),
+  openFloatingPlayer: (payload) => ipcRenderer.invoke('floating:open', payload),
+  updateFloatingPlayer: (payload) => ipcRenderer.invoke('floating:update', payload),
+  closeFloatingPlayer: (opts) => ipcRenderer.invoke('floating:close', opts),
+  setFloatingPlayerOnTop: (onTop) => ipcRenderer.invoke('floating:setOnTop', onTop),
+  floatingPlayerReady: () => ipcRenderer.invoke('floating:ready'),
+  reportFloatingPlayerState: (state) => ipcRenderer.send('floating:reportState', state),
+  sendFloatingPlayerAction: (action) => ipcRenderer.send('floating:action', action),
+  onFloatingPlayerPayload: (callback) => subscribe('floating:payload', callback),
+  onFloatingPlayerState: (callback) => subscribe('floating:state', callback),
+  onFloatingPlayerClosed: (callback) => subscribe('floating:closed', callback),
+  onFloatingPlayerAction: (callback) => subscribe('floating:actionEvent', callback),
+  onFloatingPlayerOnTopChanged: (callback) => subscribe('floating:onTopChanged', callback),
   setWindowFullScreen: (fullScreen) => ipcRenderer.invoke('window:setFullScreen', fullScreen),
   getWindowFullScreen: () => ipcRenderer.invoke('window:getFullScreen'),
   onWindowFullScreenChanged: (callback) => subscribe('window:fullScreenChanged', callback),

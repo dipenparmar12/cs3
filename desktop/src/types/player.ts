@@ -117,3 +117,58 @@ export interface ResumeTarget {
     indexerName?: string;
   };
 }
+
+export interface FloatingPlayerSubtitle {
+  name: string;
+  url: string;
+}
+
+export interface FloatingPlayerPayload {
+  /** Prepared loopback playback URL (without `?t=` — `currentTime` drives start offset). */
+  playbackUrl: string;
+  /** Transport strategy so the floating window attaches `<video>`, `hls.js`, or `shaka` properly. */
+  strategy: 'DIRECT' | 'HLS_NATIVE' | 'DASH_NATIVE' | 'FULL_TRANSCODE' | 'COPY_VIDEO';
+  /** ClearKey DRM keys if any (only when applicable). */
+  clearKeys?: Record<string, string>;
+  /** Conversion streams restart from `?t=floor(currentTime)` via `MediaTranscoder`. */
+  isConverted: boolean;
+  title: string;
+  episodeTitle?: string;
+  provider?: string;
+  currentTime: number;
+  duration: number;
+  paused: boolean;
+  volume: number;
+  muted: boolean;
+  speed: number;
+  aspect: string;
+  wheelAction: WheelAction;
+  subtitles: FloatingPlayerSubtitle[];
+  activeSubtitleUrl: string | null;
+  subtitleScale: number;
+  subtitleColor: string;
+  subtitleBackground: 'none' | 'shadow' | 'outline' | 'box';
+  subtitleWeight: 'normal' | 'bold';
+  subtitlePosition: number;
+  hasNextEpisode: boolean;
+  hasPrevEpisode: boolean;
+}
+
+export interface FloatingPlayerStateSnapshot {
+  currentTime: number;
+  duration: number;
+  paused: boolean;
+  volume: number;
+  muted: boolean;
+  speed: number;
+  ended: boolean;
+  activeSubtitleUrl: string | null;
+}
+
+export type FloatingPlayerAction = 'expand' | 'close' | 'next' | 'prev' | 'protect';
+
+export interface FloatingPlayerClosedEvent {
+  restoreMain: boolean;
+  state: FloatingPlayerStateSnapshot | null;
+}
+
