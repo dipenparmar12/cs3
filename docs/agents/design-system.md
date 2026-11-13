@@ -120,3 +120,14 @@ Still to migrate — each is a bounded follow-up, listed so nobody re-audits:
 **Not verified in a running Electron app** (it cannot launch in the cloud container). Checked:
 `tsc -b`, oxlint, the test suites, and static renders of the components with the real
 stylesheets in headless Chromium.
+
+## 5. Enterprise UI & UX Standard (2026-11)
+
+- **Content before controls:** Primary information (titles, media identity, progress, exceptions) leads every card and row. Normal states remain visually quiet; signal by exception.
+- **Surface, spacing, typography, elevation, and motion tokens** (`src/index.css :root`):
+  - Surfaces: `--surface-base` (`--bg-dark`), `--surface-sunken` (`--bg-sidebar`), `--surface-raised` (`--bg-card`), `--surface-hover`, `--surface-overlay`, `--surface-subtle`.
+  - Borders: `--border-subtle`, `--border-default` (`--border-color`), `--border-strong`.
+  - Typography scale: `--text-xs` (`0.72rem`), `--text-sm` (`0.78rem`), `--text-base` (`0.85rem`), `--text-md` (`0.94rem`), `--text-lg` (`1.1rem`), `--text-xl` (`1.35rem`).
+  - Spacing scale: `--space-1` (`0.25rem`) through `--space-6` (`1.5rem`).
+  - Elevation & motion: `--shadow-sm`, `--shadow-md`, `--shadow-lg`, `--duration-fast` (`120ms`), `--duration-normal` (`180ms`), `--ease-standard`.
+- **Card readability rule:** `SearchView`'s virtual grid relies on `POSTER_INFO_HEIGHT = 72` (`searchVirtualGrid.ts`). Any card carrying extra metadata or inline controls (such as Library cards via `.library-card .poster-info`) must opt into `height: auto; min-height: 72px; overflow: visible;` instead of clipping inside 72px, and must not stack overlapping badges in the same poster corner.
