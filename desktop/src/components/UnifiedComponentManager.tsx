@@ -18,6 +18,28 @@ import {
 } from 'lucide-react';
 import { InfoHint } from './settings/InfoHint';
 import type { SystemRuntimeStatus, RuntimeProgress } from '../../electron/cs3/runtimeProvisioner';
+import type { ManagedToolName, ToolOrigin, ToolResolution } from '../../electron/platform/toolResolver';
+
+function originLabel(origin: ToolOrigin | undefined): string {
+  switch (origin) {
+    case 'system':
+      return 'System Native';
+    case 'bundled':
+      return 'Included with app';
+    case 'toolchain':
+      return 'Dev Toolchain';
+    case 'app-managed':
+      return 'App Managed';
+    default:
+      return 'Not Installed';
+  }
+}
+
+function formatBinaryDetail(res: ToolResolution | undefined, fallbackInstalled: boolean): string {
+  if (!res) return fallbackInstalled ? 'Ready' : 'Not Installed';
+  if (res.origin === 'missing' || !res.path) return 'Not Installed';
+  return `${originLabel(res.origin)} (${res.path})`;
+}
 
 export interface ComponentSuiteState {
   runtime: SystemRuntimeStatus | null;
@@ -26,6 +48,9 @@ export interface ComponentSuiteState {
     ytdlp: boolean;
     ffmpeg: boolean;
     ffprobe: boolean;
+    mpv?: boolean;
+    bundled?: { ffmpeg: boolean; ffprobe: boolean; mpv: boolean };
+    origins?: Record<ManagedToolName, ToolResolution>;
   } | null;
   tests: {
     runtime?: { ok: boolean; version?: string; error?: string };
@@ -57,6 +82,8 @@ export const UnifiedComponentManager: React.FC = () => {
 
   const [busyMap, setBusyMap] = useState<Record<string, boolean>>({});
   const [openDisclosures, setOpenDisclosures] = useState<Record<string, boolean>>({});
+  const [preferBundled, setPreferBundled] = useState(false);
+  const [envOverride, setEnvOverride] = useState(false);
   const { message: statusMessage, flash: setStatusMessage } = useFlash<string>(4000);
 
   const flash = (msg: string) => {
@@ -65,9 +92,10 @@ export const UnifiedComponentManager: React.FC = () => {
 
   const refreshStatus = useCallback(async () => {
     try {
-      const [runtimeRes, binariesRes] = await Promise.all([
+      const [runtimeRes, binariesRes, prefRes] = await Promise.all([
         window.cloudstream?.getSystemRuntimeStatus?.(),
         window.cloudstream?.checkBinaries?.(),
+        window.cloudstream?.getRuntimeResolutionPreference?.(),
       ]);
 
       setSuiteState((prev) => ({
@@ -75,10 +103,32 @@ export const UnifiedComponentManager: React.FC = () => {
         runtime: (runtimeRes as unknown as SystemRuntimeStatus) || null,
         binaries: binariesRes || null,
       }));
+      if (prefRes?.ok) {
+        setPreferBundled(Boolean(prefRes.preferBundled));
+        setEnvOverride(Boolean(prefRes.envOverride));
+      }
     } catch (err) {
       console.warn('Failed to refresh component status:', err);
     }
   }, []);
+
+  const handleTogglePreferBundled = async (next: boolean) => {
+    try {
+      const res = await window.cloudstream?.setRuntimeResolutionPreference?.(next);
+      if (res?.ok) {
+        setPreferBundled(Boolean(res.preferBundled));
+        setEnvOverride(Boolean(res.envOverride));
+        flash(
+          next
+            ? 'Using bundled runtimes ahead of system tools.'
+            : 'Using compatible system-native tools first.'
+        );
+        await refreshStatus();
+      }
+    } catch (err: any) {
+      flash('Could not update runtime preference: ' + (err?.message || 'Error'));
+    }
+  };
 
   useEffect(() => {
     void refreshStatus();
@@ -286,6 +336,19 @@ export const UnifiedComponentManager: React.FC = () => {
   const isDownloadsReady = Boolean(suiteState.binaries?.aria2 && suiteState.binaries?.ytdlp);
   const isMediaReady = Boolean(suiteState.binaries?.ffmpeg && suiteState.binaries?.ffprobe);
 
+  const origins = suiteState.binaries?.origins;
+  const runtimeIsSystemJava = suiteState.runtime?.javaOrigin === 'system';
+  const downloadsAllSystem =
+    origins?.aria2c?.origin === 'system' && origins?.['yt-dlp']?.origin === 'system';
+  const mediaAllSystem =
+    origins?.ffmpeg?.origin === 'system' && origins?.ffprobe?.origin === 'system';
+  const mediaAllBundled =
+    origins?.ffmpeg?.origin === 'bundled' && origins?.ffprobe?.origin === 'bundled';
+  const downloadsHasAppManaged =
+    origins?.aria2c?.origin === 'app-managed' || origins?.['yt-dlp']?.origin === 'app-managed';
+  const mediaHasAppManaged =
+    origins?.ffmpeg?.origin === 'app-managed' || origins?.ffprobe?.origin === 'app-managed';
+
   const readyCount = (isRuntimeReady ? 1 : 0) + (isDownloadsReady ? 1 : 0) + (isMediaReady ? 1 : 0);
   const totalCount = 3;
   const anyMissing = readyCount < totalCount;
@@ -316,12 +379,12 @@ export const UnifiedComponentManager: React.FC = () => {
               <h3 style={{ margin: 0, fontSize: '1.15rem', fontWeight: 600 }}>
                 {anyMissing
                   ? `${totalCount - readyCount} part${totalCount - readyCount > 1 ? 's' : ''} of the app need setting up`
-                  : 'Everything the app needs is installed'}
+                  : 'Everything the app needs is ready'}
               </h3>
               <InfoHint label="About these components">
-                The extension engine (Java), the download accelerators and the audio and video
-                converter all live inside the app&apos;s own storage. Installing or repairing them
-                changes nothing else on this computer.
+                CloudStream uses compatible Java, FFmpeg and helper tools already installed on your
+                system first without creating duplicates. Missing components fall back to bundled
+                copies or are downloaded into the app&apos;s own storage without modifying your system.
               </InfoHint>
             </div>
           </div>
@@ -459,7 +522,7 @@ export const UnifiedComponentManager: React.FC = () => {
           <div>
             {isRuntimeReady ? (
               <span style={{ display: 'inline-flex', alignItems: 'center', gap: '0.35rem', color: '#10b981', fontSize: '0.85rem', fontWeight: 600 }}>
-                <CheckCircle2 size={15} /> Ready
+                <CheckCircle2 size={15} /> {runtimeIsSystemJava ? 'System Native' : suiteState.runtime?.javaOrigin === 'bundled' ? 'Included' : 'Ready'}
               </span>
             ) : (
               <span style={{ display: 'inline-flex', alignItems: 'center', gap: '0.35rem', color: '#f59e0b', fontSize: '0.85rem', fontWeight: 600 }}>
@@ -535,10 +598,21 @@ export const UnifiedComponentManager: React.FC = () => {
 
         {openDisclosures.runtime && (
           <div style={{ marginTop: '0.75rem', padding: '0.75rem', background: 'rgba(0, 0, 0, 0.25)', borderRadius: '6px', fontSize: '0.8rem', display: 'flex', flexDirection: 'column', gap: '0.35rem' }}>
-            <div>Java 21 Binary: <strong>{suiteState.runtime?.javaReady ? suiteState.runtime.javaVersion ?? 'Present' : 'Not Detected'}</strong></div>
+            <div>
+              Java 21 Binary:{' '}
+              <strong>
+                {suiteState.runtime?.javaReady
+                  ? `${suiteState.runtime.javaVersion ?? 'Present'} — ${originLabel(suiteState.runtime.javaOrigin)}${suiteState.runtime.javaPath ? ` (${suiteState.runtime.javaPath})` : ''}`
+                  : 'Not Detected'}
+              </strong>
+            </div>
+            {suiteState.runtime?.skippedSystemJavaReason && (
+              <div style={{ color: 'rgba(255, 255, 255, 0.65)' }}>
+                Skipped system Java: {suiteState.runtime.skippedSystemJavaReason}
+              </div>
+            )}
             <div>Extension Compatibility Layer: <strong>{suiteState.runtime?.sidecarReady ? 'Ready (cs3-sidecar.jar)' : 'Not Provisioned'}</strong></div>
             <div>CloudStream Provider Bridge: <strong>{suiteState.runtime?.bridgeReady ? 'Ready (library-jvm 4.8.0)' : 'Not Provisioned'}</strong></div>
-            <div>Managed Environment: <strong>{suiteState.runtime?.isAppManaged ? 'Application Managed (%APPDATA%)' : 'Bundled / Local'}</strong></div>
           </div>
         )}
       </div>
@@ -579,7 +653,7 @@ export const UnifiedComponentManager: React.FC = () => {
           <div>
             {isDownloadsReady ? (
               <span style={{ display: 'inline-flex', alignItems: 'center', gap: '0.35rem', color: '#10b981', fontSize: '0.85rem', fontWeight: 600 }}>
-                <CheckCircle2 size={15} /> Ready
+                <CheckCircle2 size={15} /> {downloadsAllSystem ? 'System Native' : 'Ready'}
               </span>
             ) : (
               <span style={{ display: 'inline-flex', alignItems: 'center', gap: '0.35rem', color: '#f59e0b', fontSize: '0.85rem', fontWeight: 600 }}>
@@ -635,15 +709,17 @@ export const UnifiedComponentManager: React.FC = () => {
               <span>{isDownloadsReady ? 'Reinstall' : 'Install Engines'}</span>
             </button>
 
-            <button
-              className="btn btn-secondary"
-              onClick={() => handleRemoveComponent('downloads')}
-              disabled={busyMap.downloads}
-              title="Remove aria2c and yt-dlp"
-            >
-              <Trash2 size={13} />
-              <span>Remove</span>
-            </button>
+            {downloadsHasAppManaged && (
+              <button
+                className="btn btn-secondary"
+                onClick={() => handleRemoveComponent('downloads')}
+                disabled={busyMap.downloads}
+                title="Remove app-managed copies of aria2c and yt-dlp"
+              >
+                <Trash2 size={13} />
+                <span>Remove</span>
+              </button>
+            )}
           </div>
 
           <button
@@ -659,8 +735,14 @@ export const UnifiedComponentManager: React.FC = () => {
 
         {openDisclosures.downloads && (
           <div style={{ marginTop: '0.75rem', padding: '0.75rem', background: 'rgba(0, 0, 0, 0.25)', borderRadius: '6px', fontSize: '0.8rem', display: 'flex', flexDirection: 'column', gap: '0.35rem' }}>
-            <div>aria2c binary: <strong>{suiteState.binaries?.aria2 ? 'Installed (%USERPROFILE%\\AppData\\...\\bin\\aria2c.exe)' : 'Not Installed'}</strong></div>
-            <div>yt-dlp binary: <strong>{suiteState.binaries?.ytdlp ? 'Installed (%USERPROFILE%\\AppData\\...\\bin\\yt-dlp.exe)' : 'Not Installed'}</strong></div>
+            <div>aria2c: <strong>{formatBinaryDetail(origins?.aria2c, Boolean(suiteState.binaries?.aria2))}</strong></div>
+            {origins?.aria2c?.skippedSystemReason && (
+              <div style={{ color: 'rgba(255, 255, 255, 0.65)' }}>Skipped system aria2c: {origins.aria2c.skippedSystemReason}</div>
+            )}
+            <div>yt-dlp: <strong>{formatBinaryDetail(origins?.['yt-dlp'], Boolean(suiteState.binaries?.ytdlp))}</strong></div>
+            {origins?.['yt-dlp']?.skippedSystemReason && (
+              <div style={{ color: 'rgba(255, 255, 255, 0.65)' }}>Skipped system yt-dlp: {origins['yt-dlp'].skippedSystemReason}</div>
+            )}
           </div>
         )}
       </div>
@@ -702,7 +784,7 @@ export const UnifiedComponentManager: React.FC = () => {
           <div>
             {isMediaReady ? (
               <span style={{ display: 'inline-flex', alignItems: 'center', gap: '0.35rem', color: '#10b981', fontSize: '0.85rem', fontWeight: 600 }}>
-                <CheckCircle2 size={15} /> Ready
+                <CheckCircle2 size={15} /> {mediaAllSystem ? 'System Native' : mediaAllBundled ? 'Included' : 'Ready'}
               </span>
             ) : (
               <span style={{ display: 'inline-flex', alignItems: 'center', gap: '0.35rem', color: '#f59e0b', fontSize: '0.85rem', fontWeight: 600 }}>
@@ -758,15 +840,17 @@ export const UnifiedComponentManager: React.FC = () => {
               <span>{isMediaReady ? 'Reinstall' : 'Install Components'}</span>
             </button>
 
-            <button
-              className="btn btn-secondary"
-              onClick={() => handleRemoveComponent('media')}
-              disabled={busyMap.media}
-              title="Remove ffmpeg and ffprobe"
-            >
-              <Trash2 size={13} />
-              <span>Remove</span>
-            </button>
+            {mediaHasAppManaged && (
+              <button
+                className="btn btn-secondary"
+                onClick={() => handleRemoveComponent('media')}
+                disabled={busyMap.media}
+                title="Remove app-managed copies of ffmpeg and ffprobe"
+              >
+                <Trash2 size={13} />
+                <span>Remove</span>
+              </button>
+            )}
           </div>
 
           <button
@@ -782,10 +866,52 @@ export const UnifiedComponentManager: React.FC = () => {
 
         {openDisclosures.media && (
           <div style={{ marginTop: '0.75rem', padding: '0.75rem', background: 'rgba(0, 0, 0, 0.25)', borderRadius: '6px', fontSize: '0.8rem', display: 'flex', flexDirection: 'column', gap: '0.35rem' }}>
-            <div>ffmpeg: <strong>{suiteState.binaries?.ffmpeg ? 'Installed (%USERPROFILE%\\AppData\\...\\bin\\ffmpeg.exe)' : 'Not Installed'}</strong></div>
-            <div>ffprobe: <strong>{suiteState.binaries?.ffprobe ? 'Installed (%USERPROFILE%\\AppData\\...\\bin\\ffprobe.exe)' : 'Not Installed'}</strong></div>
+            <div>ffmpeg: <strong>{formatBinaryDetail(origins?.ffmpeg, Boolean(suiteState.binaries?.ffmpeg))}</strong></div>
+            {origins?.ffmpeg?.skippedSystemReason && (
+              <div style={{ color: 'rgba(255, 255, 255, 0.65)' }}>Skipped system ffmpeg: {origins.ffmpeg.skippedSystemReason}</div>
+            )}
+            <div>ffprobe: <strong>{formatBinaryDetail(origins?.ffprobe, Boolean(suiteState.binaries?.ffprobe))}</strong></div>
+            {origins?.ffprobe?.skippedSystemReason && (
+              <div style={{ color: 'rgba(255, 255, 255, 0.65)' }}>Skipped system ffprobe: {origins.ffprobe.skippedSystemReason}</div>
+            )}
+            {origins?.mpv && (
+              <div>mpv (native player): <strong>{formatBinaryDetail(origins.mpv, Boolean(suiteState.binaries?.mpv))}</strong></div>
+            )}
           </div>
         )}
+      </div>
+
+      {/* Quiet Runtime Resolution Preference (PRD-57) */}
+      <div
+        className="settings-card"
+        style={{
+          border: '1px solid rgba(255, 255, 255, 0.08)',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'space-between',
+          gap: '1rem',
+        }}
+      >
+        <div>
+          <div style={{ fontSize: '0.9rem', fontWeight: 600 }}>
+            Prefer bundled runtimes over system tools
+          </div>
+          <div style={{ fontSize: '0.8rem', color: 'rgba(255, 255, 255, 0.6)', marginTop: '0.2rem' }}>
+            {envOverride
+              ? 'Controlled by CS3_PREFER_BUNDLED in the environment.'
+              : 'By default, CloudStream uses compatible system-wide Java, FFmpeg and helper tools first without duplicating them. Enable this only to troubleshoot a broken system install.'}
+          </div>
+        </div>
+        <label style={{ display: 'inline-flex', alignItems: 'center', cursor: envOverride ? 'not-allowed' : 'pointer', flexShrink: 0 }}>
+          <input
+            type="checkbox"
+            checked={preferBundled || envOverride}
+            disabled={envOverride || isAnyBusy}
+            onChange={(e) => void handleTogglePreferBundled(e.target.checked)}
+            aria-label="Prefer bundled runtimes over system tools"
+            style={{ width: '1rem', height: '1rem', accentColor: '#3b82f6' }}
+          />
+        </label>
       </div>
     </div>
   );

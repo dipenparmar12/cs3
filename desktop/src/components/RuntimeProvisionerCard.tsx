@@ -94,7 +94,11 @@ export const RuntimeProvisionerCard: React.FC = () => {
       <div style={{ background: 'rgba(255, 255, 255, 0.03)', borderRadius: '8px', padding: '0.85rem 1rem', marginBottom: '1rem', display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: '0.875rem' }}>
           <span>Java 21 Execution Engine:</span>
-          <strong>{status?.javaReady ? status.javaVersion ?? 'Java 21 Ready' : 'Not Provisioned'}</strong>
+          <strong>
+            {status?.javaReady
+              ? `${status.javaVersion ?? 'Java 21'}${status.javaOrigin === 'system' ? ' (System Native)' : status.javaOrigin === 'bundled' ? ' (Included)' : ''}`
+              : 'Not Provisioned'}
+          </strong>
         </div>
 
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: '0.875rem' }}>
@@ -108,9 +112,24 @@ export const RuntimeProvisionerCard: React.FC = () => {
         </div>
 
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: '0.875rem' }}>
-          <span>Runtime Environment:</span>
-          <strong>{status?.isAppManaged ? 'Application Managed (%APPDATA%)' : 'Bundled / Local'}</strong>
+          <span>Java Environment:</span>
+          <strong>
+            {status?.javaOrigin === 'system'
+              ? 'System Native (JAVA_HOME / PATH)'
+              : status?.javaOrigin === 'bundled'
+                ? 'Included with app'
+                : status?.javaOrigin === 'toolchain'
+                  ? 'Local Dev Toolchain'
+                  : status?.isAppManaged
+                    ? 'Application Managed (%APPDATA%)'
+                    : 'Not Detected'}
+          </strong>
         </div>
+        {status?.skippedSystemJavaReason && (
+          <div style={{ fontSize: '0.78rem', color: 'var(--text-muted, rgba(255,255,255,0.6))' }}>
+            Note: {status.skippedSystemJavaReason}
+          </div>
+        )}
       </div>
 
       {isBusy && progress && (
