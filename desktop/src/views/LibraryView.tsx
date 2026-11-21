@@ -88,6 +88,21 @@ const BUCKETS: Array<{ status: WatchStatus; label: string }> = BUCKET_ORDER.map(
   label: BUCKET_LABELS[status],
 }));
 
+/**
+ * Resolves an addressable URL for a shelf entry.
+ *
+ * Entries collapse every provider URL seen for a title. If `entry.urls` is
+ * empty (e.g. non-reopenable links handle), fall back to known source addresses,
+ * or construct a synthetic library URI (`cs3ext://<Provider>/<Title>`) so the
+ * card click never fails silently.
+ */
+function resolveEntryUrl(entry: LibraryEntry): string {
+  if (entry.urls?.[0]) return entry.urls[0];
+  if (entry.sourceAddresses?.[0]) return entry.sourceAddresses[0];
+  const provider = entry.metadata?.provider ?? 'Library';
+  return `cs3ext://${encodeURIComponent(provider)}/${encodeURIComponent(entry.key || entry.title)}`;
+}
+
 /** What a shelf entry is found by: the names it goes by and what it is. */
 const entryMatches = (entry: LibraryEntry, query: string) =>
   matchesScreenQuery(query, [
@@ -330,8 +345,7 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
     (document.activeElement as HTMLElement)?.blur();
     // Entries collapse every provider URL seen for a title. The first is the one
     // it was originally added from, which is the most likely to still resolve.
-    const url = entry.urls[0];
-    if (!url) return;
+    const url = resolveEntryUrl(entry);
     onSelectMedia({
       name: entry.title,
       url,
@@ -352,8 +366,7 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
   const playEntry = (entry: LibraryEntry, e?: React.MouseEvent) => {
     e?.stopPropagation();
     (document.activeElement as HTMLElement)?.blur();
-    const url = entry.urls[0];
-    if (!url) return;
+    const url = resolveEntryUrl(entry);
     if (!onResume) {
       openEntry(entry);
       return;
@@ -517,7 +530,7 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
         />
       ) : (
         <>
-      <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap', alignItems: 'center' }}>
+      <div className="library-buckets">
         {BUCKETS.map(({ status, label }) => (
           <button
             key={status}
@@ -533,7 +546,7 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
             size="compact"
             variant="ambient"
             icon={CheckSquare}
-            style={{ marginLeft: 'auto' }}
+            className="library-buckets__select"
             onClick={selection.enter}
             title="Select titles to remove or move"
           >
@@ -573,13 +586,13 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
         </SelectionToolbar>
       )}
       {!selection.active && bulkStatus && (
-        <p role="status" style={{ margin: 0, color: 'var(--text-muted)', fontSize: '0.8rem' }}>
+        <p role="status" className="library-status-note">
           {bulkStatus}
         </p>
       )}
 
       {loading ? (
-        <p style={{ color: 'var(--text-muted)', fontSize: '0.85rem' }}>Loading…</p>
+        <p className="library-loading">Loading…</p>
       ) : searching && entries.length === 0 ? (
         <ScreenSearchNoMatches
           query={query}
@@ -629,7 +642,7 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
             return (
               <div
                 key={entry.key}
-                className={`poster-card${cardState.visited ? ' poster-card--visited' : ''}${
+                className={`poster-card library-card${cardState.visited ? ' poster-card--visited' : ''}${
                   selection.active ? ' is-selectable' : ''
                 }${selected ? ' is-selected' : ''}`}
               >
@@ -716,22 +729,24 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
                 </div>
 
                 <div className="poster-info">
-                  <h4 className="poster-title" title={entry.title} onClick={(e) => openEntry(entry, e)}>
-                    {entry.title}
-                  </h4>
-                  <div className="poster-meta">
-                    {entry.year && <span>{entry.year}</span>}
-                    {entry.userRating != null && (
-                      <span>
-                        <Star size={11} /> {entry.userRating}
-                      </span>
+                  <div className="library-card__identity">
+                    <h4 className="poster-title" title={entry.title} onClick={(e) => openEntry(entry, e)}>
+                      {entry.title}
+                    </h4>
+                    <div className="poster-meta">
+                      {entry.year && <span>{entry.year}</span>}
+                      {entry.userRating != null && (
+                        <span>
+                          <Star size={11} /> {entry.userRating}
+                        </span>
+                      )}
+                    </div>
+                    {watched && (
+                      <div className="poster-resume">
+                        <Clock size={11} /> {watched}
+                      </div>
                     )}
                   </div>
-                  {watched && (
-                    <div className="poster-resume">
-                      <Clock size={11} /> {watched}
-                    </div>
-                  )}
 
                   <div className="library-card__actions">
                     <Select
@@ -743,17 +758,16 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
                       options={BUCKETS.map(({ status, label }) => ({ value: status, label }))}
                     />
 
-                    <button
-                      className="icon-button"
+                    <Button
+                      variant="ambient"
+                      size="compact"
+                      icon={RotateCw}
+                      iconOnly
+                      loading={refreshingKey === entry.key}
                       onClick={(e) => handleRefreshSources(entry, e)}
                       aria-label={`Refresh sources for ${entry.title}`}
                       title="Refresh sources from enabled providers"
-                      disabled={refreshingKey === entry.key}
-                      style={{ color: '#60a5fa' }}
-                    >
-                      <RotateCw size={13} className={refreshingKey === entry.key ? 'animate-spin' : ''} />
-                    </button>
-
+                    />
                   </div>
                 </div>
               </div>

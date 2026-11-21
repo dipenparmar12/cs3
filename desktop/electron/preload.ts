@@ -14,6 +14,7 @@ import type {
 import type { OttPlatformView } from './cs3/ottPlatforms';
 import type { AppUpdateState } from './appUpdate/appUpdateService';
 import type { PlaybackTelemetryRecord, TelemetrySummary } from './media/playbackTelemetry';
+import type { ManagedToolName, ToolOrigin, ToolResolution } from './platform/toolResolver.ts';
 import type { ProfileState, SourceProfile } from './cs3/sourceProfiles.ts';
 import type {
   ProfileActionResult,
@@ -21,6 +22,12 @@ import type {
   ProfileDraft,
   UserProfilesState,
 } from '../src/types/profiles';
+import type {
+  FloatingPlayerAction,
+  FloatingPlayerClosedEvent,
+  FloatingPlayerPayload,
+  FloatingPlayerStateSnapshot,
+} from '../src/types/player';
 
 /**
  * The whole profile picture, answered by every profile call.
@@ -313,6 +320,8 @@ export interface CloudStreamElectronAPI {
   clearExtendedMetadata: () => Promise<Envelope & { cleared: number }>;
   /** Searches public repositories (YouTube) keylessly for trailers and promos of any content. */
   findTrailers: (title: string, year?: number) => Promise<Envelope & { videos: TitleVideo[] }>;
+  /** Discovers open trailers, teasers, and clips for any search query across public sources. */
+  searchTrailers: (query: string, options?: { maxResults?: number }) => Promise<Envelope & { videos: TitleVideo[] }>;
   /** Discovers on-demand reviews, explanations, recaps, and related media from public sources. */
   /** Everything else a person or studio made — see `metadata/filmography.ts`. */
   getFilmography: (request: FilmographyRequest) => Promise<Envelope & { filmography: Filmography | null }>;
@@ -1102,6 +1111,8 @@ export interface CloudStreamElectronAPI {
         backgroundPlayback: 'continue' | 'audio-only' | 'pause';
         /** Pin the app above other windows while a floating player is showing. */
         alwaysOnTop: boolean;
+        /** Mouse wheel scroll action in player: 'volume' (default) or 'seek' (timeline). */
+        wheelAction?: 'volume' | 'seek';
       };
     }
   >;
@@ -1119,6 +1130,7 @@ export interface CloudStreamElectronAPI {
     floatingMode?: 'mini' | 'floating' | 'pip' | 'background';
     backgroundPlayback?: 'continue' | 'audio-only' | 'pause';
     alwaysOnTop?: boolean;
+    wheelAction?: 'volume' | 'seek';
   }) => Promise<Envelope>;
   onPlayerPreferencesChanged: (
     callback: (preferences: StoredPlayerPreferences) => void
@@ -1134,6 +1146,22 @@ export interface CloudStreamElectronAPI {
    */
   setWindowAlwaysOnTop: (onTop: boolean) => Promise<Envelope & { alwaysOnTop: boolean }>;
   getWindowAlwaysOnTop: () => Promise<Envelope & { alwaysOnTop: boolean }>;
+  openFloatingPlayer: (payload: FloatingPlayerPayload) => Promise<Envelope>;
+  updateFloatingPlayer: (payload: FloatingPlayerPayload) => Promise<Envelope>;
+  closeFloatingPlayer: (opts?: { restoreMain?: boolean }) => Promise<Envelope>;
+  setFloatingPlayerOnTop: (onTop: boolean) => Promise<Envelope & { alwaysOnTop: boolean }>;
+  floatingPlayerReady: () => Promise<Envelope>;
+  getFloatingPlayerBounds: () => Promise<
+    Envelope & { bounds: { x: number; y: number; width: number; height: number } | null }
+  >;
+  setFloatingPlayerBounds: (bounds: { x: number; y: number; width: number; height: number }) => void;
+  reportFloatingPlayerState: (state: FloatingPlayerStateSnapshot) => void;
+  sendFloatingPlayerAction: (action: FloatingPlayerAction) => void;
+  onFloatingPlayerPayload: (callback: (payload: FloatingPlayerPayload) => void) => () => void;
+  onFloatingPlayerState: (callback: (state: FloatingPlayerStateSnapshot) => void) => () => void;
+  onFloatingPlayerClosed: (callback: (event: FloatingPlayerClosedEvent) => void) => () => void;
+  onFloatingPlayerAction: (callback: (action: FloatingPlayerAction) => void) => () => void;
+  onFloatingPlayerOnTopChanged: (callback: (onTop: boolean) => void) => () => void;
   /**
    * The window's fullscreen — the only fullscreen the app has. The player
    * drives this rather than the HTML Fullscreen API so the two never stack;
@@ -1230,6 +1258,8 @@ export interface CloudStreamElectronAPI {
     mpv: boolean;
     /** Which of these shipped with the app rather than being downloaded. */
     bundled: { ffmpeg: boolean; ffprobe: boolean; mpv: boolean };
+    /** Per-tool origin, resolved path, version, and skipped-system diagnostics (PRD-57). */
+    origins?: Record<ManagedToolName, ToolResolution>;
   }>;
   testAllBinaries: () => Promise<{
     aria2: { ok: boolean; version?: string; path?: string; error?: string };
@@ -1254,12 +1284,17 @@ export interface CloudStreamElectronAPI {
 
   // Plug-and-Play Runtime Provisioner
   getSystemRuntimeStatus: () => Promise<Envelope & SystemRuntimeStatus>;
+  getRuntimeResolutionPreference: () => Promise<Envelope & { preferBundled: boolean; envOverride: boolean }>;
+  setRuntimeResolutionPreference: (
+    preferBundled: boolean
+  ) => Promise<Envelope & { preferBundled: boolean; envOverride: boolean }>;
   provisionSystemRuntime: () => Promise<Envelope & { ready: boolean }>;
   repairSystemRuntime: () => Promise<Envelope & { ready: boolean }>;
   testSystemRuntime: () => Promise<{
     ok: boolean;
     version?: string;
     javaPath?: string;
+    javaOrigin?: ToolOrigin;
     sidecarPath?: string;
     runtimeDir?: string;
     error?: string;
@@ -2187,6 +2222,7 @@ const api: CloudStreamElectronAPI = {
   forgetProviderAttempt: (title, year, provider) => ipcRenderer.invoke('interactions:forgetAttempt', title, year, provider),
   clearExtendedMetadata: () => ipcRenderer.invoke('metadata:clearCache'),
   findTrailers: (title, year) => ipcRenderer.invoke('metadata:findTrailers', title, year),
+  searchTrailers: (query, options) => ipcRenderer.invoke('metadata:searchTrailers', query, options),
   findRelatedMedia: (request) => ipcRenderer.invoke('metadata:findRelatedMedia', request),
   forgetRelatedMedia: (request) => ipcRenderer.invoke('metadata:forgetRelatedMedia', request),
   getFilmography: (request) => ipcRenderer.invoke('metadata:filmography', request),
@@ -2411,6 +2447,20 @@ const api: CloudStreamElectronAPI = {
   onPlayerPreferencesChanged: (callback) => subscribe('player:preferencesChanged', callback),
   setWindowAlwaysOnTop: (onTop) => ipcRenderer.invoke('window:setAlwaysOnTop', onTop),
   getWindowAlwaysOnTop: () => ipcRenderer.invoke('window:getAlwaysOnTop'),
+  openFloatingPlayer: (payload) => ipcRenderer.invoke('floating:open', payload),
+  updateFloatingPlayer: (payload) => ipcRenderer.invoke('floating:update', payload),
+  closeFloatingPlayer: (opts) => ipcRenderer.invoke('floating:close', opts),
+  setFloatingPlayerOnTop: (onTop) => ipcRenderer.invoke('floating:setOnTop', onTop),
+  floatingPlayerReady: () => ipcRenderer.invoke('floating:ready'),
+  getFloatingPlayerBounds: () => ipcRenderer.invoke('floating:getBounds'),
+  setFloatingPlayerBounds: (bounds) => ipcRenderer.send('floating:setBounds', bounds),
+  reportFloatingPlayerState: (state) => ipcRenderer.send('floating:reportState', state),
+  sendFloatingPlayerAction: (action) => ipcRenderer.send('floating:action', action),
+  onFloatingPlayerPayload: (callback) => subscribe('floating:payload', callback),
+  onFloatingPlayerState: (callback) => subscribe('floating:state', callback),
+  onFloatingPlayerClosed: (callback) => subscribe('floating:closed', callback),
+  onFloatingPlayerAction: (callback) => subscribe('floating:actionEvent', callback),
+  onFloatingPlayerOnTopChanged: (callback) => subscribe('floating:onTopChanged', callback),
   setWindowFullScreen: (fullScreen) => ipcRenderer.invoke('window:setFullScreen', fullScreen),
   getWindowFullScreen: () => ipcRenderer.invoke('window:getFullScreen'),
   onWindowFullScreenChanged: (callback) => subscribe('window:fullScreenChanged', callback),
@@ -2465,6 +2515,9 @@ const api: CloudStreamElectronAPI = {
 
   // Plug-and-Play Runtime Provisioner
   getSystemRuntimeStatus: () => ipcRenderer.invoke('runtime:getStatus'),
+  getRuntimeResolutionPreference: () => ipcRenderer.invoke('runtime:getPreference'),
+  setRuntimeResolutionPreference: (preferBundled) =>
+    ipcRenderer.invoke('runtime:setPreference', preferBundled),
   provisionSystemRuntime: () => ipcRenderer.invoke('runtime:provision'),
   repairSystemRuntime: () => ipcRenderer.invoke('runtime:repair'),
   testSystemRuntime: () => ipcRenderer.invoke('runtime:test'),

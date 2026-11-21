@@ -8,13 +8,15 @@ import {
   CheckCircle2,
   Download,
   RotateCcw,
-  Minus,
-  Plus,
   Star,
   Sliders,
   ChevronDown,
   ChevronUp,
   Subtitles,
+  AlignLeft,
+  AlignCenter,
+  AlignRight,
+  Move,
 } from 'lucide-react';
 import type { SavedSubtitle } from '../../../electron/subtitles/subtitleLibrary';
 import type { SubtitleFindResult, SubtitleSearchResult } from '../../../electron/subtitleService';
@@ -22,11 +24,17 @@ import {
   DEFAULT_SUBTITLE_STYLE,
   SUBTITLE_BACKGROUNDS,
   SUBTITLE_COLORS,
+  SUBTITLE_LINE_HEIGHTS,
+  SUBTITLE_PRESETS,
   SUBTITLE_SCALES,
+  isAssSubtitleTrack,
+  isBitmapSubtitleTrack,
   subtitleCssVariables,
   type SubtitleBackground,
+  type SubtitleHorizontalAlign,
   type SubtitleStyle,
 } from '../../utils/subtitleStyle';
+import { SubtitleSyncSlider } from './SubtitleSyncSlider';
 import { getLanguageFlag, getLanguageName } from '../../utils/languageFlag';
 import { describeError } from '../../utils/errors';
 import { FlagIcon } from '../FlagIcon';
@@ -80,6 +88,12 @@ interface SubtitlePanelProps {
   onDelayChange: (seconds: number) => void;
   /** The playing source's release name; ranks the subtitle timed to it first. */
   releaseName?: string;
+  /** Current video playback position in seconds (used for audio-cue bookmark calibration). */
+  currentTime?: number;
+  /** Active cue start time in seconds if available. */
+  activeCueStartTime?: number;
+  /** Live callback when appearance or position changes so VideoPlayer updates immediately. */
+  onStyleChange?: (next: SubtitleStyle) => void;
 }
 
 /** Languages offered as one-press filters before a search has returned any. */
@@ -127,6 +141,9 @@ export const SubtitlePanel: React.FC<SubtitlePanelProps> = ({
   delay,
   onDelayChange,
   releaseName,
+  currentTime,
+  activeCueStartTime,
+  onStyleChange,
 }) => {
   const [results, setResults] = useState<SubtitleSearchResult[]>([]);
   const [loading, setLoading] = useState(false);
@@ -194,9 +211,15 @@ export const SubtitlePanel: React.FC<SubtitlePanelProps> = ({
   );
   const [applying, setApplying] = useState<string | null>(null);
 
-  // In-player subtitle style configuration & compact language selector state
-  const [showConfig, setShowConfig] = useState(false);
+  // In-player subtitle panel section tabs & advanced appearance disclosure
+  type PanelTab = 'tracks' | 'sync' | 'position' | 'appearance';
+  const [panelTab, setPanelTab] = useState<PanelTab>('tracks');
+  const [advancedAppearanceOpen, setAdvancedAppearanceOpen] = useState(false);
   const [langMenuOpen, setLangMenuOpen] = useState(false);
+
+  const activeTrackName = embedded.find((s) => s.url === activeUrl)?.name;
+  const isBitmapTrack = isBitmapSubtitleTrack(activeTrackName);
+  const isAssTrack = isAssSubtitleTrack(activeTrackName);
   /**
    * The languages of the regions the viewer picked (PRD-54), which order the
    * language list: English, then these, then the rest. Asked when the panel
@@ -261,6 +284,7 @@ export const SubtitlePanel: React.FC<SubtitlePanelProps> = ({
   const updateStyle = (patch: Partial<SubtitleStyle>) => {
     const next = { ...style, ...patch };
     setStyle(next);
+    onStyleChange?.(next);
     void window.cloudstream?.setPlayerPreferences({
       subtitleScale: next.scale,
       subtitleColor: next.color,
@@ -504,14 +528,14 @@ export const SubtitlePanel: React.FC<SubtitlePanelProps> = ({
         <div className="player-panel__head-actions">
           <button
             type="button"
-            className={`icon-button subtitle-panel__config-btn${showConfig ? ' active' : ''}`}
+            className={`icon-button subtitle-panel__config-btn${panelTab === 'appearance' ? ' active' : ''}`}
             onClick={(e) => {
               e.stopPropagation();
-              setShowConfig((v) => !v);
+              setPanelTab((prev) => (prev === 'appearance' ? 'tracks' : 'appearance'));
             }}
             onPointerDown={(e) => e.stopPropagation()}
             onMouseDown={(e) => e.stopPropagation()}
-            title={showConfig ? 'Hide subtitle appearance settings' : 'Subtitle style & appearance settings'}
+            title={panelTab === 'appearance' ? 'Back to tracks' : 'Subtitle style & appearance settings'}
             aria-label="Subtitle appearance settings"
           >
             <Sliders size={18} />
@@ -532,50 +556,187 @@ export const SubtitlePanel: React.FC<SubtitlePanelProps> = ({
         </div>
       </header>
 
-      {/* In-player Subtitle Appearance Settings Drawer */}
-      {showConfig && (
+      <div className="subtitle-panel__tabs" role="tablist" aria-label="Subtitle sections">
+        {([
+          { id: 'tracks', label: 'Tracks' },
+          { id: 'sync', label: delay !== 0 ? `Sync (${delay > 0 ? '+' : ''}${Math.round(delay * 1000)}ms)` : 'Sync' },
+          { id: 'position', label: 'Position' },
+          { id: 'appearance', label: 'Appearance' },
+        ] as const).map((t) => (
+          <button
+            key={t.id}
+            type="button"
+            role="tab"
+            aria-selected={panelTab === t.id}
+            className={`subtitle-panel__tab${panelTab === t.id ? ' subtitle-panel__tab--on' : ''}`}
+            onClick={() => setPanelTab(t.id)}
+          >
+            {t.label}
+          </button>
+        ))}
+      </div>
+
+      {panelTab === 'sync' && (
+        <div className="subtitle-panel__section" role="tabpanel" aria-label="Subtitle timing synchronisation">
+          <SubtitleSyncSlider
+            delay={delay}
+            onDelayChange={onDelayChange}
+            currentTime={currentTime}
+            activeCueStartTime={activeCueStartTime}
+          />
+        </div>
+      )}
+
+      {panelTab === 'position' && (
+        <div className="subtitle-panel__section" role="tabpanel" aria-label="Subtitle positioning">
+          {isBitmapTrack && (
+            <div className="subtitle-panel__capability-note" role="status">
+              <AlertTriangle size={14} aria-hidden />
+              <span>Bitmap subtitle (PGS / VOBSUB): appearance &amp; free positioning are locked.</span>
+            </div>
+          )}
+          {!isBitmapTrack && isAssTrack && (
+            <div className="subtitle-panel__capability-note" role="status">
+              <span>ASS/SSA track: embedded script coordinates may take precedence.</span>
+            </div>
+          )}
+
+          <div className="subtitle-panel__config-row subtitle-panel__config-row-stacked">
+            <div className="subtitle-panel__config-label-row">
+              <span>Horizontal alignment</span>
+              <span className="subtitle-panel__config-val">
+                {(style.horizontalAlign ?? 'center').replace(/^./, (c) => c.toUpperCase())}
+              </span>
+            </div>
+            <div className="sub-choices" role="group" aria-label="Horizontal alignment">
+              {([
+                { value: 'left', label: 'Left', Icon: AlignLeft },
+                { value: 'center', label: 'Center', Icon: AlignCenter },
+                { value: 'right', label: 'Right', Icon: AlignRight },
+              ] as const).map(({ value, label, Icon }) => (
+                <button
+                  key={value}
+                  type="button"
+                  disabled={isBitmapTrack}
+                  className={`sub-choice${(style.horizontalAlign ?? 'center') === value ? ' sub-choice--on' : ''}`}
+                  aria-pressed={(style.horizontalAlign ?? 'center') === value}
+                  onClick={() =>
+                    updateStyle({
+                      horizontalAlign: value as SubtitleHorizontalAlign,
+                      positionX: value === 'left' ? 0.1 : value === 'right' ? 0.9 : 0.5,
+                    })
+                  }
+                >
+                  <Icon size={13} aria-hidden /> {label}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          <div className="subtitle-panel__config-row subtitle-panel__config-row-stacked">
+            <div className="subtitle-panel__config-label-row">
+              <span>Vertical lift</span>
+              <span className="subtitle-panel__config-val">
+                {style.position === 0 ? 'Bottom default (0%)' : `${style.position}% up`}
+              </span>
+            </div>
+            <input
+              type="range"
+              min={0}
+              max={90}
+              step={2}
+              disabled={isBitmapTrack}
+              value={style.position}
+              onChange={(e) => updateStyle({ position: Number(e.target.value) })}
+              className="subtitle-panel__range"
+              aria-label="Vertical subtitle position"
+            />
+          </div>
+
+          <div className="subtitle-panel__drag-hint">
+            <Move size={13} aria-hidden />
+            <span>Tip: Hold on the subtitle text over the video for 2 seconds to drag it freely.</span>
+          </div>
+
+          <div className="subtitle-panel__config-footer">
+            <button
+              type="button"
+              className="sub-choice"
+              disabled={isBitmapTrack}
+              onClick={() => updateStyle({ position: 0, horizontalAlign: 'center', positionX: 0.5 })}
+            >
+              Reset position
+            </button>
+          </div>
+        </div>
+      )}
+
+      {panelTab === 'appearance' && (
         <div
           className="subtitle-panel__config-panel"
-          role="region"
+          role="tabpanel"
           aria-label="Subtitle appearance settings"
           onPointerDown={(e) => e.stopPropagation()}
           onMouseDown={(e) => e.stopPropagation()}
         >
-          <div className="subtitle-panel__config-header">
-            <span className="subtitle-panel__config-title">Subtitle Appearance</span>
-            <button
-              type="button"
-              className="subtitle-panel__config-close"
-              onClick={(e) => {
-                e.stopPropagation();
-                setShowConfig(false);
-              }}
-              onPointerDown={(e) => e.stopPropagation()}
-              onMouseDown={(e) => e.stopPropagation()}
-              aria-label="Close subtitle settings"
-            >
-              <X size={14} />
-            </button>
+          {isBitmapTrack && (
+            <div className="subtitle-panel__capability-note" role="status">
+              <AlertTriangle size={14} aria-hidden />
+              <span>Bitmap subtitle (PGS / VOBSUB): styling overrides are disabled.</span>
+            </div>
+          )}
+
+          {/* Presets */}
+          <div className="subtitle-panel__config-row subtitle-panel__config-row-stacked">
+            <div className="subtitle-panel__config-label-row">
+              <span>Quick presets</span>
+            </div>
+            <div className="sub-presets">
+              {SUBTITLE_PRESETS.map((preset) => {
+                const active =
+                  preset.patch.color?.toLowerCase() === style.color.toLowerCase() &&
+                  preset.patch.background === style.background &&
+                  (preset.patch.weight ?? style.weight) === style.weight;
+                return (
+                  <button
+                    key={preset.id}
+                    type="button"
+                    disabled={isBitmapTrack}
+                    className={`sub-preset${active ? ' sub-preset--on' : ''}`}
+                    title={preset.description}
+                    onClick={() => updateStyle(preset.patch)}
+                  >
+                    <span className="sub-preset__name">{preset.label}</span>
+                  </button>
+                );
+              })}
+            </div>
           </div>
 
-          {/* Live Preview */}
-          <div className="sub-preview" style={subtitleCssVariables(style) as React.CSSProperties}>
+          {/* Live WYSIWYG Preview against split dark/light checkerboard */}
+          <div
+            className="sub-preview sub-preview--split"
+            style={subtitleCssVariables(style) as React.CSSProperties}
+          >
             <span className="sub-preview__cue">
-              They're not going to make it. We should go back.
+              The quick brown fox jumps over the lazy dog.
+              <br />
+              Synchronized at 23.976 fps.
             </span>
           </div>
 
-          {/* Size */}
+          {/* Font Scale */}
           <div className="subtitle-panel__config-row subtitle-panel__config-row-stacked">
             <div className="subtitle-panel__config-label-row">
-              <span>Size</span>
-              <span className="subtitle-panel__config-val">{Math.round(style.scale * 100)}%</span>
+              <span>Text size</span>
+              <span className="subtitle-panel__config-val">{style.scale.toFixed(2).replace(/\.?0+$/, '')}x</span>
             </div>
             <input
               type="range"
-              min={0.5}
-              max={2.5}
+              min={0.75}
+              max={2.0}
               step={0.05}
+              disabled={isBitmapTrack}
               value={style.scale}
               onChange={(e) => updateStyle({ scale: Number(e.target.value) })}
               className="subtitle-panel__range"
@@ -586,6 +747,7 @@ export const SubtitlePanel: React.FC<SubtitlePanelProps> = ({
                 <button
                   key={scale}
                   type="button"
+                  disabled={isBitmapTrack}
                   className={`sub-chip${Math.abs(style.scale - scale) < 0.01 ? ' sub-chip--on' : ''}`}
                   onClick={() => updateStyle({ scale })}
                 >
@@ -595,91 +757,137 @@ export const SubtitlePanel: React.FC<SubtitlePanelProps> = ({
             </div>
           </div>
 
-          {/* Colour */}
-          <div className="subtitle-panel__config-row subtitle-panel__config-row-stacked">
-            <div className="subtitle-panel__config-label-row">
-              <span>Colour</span>
-              <span className="subtitle-panel__config-val">
-                {SUBTITLE_COLORS.find((c) => c.value.toLowerCase() === style.color.toLowerCase())?.label ?? style.color}
-              </span>
-            </div>
-            <div className="sub-choices">
-              {SUBTITLE_COLORS.map((option) => (
-                <button
-                  key={option.value}
-                  type="button"
-                  className={`sub-swatch${style.color.toLowerCase() === option.value.toLowerCase() ? ' sub-swatch--on' : ''}`}
-                  style={{ background: option.value }}
-                  title={option.label}
-                  aria-label={option.label}
-                  aria-pressed={style.color.toLowerCase() === option.value.toLowerCase()}
-                  onClick={() => updateStyle({ color: option.value })}
-                />
-              ))}
-            </div>
-          </div>
+          <button
+            type="button"
+            className="sub-sync__cal-toggle"
+            aria-expanded={advancedAppearanceOpen}
+            onClick={() => setAdvancedAppearanceOpen((v) => !v)}
+          >
+            {advancedAppearanceOpen ? <ChevronUp size={13} aria-hidden /> : <ChevronDown size={13} aria-hidden />}
+            <span>Advanced appearance options</span>
+          </button>
 
-          {/* Background */}
-          <div className="subtitle-panel__config-row subtitle-panel__config-row-stacked">
-            <div className="subtitle-panel__config-label-row">
-              <span>Background</span>
-              <span className="subtitle-panel__config-val">
-                {SUBTITLE_BACKGROUNDS.find((b) => b.value === style.background)?.label}
-              </span>
-            </div>
-            <div className="sub-choices">
-              {SUBTITLE_BACKGROUNDS.map((option) => (
-                <button
-                  key={option.value}
-                  type="button"
-                  className={`sub-choice${style.background === option.value ? ' sub-choice--on' : ''}`}
-                  title={option.hint}
-                  onClick={() => updateStyle({ background: option.value as SubtitleBackground })}
-                >
-                  {option.label}
-                </button>
-              ))}
-            </div>
-          </div>
+          {advancedAppearanceOpen && (
+            <div className="sub-advanced">
+              {/* Colour */}
+              <div className="subtitle-panel__config-row subtitle-panel__config-row-stacked">
+                <div className="subtitle-panel__config-label-row">
+                  <span>Text colour</span>
+                  <span className="subtitle-panel__config-val">
+                    {SUBTITLE_COLORS.find((c) => c.value.toLowerCase() === style.color.toLowerCase())?.label ?? style.color}
+                  </span>
+                </div>
+                <div className="sub-choices">
+                  {SUBTITLE_COLORS.map((option) => (
+                    <button
+                      key={option.value}
+                      type="button"
+                      disabled={isBitmapTrack}
+                      className={`sub-swatch${style.color.toLowerCase() === option.value.toLowerCase() ? ' sub-swatch--on' : ''}`}
+                      style={{ background: option.value }}
+                      title={option.label}
+                      aria-label={option.label}
+                      aria-pressed={style.color.toLowerCase() === option.value.toLowerCase()}
+                      onClick={() => updateStyle({ color: option.value })}
+                    />
+                  ))}
+                  <input
+                    type="color"
+                    disabled={isBitmapTrack}
+                    value={style.color}
+                    onChange={(e) => updateStyle({ color: e.target.value })}
+                    aria-label="Custom subtitle text colour"
+                    className="sub-color-input"
+                  />
+                </div>
+              </div>
 
-          {/* Bold weight */}
-          <div className="subtitle-panel__config-row">
-            <span>Bold text</span>
-            <label className="toggle">
-              <input
-                type="checkbox"
-                checked={style.weight === 'bold'}
-                onChange={(e) => updateStyle({ weight: e.target.checked ? 'bold' : 'normal' })}
-              />
-              <span>{style.weight === 'bold' ? 'On' : 'Off'}</span>
-            </label>
-          </div>
+              {/* Background */}
+              <div className="subtitle-panel__config-row subtitle-panel__config-row-stacked">
+                <div className="subtitle-panel__config-label-row">
+                  <span>Background mode</span>
+                  <span className="subtitle-panel__config-val">
+                    {SUBTITLE_BACKGROUNDS.find((b) => b.value === style.background)?.label}
+                  </span>
+                </div>
+                <div className="sub-choices">
+                  {SUBTITLE_BACKGROUNDS.map((option) => (
+                    <button
+                      key={option.value}
+                      type="button"
+                      disabled={isBitmapTrack}
+                      className={`sub-choice${style.background === option.value ? ' sub-choice--on' : ''}`}
+                      title={option.hint}
+                      onClick={() => updateStyle({ background: option.value as SubtitleBackground })}
+                    >
+                      {option.label}
+                    </button>
+                  ))}
+                </div>
+              </div>
 
-          {/* Vertical Lift / Position */}
-          <div className="subtitle-panel__config-row subtitle-panel__config-row-stacked">
-            <div className="subtitle-panel__config-label-row">
-              <span>Raise from bottom</span>
-              <span className="subtitle-panel__config-val">
-                {style.position === 0 ? 'Default position' : `${style.position}% up`}
-              </span>
+              {style.background === 'box' && (
+                <div className="subtitle-panel__config-row subtitle-panel__config-row-stacked">
+                  <div className="subtitle-panel__config-label-row">
+                    <span>Box opacity</span>
+                    <span className="subtitle-panel__config-val">{Math.round((style.boxOpacity ?? 0.75) * 100)}%</span>
+                  </div>
+                  <input
+                    type="range"
+                    min={0}
+                    max={1}
+                    step={0.05}
+                    disabled={isBitmapTrack}
+                    value={style.boxOpacity ?? 0.75}
+                    onChange={(e) => updateStyle({ boxOpacity: Number(e.target.value) })}
+                    className="subtitle-panel__range"
+                    aria-label="Box background opacity"
+                  />
+                </div>
+              )}
+
+              {/* Line spacing */}
+              <div className="subtitle-panel__config-row subtitle-panel__config-row-stacked">
+                <div className="subtitle-panel__config-label-row">
+                  <span>Line spacing</span>
+                </div>
+                <div className="sub-choices">
+                  {SUBTITLE_LINE_HEIGHTS.map((opt) => (
+                    <button
+                      key={opt.value}
+                      type="button"
+                      disabled={isBitmapTrack}
+                      className={`sub-choice${Math.abs((style.lineHeight ?? 1.3) - opt.value) < 0.05 ? ' sub-choice--on' : ''}`}
+                      onClick={() => updateStyle({ lineHeight: opt.value })}
+                    >
+                      {opt.label}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              {/* Bold weight */}
+              <div className="subtitle-panel__config-row">
+                <span>Bold text</span>
+                <label className="toggle">
+                  <input
+                    type="checkbox"
+                    disabled={isBitmapTrack}
+                    checked={style.weight === 'bold'}
+                    onChange={(e) => updateStyle({ weight: e.target.checked ? 'bold' : 'normal' })}
+                  />
+                  <span>{style.weight === 'bold' ? 'On' : 'Off'}</span>
+                </label>
+              </div>
             </div>
-            <input
-              type="range"
-              min={0}
-              max={40}
-              step={5}
-              value={style.position}
-              onChange={(e) => updateStyle({ position: Number(e.target.value) })}
-              className="subtitle-panel__range"
-              aria-label="Raise from bottom"
-            />
-          </div>
+          )}
 
           {/* Reset */}
           <div className="subtitle-panel__config-footer">
             <button
               type="button"
               className="sub-choice"
+              disabled={isBitmapTrack}
               onClick={() => updateStyle(DEFAULT_SUBTITLE_STYLE)}
             >
               Reset appearance
@@ -687,6 +895,9 @@ export const SubtitlePanel: React.FC<SubtitlePanelProps> = ({
           </div>
         </div>
       )}
+
+      {panelTab === 'tracks' && (
+      <>
 
       {/* What this video already has — the choice made most often — before searching. */}
       <div className="player-panel__sub-heading subtitle-panel__current-heading">On this video</div>
@@ -976,34 +1187,25 @@ export const SubtitlePanel: React.FC<SubtitlePanelProps> = ({
         </div>
       )}
 
-      <div className="subtitle-panel__sync" aria-label="Subtitle timing">
-        <span>Timing</span>
-        <button
-          className="icon-button"
-          onClick={() => onDelayChange(Math.round((delay - 0.25) * 100) / 100)}
-          aria-label="Show subtitles earlier"
-          title="Earlier by 0.25s"
-        >
-          <Minus size={14} />
-        </button>
-        <output>
-          {delay > 0 ? '+' : ''}
-          {delay.toFixed(2)}s
-        </output>
-        <button
-          className="icon-button"
-          onClick={() => onDelayChange(Math.round((delay + 0.25) * 100) / 100)}
-          aria-label="Show subtitles later"
-          title="Later by 0.25s"
-        >
-          <Plus size={14} />
-        </button>
-        {delay !== 0 && (
-          <button className="subtitle-panel__sync-reset" onClick={() => onDelayChange(0)}>
+      {delay !== 0 && (
+        <div className="subtitle-panel__sync" aria-label="Subtitle timing">
+          <span>Timing</span>
+          <output>
+            {delay > 0 ? '+' : ''}
+            {Math.round(delay * 1000)} ms
+          </output>
+          <button
+            type="button"
+            className="subtitle-panel__sync-reset"
+            onClick={() => setPanelTab('sync')}
+          >
+            Adjust
+          </button>
+          <button type="button" className="subtitle-panel__sync-reset" onClick={() => onDelayChange(0)}>
             Reset
           </button>
-        )}
-      </div>
+        </div>
+      )}
 
       {saved.length > 0 && (
         <div className="player-panel__sub-group">
@@ -1142,6 +1344,8 @@ export const SubtitlePanel: React.FC<SubtitlePanelProps> = ({
           </div>
         );
       })}
+      </>
+      )}
     </aside>
   );
 };

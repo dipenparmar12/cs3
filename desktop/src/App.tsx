@@ -90,6 +90,10 @@ const FilmographyDialog = lazy(() =>
 const PeopleResults = lazy(() =>
   import('./components/search/PeopleResults').then((m) => ({ default: m.PeopleResults }))
 );
+/** A search for trailers and clips only: discovers promotional videos across public platforms. */
+const TrailerResults = lazy(() =>
+  import('./components/search/TrailerResults').then((m) => ({ default: m.TrailerResults }))
+);
 const TrailerPopup = lazy(() =>
   import('./components/detail/TrailerPopup').then((m) => ({ default: m.TrailerPopup }))
 );
@@ -471,6 +475,8 @@ export const App: React.FC = () => {
   const [openEntity, setOpenEntity] = useState<{ entity: EntitySuggestion; categories: SearchCategory[] } | null>(null);
   /** The last search was for people or studios only (no Titles chip): shown by PeopleResults, not SearchView. */
   const [peopleSearch, setPeopleSearch] = useState<{ query: string; categories: SearchCategory[] } | null>(null);
+  /** The last search was for trailers only (Trailers chip): shown by TrailerResults, not SearchView. */
+  const [trailerSearch, setTrailerSearch] = useState<{ query: string; categories: SearchCategory[] } | null>(null);
   /** Which Settings pane to open on, when something deep-links into it. */
   const [settingsTab, setSettingsTab] = useState<'general' | 'about'>('general');
   /** Which Extensions tab opens next — Updates when the update notice is followed. */
@@ -1106,6 +1112,7 @@ export const App: React.FC = () => {
     }
     lastQuery.current = { query, options };
     setPeopleSearch(null);
+    setTrailerSearch(null);
     setSavedView(null);
     setSearchQuery(query);
     setSearch(null); // Instantly clear old search results
@@ -1160,6 +1167,7 @@ export const App: React.FC = () => {
     setSearchError(null);
     setSearchUi(EMPTY_SEARCH_UI);
     setPeopleSearch(null);
+    setTrailerSearch(null);
   }, [search]);
 
   /** Enter with only people or studio chips: no provider search runs, only the lookup. */
@@ -1171,6 +1179,7 @@ export const App: React.FC = () => {
       setSearchError(null);
       setSearchQuery(query);
       setPeopleSearch({ query, categories });
+      setTrailerSearch(null);
       resetScreen('search');
       switchTab('search');
       scrollAfterPaint(0);
@@ -1178,7 +1187,26 @@ export const App: React.FC = () => {
     [search, resetScreen, switchTab, scrollAfterPaint]
   );
 
-  const hasSearchResults = Boolean((search && (search.results.length > 0 || !search.done)) || peopleSearch);
+  /** Enter with only the Trailers chip: no provider search runs, only trailer discovery across public platforms. */
+  const handleSearchTrailers = useCallback(
+    async (query: string, categories: SearchCategory[]) => {
+      if (search && !search.done) await window.cloudstream?.cancelSearch(search.id);
+      setSearch(null);
+      setSavedView(null);
+      setSearchError(null);
+      setSearchQuery(query);
+      setPeopleSearch(null);
+      setTrailerSearch({ query, categories });
+      resetScreen('search');
+      switchTab('search');
+      scrollAfterPaint(0);
+    },
+    [search, resetScreen, switchTab, scrollAfterPaint]
+  );
+
+  const hasSearchResults = Boolean(
+    (search && (search.results.length > 0 || !search.done)) || peopleSearch || trailerSearch
+  );
 
   /**
    * Opens a saved search as it was saved.
@@ -1199,6 +1227,8 @@ export const App: React.FC = () => {
     resetScreen('search');
     setSearchError(null);
     setSearchUi(EMPTY_SEARCH_UI);
+    setPeopleSearch(null);
+    setTrailerSearch(null);
     setSearchQuery(saved.query);
     setSearch({
       id: `saved:${saved.id}`,
@@ -1475,6 +1505,7 @@ export const App: React.FC = () => {
     // session owns its own stream, so it is ended explicitly instead.
     if (session) window.cloudstream?.stopPlayback(session.id, true);
     void window.cloudstream?.mpvStop?.();
+    void window.cloudstream?.closeFloatingPlayer?.({ restoreMain: false });
     setSession(null);
     setPreparing(null);
     setPlayback(null);
@@ -1501,6 +1532,16 @@ export const App: React.FC = () => {
     setPlayerMini(false);
     setPlayerHidden(false);
   };
+
+  /**
+   * Hides the in-app overlay completely while a Windows-level floating window
+   * owns playback, so the user never sees both a Windows floating window and
+   * an app-level `.player--mini` card at the same time.
+   */
+  const handleHideForFloating = useCallback(() => {
+    setPlayerMini(false);
+    setPlayerHidden(true);
+  }, []);
 
   /**
    * Steps out of the player without ending it.
@@ -2193,6 +2234,7 @@ export const App: React.FC = () => {
           onOpenInspector={() => setIsInspectorOpen(true)}
           onOpenEntity={(entity, categories) => setOpenEntity({ entity, categories })}
           onSearchPeople={(query, categories) => void handleSearchPeople(query, categories)}
+          onSearchTrailers={(query, categories) => void handleSearchTrailers(query, categories)}
           // So a search started from the details page shows in the bar that
           // claims to say what is being searched.
           externalQuery={searchQuery}
@@ -2288,6 +2330,7 @@ export const App: React.FC = () => {
               mini={playerMini}
               onMinimize={handleMinimizePlayer}
               onExpand={handleExpandPlayer}
+              onHideForFloating={handleHideForFloating}
               onOpenDownloads={() => handleLeavePlayer('downloads')}
               series={session.context.series}
               progress={session.context.progress}
@@ -2364,6 +2407,7 @@ export const App: React.FC = () => {
               mini={playerMini}
               onMinimize={handleMinimizePlayer}
               onExpand={handleExpandPlayer}
+              onHideForFloating={handleHideForFloating}
               onOpenDownloads={() => handleLeavePlayer('downloads')}
               sourceSession={{
                 phase: 'searching',
@@ -2392,6 +2436,7 @@ export const App: React.FC = () => {
               mini={playerMini}
               onMinimize={handleMinimizePlayer}
               onExpand={handleExpandPlayer}
+              onHideForFloating={handleHideForFloating}
               onOpenDownloads={() => handleLeavePlayer('downloads')}
               series={playback.series}
               progress={playback.progress}
@@ -2473,7 +2518,7 @@ export const App: React.FC = () => {
             <MiniPlayerBar
               title={session?.context.title ?? playback?.title ?? preparing?.title ?? 'Playing'}
               episodeTitle={session?.context.episodeTitle ?? playback?.episodeTitle}
-              onReturn={() => setPlayerHidden(false)}
+              onReturn={handleExpandPlayer}
               onStop={handleClosePlayer}
             />
           )}
@@ -2580,7 +2625,24 @@ export const App: React.FC = () => {
                   </Suspense>
                 </ErrorBoundary>
               )}
-              {!openTorrent && activeTab === 'search' && !peopleSearch && (
+              {!openTorrent && activeTab === 'search' && trailerSearch && (
+                <ErrorBoundary>
+                  <Suspense fallback={null}>
+                    <TrailerResults
+                      key={`${trailerSearch.query}|${trailerSearch.categories.join(',')}`}
+                      query={trailerSearch.query}
+                      categories={trailerSearch.categories}
+                      onPlayTrailer={(videos, startId, titleName) => {
+                        setTrailerMini(false);
+                        setTrailer({ videos, startId, titleName, key: Date.now() });
+                      }}
+                      onSelectMedia={handleSelectMedia}
+                      onSearchTitles={(query) => void handleSearch(query)}
+                    />
+                  </Suspense>
+                </ErrorBoundary>
+              )}
+              {!openTorrent && activeTab === 'search' && !peopleSearch && !trailerSearch && (
                 <ErrorBoundary>
                   <SearchView
                     query={searchQuery}

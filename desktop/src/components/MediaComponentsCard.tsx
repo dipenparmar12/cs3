@@ -12,9 +12,15 @@ import { Check, Loader2, Wrench, ChevronDown, ChevronRight, AlertTriangle } from
  */
 
 export const MediaComponentsCard: React.FC = () => {
-  const [status, setStatus] = useState<{ ffmpeg: boolean; ffprobe: boolean; bundled: boolean } | null>(
-    null
-  );
+  const [status, setStatus] = useState<{
+    ffmpeg: boolean;
+    ffprobe: boolean;
+    bundled: boolean;
+    systemNative: boolean;
+    ffmpegPath?: string | null;
+    ffprobePath?: string | null;
+    skippedReason?: string;
+  } | null>(null);
   const [installing, setInstalling] = useState(false);
   const [progress, setProgress] = useState<{ status: string; percent: number } | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -23,10 +29,16 @@ export const MediaComponentsCard: React.FC = () => {
   const refresh = useCallback(async () => {
     const binaries = await window.cloudstream?.checkBinaries();
     if (binaries) {
+      const ffmpegOrigin = binaries.origins?.ffmpeg;
+      const ffprobeOrigin = binaries.origins?.ffprobe;
       setStatus({
         ffmpeg: binaries.ffmpeg,
         ffprobe: binaries.ffprobe,
         bundled: binaries.bundled.ffmpeg && binaries.bundled.ffprobe,
+        systemNative: ffmpegOrigin?.origin === 'system' && ffprobeOrigin?.origin === 'system',
+        ffmpegPath: ffmpegOrigin?.path,
+        ffprobePath: ffprobeOrigin?.path,
+        skippedReason: ffmpegOrigin?.skippedSystemReason ?? ffprobeOrigin?.skippedSystemReason,
       });
     }
   }, []);
@@ -53,14 +65,8 @@ export const MediaComponentsCard: React.FC = () => {
   }, [refresh]);
 
   const installed = Boolean(status?.ffmpeg && status?.ffprobe);
-  /**
-   * Reported as "included" rather than "installed" when it shipped in the box.
-   *
-   * Saying "Installed" for something nobody installed teaches the reader that
-   * this badge is decorative — and this is the same badge they will come back
-   * to when something really is missing.
-   */
   const bundled = Boolean(status?.bundled);
+  const systemNative = Boolean(status?.systemNative);
 
   return (
     <div className="settings-card">
@@ -69,16 +75,18 @@ export const MediaComponentsCard: React.FC = () => {
         <h3>Media Components</h3>
         {installed && (
           <span className="settings-card__badge">
-            <Check size={12} /> {bundled ? 'Included' : 'Installed'}
+            <Check size={12} /> {systemNative ? 'System Native' : bundled ? 'Included' : 'Installed'}
           </span>
         )}
       </div>
 
       <p className="muted">
         {installed
-          ? bundled
-            ? 'These ship with the app, so wider format support works out of the box. Nothing to install.'
-            : 'Everything needed for wider format support is installed. Media with unusual audio will play normally.'
+          ? systemNative
+            ? 'Using FFmpeg and FFprobe already installed on your system. Nothing to download.'
+            : bundled
+              ? 'These ship with the app, so wider format support works out of the box. Nothing to install.'
+              : 'Everything needed for wider format support is installed. Media with unusual audio will play normally.'
           : 'Some media uses audio formats Windows cannot play on its own. Installing these components fixes that, and improves download handling.'}
       </p>
 
@@ -130,12 +138,13 @@ export const MediaComponentsCard: React.FC = () => {
           </p>
           <ul>
             <li>
-              ffmpeg: {status?.ffmpeg ? 'present' : 'not installed'}
+              ffmpeg: {status?.ffmpeg ? status.ffmpegPath ?? 'present' : 'not installed'}
             </li>
             <li>
-              ffprobe: {status?.ffprobe ? 'present' : 'not installed'}
+              ffprobe: {status?.ffprobe ? status.ffprobePath ?? 'present' : 'not installed'}
             </li>
           </ul>
+          {status?.skippedReason && <p className="muted">Note: {status.skippedReason}</p>}
           <p>
             <code>ffprobe</code> identifies the audio codec in a stream, which is
             what tells "this file has no audio" apart from "this audio codec

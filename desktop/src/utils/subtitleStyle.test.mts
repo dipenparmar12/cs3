@@ -15,6 +15,9 @@ import {
   DEFAULT_SUBTITLE_STYLE,
   MPV_BASE_SUB_FONT_SIZE,
   SUBTITLE_BACKGROUNDS,
+  SUBTITLE_PRESETS,
+  isAssSubtitleTrack,
+  isBitmapSubtitleTrack,
   subtitleCssVariables,
   subtitleMpvProperties,
   type SubtitleStyle,
@@ -119,4 +122,32 @@ test('raising cues moves them the same way in both renderers', () => {
 test('the default position is the bottom of the frame in both', () => {
   assert.equal(subtitleCssVariables(style({ position: 0 }))['--cue-lift'], '0%');
   assert.equal(subtitleMpvProperties(style({ position: 0 }))['sub-pos'], 100);
+});
+
+// --- presets, box opacity, alignment, and format detection ------------------
+
+test('boxOpacity scales both CSS rgba alpha and mpv hex alpha', () => {
+  const css = subtitleCssVariables(style({ background: 'box', boxOpacity: 0.5 }));
+  assert.equal(css['--cue-bg'], 'rgba(0, 0, 0, 0.5)');
+  const mpv = subtitleMpvProperties(style({ background: 'box', boxOpacity: 0.5 }));
+  assert.equal(mpv['sub-back-color'], '#80000000');
+});
+
+test('horizontalAlign reaches both CSS and mpv', () => {
+  assert.equal(subtitleCssVariables(style({ horizontalAlign: 'left' }))['--cue-align'], 'left');
+  assert.equal(subtitleMpvProperties(style({ horizontalAlign: 'left' }))['sub-align-x'], 'left');
+});
+
+test('all 4 subtitle presets produce distinct styles', () => {
+  assert.equal(SUBTITLE_PRESETS.length, 4);
+  const ids = new Set(SUBTITLE_PRESETS.map((p) => p.id));
+  assert.equal(ids.size, 4);
+});
+
+test('bitmap and ASS subtitle track detection identifies constrained formats', () => {
+  assert.equal(isBitmapSubtitleTrack('English (hdmv_pgs_subtitle)'), true);
+  assert.equal(isBitmapSubtitleTrack('French [VOBSUB]'), true);
+  assert.equal(isBitmapSubtitleTrack('English (SRT)'), false);
+  assert.equal(isAssSubtitleTrack('Japanese [ASS]'), true);
+  assert.equal(isAssSubtitleTrack('English.vtt'), false);
 });

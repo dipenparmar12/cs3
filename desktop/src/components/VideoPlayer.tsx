@@ -20,7 +20,16 @@ import {
 import type { SwarmReport, TorrentStreamStats } from '../types/torrent';
 import type { Episode } from '../types/api';
 import { AspectRatioMode } from '../types/player';
-import type { ExternalPlaybackSnapshot } from '../types/player';
+import type {
+  ExternalPlaybackSnapshot,
+  FloatingPlayerPayload,
+  FloatingPlayerStateSnapshot,
+} from '../types/player';
+import {
+  isPointerTap,
+  resolveFloatingPresentation,
+  shouldHandlePlayerKeydown,
+} from './player/miniPlayerModel';
 import type { MpvSnapshot } from '../types/mpv';
 import type { TorrentResult } from '../types/torrent';
 import type { DownloadTask } from '../types/download';
@@ -191,6 +200,8 @@ interface VideoPlayerProps {
   onMinimize?: () => void;
   /** Returns the mini player to full size. */
   onExpand?: () => void;
+  /** Hides the in-app overlay while a Windows-level floating player owns playback. */
+  onHideForFloating?: () => void;
   sourceSession?: {
     phase: PlaybackPhase;
     sources: TorrentResult[];
@@ -389,7 +400,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
   streamUrl, mimeType, title, originalTitle, episodeTitle, providerProvenance,
   infoHash, subtitles, onBack, series, onSelectEpisode, switchingTo, switchError,
   progress, sourceSession, subtitleContext, onDownloadCurrent, onOpenDownloads, playbackPreferences,
-  hidden = false, mini = false, onMinimize, onExpand, showAspectRatioControl,
+  hidden = false, mini = false, onMinimize, onExpand, onHideForFloating, showAspectRatioControl,
   showPlaybackSpeedControl, showSubtitlesControl: showSubtitlesControlProp, onSearchTitle, onOpenDetail,
 }) => {
   /**
@@ -406,6 +417,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
 
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const containerRef = useRef<HTMLDivElement | null>(null);
+  const controlsRef = useRef<HTMLElement | null>(null);
   const seekBarRef = useRef<HTMLDivElement | null>(null);
   const hlsRef = useRef<Hls | null>(null);
   const shakaRef = useRef<ShakaAttachment | null>(null);
@@ -481,6 +493,9 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
   const [floatingMode, setFloatingMode] = useState<FloatingMode>('mini');
   const [backgroundPlayback, setBackgroundPlayback] = useState<BackgroundPlayback>('continue');
   const [alwaysOnTop, setAlwaysOnTop] = useState(false);
+  const [wheelAction, setWheelAction] = useState<'volume' | 'seek'>('volume');
+  const wheelActionRef = useRef<'volume' | 'seek'>('volume');
+  wheelActionRef.current = wheelAction;
 
   /**
    * Fullscreen is the window's (see `useWindowFullScreen`), never the HTML API
@@ -534,16 +549,43 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
     if (mismatchWarning) warningAnswerRef.current ??= 'unanswered';
   }, [mismatchWarning]);
   const [subtitlePanelOpen, setSubtitlePanelOpen] = useState(false);
+  const [downloadPanelOpen, setDownloadPanelOpen] = useState(false);
+
+  const openSidePanel = useCallback(
+    (target: 'episodes' | 'sources' | 'subtitles' | 'downloads', toggle = false) => {
+      setPanelOpen((prev) => (target === 'episodes' ? (toggle ? !prev : true) : false));
+      setSourcePanelOpen((prev) => (target === 'sources' ? (toggle ? !prev : true) : false));
+      setSubtitlePanelOpen((prev) => (target === 'subtitles' ? (toggle ? !prev : true) : false));
+      setDownloadPanelOpen((prev) => (target === 'downloads' ? (toggle ? !prev : true) : false));
+    },
+    []
+  );
+
+  // Measure the bottom control bar so side panels stop cleanly above the
+  // timeline seek track and never hide controls or other panel toggles.
+  useEffect(() => {
+    const controls = controlsRef.current;
+    const container = containerRef.current;
+    if (!controls || !container) return;
+    const syncHeight = () => {
+      const height = Math.ceil(controls.getBoundingClientRect().height);
+      if (height > 0) container.style.setProperty('--player-controls-height', `${height}px`);
+    };
+    syncHeight();
+    if (typeof ResizeObserver === 'undefined') return;
+    const observer = new ResizeObserver(syncHeight);
+    observer.observe(controls);
+    return () => observer.disconnect();
+  }, []);
 
   // `s` in mpv's own window asks for the subtitle search, which lives here.
   useEffect(
     () =>
       window.cloudstream?.onMpvAction?.((action) => {
-        if (action === 'subtitles') setSubtitlePanelOpen(true);
+        if (action === 'subtitles') openSidePanel('subtitles');
       }),
-    []
+    [openSidePanel]
   );
-  const [downloadPanelOpen, setDownloadPanelOpen] = useState(false);
   const [downloadQueue, setDownloadQueue] = useState<DownloadTask[]>([]);
 
   const activeSource = useMemo(() => {
@@ -1022,14 +1064,61 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
    * Keeps this exact playback: the page, the episode, the place, the source
    * and the tracks — the bookmark beside the title. It lands in Library ›
    * Saved pages with a Resume button that plays it back exactly, re-finding
-   * the same release when its link has expired. Pressing it again updates
-   * the saved place rather than unsaving it.
+   * the same release when its link has expired.
+   *
+   * Toggles save / unsave when the playing title & source match the stored
+   * bookmark. If a different source or title is playing, clicking saves/updates it.
    */
   const [playbackSaved, setPlaybackSaved] = useState(false);
-  useEffect(() => setPlaybackSaved(false), [title, progress?.season, progress?.episode]);
-  const savePlayback = useCallback(async () => {
+  const [savedSourceId, setSavedSourceId] = useState<string | null>(null);
+
+  // Check saved state whenever title, mediaUrl, season or episode changes
+  useEffect(() => {
+    let cancelled = false;
     const pageUrl = progress?.mediaUrl;
-    if (!pageUrl || !window.cloudstream?.saveBookmark) return;
+    if (!pageUrl || !window.cloudstream?.getBookmark) {
+      setPlaybackSaved(false);
+      setSavedSourceId(null);
+      return;
+    }
+    void window.cloudstream.getBookmark(pageUrl).then((res) => {
+      if (cancelled) return;
+      if (res?.bookmark) {
+        setPlaybackSaved(true);
+        setSavedSourceId(res.bookmark.playback?.source?.id ?? null);
+      } else {
+        setPlaybackSaved(false);
+        setSavedSourceId(null);
+      }
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [title, progress?.mediaUrl, progress?.season, progress?.episode]);
+
+  const toggleSavePlayback = useCallback(async () => {
+    const pageUrl = progress?.mediaUrl;
+    if (!pageUrl || !window.cloudstream) return;
+
+    // Current source identifier (or empty string if none)
+    const currentSrcId = activeSource?.infoHash || activeSource?.title || '';
+    const isSameSource = !savedSourceId || !currentSrcId || savedSourceId === currentSrcId;
+
+    // If currently saved and same source, clicking unsaves it
+    if (playbackSaved && isSameSource) {
+      const res = await window.cloudstream.removeBookmark?.(pageUrl);
+      if (res?.ok || res?.removed) {
+        setPlaybackSaved(false);
+        setSavedSourceId(null);
+        notify('Removed from Saved pages', 'good');
+      } else {
+        notify('Could not remove bookmark', 'bad');
+      }
+      return;
+    }
+
+    // Otherwise, save or update with current playback & source
+    if (!window.cloudstream.saveBookmark) return;
     const response = await window.cloudstream.saveBookmark({
       mediaUrl: pageUrl,
       title,
@@ -1055,8 +1144,9 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
       },
     });
     if (response?.ok) {
-      notify(playbackSaved ? 'Saved playback updated' : 'Playback saved — Library › Saved pages', 'good');
+      notify(playbackSaved ? 'Saved playback updated with new source' : 'Playback saved — Library › Saved pages', 'good');
       setPlaybackSaved(true);
+      setSavedSourceId(currentSrcId || null);
     } else {
       notify(response?.error ?? 'Could not save this playback', 'bad');
     }
@@ -1072,6 +1162,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
     duration,
     notify,
     playbackSaved,
+    savedSourceId,
   ]);
 
   /**
@@ -2844,10 +2935,10 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
         : subtitleStyle.background === 'shadow'
           ? '0 2px 4px rgba(0, 0, 0, 0.9)'
           : 'none';
-    const bgColor =
-      subtitleStyle.background === 'box'
-        ? 'rgba(0, 0, 0, 0.85)'
-        : 'transparent';
+    const bgColor = vars['--cue-bg'];
+    const lineHeight = vars['--cue-line-height'] ?? '1.3';
+    const shiftX = vars['--cue-shift-x'] ?? '0%';
+    const textAlign = vars['--cue-align'] ?? 'center';
 
     styleTag.textContent = `
       .player video::cue,
@@ -2858,15 +2949,16 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
         background: ${bgColor} !important;
         text-shadow: ${shadow} !important;
         font-weight: ${subtitleStyle.weight === 'bold' ? '700' : '400'} !important;
-        line-height: 1.18 !important;
+        line-height: ${lineHeight} !important;
+        text-align: ${textAlign} !important;
         white-space: normal !important;
         padding: 0.1em 0.35em !important;
       }
       .player video::-webkit-media-text-track-container {
-        transform: translateY(-${subtitleStyle.position}%) !important;
+        transform: translate(${shiftX}, -${subtitleStyle.position}%) !important;
       }
       .player video::-webkit-media-text-track-display {
-        line-height: 1.18 !important;
+        line-height: ${lineHeight} !important;
       }
     `;
 
@@ -2900,6 +2992,9 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
       setFloatingMode(preferences.floatingMode ?? 'mini');
       setBackgroundPlayback(preferences.backgroundPlayback ?? 'continue');
       setAlwaysOnTop(preferences.alwaysOnTop === true);
+      const action = preferences.wheelAction === 'seek' ? 'seek' : 'volume';
+      setWheelAction(action);
+      wheelActionRef.current = action;
       setSubtitleStyle({
         scale: preferences.subtitleScale ?? DEFAULT_SUBTITLE_STYLE.scale,
         color: preferences.subtitleColor ?? DEFAULT_SUBTITLE_STYLE.color,
@@ -2926,6 +3021,11 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
       if (prefs.floatingMode) setFloatingMode(prefs.floatingMode);
       if (prefs.backgroundPlayback) setBackgroundPlayback(prefs.backgroundPlayback);
       if (typeof prefs.alwaysOnTop === 'boolean') setAlwaysOnTop(prefs.alwaysOnTop);
+      if (prefs.wheelAction) {
+        const action = prefs.wheelAction === 'seek' ? 'seek' : 'volume';
+        setWheelAction(action);
+        wheelActionRef.current = action;
+      }
       if (prefs.audioLanguage) preferredAudioLanguage.current = prefs.audioLanguage;
       if (prefs.subtitleLanguage) {
         preferredSubtitleLanguage.current = prefs.subtitleLanguage;
@@ -4250,6 +4350,252 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
     showOsd({ kind: 'volume', volume, muted: next });
   }, [isMuted, showOsd, volume]);
 
+  const [floatingWindowOpen, setFloatingWindowOpen] = useState(false);
+  const floatingWindowOpenRef = useRef(false);
+  floatingWindowOpenRef.current = floatingWindowOpen;
+  const miniPointerDownRef = useRef<{ x: number; y: number } | null>(null);
+  const miniClickTimerRef = useRef<number | null>(null);
+
+  const floatingPresentation = resolveFloatingPresentation({
+    mini,
+    hidden,
+    floatingMode,
+    isFloatingWindowOpen: floatingWindowOpen,
+    isNativePipOpen: floating.isPip,
+    isNativeEngine,
+  });
+  const showMini = floatingPresentation === 'app';
+  const suppressPlayerOverlay = hidden || floatingPresentation === 'windows';
+
+  // If fallback Chromium native PiP opens (e.g. DRM stream), never keep `.player--mini` open beside it.
+  const wasNativePipRef = useRef(false);
+  useEffect(() => {
+    if (floating.isPip) {
+      wasNativePipRef.current = true;
+      if (!hidden) onHideForFloating?.();
+    } else if (wasNativePipRef.current) {
+      wasNativePipRef.current = false;
+      if (hidden && !mini && !floatingWindowOpenRef.current && videoRef.current && !videoRef.current.paused) {
+        onExpand?.();
+      }
+    }
+  }, [floating.isPip, hidden, mini, onExpand, onHideForFloating]);
+
+  const buildFloatingPayload = useCallback((): FloatingPlayerPayload | null => {
+    if (isNativeEngine || !prepared?.ok || !prepared.playbackUrl || !capability) return null;
+    if (capability.requiredStrategy === 'EME_NATIVE' || capability.requiredStrategy === 'DASH_NATIVE') {
+      return null;
+    }
+    const video = videoRef.current;
+    const position = offsetRef.current + (video?.currentTime ?? 0);
+    const strategy =
+      capability.requiredStrategy === 'HLS_NATIVE'
+        ? 'HLS_NATIVE'
+        : isConverted
+          ? 'FULL_TRANSCODE'
+          : 'DIRECT';
+    const rawPlaybackUrl = isConverted ? prepared.playbackUrl.split('?')[0] : prepared.playbackUrl;
+    return {
+      playbackUrl: rawPlaybackUrl,
+      strategy,
+      isConverted,
+      title,
+      episodeTitle,
+      provider: providerProvenance?.provider,
+      currentTime: Number.isFinite(position) ? position : currentPositionRef.current,
+      duration: durationRef.current > 0 ? durationRef.current : (video?.duration || duration || 0),
+      paused: video ? video.paused : !isPlaying,
+      volume,
+      muted: isMuted,
+      speed,
+      aspect,
+      wheelAction: wheelActionRef.current,
+      subtitles: allSubtitles.map((s) => ({ name: s.name, url: s.url })),
+      activeSubtitleUrl: activeSubtitle,
+      subtitleScale: subtitleStyle.scale,
+      subtitleColor: subtitleStyle.color,
+      subtitleBackground: subtitleStyle.background,
+      subtitleWeight: subtitleStyle.weight,
+      subtitlePosition: subtitleStyle.position,
+      hasNextEpisode: Boolean(nextEpisode && onSelectEpisode),
+      hasPrevEpisode: Boolean(previousEpisode && onSelectEpisode),
+    };
+  }, [
+    activeSubtitle,
+    allSubtitles,
+    aspect,
+    capability,
+    duration,
+    episodeTitle,
+    isConverted,
+    isMuted,
+    isNativeEngine,
+    isPlaying,
+    nextEpisode,
+    onSelectEpisode,
+    prepared,
+    previousEpisode,
+    providerProvenance?.provider,
+    speed,
+    subtitleStyle,
+    title,
+    volume,
+  ]);
+
+  const enterWindowsFloating = useCallback(async () => {
+    if (privacy.state !== 'open') {
+      privacy.requestPlay();
+      return;
+    }
+    if (isNativeEngine) {
+      await window.cloudstream?.setMpvOnTop?.(true);
+      onHideForFloating?.();
+      return;
+    }
+    const payload = buildFloatingPayload();
+    if (payload && window.cloudstream?.openFloatingPlayer) {
+      videoRef.current?.pause();
+      setFloatingWindowOpen(true);
+      onHideForFloating?.();
+      await window.cloudstream.openFloatingPlayer(payload);
+      return;
+    }
+    if (floating.isPipSupported) {
+      onHideForFloating?.();
+      await floating.enterPip();
+    }
+  }, [buildFloatingPayload, floating, isNativeEngine, onHideForFloating, privacy]);
+
+  const toggleWindowsFloating = useCallback(async () => {
+    if (floatingWindowOpenRef.current) {
+      await window.cloudstream?.closeFloatingPlayer?.({ restoreMain: true });
+      return;
+    }
+    if (floating.isPip) {
+      await floating.exitPip();
+      onExpand?.();
+      return;
+    }
+    await enterWindowsFloating();
+  }, [enterWindowsFloating, floating, onExpand]);
+
+  useEffect(() => {
+    const api = window.cloudstream;
+    if (!api?.onFloatingPlayerState || !api.onFloatingPlayerClosed || !api.onFloatingPlayerAction) {
+      return;
+    }
+
+    const applySnapshot = (state: FloatingPlayerStateSnapshot | null, resumeAfter: boolean) => {
+      if (!state) return;
+      setVolume(state.volume);
+      setIsMuted(state.muted);
+      setSpeed(state.speed);
+      setCurrentTime(state.currentTime);
+      currentPositionRef.current = state.currentTime;
+      if (state.duration > 0) {
+        setDuration(state.duration);
+        durationRef.current = state.duration;
+      }
+      if (state.activeSubtitleUrl !== activeSubtitle) {
+        setActiveSubtitle(state.activeSubtitleUrl);
+      }
+
+      const video = videoRef.current;
+      if (!video) return;
+      video.volume = state.volume;
+      video.muted = state.muted;
+      video.playbackRate = state.speed;
+
+      if (isConverted && prepared?.playbackUrl) {
+        const startAt = Math.floor(state.currentTime);
+        setPlaybackOffset(startAt);
+        offsetRef.current = startAt;
+        video.src = atTime(prepared.playbackUrl, startAt);
+      } else if (Number.isFinite(state.currentTime) && Math.abs(video.currentTime - state.currentTime) > 0.75) {
+        video.currentTime = state.currentTime;
+      }
+
+      if (resumeAfter && !state.paused && !state.ended) {
+        void video.play().catch(() => {});
+      } else {
+        video.pause();
+      }
+    };
+
+    const offState = api.onFloatingPlayerState((state) => {
+      if (!floatingWindowOpenRef.current) return;
+      setCurrentTime(state.currentTime);
+      currentPositionRef.current = state.currentTime;
+      if (state.duration > 0) {
+        setDuration(state.duration);
+        durationRef.current = state.duration;
+      }
+      setVolume(state.volume);
+      setIsMuted(state.muted);
+      setSpeed(state.speed);
+      setIsPlaying(!state.paused);
+      if (state.ended && nextEpisode && onSelectEpisode && !upNextDismissed) {
+        onSelectEpisode(nextEpisode);
+      }
+    });
+
+    const offClosed = api.onFloatingPlayerClosed(({ restoreMain, state }) => {
+      setFloatingWindowOpen(false);
+      applySnapshot(state, restoreMain);
+      if (state?.ended && nextEpisode && onSelectEpisode && !upNextDismissed) {
+        onSelectEpisode(nextEpisode);
+        return;
+      }
+      if (restoreMain) {
+        onExpand?.();
+      }
+    });
+
+    const offAction = api.onFloatingPlayerAction((action) => {
+      if (action === 'next' && nextEpisode && onSelectEpisode) {
+        onSelectEpisode(nextEpisode);
+      } else if (action === 'prev' && previousEpisode && onSelectEpisode) {
+        onSelectEpisode(previousEpisode);
+      } else if (action === 'protect') {
+        window.dispatchEvent(new KeyboardEvent('keydown', { key: '`', code: 'Backquote', bubbles: true }));
+      }
+    });
+
+    return () => {
+      offState();
+      offClosed();
+      offAction();
+    };
+  }, [activeSubtitle, isConverted, nextEpisode, onExpand, onSelectEpisode, prepared?.playbackUrl, previousEpisode, upNextDismissed]);
+
+  // If the viewer clicks "Return" in the app while the Windows floating player is open, close it cleanly.
+  useEffect(() => {
+    if (floatingWindowOpen && !hidden && !mini) {
+      void window.cloudstream?.closeFloatingPlayer?.({ restoreMain: true });
+    }
+  }, [floatingWindowOpen, hidden, mini]);
+
+  const buildFloatingPayloadRef = useRef(buildFloatingPayload);
+  buildFloatingPayloadRef.current = buildFloatingPayload;
+
+  // Keep the Windows floating window synced if the episode/source changes (e.g. Next Episode).
+  useEffect(() => {
+    if (!floatingWindowOpen) return;
+    const payload = buildFloatingPayloadRef.current();
+    if (!payload) return;
+    videoRef.current?.pause();
+    void window.cloudstream?.updateFloatingPlayer?.(payload);
+  }, [floatingWindowOpen, prepared?.playbackUrl, activeSubtitle, subtitleStyle]);
+
+  useEffect(
+    () => () => {
+      if (floatingWindowOpenRef.current) {
+        void window.cloudstream?.closeFloatingPlayer?.({ restoreMain: false });
+      }
+    },
+    []
+  );
+
   const keyboardStateRef = useRef({
     togglePlay,
     seekBy,
@@ -4259,6 +4605,8 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
     toggleSubtitles,
     cycleSubtitles,
     onBack,
+    onExpand,
+    showMini,
     series,
     nextEpisode,
     previousEpisode,
@@ -4271,6 +4619,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
     setSourcePanelOpen,
     setSubtitlePanelOpen,
     setDownloadPanelOpen,
+    openSidePanel,
     volume,
     setVolume,
     isMuted,
@@ -4296,6 +4645,8 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
     toggleSubtitles,
     cycleSubtitles,
     onBack,
+    onExpand,
+    showMini,
     series,
     nextEpisode,
     previousEpisode,
@@ -4308,6 +4659,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
     setSourcePanelOpen,
     setSubtitlePanelOpen,
     setDownloadPanelOpen,
+    openSidePanel,
     volume,
     setVolume,
     isMuted,
@@ -4325,33 +4677,58 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
   };
 
   useEffect(() => {
-    // Still mounted, but the viewer is looking at another screen. Leaving this
-    // bound would make typing in a search box seek the film.
-    //
-    // The mini player is disarmed for the same reason and it matters more
-    // there: it is *visible*, so it looks like it has focus, and the whole
-    // point of it is that the viewer is typing somewhere else. A space bar in
-    // the search box must not pause the film.
-    if (hidden || mini) return;
+    // Still mounted while hidden — ignore all shortcuts while off screen.
+    if (suppressPlayerOverlay) return;
 
     const onKey = (e: KeyboardEvent) => {
       const state = keyboardStateRef.current;
       const target = e.target as HTMLElement | null;
 
-      // True text input detection: range sliders, checkboxes, radios, and buttons are NOT text input fields.
-      const isTextInput = (el: HTMLElement | null): boolean => {
-        if (!el) return false;
-        if (el.isContentEditable) return true;
-        const tag = el.tagName;
+      const isTextEntryTarget = (() => {
+        if (!target) return false;
+        const tag = target.tagName;
         if (tag === 'TEXTAREA' || tag === 'SELECT') return true;
         if (tag === 'INPUT') {
-          const type = (el as HTMLInputElement).type?.toLowerCase();
-          return type !== 'range' && type !== 'checkbox' && type !== 'radio' && type !== 'button';
+          const type = (target as HTMLInputElement).type;
+          return type !== 'range' && type !== 'checkbox' && type !== 'button';
         }
-        return false;
-      };
+        return target.isContentEditable;
+      })();
 
-      if (isTextInput(target)) {
+      const activeEl = document.activeElement as HTMLElement | null;
+      const isFocusInsidePlayer = Boolean(
+        containerRef.current &&
+          (containerRef.current === activeEl ||
+            containerRef.current.contains(activeEl) ||
+            (target && containerRef.current.contains(target)))
+      );
+
+      if (
+        !shouldHandlePlayerKeydown({
+          hidden: suppressPlayerOverlay,
+          mini: state.showMini,
+          isFocusInsidePlayer,
+          isTextEntryTarget,
+          isModalBlocking: false,
+        })
+      ) {
+        return;
+      }
+
+      if (e.ctrlKey || e.metaKey || e.altKey) return;
+
+      // In mini mode, blur buttons or range sliders on transport keys so browser
+      // slider stepping never fights player shortcuts.
+      if (
+        state.showMini &&
+        target &&
+        ((target instanceof HTMLInputElement && target.type === 'range') ||
+          (target instanceof HTMLButtonElement && (e.key === ' ' || e.key.startsWith('Arrow'))))
+      ) {
+        target.blur();
+      }
+
+      if (isTextEntryTarget) {
         if (e.key === 'Escape') {
           target?.blur();
         }
@@ -4365,7 +4742,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
           (target.tagName === 'INPUT' && (target as HTMLInputElement).type === 'range'))
       ) {
         target.blur();
-        containerRef.current?.focus();
+        containerRef.current?.focus({ preventScroll: true });
       }
 
       switch (e.key) {
@@ -4419,8 +4796,12 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
         case 'f':
         case 'F':
           e.preventDefault();
-          state.toggleFullscreen();
-          state.revealControls();
+          if (state.showMini) {
+            state.onExpand?.();
+          } else {
+            state.toggleFullscreen();
+            state.revealControls();
+          }
           break;
         case 'c':
         case 'C':
@@ -4493,14 +4874,14 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
         case 's':
         case 'S':
           e.preventDefault();
-          state.setSubtitlePanelOpen((v) => !v);
+          state.openSidePanel('subtitles', true);
           state.revealControls();
           break;
         case 'e':
         case 'E':
           if (state.series) {
             e.preventDefault();
-            state.setPanelOpen((v) => !v);
+            state.openSidePanel('episodes', true);
             state.revealControls();
           }
           break;
@@ -4519,7 +4900,10 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
           }
           break;
         case 'Escape':
-          if (state.panelOpen || state.sourcePanelOpen || state.subtitlePanelOpen || state.downloadPanelOpen) {
+          if (state.showMini) {
+            e.preventDefault();
+            state.onExpand?.();
+          } else if (state.panelOpen || state.sourcePanelOpen || state.subtitlePanelOpen || state.downloadPanelOpen) {
             state.setPanelOpen(false);
             state.setSourcePanelOpen(false);
             state.setSubtitlePanelOpen(false);
@@ -4537,7 +4921,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [hidden, mini]);
+  }, [suppressPlayerOverlay]);
 
   useEffect(() => {
     if (!hidden && !mini) {
@@ -4576,7 +4960,70 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
     [panelOpen, sourcePanelOpen, subtitlePanelOpen, downloadPanelOpen, revealControls]
   );
 
-  const miniFrame = useMiniFrame(mini);
+  const miniFrame = useMiniFrame(showMini);
+
+  const handlePlayerWheel = useCallback(
+    (e: React.WheelEvent<HTMLDivElement>) => {
+      // Don't intercept scroll inside menus or panels (e.g. subtitle track list, episodes list, source list)
+      const target = e.target as HTMLElement | null;
+      if (
+        target?.closest('.player-panel') ||
+        target?.closest('.player-copy__menu') ||
+        target?.closest('.hover-menu') ||
+        target?.closest('.player__menu')
+      ) {
+        return;
+      }
+
+      if (Math.abs(e.deltaY) < 2) return;
+      e.preventDefault();
+
+      if (wheelActionRef.current === 'seek') {
+        // Scrolling up -> forward (fast-forward); scrolling down -> backward
+        const forward = e.deltaY < 0;
+        // Scale seek jump with scroll intensity for fast scrubbing, minimum SKIP_SECONDS
+        const absDelta = Math.abs(e.deltaY);
+        const multiplier = absDelta > 100 ? Math.min(6, Math.floor(absDelta / 50)) : 1;
+        const delta = (forward ? SKIP_SECONDS : -SKIP_SECONDS) * multiplier;
+        const position = seekBy(delta);
+        showOsd({ kind: 'seek', delta, position, duration });
+        revealControls();
+      } else {
+        // Default: volume control
+        // Scaling with scroll intensity:
+        // Slow tick (~2 to ~30): 0.02 - 0.03 for fine adjustments
+        // Normal tick (~30 to ~100): 0.05
+        // Fast/vigorous flick (>150): scales rapidly so a single vigorous scroll
+        // can sweep straight from 0 to 100% or 100% to 0 (mute).
+        const absDelta = Math.abs(e.deltaY);
+        let step = 0.05;
+        if (absDelta < 25) {
+          step = 0.02;
+        } else if (absDelta < 60) {
+          step = 0.03;
+        } else if (absDelta >= 450) {
+          step = 1.0; // Instant 0 <-> 100% on a full flick
+        } else if (absDelta > 200) {
+          // Quadratic scaling for strong flicks (e.g. delta 300 gives step ~0.65, delta 400 gives step ~0.9)
+          step = Math.min(1.0, Math.round((Math.pow(absDelta / 450, 1.8)) * 100) / 100);
+        } else if (absDelta > 100) {
+          step = Math.min(0.25, Math.round((absDelta / 600) * 100) / 100);
+        }
+        const change = e.deltaY < 0 ? step : -step;
+        const currentVol = isMuted ? 0 : volume;
+        const next = Math.max(0, Math.min(1, Math.round((currentVol + change) * 100) / 100));
+        setVolume(next);
+        if (next > 0 && isMuted) {
+          setIsMuted(false);
+        } else if (next === 0 && !isMuted) {
+          setIsMuted(true);
+        }
+        showOsd({ kind: 'volume', volume: next, muted: next === 0 });
+        revealControls();
+      }
+    },
+    [duration, isMuted, revealControls, seekBy, showOsd, volume]
+  );
 
   /**
    * Geometry for the floating window.
@@ -4586,7 +5033,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
    * rendering a second player would mean a second `<video>` — which is the one
    * thing this component must never do.
    */
-  const miniStyle: React.CSSProperties | undefined = mini
+  const miniStyle: React.CSSProperties | undefined = showMini
     ? {
         left: miniFrame.frame.x,
         top: miniFrame.frame.y,
@@ -4601,7 +5048,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
       tabIndex={-1}
       className={
         `player${controlsVisible || keepControls ? '' : ' player--idle'}` +
-        (mini ? ' player--mini' : '') +
+        (showMini ? ' player--mini' : '') +
         /*
           Audio-only hides the picture rather than unmounting the element.
           Unmounting is what ends the stream, loses the position and
@@ -4611,9 +5058,9 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
           is on screen. On the native engine the video track is genuinely
           dropped.
         */
-        (mini && floatingMode === 'background' ? ' player--audio-only' : '') +
-        (mini && miniFrame.isDragging ? ' player--dragging' : '') +
-        (mini && miniFrame.isResizing && miniFrame.resizeDirection
+        (showMini && floatingMode === 'background' ? ' player--audio-only' : '') +
+        (showMini && miniFrame.isDragging ? ' player--dragging' : '') +
+        (showMini && miniFrame.isResizing && miniFrame.resizeDirection
           ? ` player--resizing player--resizing-${miniFrame.resizeDirection}`
           : '')
       }
@@ -4624,15 +5071,58 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
       // from an inline style — the stylesheet owns those rules and reads these
       // custom properties from the player root.
       style={
-        hidden
+        suppressPlayerOverlay
           ? { display: 'none' }
           : { ...(miniStyle ?? {}), ...subtitleCssVariables(subtitleStyle) }
       }
-      aria-hidden={hidden || undefined}
+      aria-hidden={suppressPlayerOverlay || undefined}
       onMouseMove={revealControls}
       onMouseEnter={handlePlayerEnter}
       onMouseLeave={handlePlayerLeave}
-      onPointerDown={mini ? miniFrame.startDrag : handlePlayerPointerDown}
+      onWheel={handlePlayerWheel}
+      onPointerDown={(e) => {
+        if (showMini) {
+          containerRef.current?.focus({ preventScroll: true });
+          miniPointerDownRef.current = { x: e.clientX, y: e.clientY };
+          miniFrame.startDrag(e);
+        } else {
+          handlePlayerPointerDown(e);
+        }
+      }}
+      onPointerUp={(e) => {
+        if (!showMini || e.button !== 0) return;
+        const target = e.target as HTMLElement | null;
+        if (
+          target?.closest(
+            '.player-mini__top, .player-mini__bar, .player-mini__progress, .player-mini__resize, .player-mini__resize-edge'
+          )
+        ) {
+          return;
+        }
+        const down = miniPointerDownRef.current;
+        if (!down || !isPointerTap(down.x, down.y, e.clientX, e.clientY)) return;
+        if (privacy.state !== 'open') return;
+        if (miniClickTimerRef.current) window.clearTimeout(miniClickTimerRef.current);
+        miniClickTimerRef.current = window.setTimeout(() => {
+          togglePlay();
+        }, 190);
+      }}
+      onDoubleClick={(e) => {
+        if (!showMini) return;
+        const target = e.target as HTMLElement | null;
+        if (
+          target?.closest(
+            '.player-mini__top, .player-mini__bar, .player-mini__progress, .player-mini__resize, .player-mini__resize-edge'
+          )
+        ) {
+          return;
+        }
+        if (miniClickTimerRef.current) {
+          window.clearTimeout(miniClickTimerRef.current);
+          miniClickTimerRef.current = null;
+        }
+        onExpand?.();
+      }}
     >
       {/*
         The mini player's own chrome.
@@ -4642,7 +5132,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
         pixels wide with eleven buttons on it — and the things wanted from a
         window in the corner are only ever pause, expand, and close.
       */}
-      {mini && (
+      {showMini && (
         <>
           {/* Top Window Bar: Title, Grip indicator, and Windows-style Top-Right Window Controls */}
           <div className="player-mini__top" role="presentation">
@@ -4783,14 +5273,14 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
               {formatTimecode(currentTime)} / {rightHandLabel}
             </button>
             <div className="player-mini__spacer" />
-            {floating.isPipSupported && (
+            {(floating.isPipSupported || Boolean(window.cloudstream?.openFloatingPlayer)) && (
               <button
                 type="button"
                 onClick={(e) => {
                   e.stopPropagation();
-                  void floating.togglePip();
+                  void toggleWindowsFloating();
                 }}
-                title="Float above other applications"
+                title="Open in Windows floating window"
                 aria-label="Open in a floating window"
               >
                 <PictureInPicture2 size={15} />
@@ -4880,12 +5370,12 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
           state={privacy.state}
           onPlay={privacy.requestPlay}
           onBack={onBack}
-          compact={mini}
+          compact={showMini}
         />
       )}
 
       {/* Full-bleed click surface that cleanly delegates single-click play/pause and double-click fullscreen */}
-      {!mini && (
+      {!showMini && (
         <div
           className="player__click-surface"
           // A stray click must not reveal a protected video; Play and Space are the explicit asks.
@@ -5278,21 +5768,10 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
             className="icon-button"
             onClick={(e) => {
               e.stopPropagation();
-              /**
-               * Minimise means whatever the preference says it means.
-               *
-               * `onMinimize()` runs in every case, because it is what puts the
-               * browsing UI back in front of the user — that is the request,
-               * and the mode only decides where the picture goes. For `pip`
-               * the element also detaches into an OS window; the in-app mini
-               * window then shows the browser's own "playing in
-               * Picture-in-Picture" placeholder, which is the standard
-               * behaviour and the honest one, since the surface really has
-               * moved.
-               */
-              onMinimize();
-              if (floatingMode === 'pip' && floating.isPipSupported) {
-                void floating.enterPip();
+              if (floatingMode === 'pip') {
+                void enterWindowsFloating();
+              } else {
+                onMinimize();
               }
             }}
             aria-label="Minimise the player"
@@ -5314,14 +5793,14 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
           refuses is worse than one that is absent, because it reads as the
           floating player being broken rather than as unavailable here.
         */}
-        {floating.isPipSupported && (
+        {(floating.isPipSupported || Boolean(window.cloudstream?.openFloatingPlayer)) && (
           <button
-            className={`icon-button${floating.isPip ? ' icon-button--on' : ''}`}
+            className={`icon-button${floatingWindowOpen || floating.isPip ? ' icon-button--on' : ''}`}
             onClick={(e) => {
               e.stopPropagation();
-              void floating.togglePip();
+              void toggleWindowsFloating();
             }}
-            aria-label={floating.isPip ? 'Close the floating window' : 'Open in a floating window'}
+            aria-label={floatingWindowOpen || floating.isPip ? 'Close the floating window' : 'Open in a floating window'}
             title={
               floating.isPip
                 ? 'Bring playback back into the app'
@@ -5349,33 +5828,48 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
         */}
         <div className="player__titles">
           <div className="player__title-row">
-            <h2>{title}</h2>
-            {onOpenDetail && progress?.mediaUrl && (
+            {onOpenDetail && progress?.mediaUrl ? (
               <button
                 type="button"
-                className="player__title-search"
+                className="player__title-btn"
                 onClick={onOpenDetail}
                 title="Open title details"
                 aria-label={`Open details for ${title}`}
               >
-                <Info size={15} />
+                <h2>{title}</h2>
+                <span className="player__title-info-icon" aria-hidden="true">
+                  <Info size={14} />
+                </span>
               </button>
+            ) : (
+              <h2>{title}</h2>
             )}
-            {progress?.mediaUrl && (
-              <button
-                type="button"
-                className={`player__title-search${playbackSaved ? ' player__title-search--on' : ''}`}
-                onClick={() => void savePlayback()}
-                title={
-                  playbackSaved
-                    ? 'Saved — press again to update the place'
-                    : 'Keep this playback: the source, the tracks and where you are'
-                }
-                aria-label="Save this playback"
-              >
-                {playbackSaved ? <BookmarkCheck size={15} /> : <BookmarkPlus size={15} />}
-              </button>
-            )}
+            {progress?.mediaUrl && (() => {
+              const currentSrcId = activeSource?.infoHash || activeSource?.title || '';
+              const isDifferentSource = Boolean(playbackSaved && savedSourceId && currentSrcId && savedSourceId !== currentSrcId);
+              return (
+                <button
+                  type="button"
+                  className={`player__title-search player__title-save-btn${playbackSaved ? ' player__title-search--on' : ''}`}
+                  onClick={() => void toggleSavePlayback()}
+                  title={
+                    playbackSaved
+                      ? isDifferentSource
+                        ? 'Saved with another source — click to update with this source'
+                        : 'Saved — click to remove from saved pages'
+                      : 'Keep this playback: the source, the tracks and where you are'
+                  }
+                  aria-label={playbackSaved ? (isDifferentSource ? 'Update saved source' : 'Saved playback') : 'Save playback'}
+                >
+                  {playbackSaved ? (
+                    isDifferentSource ? <BookmarkPlus size={14} /> : <BookmarkCheck size={14} />
+                  ) : (
+                    <BookmarkPlus size={14} />
+                  )}
+                  <span>{playbackSaved ? (isDifferentSource ? 'Update' : 'Saved') : 'Save'}</span>
+                </button>
+              );
+            })()}
             {onSearchTitle && (
               <button
                 type="button"
@@ -5464,7 +5958,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
         </div>
       </header>
 
-      {resumeNotice !== null && !mini && (
+      {resumeNotice !== null && !showMini && (
         <div className="player__resume-notice" role="status">
           <span>Resumed at {formatTimecode(resumeNotice)}</span>
           <button
@@ -5555,6 +6049,8 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
         releaseName={activeSource?.title}
         delay={subtitleDelay}
         onDelayChange={setSubtitleDelay}
+        currentTime={currentTime}
+        onStyleChange={setSubtitleStyle}
       />
 
       <PlayerDownloadPanel
@@ -5585,6 +6081,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
       />
 
       <footer
+        ref={controlsRef}
         className={`player__controls${controlsVisible || keepControls ? '' : ' hidden'}`}
         onPointerDown={(e) => e.stopPropagation()}
         onClick={(e) => e.stopPropagation()}
@@ -5807,11 +6304,11 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
 
           {series && (
             <button
-              className="icon-button"
+              className={`icon-button${panelOpen ? ' active' : ''}`}
               data-panel-toggle
               onClick={(e) => {
                 e.stopPropagation();
-                setPanelOpen((v) => !v);
+                openSidePanel('episodes', true);
                 revealControls();
               }}
               aria-label="Episodes"
@@ -5823,11 +6320,11 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
 
           {sourceSession && (
             <button
-              className="icon-button"
+              className={`icon-button${sourcePanelOpen ? ' active' : ''}`}
               data-panel-toggle
               onClick={(e) => {
                 e.stopPropagation();
-                setSourcePanelOpen((v) => !v);
+                openSidePanel('sources', true);
                 revealControls();
               }}
               aria-label="Sources"
@@ -5852,7 +6349,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
             data-panel-toggle
             onClick={(e) => {
               e.stopPropagation();
-              setDownloadPanelOpen((v) => !v);
+              openSidePanel('downloads', true);
               revealControls();
             }}
             aria-label="Downloads"
@@ -5912,7 +6409,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
                       type="button"
                       className="hover-menu__footer-action"
                       onClick={() => {
-                        setSubtitlePanelOpen(true);
+                        openSidePanel('subtitles');
                         revealControls();
                       }}
                     >
@@ -5928,7 +6425,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
                   data-panel-toggle
                   onClick={(e) => {
                     e.stopPropagation();
-                    setSubtitlePanelOpen((v) => !v);
+                    openSidePanel('subtitles', true);
                     revealControls();
                   }}
                   aria-label="Search subtitles"

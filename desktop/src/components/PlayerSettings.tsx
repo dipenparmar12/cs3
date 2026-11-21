@@ -16,6 +16,7 @@ type NativePolicy = 'off' | 'auto' | 'aggressive';
 
 type FloatingMode = 'mini' | 'floating' | 'pip' | 'background';
 type BackgroundPlayback = 'continue' | 'audio-only' | 'pause';
+type WheelAction = 'volume' | 'seek';
 
 /**
  * Plain-language names for the stored values.
@@ -38,6 +39,11 @@ const BACKGROUND_LABELS: Record<BackgroundPlayback, string> = {
   pause: 'Pauses',
 };
 
+const WHEEL_ACTION_LABELS: Record<WheelAction, string> = {
+  volume: 'Adjust volume',
+  seek: 'Seek timeline (forward / backward)',
+};
+
 export const PlayerSettings: React.FC = () => {
   const [showSpeedControl, setShowSpeedControl] = useState(false);
   const [showAspectControl, setShowAspectControl] = useState(false);
@@ -49,6 +55,7 @@ export const PlayerSettings: React.FC = () => {
   const [floatingMode, setFloatingMode] = useState<FloatingMode>('mini');
   const [backgroundPlayback, setBackgroundPlayback] = useState<BackgroundPlayback>('continue');
   const [alwaysOnTop, setAlwaysOnTop] = useState(false);
+  const [wheelAction, setWheelAction] = useState<WheelAction>('volume');
 
   useEffect(() => {
     void window.cloudstream?.getPlayerPreferences().then((stored) => {
@@ -56,6 +63,7 @@ export const PlayerSettings: React.FC = () => {
       setFloatingMode(stored.preferences.floatingMode ?? 'mini');
       setBackgroundPlayback(stored.preferences.backgroundPlayback ?? 'continue');
       setAlwaysOnTop(stored.preferences.alwaysOnTop === true);
+      setWheelAction(stored.preferences.wheelAction ?? 'volume');
     });
   }, []);
 
@@ -68,12 +76,14 @@ export const PlayerSettings: React.FC = () => {
     floatingMode?: FloatingMode;
     backgroundPlayback?: BackgroundPlayback;
     alwaysOnTop?: boolean;
+    wheelAction?: WheelAction;
   }) => {
     if (patch.floatingMode !== undefined) setFloatingMode(patch.floatingMode);
     if (patch.backgroundPlayback !== undefined) setBackgroundPlayback(patch.backgroundPlayback);
     if (patch.alwaysOnTop !== undefined) setAlwaysOnTop(patch.alwaysOnTop);
+    if (patch.wheelAction !== undefined) setWheelAction(patch.wheelAction);
     await window.cloudstream?.setPlayerPreferences(patch);
-    setStatusMessage('Saved. It applies the next time you minimise the player.');
+    setStatusMessage('Saved.');
   };
 
   /**
@@ -372,6 +382,27 @@ export const PlayerSettings: React.FC = () => {
             label="Toggle playback speed control"
             stateLabel={showSpeedControl ? 'Enabled' : 'Disabled'}
           />
+        </SettingRow>
+
+        <SettingRow
+          label="Mouse wheel scroll action"
+          note={WHEEL_ACTION_LABELS[wheelAction]}
+          hint={
+            <>
+              Choose what scrolling up or down on the video player does. By default, scrolling
+              up or down adjusts the volume (+/-5%). You can configure it to seek backward or forward
+              along the playback timeline instead.
+            </>
+          }
+        >
+          <select
+            value={wheelAction}
+            onChange={(e) => void saveFloating({ wheelAction: e.target.value as WheelAction })}
+            aria-label="Mouse wheel action"
+          >
+            <option value="volume">Adjust volume (default)</option>
+            <option value="seek">Seek timeline (fast forward / backward)</option>
+          </select>
         </SettingRow>
       </SettingGroup>
 

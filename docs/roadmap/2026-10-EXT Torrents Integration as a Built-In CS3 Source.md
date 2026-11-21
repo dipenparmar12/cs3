@@ -1,6 +1,6 @@
 # PRD: EXT Torrents Integration as a Built-In CS3 Source
 
-**Status:** Proposed  
+**Status:** **Dropped (2026-11-02), kept on record.** Attempted: the live check (§14.0) found a Cloudflare Turnstile checkbox that Electron cannot pass, even with a person ticking it. §14.1–14.7 stay as the design in case the site drops the check or publishes an API  
 **Priority:** High  
 **Platform:** CS3 Desktop  
 **Integration type:** Built-in torrent indexer and metadata source  
@@ -422,3 +422,170 @@ Treat EXT Torrents as a torrent indexer, not as a video-streaming provider.
 Its responsibility is to discover torrent releases, extract their metadata, and supply valid torrent references. CS3's existing torrent manager is responsible for resolving those references into files and playable media.
 
 This separation keeps the integration maintainable, allows torrent handling to improve independently, and prevents website-specific behavior from leaking into the application's core playback architecture.
+
+
+## 14. Implementation design (2026-11-02)
+
+How to build §1–13 in this codebase. Strategy and phasing: [2026-11 Desktop beyond Android](./2026-11-desktop-beyond-android.md).
+
+### 14.0 Live check result and decision (2026-11-02)
+
+| Tried | Result |
+|---|---|
+| `ext.to` from Node | ISP DNS answers with a block address (49.44.79.236). Connecting to the DoH address was refused as working around the block |
+| `ext.to` in the agent's browser pane | Refused ("denied or failed", no reason); `example.com` opened |
+| Mirror `ext2.to` in the agent's browser pane | Opens. Cloudflare "Performing security verification" with a Turnstile **"Verify you are human" checkbox**; still there after 8 s, so not an automatic check |
+| A person ticks it in that pane | **Failed.** Inconclusive: the pane is driven by automation |
+| A person ticks it in a plain Electron 43 window (Chromium 150), the app's reshaped UA (`browserUserAgent`), no automation, its own partition | **Failed.** This is the window CS3's verification would use |
+| The same person in Edge | Passes (the user's report); no `cf_clearance` among the cookies they shared, only an anonymous `PHPSESSID` |
+
+**Decision.**
+
+- No built-in EXT.to indexer for now. Every search would end in a check nobody can pass inside the app.
+- Making Electron imitate Chrome more closely (client hints, brand lists, fingerprints) to get through Turnstile would be evading bot detection. **Out of scope.**
+- Reusing a clearance or session cookie copied from Edge is out of scope for the same reason: Cloudflare binds a clearance to the browser that earned it.
+
+**Not scheduled, if wanted later (small, legitimate):**
+
+| Piece | State |
+|---|---|
+| CS3 opens `magnet:` links from other apps | **Already built**: `electron-builder.yml` `protocols: magnet`; `main.ts` `openableFromArgv` → `app:openLocalFile` → `App.tsx` `handleOpenMagnet`. Not checked from Edge in a packaged install |
+| "Search on EXT Torrents ↗" in the source picker | New: opens the viewer's browser on the site's search for this title (`shell:openExternal`). Search URL to confirm from Edge (copy one search page's address) |
+| Mirror list | `ext.to` and `ext2.to` known; the link tries neither, it opens the one in settings (default `ext2.to`) |
+
+Retest the built-in indexer if the site drops the checkbox or publishes an API. The rest of §14 is the design for that day.
+
+### 14.1 What is known, and what is not
+
+| Fact | Status |
+|---|---|
+| The ISP resolver on the dev machine answers `ext.to` with a block address (49.44.79.236); Cloudflare DoH answers 104.21.82.15 and 172.67.193.81 | Measured 2026-11-02 |
+| The app resolves names with DoH by default (`networkSettings.ts`, `automatic`), and indexer requests go through `net.fetch` (`torrent/http.ts`), which honours it | From the code; **not run against ext.to** |
+| Whether ext.to challenges the app, and with which kind (automatic or checkbox) | **Not verified**: no page was fetched from this environment |
+| Page structure, search URL, where magnets live, whether `.torrent` needs a login, pagination, IMDb-id search | **Not verified**. The site advertises IMDb-id, hash, size, seeder and category search on its advanced-search page (external research); its news page says advanced search is in test mode |
+| An earlier adapter (`claude/android-media-desktop-dybtml`, ee3e010, 2026-08-22: `extTo.ts`, `extToParser.ts`, a "human gateway") | Never merged (AGENTS §14.1). Written without reaching the site, so its parser is structural guesswork; its search URL (`/search/?q=`) is unconfirmed. Use it as a reference for tests, not as code to take |
+
+### 14.2 Phase 0: the live check (needs you)
+
+Nothing below is built until this is done. Two ways to do it; either is enough.
+
+**A. You save the pages** (no credentials leave your machine):
+
+1. In Chrome, with secure DNS on (Settings → Privacy → Use secure DNS), open `https://ext.to/`. Complete any check yourself.
+2. Save each page with **Ctrl+S → "Webpage, HTML only"** into one folder:
+   - home page;
+   - a search for `dune 2021`, and the same search sorted by seeders;
+   - a search for an IMDb id (`tt1160419`), if the site accepts it;
+   - a TV search (`the bear s02`);
+   - one movie detail page and one season-pack detail page;
+   - `https://ext.to/advanced/`.
+3. Open DevTools → Network, run one search, and copy the request URL of the request that returned results (it may be the page itself or an XHR).
+4. Note: does the listing carry a magnet, or only the detail page? Does "Download .torrent" work signed out? What did the check look like (spinner, or a checkbox)?
+5. Do **not** send cookie values. Put the folder path in chat.
+
+**B. Let the agent look**: tried 2026-11-02 and unavailable (§14.0). The agent's direct fetch was refused as a DNS-block workaround, and the desktop app's built-in browser refused `https://ext.to/` ("denied or failed", no reason given) while `example.com` opened. Use A.
+
+Output of Phase 0, committed with the adapter:
+
+- `desktop/electron/torrent/indexers/fixtures/ext-to/*.html` (trimmed to the result list and one detail page each; no scripts, no cookies);
+- the verified search URL, selectors and field list, written into §14.3 in place of the "to confirm" marks.
+
+### 14.3 Design
+
+**Lane.** A `TorrentIndexer` (§1 of the strategy doc): EXT.to answers "which torrents exist for this title", the same question as 1337x. Not a `NativeProvider`, not an extension.
+
+| Piece | File | Notes |
+|---|---|---|
+| Parser (pure) | `torrent/indexers/extToParser.ts` | `parseListing(html, baseUrl) → {rows, markers}` and `parseDetail(html) → {magnet?, torrentUrl?, files?, imdbId?}`. `markers` = the page is a results page (result container present). Fixture tests |
+| Adapter | `torrent/indexers/extTo.ts` | `id = 'extto'`, `name = 'EXT Torrents'`, `specialises = 'any'`. `search()`: one listing request, then detail pages for the top rows by seeders that lack a magnet (cap **8**, 2 in flight, same shape as 1337x's `X1337_DETAIL_LIMIT`) |
+| Registration | `torrent/indexerRegistry.ts` | One `case 'extto'`; listed in Settings → Sources → Places searched |
+| HTTP | `torrent/http.ts` `fetchDocument` | Already: DoH, proxy, challenge sniffing, clearance replay with the UA that earned it, `Retry-After` |
+| Verification | `cs3/clearance.ts` + new visible window (strategy §5.1) | Shared with every other site and with extensions |
+
+**Query.** In order, first that applies:
+
+1. `imdbId` present and IMDb search confirmed in Phase 0 → search by id (exact work; no title matching needed).
+2. Else `withEpisodeTerms(query)` (zero-padded `S01E02`), as 1337x.
+3. Sorted by seeders if the site supports it (to confirm). One page only: the ranker wants the best releases, not all.
+
+**Row → `RawTorrent`.** `title` from the magnet's `dn` when present (not truncated), else the link text; `infoHash` from the magnet (`infoHashFromMagnet`); `torrentUrl` when the site offers one; `sizeBytes` (`parseSize`, base 1000 as sites quote); `seeders`, `leechers`, `publishedAt`, `category`. Then `finaliseResult` as every adapter. A row without a magnet, hash or detail link is not a result row.
+
+**Verdicts** (the outcome's `error`, so the picker and Settings say it plainly):
+
+| Seen | Verdict | Said to the viewer |
+|---|---|---|
+| DNS or connect failure | unreachable | "EXT Torrents can't be reached from this network." |
+| Hidden solve failed on a challenge | needs-verification | "EXT Torrents wants a quick check that you're human." + Verify |
+| `cloudflare-block` | blocked | "EXT Torrents blocks this connection." (no button) |
+| `rate-limited` | rate-limited | "EXT Torrents asked us to slow down; trying again in N s." |
+| Results page, zero rows | **site-changed** | "EXT Torrents changed its pages; its results are off until an update." |
+| No results page markers, no rows | empty | (an ordinary empty answer) |
+
+`site-changed` is counted apart from failures in `indexerBudget` and logged as `indexer_site_changed` (host only).
+
+**Load on the site.** One listing + ≤ 8 detail pages per search; detail pages cached per URL for 6 h (magnets do not change); `indexerBudget` deadline and cooldown apply as for any indexer; nothing runs for a title the search scope excludes.
+
+**Torrent handoff.** Unchanged paths: Play → `TorrentEngine` (stream), Download → `DownloadService`, Copy link and Save .torrent from the row (`torrent:exportFile`). A site `.torrent` is fetched through `http.ts` (with the clearance) and accepted only if its infohash matches the row's (`torrentMetadata.ts`).
+
+### 14.4 Tests
+
+| Test | Covers | Must fail when |
+|---|---|---|
+| `extToParser.test.mts` | Each fixture → expected rows (title, hash, size, seeders) | A selector or field mapping is broken |
+| same | Results page with rows removed → `site-changed`; non-results page → empty | The verdict collapses into empty |
+| same | Header, ad and pagination rows are not results | A non-torrent row is accepted |
+| `extTo.test.mts` (stubbed `setHttpFetch`) | Detail cap 8; only rows lacking a magnet are fetched; IMDb query used when present | Unbounded detail fetches |
+| `botChallenge` existing tests + one for the verification outcome | `cloudflare-challenge` after a failed solve → `needs-verification` | A block offers Verify |
+| `ipc` | `network:verifyHost` registered and exposed | Four-place drift |
+| Live e2e (not CI) | `tools/e2e/` run fetches the real site and prints first rows beside raw HTML | — |
+
+### 14.5 Rollout
+
+- Ships **off** until Phase 0 fixtures exist and one search has played in the built app; then **on**, like the other built-ins.
+- Added to `DEFAULT_INDEXER_CONFIGS` with a bump of `INDEXER_CONFIG_VERSION`: existing installs are re-seeded and keep every on/off choice already made (`indexerRegistry.ts`). Turning it on later is a second bump with `enabled: true`; a viewer who switched it off stays off.
+- Reverting is deleting one case and two files.
+
+### 14.6 UI changes, low fidelity
+
+Only what changes. Everything else (source rows, Play, Download, Copy link, Save .torrent) is as today.
+
+**Settings → Sources → Places searched.** Current rows:
+
+```
+☑ 1337x                     OK · 31 results · 1,240 ms
+☑ BitSearch                 Last error: HTTP 403
+☑ Jackett (all)  Torznab    OK · 112 results · 2,010 ms
+```
+
+Changed: EXT.to joins the list; a row whose failure a person can fix gets a button.
+
+```
+☑ EXT Torrents              Needs a human check      [ Verify ]
+☑ 1337x                     OK · 31 results · 1,240 ms
+☑ BitSearch                 Last error: HTTP 403
+```
+
+After a site change:
+
+```
+☑ EXT Torrents              Site changed — results off until an update
+```
+
+**Source picker.** The source row is unchanged; the origin line names the indexer:
+
+```
+▸ 1080p  WEB  HDR   Dune.Part.Two.2024.2160p.WEB-DL…   👥 1,204  💾 18.3 GB
+  EXT Torrents                                    [▶ Play] [⬇] [🔗] [💾]
+```
+
+The warning above the list changes as in the strategy doc §8.1 (Verify in browser).
+
+**Verification window.** As in the strategy doc §8.2.
+
+### 14.7 Done means
+
+1. With DoH on, a search for a film with an IMDb id returns EXT.to rows in the picker, in the built app.
+2. One row plays through the torrent engine; one downloads; Save .torrent writes a file whose infohash matches.
+3. A checkbox challenge shows Verify; after the person passes it, the same search returns rows without another prompt until the clearance expires.
+4. A block shows no Verify; a rate limit waits; a fixture with its rows removed reads as `site-changed`.
+5. Tests above pass and each fails on the broken code.

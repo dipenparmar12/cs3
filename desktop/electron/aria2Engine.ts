@@ -6,6 +6,13 @@ import path from 'path';
 import fs from 'fs';
 import { app } from 'electron';
 import { describeError } from '../src/utils/errors.ts';
+import {
+  isPreferBundled,
+  orderBinaryCandidates,
+  probeManagedBinarySync,
+  resolveBinaryCandidate,
+  systemSearchDirs,
+} from './platform/toolResolver.ts';
 
 export interface Aria2Progress {
   gid: string;
@@ -70,13 +77,25 @@ export class Aria2Engine {
   }
 
   public getBinaryPath(): string | null {
-    const binaryName = process.platform === 'win32' ? 'aria2c.exe' : 'aria2c';
-    const userBin = app ? path.join(app.getPath('userData'), 'bin', binaryName) : '';
-    const cwdBin = path.join(process.cwd(), 'bin', binaryName);
-
-    if (userBin && fs.existsSync(userBin)) return userBin;
-    if (fs.existsSync(cwdBin)) return cwdBin;
-    return null;
+    const userBin = app ? path.join(app.getPath('userData'), 'bin') : '';
+    const cwdBin = path.join(process.cwd(), 'bin');
+    const bundledDirs = [
+      ...(app?.isPackaged ? [path.join(process.resourcesPath, 'media')] : []),
+      path.join(process.cwd(), 'media-runtime'),
+    ];
+    const candidates = orderBinaryCandidates({
+      name: 'aria2c',
+      preferBundled: isPreferBundled(),
+      bundledDirs,
+      binDir: userBin,
+      cwdBinDir: cwdBin,
+      systemDirs: systemSearchDirs(),
+    });
+    return resolveBinaryCandidate(
+      candidates,
+      (file) => fs.existsSync(file),
+      (candidate) => probeManagedBinarySync('aria2c', candidate.exePath)
+    ).path;
   }
 
   /**

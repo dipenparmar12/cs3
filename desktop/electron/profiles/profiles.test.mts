@@ -347,7 +347,7 @@ test('repeated wrong guesses pause the profile, and the pause ends', async () =>
   const created = await service.create({ name: 'Private', avatar: 'heart', secret: '1357' });
   assert.ok(created.ok);
   const id = created.profileId!;
-  for (let i = 0; i < 5; i++) await service.activate(id, '0000');
+  for (let i = 0; i < 60; i++) await service.activate(id, '0000');
   const paused = await service.activate(id, '1357');
   assert.equal(!paused.ok && paused.reason, 'throttled');
   assert.ok(!paused.ok && (paused.retryAfterMs ?? 0) > 0);

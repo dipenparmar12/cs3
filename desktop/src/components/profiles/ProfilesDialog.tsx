@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { Copy, Lock, Pencil, Trash2, UserPlus } from 'lucide-react';
 import { Button, Checkbox, Dialog, DialogActions, FormField, Input, SecretInput } from '../ui';
 import { ProfileAvatar, PROFILE_AVATARS } from './ProfileAvatar';
@@ -291,6 +291,33 @@ const UnlockView: React.FC<{
   onUnlock: (secret: string) => void | Promise<void>;
 }> = ({ profile, busy, error, onCancel, onUnlock }) => {
   const [secret, setSecret] = useState('');
+  const [shaking, setShaking] = useState(false);
+  const lastFailedAttempt = React.useRef<string | null>(null);
+
+  // Clear input and shake when an error occurs
+  useEffect(() => {
+    if (error) {
+      setShaking(false);
+      requestAnimationFrame(() => setShaking(true));
+      setSecret('');
+    }
+  }, [error]);
+
+  const handleUnlock = (toUnlock: string) => {
+    if (busy || !toUnlock) return;
+    lastFailedAttempt.current = toUnlock;
+    void onUnlock(toUnlock);
+  };
+
+  // Windows PIN auto-unlock: automatically triggers unlock when user enters a 4-digit or 6-digit PIN
+  useEffect(() => {
+    if (busy || !secret) return;
+    if (secret === lastFailedAttempt.current) return;
+    if (/^\d{4}$/.test(secret) || /^\d{6}$/.test(secret)) {
+      handleUnlock(secret);
+    }
+  }, [secret, busy]);
+
   return (
     <Dialog
       size="sm"
@@ -304,17 +331,18 @@ const UnlockView: React.FC<{
           <Button onClick={onCancel} disabled={busy}>
             Cancel
           </Button>
-          <Button variant="prominent" loading={busy} disabled={!secret} onClick={() => void onUnlock(secret)}>
+          <Button variant="prominent" loading={busy} disabled={!secret} onClick={() => handleUnlock(secret)}>
             Unlock
           </Button>
         </DialogActions>
       }
     >
       <form
-        className="profiles-dialog__unlock"
+        className={`profiles-dialog__unlock${shaking ? ' profiles-dialog__unlock--shake' : ''}`}
+        onAnimationEnd={() => setShaking(false)}
         onSubmit={(event) => {
           event.preventDefault();
-          if (secret && !busy) void onUnlock(secret);
+          handleUnlock(secret);
         }}
       >
         <ProfileAvatar avatar={profile.avatar} size="lg" />

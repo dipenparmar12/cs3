@@ -416,18 +416,74 @@ select.ui-select:disabled { opacity: var(--control-disabled-opacity); cursor: no
 .bucket-trigger--on { border-color: var(--accent-primary); background: var(--control-selected-bg); color: var(--accent-light); }
 
 /* Library card controls on the shared tokens. */
+.library-buckets {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+}
+.library-buckets__select { margin-left: auto; }
+.library-status-note {
+  margin: 0;
+  color: var(--text-muted);
+  font-size: var(--text-sm);
+}
+.library-loading {
+  color: var(--text-muted);
+  font-size: var(--text-base);
+}
+
+.library-card .poster-info {
+  height: auto;
+  min-height: 76px;
+  overflow: visible;
+  flex: 1 1 auto;
+  justify-content: space-between;
+  gap: var(--space-2);
+  padding: var(--space-3);
+}
+.library-card__identity {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  min-width: 0;
+}
+.library-card .poster-title {
+  white-space: normal;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  line-height: 1.3;
+}
+.library-card .poster-badge {
+  left: 8px;
+  right: auto;
+}
+.library-card .poster-resume {
+  margin-top: 0;
+  font-size: var(--text-xs);
+  line-height: 1.3;
+}
+.library-card .library-card__actions {
+  margin-top: var(--space-1);
+  padding-top: var(--space-2);
+  border-top: 1px solid var(--border-subtle);
+}
 .library-card__status { flex: 1; min-width: 0; }
-/* Library card: remove and saved sources live on the poster (fixed card height). */
+/* Library card: remove and saved sources live on the poster (no clipping in the body). */
 .library-card__remove, .library-card__sources-chip {
   position: absolute; z-index: 3; display: inline-flex; align-items: center; gap: 0.25rem;
-  border: 1px solid rgba(255, 255, 255, 0.18); background: rgba(10, 12, 18, 0.78); color: #fff;
-  font: inherit; font-size: 0.72rem; cursor: pointer; backdrop-filter: blur(6px);
+  border: 1px solid var(--border-strong); background: rgba(10, 12, 18, 0.82); color: var(--text-main);
+  font: inherit; font-size: var(--text-xs); cursor: pointer; backdrop-filter: blur(6px);
+  transition: opacity var(--duration-fast) var(--ease-standard), background-color var(--duration-fast) var(--ease-standard);
 }
-.library-card__remove { top: 0.4rem; right: 0.4rem; width: 1.6rem; height: 1.6rem; justify-content: center; border-radius: 50%; opacity: 0; transition: opacity 120ms ease; }
-.poster-card:hover .library-card__remove, .library-card__remove:focus-visible { opacity: 1; }
-.library-card__remove:hover { background: var(--danger, #e5484d); border-color: transparent; }
-.library-card__sources-chip { left: 0.4rem; bottom: 0.55rem; padding: 0.15rem 0.45rem; border-radius: 999px; }
-.library-card__sources-chip:hover, .library-card__sources-chip:focus-visible { background: var(--accent, #3b82f6); border-color: transparent; }
+.library-card__remove { top: 0.45rem; right: 0.45rem; width: 1.65rem; height: 1.65rem; justify-content: center; border-radius: var(--radius-full); opacity: 0; }
+.poster-card:hover .library-card__remove,
+.poster-card:focus-within .library-card__remove,
+.library-card__remove:focus-visible { opacity: 1; }
+.library-card__remove:hover { background: var(--control-danger); border-color: transparent; color: #fff; }
+.library-card__sources-chip { left: 0.45rem; bottom: 0.55rem; padding: 0.15rem 0.5rem; border-radius: var(--radius-full); }
+.library-card__sources-chip:hover, .library-card__sources-chip:focus-visible { background: var(--accent-primary); border-color: transparent; color: #fff; }
 @media (hover: none) { .library-card__remove { opacity: 1; } }
 
 /* --- Erase my data (Settings → Privacy) ----------------------------------- */

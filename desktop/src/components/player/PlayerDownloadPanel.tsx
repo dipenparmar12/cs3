@@ -2,7 +2,7 @@ import React, { useState, useMemo } from 'react';
 import { useFlash } from '../../utils/useFlash';
 import {
   X, Play, Pause, RotateCw, Trash2, Check, Copy, Download, FolderOpen, ArrowUpRight,
-  Layers, CheckCircle2, PauseCircle, AlertCircle,
+  CheckCircle2,
 } from 'lucide-react';
 import type { DownloadTask } from '../../types/download';
 import { DownloadState } from '../../types/download';
@@ -11,8 +11,8 @@ import { formatEtaDuration, formatPanelSize, formatTransferRate } from '../../ut
 /**
  * The download summary shown over the player.
  *
- * Provides instant filtering (Active, Done, Paused, Failed, All) and quick management
- * controls without needing to leave playback.
+ * Leads with the current video, keeps active and failed downloads easy to act
+ * on, and lets completed items stay quiet until hovered or focused.
  */
 
 export type DownloadFilterTab = 'all' | 'downloading' | 'paused' | 'failed' | 'completed';
@@ -28,14 +28,33 @@ interface PlayerDownloadPanelProps {
   /** Leaves the player running and shows the full Downloads screen. */
   onOpenDownloads?: () => void;
   /**
-   * The video on screen, and its download if one exists. The panel leads with
-   * it: "Download this video", or this video's progress — the action the
-   * control bar's second download icon used to stand for.
+   * The video on screen, and its download if one exists.
    */
   current?: DownloadTask | null;
   currentTitle?: string;
   currentDetail?: string;
   onDownloadCurrent?: () => void;
+}
+
+const isActiveState = (state: DownloadState): boolean =>
+  state === DownloadState.Downloading ||
+  state === DownloadState.Queued ||
+  state === DownloadState.Retrying ||
+  state === DownloadState.RefreshingSource;
+
+function formatTaskSubtitle(task: DownloadTask): string {
+  const parts: string[] = [];
+  if (task.resolution) parts.push(`${task.resolution}p`);
+  if (task.state === DownloadState.Completed) {
+    if (task.totalBytes > 0) parts.push(formatPanelSize(task.totalBytes));
+    else if (task.bytesDownloaded > 0) parts.push(formatPanelSize(task.bytesDownloaded));
+  } else if (task.totalBytes > 0) {
+    parts.push(`${formatPanelSize(task.bytesDownloaded)} of ${formatPanelSize(task.totalBytes)}`);
+  } else if (task.bytesDownloaded > 0) {
+    parts.push(formatPanelSize(task.bytesDownloaded));
+  }
+  if (task.providerName) parts.push(task.providerName);
+  return parts.join(' · ');
 }
 
 export const PlayerDownloadPanel: React.FC<PlayerDownloadPanelProps> = ({
@@ -62,20 +81,10 @@ export const PlayerDownloadPanel: React.FC<PlayerDownloadPanelProps> = ({
     let failed = 0;
 
     for (const t of tasks) {
-      if (
-        t.state === DownloadState.Downloading ||
-        t.state === DownloadState.Queued ||
-        t.state === DownloadState.Retrying ||
-        t.state === DownloadState.RefreshingSource
-      ) {
-        downloading++;
-      } else if (t.state === DownloadState.Completed) {
-        completed++;
-      } else if (t.state === DownloadState.Paused) {
-        paused++;
-      } else if (t.state === DownloadState.Failed) {
-        failed++;
-      }
+      if (isActiveState(t.state)) downloading++;
+      else if (t.state === DownloadState.Completed) completed++;
+      else if (t.state === DownloadState.Paused) paused++;
+      else if (t.state === DownloadState.Failed) failed++;
     }
 
     return {
@@ -89,36 +98,21 @@ export const PlayerDownloadPanel: React.FC<PlayerDownloadPanelProps> = ({
 
   const filteredTasks = useMemo(() => {
     const list = tasks.filter((t) => {
-      if (activeFilter === 'downloading') {
-        return (
-          t.state === DownloadState.Downloading ||
-          t.state === DownloadState.Queued ||
-          t.state === DownloadState.Retrying ||
-          t.state === DownloadState.RefreshingSource
-        );
-      }
+      if (activeFilter === 'downloading') return isActiveState(t.state);
       if (activeFilter === 'paused') return t.state === DownloadState.Paused;
       if (activeFilter === 'failed') return t.state === DownloadState.Failed;
       if (activeFilter === 'completed') return t.state === DownloadState.Completed;
       return true;
     });
 
-    // Recently downloaded items come 1st
+    // Recently queued or updated items stay near the top.
     list.sort((a, b) => (b.createdTime || 0) - (a.createdTime || 0));
-
     return list;
   }, [tasks, activeFilter]);
 
   const handlePauseAll = () => {
     for (const t of tasks) {
-      if (
-        t.state === DownloadState.Downloading ||
-        t.state === DownloadState.Queued ||
-        t.state === DownloadState.Retrying ||
-        t.state === DownloadState.RefreshingSource
-      ) {
-        onPause(t.id);
-      }
+      if (isActiveState(t.state)) onPause(t.id);
     }
   };
 
@@ -132,9 +126,7 @@ export const PlayerDownloadPanel: React.FC<PlayerDownloadPanelProps> = ({
 
   const handleClearCompleted = () => {
     for (const t of tasks) {
-      if (t.state === DownloadState.Completed) {
-        onRemove(t.id);
-      }
+      if (t.state === DownloadState.Completed) onRemove(t.id);
     }
   };
 
@@ -144,7 +136,7 @@ export const PlayerDownloadPanel: React.FC<PlayerDownloadPanelProps> = ({
     const percent =
       t.totalBytes > 0 ? Math.min(100, Math.floor((t.bytesDownloaded / t.totalBytes) * 100)) : 0;
     const lines = [
-      `CloudStream Desktop — Download Metadata`,
+      `CloudStream Desktop — Download Details`,
       `Title:       ${t.title}`,
       `Provider:    ${t.providerName || 'Built-in'}`,
       `Quality:     ${t.resolution ? `${t.resolution}p` : t.quality || 'Unknown'}`,
@@ -163,56 +155,53 @@ export const PlayerDownloadPanel: React.FC<PlayerDownloadPanelProps> = ({
     setCopiedId(t.id);
   };
 
+  const summaryFact =
+    tasks.length === 0
+      ? 'Nothing saved yet'
+      : counts.downloading > 0
+        ? `${counts.downloading} downloading · ${counts.completed} saved`
+        : `${counts.completed} saved${counts.failed > 0 ? ` · ${counts.failed} failed` : ''}`;
+
+  const filterTabs: Array<{ id: DownloadFilterTab; label: string; count: number }> = [
+    { id: 'all', label: 'All', count: counts.all },
+    { id: 'downloading', label: 'Active', count: counts.downloading },
+    { id: 'paused', label: 'Paused', count: counts.paused },
+    { id: 'failed', label: 'Failed', count: counts.failed },
+    { id: 'completed', label: 'Done', count: counts.completed },
+  ];
+
+  const hasBulkActions =
+    counts.downloading > 0 || counts.paused > 0 || counts.failed > 0 || counts.completed > 0;
+
   return (
-    <div
+    <aside
       className="player-panel player-download-panel episode-panel-overlay"
-      style={{
-        position: 'absolute',
-        top: 0,
-        right: 0,
-        bottom: 0,
-        width: '380px',
-        backgroundColor: 'rgba(12, 15, 23, 0.96)',
-        backdropFilter: 'blur(12px)',
-        zIndex: 60,
-        display: 'flex',
-        flexDirection: 'column',
-        borderLeft: '1px solid rgba(255, 255, 255, 0.1)',
-        boxShadow: '-8px 0 24px rgba(0, 0, 0, 0.6)',
-        color: '#fff',
-      }}
+      aria-label="Downloads"
     >
-      {/* Panel Header */}
-      <div
-        style={{
-          padding: '1.1rem 1.25rem',
-          display: 'flex',
-          justifyContent: 'space-between',
-          alignItems: 'center',
-          borderBottom: '1px solid rgba(255, 255, 255, 0.1)',
-        }}
-      >
-        <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem' }}>
-          <Download size={19} style={{ color: 'var(--accent-light, #60a5fa)' }} />
-          <h3 style={{ margin: 0, fontSize: '0.98rem', fontWeight: 600 }}>
-            Downloads ({tasks.length})
-          </h3>
+      <header className="player-panel__head">
+        <div>
+          <h3>Downloads</h3>
+          <div className="player-panel__facts">
+            <span>{summaryFact}</span>
+          </div>
         </div>
         <button
+          type="button"
           className="icon-button"
           onClick={onClose}
           aria-label="Close download panel"
-          style={{ background: 'transparent', border: 'none', color: '#aaa', cursor: 'pointer' }}
         >
-          <X size={19} />
+          <X size={18} />
         </button>
-      </div>
+      </header>
 
       {onDownloadCurrent && (
         <div className="player-dl-current">
           <div className="player-dl-current__text">
-            <span className="player-dl-current__label">This video</span>
-            <span className="player-dl-current__title" title={currentTitle}>{currentTitle}</span>
+            <span className="player-dl-current__label">Current video</span>
+            <span className="player-dl-current__title" title={currentTitle}>
+              {currentTitle}
+            </span>
             {currentDetail && <span className="player-dl-current__detail">{currentDetail}</span>}
           </div>
           {!current ? (
@@ -221,7 +210,7 @@ export const PlayerDownloadPanel: React.FC<PlayerDownloadPanelProps> = ({
             </button>
           ) : current.state === DownloadState.Completed ? (
             <span className="player-dl-current__state player-dl-current__state--done">
-              <CheckCircle2 size={14} /> Downloaded
+              <CheckCircle2 size={14} /> Saved
             </span>
           ) : (
             <div className="player-dl-current__progress">
@@ -235,11 +224,23 @@ export const PlayerDownloadPanel: React.FC<PlayerDownloadPanelProps> = ({
                       : 'Starting…'}
               </span>
               {current.state === DownloadState.Downloading ? (
-                <button type="button" className="icon-button" onClick={() => onPause(current.id)} aria-label="Pause this download" title="Pause">
+                <button
+                  type="button"
+                  className="icon-button"
+                  onClick={() => onPause(current.id)}
+                  aria-label="Pause this download"
+                  title="Pause"
+                >
                   <Pause size={14} />
                 </button>
-              ) : (current.state === DownloadState.Paused || current.state === DownloadState.Failed) ? (
-                <button type="button" className="icon-button" onClick={() => onResume(current.id)} aria-label="Resume this download" title="Resume">
+              ) : current.state === DownloadState.Paused || current.state === DownloadState.Failed ? (
+                <button
+                  type="button"
+                  className="icon-button"
+                  onClick={() => onResume(current.id)}
+                  aria-label="Resume this download"
+                  title="Resume"
+                >
                   <Play size={14} />
                 </button>
               ) : null}
@@ -248,144 +249,95 @@ export const PlayerDownloadPanel: React.FC<PlayerDownloadPanelProps> = ({
         </div>
       )}
 
-      {/* Filter Tabs Header in requested order: ALL, Active, Paused, Failed, Done */}
-      <div className="player-dl-tabs">
-        <button
-          type="button"
-          className={`player-dl-tab ${activeFilter === 'all' ? 'player-dl-tab--active' : ''}`}
-          onClick={() => setActiveFilter('all')}
-        >
-          <Layers size={13} />
-          <span>All</span>
-          <span className="player-dl-tab__count">({counts.all})</span>
-        </button>
-
-        <button
-          type="button"
-          className={`player-dl-tab ${activeFilter === 'downloading' ? 'player-dl-tab--active' : ''}`}
-          onClick={() => setActiveFilter('downloading')}
-        >
-          <RotateCw
-            size={12}
-            className={counts.downloading > 0 ? 'spin' : ''}
-            style={{ color: counts.downloading > 0 ? '#60a5fa' : undefined }}
-          />
-          <span>Active</span>
-          <span className="player-dl-tab__count">({counts.downloading})</span>
-        </button>
-
-        <button
-          type="button"
-          className={`player-dl-tab ${activeFilter === 'paused' ? 'player-dl-tab--active' : ''}`}
-          onClick={() => setActiveFilter('paused')}
-        >
-          <PauseCircle size={12} />
-          <span>Paused</span>
-          <span className="player-dl-tab__count">({counts.paused})</span>
-        </button>
-
-        <button
-          type="button"
-          className={`player-dl-tab ${activeFilter === 'failed' ? 'player-dl-tab--active' : ''}`}
-          onClick={() => setActiveFilter('failed')}
-        >
-          <AlertCircle size={12} style={{ color: counts.failed > 0 ? '#f87171' : undefined }} />
-          <span>Failed</span>
-          <span className="player-dl-tab__count" style={{ color: counts.failed > 0 ? '#f87171' : undefined }}>
-            ({counts.failed})
-          </span>
-        </button>
-
-        <button
-          type="button"
-          className={`player-dl-tab ${activeFilter === 'completed' ? 'player-dl-tab--active' : ''}`}
-          onClick={() => setActiveFilter('completed')}
-        >
-          <CheckCircle2 size={12} style={{ color: counts.completed > 0 ? '#10b981' : undefined }} />
-          <span>Done</span>
-          <span className="player-dl-tab__count">({counts.completed})</span>
-        </button>
+      {/* Filter pills */}
+      <div className="player-dl-tabs" role="tablist" aria-label="Filter downloads">
+        {filterTabs.map((tab) => {
+          const isActive = activeFilter === tab.id;
+          const showCount = tab.id === 'all' || tab.count > 0;
+          return (
+            <button
+              key={tab.id}
+              type="button"
+              role="tab"
+              aria-selected={isActive}
+              className={`player-dl-tab${isActive ? ' player-dl-tab--active' : ''}`}
+              onClick={() => setActiveFilter(tab.id)}
+            >
+              <span>{tab.label}</span>
+              {showCount && (
+                <span
+                  className={`player-dl-tab__count${
+                    tab.id === 'failed' && tab.count > 0 ? ' player-dl-tab__count--warn' : ''
+                  }`}
+                >
+                  {tab.count}
+                </span>
+              )}
+            </button>
+          );
+        })}
       </div>
 
-      {/* Quick Action Controls Subheader */}
-      {tasks.length > 0 && (
+      {/* Quiet bulk controls — only rendered when actionable */}
+      {hasBulkActions && (
         <div className="player-dl-actions">
-          <span>
-            {counts.downloading > 0 ? `${counts.downloading} downloading` : 'Idle'} • {counts.completed} done
-          </span>
-          <div className="player-dl-actions__btns">
-            {counts.downloading > 0 && (
-              <button
-                type="button"
-                className="player-dl-action-btn"
-                onClick={handlePauseAll}
-                title="Pause active downloads"
-              >
-                <Pause size={11} /> Pause All
-              </button>
-            )}
-            {(counts.paused > 0 || counts.failed > 0) && (
-              <button
-                type="button"
-                className="player-dl-action-btn"
-                onClick={handleResumeAll}
-                title="Resume paused / retry failed"
-              >
-                <Play size={11} /> Resume
-              </button>
-            )}
-            {counts.completed > 0 && (
-              <button
-                type="button"
-                className="player-dl-action-btn"
-                onClick={handleClearCompleted}
-                title="Clear completed downloads from queue"
-              >
-                <Trash2 size={11} /> Clear Done
-              </button>
-            )}
-          </div>
+          {counts.downloading > 0 && (
+            <button
+              type="button"
+              className="player-dl-action-btn"
+              onClick={handlePauseAll}
+              title="Pause active downloads"
+            >
+              <Pause size={12} /> Pause all
+            </button>
+          )}
+          {(counts.paused > 0 || counts.failed > 0) && (
+            <button
+              type="button"
+              className="player-dl-action-btn"
+              onClick={handleResumeAll}
+              title="Resume paused or retry failed downloads"
+            >
+              <Play size={12} /> Resume all
+            </button>
+          )}
+          {counts.completed > 0 && (
+            <button
+              type="button"
+              className="player-dl-action-btn"
+              onClick={handleClearCompleted}
+              title="Clear finished items from this list"
+            >
+              Clear finished
+            </button>
+          )}
         </div>
       )}
 
-      {/* Panel Content List */}
-      <div style={{ flex: 1, overflowY: 'auto', padding: '0.85rem', display: 'flex', flexDirection: 'column', gap: '0.65rem' }}>
+      {/* Download queue & saved items */}
+      <div className="player-dl-list">
         {tasks.length === 0 ? (
-          <div
-            style={{
-              padding: '2.5rem 1rem',
-              textAlign: 'center',
-              color: 'var(--text-subtle, #888)',
-              fontSize: '0.88rem',
-            }}
-          >
-            No downloads in queue.
+          <div className="player-dl-empty">
+            Downloads you start will appear here so you can watch offline.
           </div>
         ) : filteredTasks.length === 0 ? (
-          <div
-            style={{
-              padding: '2.5rem 1rem',
-              textAlign: 'center',
-              color: 'var(--text-subtle, #888)',
-              fontSize: '0.86rem',
-            }}
-          >
+          <div className="player-dl-empty">
             {activeFilter === 'downloading'
-              ? 'No active downloads in progress.'
+              ? 'Nothing is downloading right now.'
               : activeFilter === 'completed'
-              ? 'No completed downloads.'
-              : activeFilter === 'paused'
-              ? 'No paused downloads.'
-              : activeFilter === 'failed'
-              ? 'No failed downloads.'
-              : 'No downloads found in this filter.'}
+                ? 'No finished downloads yet.'
+                : activeFilter === 'paused'
+                  ? 'No paused downloads.'
+                  : activeFilter === 'failed'
+                    ? 'No failed downloads.'
+                    : 'No downloads match this filter.'}
             <div style={{ marginTop: '0.6rem' }}>
               <button
                 type="button"
                 className="player-dl-action-btn"
                 onClick={() => setActiveFilter('all')}
               >
-                Show All ({tasks.length})
+                Show all ({tasks.length})
               </button>
             </div>
           </div>
@@ -396,149 +348,132 @@ export const PlayerDownloadPanel: React.FC<PlayerDownloadPanelProps> = ({
                 ? Math.min(100, Math.floor((task.bytesDownloaded / task.totalBytes) * 100))
                 : 0;
             const isDownloading = task.state === DownloadState.Downloading;
-            const isResumable =
-              task.state === DownloadState.Paused || task.state === DownloadState.Failed;
+            const isQueued = task.state === DownloadState.Queued;
             const isRefreshing =
               task.state === DownloadState.RefreshingSource || task.state === DownloadState.Retrying;
+            const isPaused = task.state === DownloadState.Paused;
+            const isFailed = task.state === DownloadState.Failed;
+            const isCompleted = task.state === DownloadState.Completed;
+            const showBar = !isCompleted && (isDownloading || isPaused || percent > 0);
+            const subtitle = formatTaskSubtitle(task);
+            const displayTitle = task.episodeNumber
+              ? `${task.title} · Ep ${task.episodeNumber}`
+              : task.title;
 
             return (
               <div
                 key={task.id}
-                style={{
-                  backgroundColor: 'rgba(255, 255, 255, 0.05)',
-                  borderRadius: '8px',
-                  padding: '0.85rem',
-                  border: '1px solid rgba(255, 255, 255, 0.08)',
-                  display: 'flex',
-                  flexDirection: 'column',
-                  gap: '0.4rem',
-                }}
+                className={`player-dl-card${
+                  isFailed ? ' player-dl-card--failed' : isDownloading || isRefreshing ? ' player-dl-card--active' : ''
+                }`}
               >
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: '0.5rem' }}>
-                  <div style={{ overflow: 'hidden' }}>
-                    <div
-                      style={{
-                        fontSize: '0.86rem',
-                        fontWeight: 600,
-                        color: '#fff',
-                        whiteSpace: 'nowrap',
-                        overflow: 'hidden',
-                        textOverflow: 'ellipsis',
-                      }}
-                      title={task.title}
-                    >
-                      {task.title} {task.episodeNumber ? `• Ep ${task.episodeNumber}` : ''}
-                    </div>
-                    <div style={{ fontSize: '0.72rem', color: 'var(--text-subtle, #888)' }}>
-                      {task.providerName || 'aria2c'} {task.resolution ? `• ${task.resolution}p` : ''}
-                    </div>
-                  </div>
-                  <div style={{ fontSize: '0.75rem', fontWeight: 600, color: 'var(--accent-light, #60a5fa)', flexShrink: 0 }}>
-                    {isDownloading ? (
-                      formatTransferRate(task.downloadSpeed)
-                    ) : isRefreshing ? (
-                      <span style={{ display: 'inline-flex', alignItems: 'center', gap: '0.25rem' }}>
-                        <RotateCw size={12} className="spin" /> Retrying...
-                      </span>
-                    ) : (
-                      task.state
-                    )}
-                  </div>
-                </div>
-
-                {/* Progress Bar */}
-                <div
-                  style={{
-                    height: '5px',
-                    backgroundColor: 'rgba(255, 255, 255, 0.1)',
-                    borderRadius: '3px',
-                    overflow: 'hidden',
-                    width: '100%',
-                  }}
-                >
-                  <div
-                    style={{
-                      height: '100%',
-                      width: `${percent}%`,
-                      backgroundColor:
-                        task.state === DownloadState.Completed
-                          ? 'var(--status-success, #10b981)'
-                          : 'var(--accent-primary, #3b82f6)',
-                      transition: 'width 0.3s ease',
-                    }}
-                  />
-                </div>
-
-                <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.72rem', color: 'var(--text-muted, #aaa)' }}>
-                  <span>
-                    {formatPanelSize(task.bytesDownloaded)} / {formatPanelSize(task.totalBytes)} ({percent}%)
+                <div className="player-dl-card__top">
+                  <span className="player-dl-card__title" title={displayTitle}>
+                    {displayTitle}
                   </span>
-                  <span>{task.etaSeconds > 0 ? `ETA: ${formatEtaDuration(task.etaSeconds)}` : ''}</span>
+
+                  {isDownloading ? (
+                    <span className="player-dl-card__status player-dl-card__status--active">
+                      <span>
+                        {task.totalBytes > 0 ? `${percent}%` : ''}
+                        {task.downloadSpeed > 0
+                          ? `${task.totalBytes > 0 ? ' · ' : ''}${formatTransferRate(task.downloadSpeed)}`
+                          : ''}
+                      </span>
+                      <button
+                        type="button"
+                        className="player-dl-card__pill"
+                        onClick={() => onPause(task.id)}
+                        aria-label="Pause download"
+                      >
+                        <Pause size={11} /> Pause
+                      </button>
+                    </span>
+                  ) : isRefreshing ? (
+                    <span className="player-dl-card__status player-dl-card__status--active">
+                      <RotateCw size={12} className="spin" /> Reconnecting…
+                    </span>
+                  ) : isQueued ? (
+                    <span className="player-dl-card__status">Waiting</span>
+                  ) : isPaused ? (
+                    <button
+                      type="button"
+                      className="player-dl-card__pill"
+                      onClick={() => onResume(task.id)}
+                      aria-label="Resume download"
+                    >
+                      <Play size={11} /> Resume
+                    </button>
+                  ) : isFailed ? (
+                    <button
+                      type="button"
+                      className="player-dl-card__pill player-dl-card__pill--retry"
+                      onClick={() => onResume(task.id)}
+                      aria-label="Retry download"
+                    >
+                      <RotateCw size={11} /> Retry
+                    </button>
+                  ) : null}
                 </div>
 
-                {task.errorMessage && (
-                  <div
-                    style={{
-                      fontSize: '0.72rem',
-                      color: task.state === DownloadState.Failed ? '#f87171' : '#aaa',
-                      whiteSpace: 'nowrap',
-                      overflow: 'hidden',
-                      textOverflow: 'ellipsis',
-                    }}
-                    title={task.errorMessage}
-                  >
-                    {task.errorMessage}
+                {showBar && (
+                  <div className="player-dl-card__bar">
+                    <div
+                      className={`player-dl-card__fill${isPaused ? ' player-dl-card__fill--paused' : ''}`}
+                      style={{ width: `${percent}%` }}
+                    />
                   </div>
                 )}
 
-                {/* Controls */}
-                <div style={{ display: 'flex', gap: '0.35rem', marginTop: '0.2rem', justifyContent: 'flex-end' }}>
-                  <button
-                    className="btn btn-secondary btn-icon"
-                    onClick={() => copyTaskMeta(task)}
-                    title="Copy Download Debug Metadata"
-                    style={{ padding: '0.3rem 0.5rem', background: 'rgba(255, 255, 255, 0.08)', border: 'none', borderRadius: '4px', color: '#ccc', cursor: 'pointer' }}
+                <div className="player-dl-card__bottom">
+                  <span
+                    className={`player-dl-card__meta${isFailed ? ' player-dl-card__meta--failed' : ''}`}
+                    title={isFailed && task.errorMessage ? task.errorMessage : subtitle}
                   >
-                    {copiedId === task.id ? <Check size={13} style={{ color: '#10b981' }} /> : <Copy size={13} />}
-                  </button>
-                  {isDownloading && (
+                    {isFailed
+                      ? task.errorMessage || "Couldn't finish download"
+                      : isDownloading && task.etaSeconds > 0
+                        ? `${subtitle}${subtitle ? ' · ' : ''}${formatEtaDuration(task.etaSeconds)} left`
+                        : isPaused
+                          ? `${subtitle}${subtitle ? ' · ' : ''}Paused`
+                          : subtitle || (isCompleted ? 'Saved' : '')}
+                  </span>
+
+                  <div className="player-dl-card__actions">
+                    {onReveal && (
+                      <button
+                        type="button"
+                        className="player-dl-card__btn"
+                        onClick={() => onReveal(task.targetFilePath)}
+                        title="Show file in folder"
+                        aria-label="Show file in folder"
+                      >
+                        <FolderOpen size={13} />
+                      </button>
+                    )}
                     <button
-                      className="btn btn-secondary btn-icon"
-                      onClick={() => onPause(task.id)}
-                      title="Pause Download"
-                      style={{ padding: '0.3rem 0.5rem', background: 'rgba(255, 255, 255, 0.08)', border: 'none', borderRadius: '4px', color: '#ccc', cursor: 'pointer' }}
+                      type="button"
+                      className="player-dl-card__btn"
+                      onClick={() => copyTaskMeta(task)}
+                      title="Copy technical details"
+                      aria-label="Copy technical details"
                     >
-                      <Pause size={13} />
+                      {copiedId === task.id ? (
+                        <Check size={13} style={{ color: '#10b981' }} />
+                      ) : (
+                        <Copy size={13} />
+                      )}
                     </button>
-                  )}
-                  {isResumable && (
                     <button
-                      className="btn btn-secondary btn-icon"
-                      onClick={() => onResume(task.id)}
-                      title={task.state === DownloadState.Failed ? 'Retry Download' : 'Resume Download'}
-                      style={{ padding: '0.3rem 0.5rem', background: 'rgba(255, 255, 255, 0.08)', border: 'none', borderRadius: '4px', color: '#ccc', cursor: 'pointer' }}
+                      type="button"
+                      className="player-dl-card__btn player-dl-card__btn--danger"
+                      onClick={() => onRemove(task.id)}
+                      title={isCompleted ? 'Remove from list' : 'Cancel & remove'}
+                      aria-label={isCompleted ? 'Remove download from list' : 'Cancel and remove download'}
                     >
-                      {task.state === DownloadState.Failed ? <RotateCw size={13} /> : <Play size={13} />}
+                      <Trash2 size={13} />
                     </button>
-                  )}
-                  {onReveal && (
-                    <button
-                      className="btn btn-secondary btn-icon"
-                      onClick={() => onReveal(task.targetFilePath)}
-                      title="Show in Folder"
-                      style={{ padding: '0.3rem 0.5rem', background: 'rgba(255, 255, 255, 0.08)', border: 'none', borderRadius: '4px', color: '#ccc', cursor: 'pointer' }}
-                    >
-                      <FolderOpen size={13} />
-                    </button>
-                  )}
-                  <button
-                    className="btn btn-secondary btn-icon"
-                    onClick={() => onRemove(task.id)}
-                    title="Cancel & Remove"
-                    style={{ padding: '0.3rem 0.5rem', background: 'rgba(255, 255, 255, 0.08)', border: 'none', borderRadius: '4px', color: '#f87171', cursor: 'pointer' }}
-                  >
-                    <Trash2 size={13} />
-                  </button>
+                  </div>
                 </div>
               </div>
             );
@@ -546,52 +481,20 @@ export const PlayerDownloadPanel: React.FC<PlayerDownloadPanelProps> = ({
         )}
       </div>
 
-      {/*
-        Anchored to the bottom rather than sitting in the list, so it stays
-        reachable with a long queue and does not compete with the per-download
-        controls above it.
-      */}
       {onOpenDownloads && (
-        <div
-          style={{
-            padding: '0.85rem 1rem',
-            borderTop: '1px solid rgba(255, 255, 255, 0.1)',
-          }}
-        >
+        <footer className="player-dl-footer">
+          <span className="player-dl-footer__hint">Playback keeps running</span>
           <button
+            type="button"
+            className="player-dl-footer__link"
             onClick={onOpenDownloads}
             title="Show the full Downloads screen — playback keeps running"
-            style={{
-              width: '100%',
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-              gap: '0.5rem',
-              padding: '0.6rem 0.75rem',
-              background: 'rgba(255, 255, 255, 0.08)',
-              border: '1px solid rgba(255, 255, 255, 0.12)',
-              borderRadius: '6px',
-              color: '#fff',
-              fontSize: '0.85rem',
-              fontWeight: 600,
-              cursor: 'pointer',
-            }}
           >
-            Open Downloads
-            <ArrowUpRight size={15} />
+            Manage all downloads
+            <ArrowUpRight size={14} />
           </button>
-          <p
-            style={{
-              margin: '0.5rem 0 0',
-              fontSize: '0.72rem',
-              color: 'var(--text-subtle, #888)',
-              textAlign: 'center',
-            }}
-          >
-            Playback keeps running while you are there.
-          </p>
-        </div>
+        </footer>
       )}
-    </div>
+    </aside>
   );
 };

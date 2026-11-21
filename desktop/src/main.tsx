@@ -7,6 +7,11 @@ import './styles/ui.css'
 import App from './App.tsx'
 import { ExperienceModeProvider } from './utils/ExperienceModeContext'
 import { ProfileRoot } from './components/profiles/ProfileRoot'
+import { FloatingPlayerWindow } from './components/player/FloatingPlayerWindow'
+
+const isFloatingPlayerWindow =
+  typeof window !== 'undefined' &&
+  new URLSearchParams(window.location.search).get('floatingPlayer') === '1';
 
 /**
  * The experience mode wraps everything, including `App` itself.
@@ -20,10 +25,14 @@ import { ProfileRoot } from './components/profiles/ProfileRoot'
  */
 createRoot(document.getElementById('root')!).render(
   <StrictMode>
-    <ExperienceModeProvider>
-      <ProfileRoot>
-        <App />
-      </ProfileRoot>
-    </ExperienceModeProvider>
+    {isFloatingPlayerWindow ? (
+      <FloatingPlayerWindow />
+    ) : (
+      <ExperienceModeProvider>
+        <ProfileRoot>
+          <App />
+        </ProfileRoot>
+      </ExperienceModeProvider>
+    )}
   </StrictMode>,
 )

@@ -204,7 +204,11 @@ export function useFloatingPlayer(options: FloatingPlayerOptions): FloatingPlaye
    * inside a player that no longer exists.
    */
   useEffect(() => {
-    const wanted = alwaysOnTop && isFloating && mode !== 'background';
+    const wanted =
+      (alwaysOnTop || mode === 'floating') &&
+      isFloating &&
+      mode !== 'background' &&
+      mode !== 'pip';
     void window.cloudstream?.setWindowAlwaysOnTop?.(wanted);
     void window.cloudstream?.setMpvOnTop?.(wanted);
     return () => {

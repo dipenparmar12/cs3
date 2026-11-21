@@ -24,12 +24,12 @@ import { spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { findJdk as doctorFindJdk } from './doctor.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = path.resolve(HERE, '..', '..');
 const SIDECAR = path.join(REPO_ROOT, 'sidecar');
 const DIST = path.join(SIDECAR, 'dist');
-const TOOLCHAIN = path.join(REPO_ROOT, 'tools', 'toolchain');
 
 /**
  * JDK modules the extension corpus actually reaches for.
@@ -85,31 +85,16 @@ function javaMajor(exe) {
   return match[1] === '1' ? parseInt(match[2] ?? '0', 10) : parseInt(match[1], 10);
 }
 
-/** A *JDK* is required, not a JRE: `jlink` ships only with the former. */
-function findJdk() {
-  const win = process.platform === 'win32';
-  const candidates = [];
-
-  try {
-    for (const entry of fs.readdirSync(TOOLCHAIN).sort().reverse()) {
-      if (entry.toLowerCase().startsWith('jdk')) candidates.push(path.join(TOOLCHAIN, entry));
-    }
-  } catch {
-    // No toolchain directory; JAVA_HOME may still serve.
+/** A *JDK* is required when linking a JRE (`jlink`), using doctor's System-First order. */
+function findJdk(requireJlink) {
+  const jdk = doctorFindJdk({ requireJlink });
+  if (jdk.java && (!requireJlink || jdk.jlink)) {
+    return { home: jdk.javaHome, java: jdk.java, jlink: jdk.jlink, major: jdk.version, source: jdk.source };
   }
-  if (process.env.JAVA_HOME) candidates.push(process.env.JAVA_HOME);
-
-  for (const home of candidates) {
-    const java = path.join(home, 'bin', win ? 'java.exe' : 'java');
-    const jlink = path.join(home, 'bin', win ? 'jlink.exe' : 'jlink');
-    if (!fs.existsSync(java) || !fs.existsSync(jlink)) continue;
-    const major = javaMajor(java);
-    if (major !== null && major >= 21) return { home, jlink, major };
-  }
-
+  const detail = jdk.seen?.find((s) => s.rejectReason)?.rejectReason;
   die(
-    'No JDK 21+ with jlink found. Unpack one into tools/toolchain/ or point JAVA_HOME at it. ' +
-      `Looked in: ${candidates.join(', ') || 'nowhere'}`
+    `No JDK 21+${requireJlink ? ' with jlink' : ''} found (${detail ?? 'checked JAVA_HOME, PATH, and tools/toolchain'}). ` +
+      'Install a JDK 21+ system-wide or run `cd desktop && bun run setup`.'
   );
 }
 
@@ -248,8 +233,9 @@ function dirSizeMb(dir) {
 
 function main() {
   const verify = process.argv.includes('--verify');
-  const jdk = findJdk();
-  step(`JDK ${jdk.major} at ${jdk.home}`);
+  const noJre = process.argv.includes('--no-jre');
+  const jdk = findJdk(!noJre);
+  step(`JDK ${jdk.major} (${jdk.source}) at ${jdk.home ?? jdk.java}`);
 
   fs.mkdirSync(DIST, { recursive: true });
   killDistProcesses();
@@ -278,78 +264,85 @@ function main() {
   copyDir(runtime, path.join(DIST, 'runtime'), 'provider classpath');
 
   // --- the JRE ------------------------------------------------------------
-  step('Linking a Java runtime');
-
   const jreDir = path.join(DIST, 'jre');
-
-  /**
-   * Relinking is skipped when the linked runtime already matches this request.
-   *
-   * jlink takes the better part of a minute and produces ~90 MB of identical
-   * output whenever neither the JDK nor the module list has moved — and it
-   * cannot write into an existing directory, so the step also had to delete a
-   * tree that a running app may hold open. The stamp records the two things
-   * that decide the output: which JDK linked it, and which modules were asked
-   * for. Both matter — the module list is curated, and a build that quietly
-   * reused a JRE missing `jdk.crypto.ec` would ship TLS that fails site by
-   * site (AGENTS.md §3).
-   */
-  const stampFile = path.join(jreDir, 'cs3-link-stamp.json');
-  const stamp = JSON.stringify({ jdk: jdk.home, major: jdk.major, modules: MODULES });
   const linkedJava = path.join(jreDir, 'bin', process.platform === 'win32' ? 'java.exe' : 'java');
-  const alreadyLinked =
-    !process.argv.includes('--relink') &&
-    fs.existsSync(linkedJava) &&
-    fs.existsSync(stampFile) &&
-    fs.readFileSync(stampFile, 'utf8') === stamp;
 
-  if (alreadyLinked) {
-    ok(`jre: reusing the linked runtime (${MODULES.length} modules, same JDK)`);
-  } else {
-    // jlink refuses to write into an existing directory, and a stale JRE from a
-    // previous run would otherwise be shipped unchanged.
+  if (noJre) {
+    step('Skipping bundled JRE (--no-jre; relies on system Java 21+)');
     cleanDir(jreDir);
+    ok('jre: omitted (system Java 21+ will be used at runtime)');
+  } else {
+    step('Linking a Java runtime');
 
-    const result = spawnSync(
-      jdk.jlink,
-      [
-        '--add-modules',
-        MODULES.join(','),
-        '--output',
-        jreDir,
-        '--no-header-files',
-        '--no-man-pages',
-        // Debug info is deliberately kept. Community plugins fail in ways that
-        // are diagnosed from stack traces, and stripping line numbers to save
-        // ~10 MB would trade the only diagnostic that has ever worked here.
-        '--compress',
-        'zip-6',
-      ],
-      { encoding: 'utf8', stdio: 'pipe' }
-    );
+    /**
+     * Relinking is skipped when the linked runtime already matches this request.
+     *
+     * jlink takes the better part of a minute and produces ~90 MB of identical
+     * output whenever neither the JDK nor the module list has moved — and it
+     * cannot write into an existing directory, so the step also had to delete a
+     * tree that a running app may hold open. The stamp records the two things
+     * that decide the output: which JDK linked it, and which modules were asked
+     * for. Both matter — the module list is curated, and a build that quietly
+     * reused a JRE missing `jdk.crypto.ec` would ship TLS that fails site by
+     * site (AGENTS.md §3).
+     */
+    const stampFile = path.join(jreDir, 'cs3-link-stamp.json');
+    const stamp = JSON.stringify({ jdk: jdk.home, major: jdk.major, modules: MODULES });
+    const alreadyLinked =
+      !process.argv.includes('--relink') &&
+      fs.existsSync(linkedJava) &&
+      fs.existsSync(stampFile) &&
+      fs.readFileSync(stampFile, 'utf8') === stamp;
 
-    if (result.status !== 0) {
-      die(`jlink failed:\n${result.stderr || result.stdout}`);
+    if (alreadyLinked) {
+      ok(`jre: reusing the linked runtime (${MODULES.length} modules, same JDK)`);
+    } else {
+      // jlink refuses to write into an existing directory, and a stale JRE from a
+      // previous run would otherwise be shipped unchanged.
+      cleanDir(jreDir);
+
+      const result = spawnSync(
+        jdk.jlink,
+        [
+          '--add-modules',
+          MODULES.join(','),
+          '--output',
+          jreDir,
+          '--no-header-files',
+          '--no-man-pages',
+          // Debug info is deliberately kept. Community plugins fail in ways that
+          // are diagnosed from stack traces, and stripping line numbers to save
+          // ~10 MB would trade the only diagnostic that has ever worked here.
+          '--compress',
+          'zip-6',
+        ],
+        { encoding: 'utf8', stdio: 'pipe' }
+      );
+
+      if (result.status !== 0) {
+        die(`jlink failed:\n${result.stderr || result.stdout}`);
+      }
+
+      const major = javaMajor(linkedJava);
+      if (major === null || major < 21) {
+        die(`the linked runtime reports Java ${major}, expected 21+`);
+      }
+      fs.writeFileSync(stampFile, stamp);
+      ok(`jre: Java ${major}, ${dirSizeMb(jreDir).toFixed(0)} MB, ${MODULES.length} modules`);
     }
-
-    const major = javaMajor(linkedJava);
-    if (major === null || major < 21) {
-      die(`the linked runtime reports Java ${major}, expected 21+`);
-    }
-    fs.writeFileSync(stampFile, stamp);
-    ok(`jre: Java ${major}, ${dirSizeMb(jreDir).toFixed(0)} MB, ${MODULES.length} modules`);
   }
 
   // --- smoke test ---------------------------------------------------------
   if (verify) {
-    step('Smoke-testing the linked runtime');
+    const verifyJava = noJre ? jdk.java : linkedJava;
+    step(noJre ? 'Smoke-testing sidecar under system Java' : 'Smoke-testing the linked runtime');
     const classpath = [
       path.join(DIST, 'cs3-sidecar.jar'),
       path.join(DIST, 'lib', '*'),
     ].join(path.delimiter);
 
     const probe = spawnSync(
-      linkedJava,
+      verifyJava,
       [
         '-Djava.library.path=',
         '-cp',
@@ -362,7 +355,7 @@ function main() {
     );
 
     const reply = (probe.stdout ?? '').split('\n').find((l) => l.trim().startsWith('{'));
-    if (!reply) die(`the sidecar produced no reply under the linked JRE.\n${probe.stderr ?? ''}`);
+    if (!reply) die(`the sidecar produced no reply under ${verifyJava}.\n${probe.stderr ?? ''}`);
 
     let parsed;
     try {
@@ -374,7 +367,7 @@ function main() {
     if (!parsed.result?.canExecute) {
       die(`the runtime cannot execute providers: ${parsed.result?.reason ?? 'no reason given'}`);
     }
-    ok('the sidecar starts under the linked JRE and can execute providers');
+    ok(`the sidecar starts under ${noJre ? 'system Java' : 'the linked JRE'} and can execute providers`);
     fs.rmSync(path.join(DIST, '.smoke'), { recursive: true, force: true });
   }
 

@@ -28,20 +28,20 @@ const SHORTCUT_CATEGORIES: ShortcutCategory[] = [
   {
     title: 'Volume & Audio',
     note: 'Mute, unmute and volume adjustment',
-    keywords: 'volume audio sound mute m arrow up down',
+    keywords: 'volume audio sound mute m arrow up down scroll wheel',
     items: [
       { action: 'Mute / Unmute', keys: ['M'] },
-      { action: 'Volume Up (+5%)', keys: ['↑'] },
-      { action: 'Volume Down (-5%)', keys: ['↓'] },
+      { action: 'Volume Up (+5%)', keys: ['↑', 'Scroll Up'] },
+      { action: 'Volume Down (-5%)', keys: ['↓', 'Scroll Down'] },
     ],
   },
   {
     title: 'Seeking & Navigation',
     note: '10s jump, 3s fine step, timeline scrubber and direct percentage',
-    keywords: 'seek forward backward 10s 3s fine shift jump arrow left right j l home end percentage',
+    keywords: 'seek forward backward 10s 3s fine shift jump arrow left right j l home end percentage scroll wheel',
     items: [
-      { action: 'Seek Forward 10s', keys: ['→', 'L'] },
-      { action: 'Seek Backward 10s', keys: ['←', 'J'] },
+      { action: 'Seek Forward 10s', keys: ['→', 'L', 'Scroll Up*'] },
+      { action: 'Seek Backward 10s', keys: ['←', 'J', 'Scroll Down*'] },
       { action: 'Seek Forward 3s', keys: ['Shift + →'] },
       { action: 'Seek Backward 3s', keys: ['Shift + ←'] },
       { action: 'Seek to 0% – 90%', keys: ['0', '–', '9'] },

@@ -16,6 +16,24 @@
 
 export type SubtitleBackground = 'none' | 'shadow' | 'outline' | 'box';
 export type SubtitleWeight = 'normal' | 'bold';
+export type SubtitleHorizontalAlign = 'left' | 'center' | 'right';
+export type SubtitleVerticalAlign = 'bottom' | 'center' | 'top';
+
+export interface SubtitlePosition {
+  /** Horizontal anchor: 0.0 (left) to 1.0 (right), 0.5 = center */
+  x: number;
+  /** Vertical distance from bottom edge: 0.0 (bottom) to 1.0 (top) */
+  y: number;
+  horizontalAlignment: SubtitleHorizontalAlign;
+  verticalAlignment: SubtitleVerticalAlign;
+}
+
+export interface SubtitlePositionAdapter {
+  getPosition(): SubtitlePosition;
+  setPosition(pos: SubtitlePosition): Promise<void>;
+  resetPosition(): Promise<void>;
+  supportsDirectPositioning(): boolean;
+}
 
 export interface SubtitleStyle {
   /** Multiplier on the base cue size. */
@@ -27,6 +45,14 @@ export interface SubtitleStyle {
   weight: SubtitleWeight;
   /** Percent of frame height to lift cues by. */
   position: number;
+  /** Opacity of the background box (0.0–1.0) when `background === 'box'`. */
+  boxOpacity?: number;
+  /** Line height multiplier (e.g. 1.1, 1.3, 1.5). */
+  lineHeight?: number;
+  /** Horizontal cue alignment. */
+  horizontalAlign?: SubtitleHorizontalAlign;
+  /** Normalized horizontal anchor (0.05–0.95, 0.5 = center). */
+  positionX?: number;
 }
 
 export const DEFAULT_SUBTITLE_STYLE: SubtitleStyle = {
@@ -44,7 +70,67 @@ export const DEFAULT_SUBTITLE_STYLE: SubtitleStyle = {
   background: 'outline',
   weight: 'normal',
   position: 0,
+  boxOpacity: 0.75,
+  lineHeight: 1.3,
+  horizontalAlign: 'center',
+  positionX: 0.5,
 };
+
+export interface SubtitlePreset {
+  id: string;
+  label: string;
+  description: string;
+  patch: Partial<SubtitleStyle>;
+}
+
+/** Four ready-to-use presets covering common viewing conditions (PRD §5.1). */
+export const SUBTITLE_PRESETS: ReadonlyArray<SubtitlePreset> = [
+  {
+    id: 'white-outline',
+    label: 'White Outline',
+    description: 'Clean white text with 4-way dark outline',
+    patch: { color: '#ffffff', background: 'outline', weight: 'normal', scale: 1 },
+  },
+  {
+    id: 'dark-box',
+    label: 'Dark Box',
+    description: 'High readability over bright scenes',
+    patch: { color: '#ffffff', background: 'box', weight: 'normal', boxOpacity: 0.75 },
+  },
+  {
+    id: 'high-contrast-yellow',
+    label: 'Yellow High Contrast',
+    description: 'Bold yellow with outline for fast scanning',
+    patch: { color: '#f2e14c', background: 'outline', weight: 'bold', scale: 1.15 },
+  },
+  {
+    id: 'soft-shadow',
+    label: 'Soft Shadow',
+    description: 'Minimal off-white with subtle drop shadow',
+    patch: { color: '#d7dae0', background: 'shadow', weight: 'normal', scale: 1 },
+  },
+];
+
+export const SUBTITLE_LINE_HEIGHTS: ReadonlyArray<{ value: number; label: string }> = [
+  { value: 1.1, label: 'Compact' },
+  { value: 1.3, label: 'Normal' },
+  { value: 1.5, label: 'Spacious' },
+];
+
+/**
+ * Bitmap subtitle formats (PGS / VOBSUB) render as pre-baked pixel images,
+ * so font styling and free repositioning cannot be applied to them.
+ */
+export function isBitmapSubtitleTrack(trackLabelOrCodec?: string): boolean {
+  if (!trackLabelOrCodec) return false;
+  return /\b(pgs|hdmv_pgs_subtitle|vobsub|dvd_subtitle|dvdsub|bitmap)\b/i.test(trackLabelOrCodec);
+}
+
+/** ASS/SSA tracks carry embedded vector styling and coordinates. */
+export function isAssSubtitleTrack(trackLabelOrCodec?: string): boolean {
+  if (!trackLabelOrCodec) return false;
+  return /\b(ass|ssa)\b|\.ass\b|\.ssa\b/i.test(trackLabelOrCodec);
+}
 
 export const SUBTITLE_SCALES = [0.75, 0.9, 1, 1.15, 1.3, 1.5, 1.75, 2] as const;
 
@@ -84,13 +170,22 @@ export function subtitleCssVariables(style: SubtitleStyle): Record<string, strin
         ? '0 2px 4px rgba(0, 0, 0, 0.9)'
         : 'none';
 
+  const boxOpacity = Math.max(0, Math.min(1, style.boxOpacity ?? 0.75));
+  const lineHeight = style.lineHeight ?? 1.3;
+  const horizontalAlign = style.horizontalAlign ?? 'center';
+  const positionX = Math.max(0.05, Math.min(0.95, style.positionX ?? 0.5));
+  const shiftXPercent = Math.round((positionX - 0.5) * 100);
+
   return {
     '--cue-scale': String(style.scale),
     '--cue-color': style.color,
     '--cue-shadow': shadow,
-    '--cue-bg': style.background === 'box' ? 'rgba(0, 0, 0, 0.75)' : 'transparent',
+    '--cue-bg': style.background === 'box' ? `rgba(0, 0, 0, ${boxOpacity})` : 'transparent',
     '--cue-weight': style.weight === 'bold' ? '700' : '400',
     '--cue-lift': `${style.position}%`,
+    '--cue-shift-x': `${shiftXPercent}%`,
+    '--cue-line-height': String(lineHeight),
+    '--cue-align': horizontalAlign,
   };
 }
 
@@ -105,16 +200,27 @@ export function subtitleCssVariables(style: SubtitleStyle): Record<string, strin
 export const MPV_BASE_SUB_FONT_SIZE = 42;
 
 export function subtitleMpvProperties(style: SubtitleStyle): Record<string, unknown> {
+  const boxOpacity = Math.max(0, Math.min(1, style.boxOpacity ?? 0.75));
+  const alphaHex = Math.round(boxOpacity * 255)
+    .toString(16)
+    .padStart(2, '0')
+    .toUpperCase();
+  const horizontalAlign = style.horizontalAlign ?? 'center';
+  const positionX = Math.max(0.05, Math.min(0.95, style.positionX ?? 0.5));
+  const marginX = horizontalAlign === 'center' ? Math.round(Math.abs(positionX - 0.5) * 200) : 28;
+
   return {
     'sub-font-size': Math.round(MPV_BASE_SUB_FONT_SIZE * style.scale),
     'sub-color': style.color,
     'sub-bold': style.weight === 'bold',
     'sub-border-size': style.background === 'outline' ? 3 : style.background === 'shadow' ? 1 : 0,
     'sub-shadow-offset': style.background === 'shadow' ? 2 : 0,
-    'sub-back-color': style.background === 'box' ? '#BF000000' : '#00000000',
+    'sub-back-color': style.background === 'box' ? `#${alphaHex}000000` : '#00000000',
     // mpv measures from the bottom in the same direction the CSS lift does, so
     // one number drives both without a sign flip to get wrong.
     'sub-pos': Math.round(100 - style.position),
+    'sub-align-x': horizontalAlign,
+    'sub-margin-x': marginX,
     'sub-ass-override': 'yes',
   };
 }

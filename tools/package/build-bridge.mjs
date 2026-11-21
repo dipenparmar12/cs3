@@ -24,6 +24,7 @@ import { spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { findMaven as doctorFindMaven } from './doctor.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 const bridgeDir = path.join(root, 'sidecar', 'bridge');
@@ -61,22 +62,7 @@ const run = (cmd, args, opts = {}) =>
  * absent Maven and still have the right one sitting beside the source.
  */
 function findMaven() {
-  const names = process.platform === 'win32' ? ['mvn.cmd', 'mvn.bat', 'mvn'] : ['mvn'];
-  const bundled = path.join(root, 'tools', 'toolchain');
-  if (fs.existsSync(bundled)) {
-    for (const entry of fs.readdirSync(bundled)) {
-      if (!entry.startsWith('apache-maven-')) continue;
-      for (const name of names) {
-        const candidate = path.join(bundled, entry, 'bin', name);
-        if (fs.existsSync(candidate)) return candidate;
-      }
-    }
-  }
-  // Nothing bundled: fall back to PATH, still trying the platform's spellings.
-  for (const name of names) {
-    if (spawnSync(name, ['-v'], { stdio: 'ignore' }).status === 0) return name;
-  }
-  return null;
+  return doctorFindMaven().mvn;
 }
 
 let mavenPath;

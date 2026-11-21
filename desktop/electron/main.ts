@@ -43,6 +43,12 @@ import { appMayUse } from './security/permissions.ts';
 import { BackupService } from './cs3/backupService.ts';
 import { runReset, summarise, type ResetAreaDefinition } from './cs3/userDataReset.ts';
 import type { UserDataResetRequest } from '../src/types/userData';
+import type {
+  FloatingPlayerAction,
+  FloatingPlayerPayload,
+  FloatingPlayerStateSnapshot,
+} from '../src/types/player';
+import { computeFloatingWindowBounds } from '../src/components/player/miniPlayerModel.ts';
 import { createBackupSections } from './cs3/backupSections.ts';
 import type { RestorePlan } from '../src/types/backup.ts';
 import fs from 'fs';
@@ -72,6 +78,11 @@ import { AppUpdateService } from './appUpdate/appUpdateService.ts';
 import { classifyNonMedia, looksLikeHtml, nonMediaReason } from './media/nonMediaResponse.ts';
 import { ResilientFetch, classifyNetworkError } from './networkResilience';
 import { BinaryDownloader } from './binaryDownloader';
+import {
+  configureProbeCache,
+  preferBundledFromEnv,
+  setPreferBundledProvider,
+} from './platform/toolResolver.ts';
 import { FastChunkDownloader, type DownloadProgress } from './fastDownloader';
 import { spawn } from 'child_process';
 import { MpvEngine } from './media/mpvEngine';
@@ -131,6 +142,7 @@ import {
   type EnrichmentRequest,
 } from './metadata/enrichmentService';
 import { searchYouTubeTrailers } from './metadata/youtube';
+import { discoverTrailers } from './metadata/trailerDiscovery.ts';
 import { relatedMediaService } from './metadata/relatedMedia/relatedMediaService.ts';
 import { fetchFilmography } from './metadata/filmography.ts';
 import type { FilmographyRequest } from '../src/types/filmography';
@@ -436,6 +448,10 @@ diagnostics.setListener((record) => {
     }
   );
 });
+
+const PREFER_BUNDLED_RUNTIMES_KEY = 'cs3_prefer_bundled_runtimes';
+configureProbeCache(storage.cacheFile('cs3-tool-probes.json'));
+setPreferBundledProvider(() => datastore.getBool(PREFER_BUNDLED_RUNTIMES_KEY, false, true));
 
 const aria2 = new Aria2Engine();
 const downloadService = new DownloadService(datastore, aria2);
@@ -1605,6 +1621,10 @@ function createWindow() {
   mainWindow.on('close', () => {
     if (boundsTimer) clearTimeout(boundsTimer);
     saveWindowBounds();
+    if (floatingPlayerWindow && !floatingPlayerWindow.isDestroyed()) {
+      floatingPlayerWindow.destroy();
+      floatingPlayerWindow = null;
+    }
   });
 
   Menu.setApplicationMenu(buildApplicationMenu());
@@ -2114,13 +2134,19 @@ app.whenReady().then(async () => {
    */
   background.add({
     id: 'ffmpeg-options',
-    label: 'Checking which options this ffmpeg build understands',
+    label: 'Checking system tools and ffmpeg options',
     priority: 80,
-    // Its own lane: two short-lived child processes that share nothing with the
+    // Its own lane: short-lived off-thread probes that share nothing with the
     // JVM warm-up or the DHT bootstrap, and holding the serial lane for them
     // would delay both for no reason.
     lane: 'media',
-    run: () => refreshFfmpegOptionSupport(),
+    run: async () => {
+      await Promise.all([
+        binaryDownloader.warmSystemProbes(),
+        pluginManager.getSidecar().getProvisioner().warmJavaProbe(),
+      ]);
+      await refreshFfmpegOptionSupport();
+    },
   });
 
   background.add({
@@ -2481,7 +2507,7 @@ let suggestRun: AbortController | null = null;
  * three catalogues answer 170–935 ms apart, so a reply that waited for all of
  * them would spend the fastest two on the slowest — see `searchSuggestions.ts`.
  */
-const SEARCH_CATEGORIES: ReadonlySet<string> = new Set<SearchCategory>(['title', 'cast', 'director', 'writer', 'producer', 'composer', 'studio']);
+const SEARCH_CATEGORIES: ReadonlySet<string> = new Set<SearchCategory>(['title', 'cast', 'director', 'writer', 'producer', 'composer', 'studio', 'trailer']);
 
 ipcMain.handle('api:suggest', async (event, query: string, requested?: unknown) => {
   suggestRun?.abort();
@@ -3563,6 +3589,34 @@ ipcMain.handle('runtime:getStatus', async () => {
   }
 });
 
+ipcMain.handle('runtime:getPreference', async () => {
+  try {
+    return {
+      ok: true,
+      preferBundled: datastore.getBool(PREFER_BUNDLED_RUNTIMES_KEY, false, true),
+      envOverride: preferBundledFromEnv(),
+    };
+  } catch (error) {
+    return { ...fail(error), preferBundled: false, envOverride: preferBundledFromEnv() };
+  }
+});
+
+ipcMain.handle('runtime:setPreference', async (_, preferBundled: boolean) => {
+  try {
+    const next = Boolean(preferBundled);
+    datastore.setBool(PREFER_BUNDLED_RUNTIMES_KEY, next, true);
+    pluginManager.getSidecar().getProvisioner().invalidateCache();
+    void refreshFfmpegOptionSupport();
+    return {
+      ok: true,
+      preferBundled: next,
+      envOverride: preferBundledFromEnv(),
+    };
+  } catch (error) {
+    return { ...fail(error), preferBundled: false, envOverride: preferBundledFromEnv() };
+  }
+});
+
 ipcMain.handle('runtime:provision', async () => {
   try {
     const provisioner = pluginManager.getSidecar().getProvisioner();
@@ -3769,6 +3823,15 @@ ipcMain.handle('metadata:findTrailers', async (_, title: string, year?: number) 
   try {
     const query = `${title || ''} ${year ? year : ''} official trailer`.trim();
     const videos = await searchYouTubeTrailers(query, { maxResults: 8 });
+    return { ok: true, videos };
+  } catch (error) {
+    return { ...fail(error), videos: [] };
+  }
+});
+
+ipcMain.handle('metadata:searchTrailers', async (_, query: string, options?: { maxResults?: number }) => {
+  try {
+    const videos = await discoverTrailers(query, options);
     return { ok: true, videos };
   } catch (error) {
     return { ...fail(error), videos: [] };
@@ -4590,6 +4653,215 @@ ipcMain.handle('window:getAlwaysOnTop', async () => ({
   alwaysOnTop: Boolean(mainWindow && !mainWindow.isDestroyed() && mainWindow.isAlwaysOnTop()),
 }));
 
+let floatingPlayerWindow: BrowserWindow | null = null;
+let floatingPlayerBounds: Electron.Rectangle | null = null;
+let floatingLastPayload: FloatingPlayerPayload | null = null;
+let floatingLastState: FloatingPlayerStateSnapshot | null = null;
+let floatingWindowReady = false;
+let pendingFloatingRestoreMain = false;
+
+function openOrUpdateFloatingPlayerWindow(payload: FloatingPlayerPayload): void {
+  floatingLastPayload = payload;
+  floatingLastState = {
+    currentTime: payload.currentTime,
+    duration: payload.duration,
+    paused: payload.paused,
+    volume: payload.volume,
+    muted: payload.muted,
+    speed: payload.speed,
+    ended: false,
+    activeSubtitleUrl: payload.activeSubtitleUrl,
+  };
+
+  if (floatingPlayerWindow && !floatingPlayerWindow.isDestroyed()) {
+    if (floatingWindowReady) {
+      floatingPlayerWindow.webContents.send('floating:payload', payload);
+    }
+    floatingPlayerWindow.show();
+    floatingPlayerWindow.focus();
+    return;
+  }
+
+  floatingWindowReady = false;
+  pendingFloatingRestoreMain = false;
+  const primaryWorkArea = screen.getPrimaryDisplay().workArea;
+  const bounds = computeFloatingWindowBounds(primaryWorkArea, floatingPlayerBounds);
+
+  const win = new BrowserWindow({
+    x: bounds.x,
+    y: bounds.y,
+    width: bounds.width,
+    height: bounds.height,
+    minWidth: 280,
+    minHeight: 158,
+    frame: false,
+    transparent: false,
+    backgroundColor: '#000000',
+    alwaysOnTop: true,
+    skipTaskbar: true,
+    resizable: true,
+    minimizable: false,
+    maximizable: false,
+    autoHideMenuBar: true,
+    show: false,
+    title: payload.title || APP_TITLE,
+    webPreferences: {
+      preload: path.join(__dirname, 'preload.cjs'),
+      contextIsolation: true,
+      nodeIntegration: false,
+      sandbox: true,
+      autoplayPolicy: 'no-user-gesture-required',
+    },
+  });
+
+  floatingPlayerWindow = win;
+  win.setAlwaysOnTop(true, 'floating');
+  win.setAspectRatio(16 / 9);
+  win.setMenuBarVisibility(false);
+
+  win.webContents.setWindowOpenHandler(({ url }) => {
+    if (/^https?:\/\//.test(url)) shell.openExternal(url);
+    return { action: 'deny' };
+  });
+
+  const rememberFloatingBounds = () => {
+    if (!win.isDestroyed()) floatingPlayerBounds = win.getBounds();
+  };
+  win.on('move', rememberFloatingBounds);
+  win.on('resize', rememberFloatingBounds);
+
+  win.once('ready-to-show', () => {
+    if (!win.isDestroyed()) {
+      win.show();
+      win.focus();
+    }
+  });
+
+  win.on('closed', () => {
+    const restoreMain = pendingFloatingRestoreMain;
+    const state = floatingLastState;
+    pendingFloatingRestoreMain = false;
+    floatingWindowReady = false;
+    if (floatingPlayerWindow === win) {
+      floatingPlayerWindow = null;
+    }
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.send('floating:closed', { restoreMain, state });
+    }
+  });
+
+  if (process.env.VITE_DEV_SERVER_URL) {
+    const devUrl = new URL(process.env.VITE_DEV_SERVER_URL);
+    devUrl.searchParams.set('floatingPlayer', '1');
+    void win.loadURL(devUrl.toString());
+  } else {
+    void win.loadFile(path.join(__dirname, '../dist/index.html'), {
+      search: 'floatingPlayer=1',
+    });
+  }
+}
+
+ipcMain.handle('floating:open', async (_, payload: FloatingPlayerPayload) => {
+  openOrUpdateFloatingPlayerWindow(payload);
+  return { ok: true };
+});
+
+ipcMain.handle('floating:update', async (_, payload: FloatingPlayerPayload) => {
+  floatingLastPayload = payload;
+  if (floatingPlayerWindow && !floatingPlayerWindow.isDestroyed() && floatingWindowReady) {
+    floatingPlayerWindow.webContents.send('floating:payload', payload);
+  }
+  return { ok: true };
+});
+
+ipcMain.handle('floating:close', async (_, opts?: { restoreMain?: boolean }) => {
+  pendingFloatingRestoreMain = Boolean(opts?.restoreMain);
+  if (floatingPlayerWindow && !floatingPlayerWindow.isDestroyed()) {
+    floatingPlayerWindow.close();
+  }
+  return { ok: true };
+});
+
+ipcMain.handle('floating:setOnTop', async (_, onTop: boolean) => {
+  if (!floatingPlayerWindow || floatingPlayerWindow.isDestroyed()) {
+    return { ok: false, error: 'Floating player window is not open.', alwaysOnTop: false };
+  }
+  floatingPlayerWindow.setAlwaysOnTop(onTop === true, 'floating');
+  const next = floatingPlayerWindow.isAlwaysOnTop();
+  floatingPlayerWindow.webContents.send('floating:onTopChanged', next);
+  return { ok: true, alwaysOnTop: next };
+});
+
+ipcMain.handle('floating:ready', async () => {
+  floatingWindowReady = true;
+  if (floatingPlayerWindow && !floatingPlayerWindow.isDestroyed() && floatingLastPayload) {
+    floatingPlayerWindow.webContents.send('floating:payload', floatingLastPayload);
+    floatingPlayerWindow.webContents.send('floating:onTopChanged', floatingPlayerWindow.isAlwaysOnTop());
+  }
+  return { ok: true };
+});
+
+ipcMain.handle('floating:getBounds', async () => {
+  if (!floatingPlayerWindow || floatingPlayerWindow.isDestroyed()) {
+    return { ok: false, error: 'Floating player window is not open.', bounds: null };
+  }
+  return { ok: true, bounds: floatingPlayerWindow.getBounds() };
+});
+
+ipcMain.on('floating:setBounds', (_, bounds: Electron.Rectangle) => {
+  if (!floatingPlayerWindow || floatingPlayerWindow.isDestroyed()) return;
+  if (
+    !bounds ||
+    !Number.isFinite(bounds.x) ||
+    !Number.isFinite(bounds.y) ||
+    !Number.isFinite(bounds.width) ||
+    !Number.isFinite(bounds.height)
+  ) {
+    return;
+  }
+  const next = {
+    x: Math.round(bounds.x),
+    y: Math.round(bounds.y),
+    width: Math.max(280, Math.round(bounds.width)),
+    height: Math.max(158, Math.round(bounds.height)),
+  };
+  floatingPlayerWindow.setBounds(next);
+  floatingPlayerBounds = floatingPlayerWindow.getBounds();
+});
+
+ipcMain.on('floating:reportState', (_, state: FloatingPlayerStateSnapshot) => {
+  floatingLastState = state;
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    mainWindow.webContents.send('floating:state', state);
+  }
+});
+
+ipcMain.on('floating:action', (_, action: FloatingPlayerAction) => {
+  if (action === 'expand' || action === 'protect') {
+    pendingFloatingRestoreMain = action === 'expand';
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      if (mainWindow.isMinimized()) mainWindow.restore();
+      mainWindow.show();
+      mainWindow.focus();
+      mainWindow.webContents.send('floating:actionEvent', action);
+    }
+    if ((action === 'expand' || action === 'protect') && floatingPlayerWindow && !floatingPlayerWindow.isDestroyed()) {
+      floatingPlayerWindow.close();
+    }
+    return;
+  }
+  if (action === 'close') {
+    pendingFloatingRestoreMain = false;
+    if (floatingPlayerWindow && !floatingPlayerWindow.isDestroyed()) {
+      floatingPlayerWindow.close();
+    }
+    return;
+  }
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    mainWindow.webContents.send('floating:actionEvent', action);
+  }
+});
+
 /**
  * The one fullscreen: the window's.
  *
@@ -5343,6 +5615,7 @@ interface StoredPlayerPreferences {
    * launch is one people stop using.
    */
   alwaysOnTop: boolean;
+  wheelAction?: 'volume' | 'seek';
 }
 
 const DEFAULT_PLAYER_PREFERENCES: StoredPlayerPreferences = {
@@ -5363,10 +5636,12 @@ const DEFAULT_PLAYER_PREFERENCES: StoredPlayerPreferences = {
   floatingMode: 'mini',
   backgroundPlayback: 'continue',
   alwaysOnTop: false,
+  wheelAction: 'volume',
 };
 
 const FLOATING_MODES = new Set(['mini', 'floating', 'pip', 'background']);
 const BACKGROUND_MODES = new Set(['continue', 'audio-only', 'pause']);
+const WHEEL_ACTIONS = new Set(['volume', 'seek']);
 
 /** Only these values mean anything to either renderer. */
 const SUBTITLE_BACKGROUNDS = new Set(['none', 'shadow', 'outline', 'box']);
@@ -5403,6 +5678,9 @@ function sanitizePlayerPreferences(
     preferences.backgroundPlayback = DEFAULT_PLAYER_PREFERENCES.backgroundPlayback;
   }
   preferences.alwaysOnTop = preferences.alwaysOnTop === true;
+  if (!WHEEL_ACTIONS.has(String(preferences.wheelAction))) {
+    preferences.wheelAction = DEFAULT_PLAYER_PREFERENCES.wheelAction;
+  }
   return preferences;
 }
 

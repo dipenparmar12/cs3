@@ -541,7 +541,12 @@ export class MediaTranscoder {
        * them by one offset, so the video's keyframe preroll stays aligned
        * with the audio.
        */
-      ...(session.audioUrl ? [...seek, '-i', session.audioUrl] : []),
+      // Reconnect options are input options too, so the audio needs its own:
+      // without them a dropped audio connection ended the audio track while
+      // the video carried on, and a trailer went silent or stopped partway.
+      ...(session.audioUrl
+        ? [...inputOptionsFor(session.audioUrl, 'progressive'), ...seek, '-i', session.audioUrl]
+        : []),
       '-map', '0:v:0',
       ...(session.audioUrl
         ? // The whole point of the second input: take its audio, not the first
