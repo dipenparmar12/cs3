@@ -9,6 +9,17 @@ import { describeError } from '../../src/utils/errors.ts';
 import { REQUIRED_JAVA_VERSION, describeRuntimeGaps } from './runtimeAdvice.ts';
 import { locateJavaHome, portableJavaSource } from '../platform/javaSources.ts';
 import { windowsTar } from '../platform/binarySources.ts';
+import {
+  discoverSystemJavaCandidates,
+  getSharedProbeCache,
+  isPreferBundled,
+  orderJavaCandidates,
+  probeJavaBinaryAsync,
+  probeJavaBinarySync,
+  resolveJavaCandidate,
+  type JavaResolution,
+  type ToolOrigin,
+} from '../platform/toolResolver.ts';
 
 export interface SystemRuntimeStatus {
   ready: boolean;
@@ -17,6 +28,10 @@ export interface SystemRuntimeStatus {
   bridgeReady: boolean;
   javaPath?: string;
   javaVersion?: string;
+  /** Where the resolved Java binary came from (`system`, `bundled`, `toolchain`, `app-managed`, `missing`). */
+  javaOrigin?: ToolOrigin;
+  /** Non-empty when a system Java was found on this machine but failed compatibility criteria. */
+  skippedSystemJavaReason?: string;
   sidecarPath?: string;
   runtimeDir?: string;
   isAppManaged: boolean;
@@ -238,7 +253,6 @@ export class RuntimeProvisioner {
   private listeners: Set<(progress: RuntimeProgress) => void> = new Set();
   private inFlightProvision: Promise<boolean> | null = null;
   private inFlightRepair: Promise<boolean> | null = null;
-  private readonly javaVersionCache = new Map<string, { version: number; mtime: number }>();
   private readonly fingerprintCache = new Map<string, { hash: string; checkedAt: number }>();
   private cachedStatus: { status: SystemRuntimeStatus; timestamp: number } | null = null;
   private lastProgress: RuntimeProgress = {
@@ -285,6 +299,11 @@ export class RuntimeProvisioner {
     return this.baseDir;
   }
 
+  public invalidateCache(): void {
+    this.cachedStatus = null;
+    this.fingerprintCache.clear();
+  }
+
   /**
    * Evaluates whether all required runtime components exist and are ready for execution.
    */
@@ -293,11 +312,11 @@ export class RuntimeProvisioner {
       return this.cachedStatus.status;
     }
 
-    const javaInfo = this.findJavaBinary();
+    const javaRes = this.findJavaResolution();
     const sidecarInfo = this.findSidecarJar();
     const bridgeInfo = this.findRuntimeDir();
 
-    const javaReady = Boolean(javaInfo && javaInfo.version >= REQUIRED_JAVA_VERSION);
+    const javaReady = Boolean(javaRes.exePath && javaRes.version && javaRes.version >= REQUIRED_JAVA_VERSION);
     const sidecarReady = Boolean(sidecarInfo && fs.existsSync(sidecarInfo.jarPath));
     const bridgeReady = Boolean(bridgeInfo && bridgeInfo.hasBridge);
 
@@ -315,13 +334,15 @@ export class RuntimeProvisioner {
       javaReady,
       sidecarReady,
       bridgeReady,
-      javaPath: javaInfo?.exePath,
-      javaVersion: javaInfo ? `Java ${javaInfo.version}` : undefined,
+      javaPath: javaRes.exePath ?? undefined,
+      javaVersion: javaRes.version ? `Java ${javaRes.version}` : undefined,
+      javaOrigin: javaRes.origin,
+      skippedSystemJavaReason: javaRes.skippedSystemReason,
       sidecarPath: sidecarInfo?.jarPath,
       runtimeDir: bridgeInfo?.dir,
       isAppManaged: Boolean(
         sidecarInfo?.jarPath.startsWith(this.baseDir) ||
-          javaInfo?.exePath.startsWith(this.baseDir)
+          javaRes.origin === 'app-managed'
       ),
       reason,
       stale: staleReason !== undefined,
@@ -437,67 +458,92 @@ export class RuntimeProvisioner {
     }
   }
 
-  /**
-   * Resolves the Java binary location across all managed & fallback paths.
-   */
-  public findJavaBinary(): { exePath: string; version: number } | null {
-    const exe = process.platform === 'win32' ? 'java.exe' : 'java';
-    const candidates: string[] = [
-      // 1. App-managed runtime directory (%APPDATA%\CloudStream 3 Desktop\cs3-runtime\java\bin\java.exe)
-      path.join(this.baseDir, 'java', 'bin', exe),
-      path.join(this.baseDir, 'jre', 'bin', exe),
-      // 2. Bundled production resources (resources/sidecar/jre/bin/java.exe)
-      ...(app?.isPackaged
-        ? [path.join(process.resourcesPath, 'sidecar', 'jre', 'bin', exe)]
-        : []),
-    ];
-
-    // 3. Developer toolchain JDKs (preferred in dev so sidecar/dist/jre is not locked)
+  private collectToolchainJdkDirs(): string[] {
+    const dirs: string[] = [];
     const toolchainRoots = [
       path.join(process.cwd(), '..', 'tools', 'toolchain'),
       path.join(process.cwd(), 'tools', 'toolchain'),
     ];
     for (const toolchainRoot of toolchainRoots) {
       try {
-        if (fs.existsSync(toolchainRoot)) {
-          for (const entry of fs.readdirSync(toolchainRoot)) {
-            if (entry.toLowerCase().startsWith('jdk')) {
-              candidates.push(path.join(toolchainRoot, entry, 'bin', exe));
-              candidates.push(path.join(toolchainRoot, entry, 'jre', 'bin', exe));
-            }
+        if (!fs.existsSync(toolchainRoot)) continue;
+        for (const entry of fs.readdirSync(toolchainRoot).sort().reverse()) {
+          if (entry.toLowerCase().startsWith('jdk')) {
+            dirs.push(path.join(toolchainRoot, entry));
           }
         }
       } catch {
         // Ignore directory read errors
       }
     }
+    return dirs;
+  }
 
-    // 4. Prebuilt dist runtime in repo (fallback if toolchain is missing)
-    candidates.push(
-      path.join(process.cwd(), '..', 'sidecar', 'dist', 'jre', 'bin', exe),
-      path.join(process.cwd(), 'sidecar', 'dist', 'jre', 'bin', exe),
-      path.join(process.cwd(), 'dist', 'jre', 'bin', exe),
+  private buildJavaCandidates() {
+    return orderJavaCandidates({
+      preferBundled: isPreferBundled(),
+      isPackaged: Boolean(app?.isPackaged),
+      baseDir: this.baseDir,
+      resourcesPath: app?.isPackaged ? process.resourcesPath : undefined,
+      toolchainDirs: this.collectToolchainJdkDirs(),
+      distJreDirs: [
+        path.join(process.cwd(), '..', 'sidecar', 'dist', 'jre'),
+        path.join(process.cwd(), 'sidecar', 'dist', 'jre'),
+        path.join(process.cwd(), 'dist', 'jre'),
+      ],
+      systemCandidates: discoverSystemJavaCandidates(),
+    });
+  }
+
+  /**
+   * Resolves Java with System-First, App-Fallback precedence (PRD-57) and
+   * criteria-gated version + JPMS module checks.
+   */
+  public findJavaResolution(): JavaResolution {
+    const candidates = this.buildJavaCandidates();
+    return resolveJavaCandidate(
+      candidates,
+      (file) => fs.existsSync(file),
+      (candidate) =>
+        probeJavaBinarySync(
+          candidate.exePath,
+          getSharedProbeCache(),
+          // System JREs are checked for required JPMS modules; bundled/app-managed
+          // runtimes are already curated/verified at build or download time.
+          candidate.origin === 'system'
+        )
     );
+  }
 
-    // 5. JAVA_HOME environment variable
-    if (process.env.JAVA_HOME) {
-      candidates.push(path.join(process.env.JAVA_HOME, 'bin', exe));
-    }
-
-    // 6. System PATH fallback
-    candidates.push(exe);
-
+  /**
+   * Pre-warms the fingerprinted Java probe cache off the main thread so startup
+   * never stalls waiting on cold JVM spawns.
+   */
+  public async warmJavaProbe(): Promise<void> {
+    const candidates = this.buildJavaCandidates();
     for (const candidate of candidates) {
-      const isPath = candidate === exe;
-      if (!isPath && !fs.existsSync(candidate)) continue;
-
-      const version = this.probeJavaVersion(candidate);
-      if (version && version >= REQUIRED_JAVA_VERSION) {
-        return { exePath: candidate, version };
-      }
+      if (!fs.existsSync(candidate.exePath)) continue;
+      const outcome = await probeJavaBinaryAsync(
+        candidate.exePath,
+        getSharedProbeCache(),
+        candidate.origin === 'system'
+      );
+      if (outcome.ok) break;
     }
+  }
 
-    return null;
+  /**
+   * Resolves the Java binary location across all system, bundled, toolchain & managed paths.
+   */
+  public findJavaBinary(): { exePath: string; version: number; origin: ToolOrigin; skippedSystemReason?: string } | null {
+    const res = this.findJavaResolution();
+    if (!res.exePath || !res.version || res.version < REQUIRED_JAVA_VERSION) return null;
+    return {
+      exePath: res.exePath,
+      version: res.version,
+      origin: res.origin,
+      skippedSystemReason: res.skippedSystemReason,
+    };
   }
 
   /**
@@ -680,30 +726,6 @@ export class RuntimeProvisioner {
     return source.runtimeDir ? this.describeRuntimeDir(source.runtimeDir) : null;
   }
 
-  private probeJavaVersion(exePath: string): number | null {
-    try {
-      const st = fs.statSync(exePath);
-      const cached = this.javaVersionCache.get(exePath);
-      if (cached && cached.mtime === st.mtimeMs) {
-        return cached.version;
-      }
-      const probe = spawnSync(exePath, ['-version'], {
-        encoding: 'utf8',
-        timeout: 6000,
-        windowsHide: true,
-      });
-      const output = `${probe.stderr ?? ''}${probe.stdout ?? ''}`;
-      const match = output.match(/version "(\d+)(?:\.(\d+))?/);
-      if (!match) return null;
-      const major = parseInt(match[1], 10);
-      const version = major === 1 ? parseInt(match[2] ?? '0', 10) : major;
-      this.javaVersionCache.set(exePath, { version, mtime: st.mtimeMs });
-      return version;
-    } catch {
-      return null;
-    }
-  }
-
   /**
    * One-click Plug-and-Play Provisioner:
    * Copies bundled components or downloads missing runtimes automatically.
@@ -782,7 +804,8 @@ export class RuntimeProvisioner {
           this.clearTranslationCache();
         }
 
-        // 4. Check Java status; if missing, auto-provision portable Java 21
+        // 4. Check Java status; reuse verified system/bundled Java 21+, and
+        //    only download portable Java 21 when no valid copy exists.
         const javaInfo = this.findJavaBinary();
         if (!javaInfo || javaInfo.version < REQUIRED_JAVA_VERSION) {
           this.notifyProgress({
@@ -791,6 +814,12 @@ export class RuntimeProvisioner {
             message: 'Downloading Java 21 execution engine for extensions...',
           });
           await this.downloadPortableJava();
+        } else if (javaInfo.origin === 'system') {
+          this.notifyProgress({
+            step: 'verifying',
+            progress: 85,
+            message: `Using system-installed Java ${javaInfo.version} (${javaInfo.exePath})`,
+          });
         }
 
         // 5. Verify final setup
@@ -981,10 +1010,14 @@ export class RuntimeProvisioner {
     ok: boolean;
     version?: string;
     javaPath?: string;
+    javaOrigin?: ToolOrigin;
     sidecarPath?: string;
     runtimeDir?: string;
     error?: string;
   }> {
+    // Drop cached probe entries so an explicit Test always re-runs live checks.
+    getSharedProbeCache().clear();
+    this.invalidateCache();
     const javaInfo = this.findJavaBinary();
     const sidecarInfo = this.findSidecarJar();
     const runtimeInfo = this.findRuntimeDir();
@@ -1004,6 +1037,7 @@ export class RuntimeProvisioner {
       ok: true,
       version: `Java ${javaInfo.version}`,
       javaPath: javaInfo.exePath,
+      javaOrigin: javaInfo.origin,
       sidecarPath: sidecarInfo.jarPath,
       runtimeDir: runtimeInfo.dir,
     };

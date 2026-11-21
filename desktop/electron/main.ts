@@ -78,6 +78,11 @@ import { AppUpdateService } from './appUpdate/appUpdateService.ts';
 import { classifyNonMedia, looksLikeHtml, nonMediaReason } from './media/nonMediaResponse.ts';
 import { ResilientFetch, classifyNetworkError } from './networkResilience';
 import { BinaryDownloader } from './binaryDownloader';
+import {
+  configureProbeCache,
+  preferBundledFromEnv,
+  setPreferBundledProvider,
+} from './platform/toolResolver.ts';
 import { FastChunkDownloader, type DownloadProgress } from './fastDownloader';
 import { spawn } from 'child_process';
 import { MpvEngine } from './media/mpvEngine';
@@ -443,6 +448,10 @@ diagnostics.setListener((record) => {
     }
   );
 });
+
+const PREFER_BUNDLED_RUNTIMES_KEY = 'cs3_prefer_bundled_runtimes';
+configureProbeCache(storage.cacheFile('cs3-tool-probes.json'));
+setPreferBundledProvider(() => datastore.getBool(PREFER_BUNDLED_RUNTIMES_KEY, false, true));
 
 const aria2 = new Aria2Engine();
 const downloadService = new DownloadService(datastore, aria2);
@@ -2125,13 +2134,19 @@ app.whenReady().then(async () => {
    */
   background.add({
     id: 'ffmpeg-options',
-    label: 'Checking which options this ffmpeg build understands',
+    label: 'Checking system tools and ffmpeg options',
     priority: 80,
-    // Its own lane: two short-lived child processes that share nothing with the
+    // Its own lane: short-lived off-thread probes that share nothing with the
     // JVM warm-up or the DHT bootstrap, and holding the serial lane for them
     // would delay both for no reason.
     lane: 'media',
-    run: () => refreshFfmpegOptionSupport(),
+    run: async () => {
+      await Promise.all([
+        binaryDownloader.warmSystemProbes(),
+        pluginManager.getSidecar().getProvisioner().warmJavaProbe(),
+      ]);
+      await refreshFfmpegOptionSupport();
+    },
   });
 
   background.add({
@@ -3571,6 +3586,34 @@ ipcMain.handle('runtime:getStatus', async () => {
     return { ok: true, ...status };
   } catch (error) {
     return { ...fail(error), ready: false, javaReady: false, sidecarReady: false, bridgeReady: false, isAppManaged: false };
+  }
+});
+
+ipcMain.handle('runtime:getPreference', async () => {
+  try {
+    return {
+      ok: true,
+      preferBundled: datastore.getBool(PREFER_BUNDLED_RUNTIMES_KEY, false, true),
+      envOverride: preferBundledFromEnv(),
+    };
+  } catch (error) {
+    return { ...fail(error), preferBundled: false, envOverride: preferBundledFromEnv() };
+  }
+});
+
+ipcMain.handle('runtime:setPreference', async (_, preferBundled: boolean) => {
+  try {
+    const next = Boolean(preferBundled);
+    datastore.setBool(PREFER_BUNDLED_RUNTIMES_KEY, next, true);
+    pluginManager.getSidecar().getProvisioner().invalidateCache();
+    void refreshFfmpegOptionSupport();
+    return {
+      ok: true,
+      preferBundled: next,
+      envOverride: preferBundledFromEnv(),
+    };
+  } catch (error) {
+    return { ...fail(error), preferBundled: false, envOverride: preferBundledFromEnv() };
   }
 });
 

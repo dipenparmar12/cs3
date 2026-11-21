@@ -14,6 +14,7 @@ import type {
 import type { OttPlatformView } from './cs3/ottPlatforms';
 import type { AppUpdateState } from './appUpdate/appUpdateService';
 import type { PlaybackTelemetryRecord, TelemetrySummary } from './media/playbackTelemetry';
+import type { ManagedToolName, ToolOrigin, ToolResolution } from './platform/toolResolver.ts';
 import type { ProfileState, SourceProfile } from './cs3/sourceProfiles.ts';
 import type {
   ProfileActionResult,
@@ -1257,6 +1258,8 @@ export interface CloudStreamElectronAPI {
     mpv: boolean;
     /** Which of these shipped with the app rather than being downloaded. */
     bundled: { ffmpeg: boolean; ffprobe: boolean; mpv: boolean };
+    /** Per-tool origin, resolved path, version, and skipped-system diagnostics (PRD-57). */
+    origins?: Record<ManagedToolName, ToolResolution>;
   }>;
   testAllBinaries: () => Promise<{
     aria2: { ok: boolean; version?: string; path?: string; error?: string };
@@ -1281,12 +1284,17 @@ export interface CloudStreamElectronAPI {
 
   // Plug-and-Play Runtime Provisioner
   getSystemRuntimeStatus: () => Promise<Envelope & SystemRuntimeStatus>;
+  getRuntimeResolutionPreference: () => Promise<Envelope & { preferBundled: boolean; envOverride: boolean }>;
+  setRuntimeResolutionPreference: (
+    preferBundled: boolean
+  ) => Promise<Envelope & { preferBundled: boolean; envOverride: boolean }>;
   provisionSystemRuntime: () => Promise<Envelope & { ready: boolean }>;
   repairSystemRuntime: () => Promise<Envelope & { ready: boolean }>;
   testSystemRuntime: () => Promise<{
     ok: boolean;
     version?: string;
     javaPath?: string;
+    javaOrigin?: ToolOrigin;
     sidecarPath?: string;
     runtimeDir?: string;
     error?: string;
@@ -2507,6 +2515,9 @@ const api: CloudStreamElectronAPI = {
 
   // Plug-and-Play Runtime Provisioner
   getSystemRuntimeStatus: () => ipcRenderer.invoke('runtime:getStatus'),
+  getRuntimeResolutionPreference: () => ipcRenderer.invoke('runtime:getPreference'),
+  setRuntimeResolutionPreference: (preferBundled) =>
+    ipcRenderer.invoke('runtime:setPreference', preferBundled),
   provisionSystemRuntime: () => ipcRenderer.invoke('runtime:provision'),
   repairSystemRuntime: () => ipcRenderer.invoke('runtime:repair'),
   testSystemRuntime: () => ipcRenderer.invoke('runtime:test'),

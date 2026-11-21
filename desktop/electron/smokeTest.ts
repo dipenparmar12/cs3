@@ -162,6 +162,7 @@ export async function runSmokeTest(deps: SmokeDeps): Promise<void> {
   const { app } = deps;
   const launch = Number(process.env.CS3_SMOKE_LAUNCH) || 1;
   const deep = process.env.CS3_SMOKE_DEEP === '1';
+  const slim = process.env.CS3_SMOKE_SLIM === '1';
   const packaged = app.isPackaged;
   const startedAt = new Date().toISOString();
   const target = deps.target ?? { platform: process.platform, arch: process.arch };
@@ -173,7 +174,7 @@ export async function runSmokeTest(deps: SmokeDeps): Promise<void> {
     checks.push(await timed('renderer', true, () => rendererMounted(deps.window), 90_000));
 
     for (const name of ['ffmpeg', 'ffprobe', 'mpv'] as const) {
-      const mustBeBundled = name === 'mpv' ? expected.mpv : expected.ffmpeg;
+      const mustBeBundled = !slim && (name === 'mpv' ? expected.mpv : expected.ffmpeg);
       checks.push(
         await timed(
           name,
@@ -203,7 +204,7 @@ export async function runSmokeTest(deps: SmokeDeps): Promise<void> {
           const java = deps.javaPath();
           if (!status.running) return { ok: false, detail: status.reason ?? 'the JVM did not answer' };
           if (!status.canExecute) return { ok: false, detail: `started, but cannot run providers: ${status.reason}` };
-          if (!isBundledJava(java, packaged)) {
+          if (!slim && !isBundledJava(java, packaged)) {
             return { ok: false, detail: `answered on ${java}, not the bundled JRE` };
           }
           return { ok: true, detail: `${status.javaVersion ?? 'Java'} (pid ${status.pid}) on ${java}` };

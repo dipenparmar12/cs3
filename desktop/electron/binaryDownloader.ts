@@ -1,6 +1,17 @@
 import fs from 'fs';
 import os from 'node:os';
 import { aria2Mirrors, extraSearchDirs, installHint, windowsTar, ytDlpMirrors } from './platform/binarySources.ts';
+import {
+  getSharedProbeCache,
+  isPreferBundled,
+  orderBinaryCandidates,
+  probeManagedBinaryAsync,
+  probeManagedBinarySync,
+  resolveBinaryCandidate,
+  systemSearchDirs,
+  type ManagedToolName,
+  type ToolResolution,
+} from './platform/toolResolver.ts';
 import path from 'path';
 import { app } from 'electron';
 import child_process from 'child_process';
@@ -14,6 +25,8 @@ export interface BinaryTestResult {
   path?: string;
   error?: string;
 }
+
+const MANAGED_TOOLS = new Set<string>(['aria2c', 'yt-dlp', 'ffmpeg', 'ffprobe', 'mpv']);
 
 const MIRRORS_FFMPEG = [
   // 1. Gyan Essentials: Highly optimized package (~38MB vs ~130MB), fast CDN, contains both ffmpeg & ffprobe
@@ -67,50 +80,94 @@ export class BinaryDownloader {
   }
 
   /**
-   * Resolves a tool, preferring the copy that shipped with the app.
+   * Resolves a managed helper tool with System-First, App-Fallback precedence
+   * (PRD-57), gated by cached compatibility criteria.
    *
-   * The order is the point. It used to start at `userData/bin` — the directory
-   * the on-demand downloader writes to — which is the same shape as the
-   * stale-runtime trap documented in `AGENTS.md`: a copy fetched by an older
-   * version of the app silently shadows the one this version was built and
-   * tested against, and nothing reports it. The bundled copy is versioned with
-   * the app, so it wins.
+   * When a compatible system-wide tool exists (`PATH` or `extraSearchDirs`),
+   * it is used directly without duplicating or shadowing it. Otherwise the
+   * bundled (`resources/media` / `desktop/media-runtime`) and app-managed
+   * (`userData/bin`) copies serve as fallback.
    *
-   * **`yt-dlp` is the deliberate exception.** Extractors break when a site
-   * changes, which happens weekly, so a downloaded copy there is *newer* rather
-   * than staler and pinning it to the release cadence would break downloads
-   * between releases. It keeps the old order.
+   * Set `CS3_PREFER_BUNDLED=1` or enable "Prefer bundled runtimes" in Settings
+   * to invert back to bundled-first (also used by release smoke tests).
    */
-  public resolveBinary(name: string): string | null {
-    const exe = process.platform === 'win32' ? `${name}.exe` : name;
-    const selfUpdating = name === 'yt-dlp';
-
-    const dirs = selfUpdating
-      ? [this.binDir, ...this.bundledDirs(), path.join(process.cwd(), 'bin')]
-      : [...this.bundledDirs(), this.binDir, path.join(process.cwd(), 'bin')];
-
-    for (const dir of dirs) {
-      const candidate = path.join(dir, exe);
-      if (fs.existsSync(candidate)) return candidate;
+  public resolveBinaryWithOrigin(name: ManagedToolName): ToolResolution {
+    const preferBundled = isPreferBundled();
+    // Pair `ffprobe` with the directory of a verified system `ffmpeg` so both
+    // tools come from the same FFmpeg build whenever possible.
+    let pairedSystemDir: string | null = null;
+    if (name === 'ffprobe' && !preferBundled) {
+      const ffmpegRes = this.resolveBinaryWithOrigin('ffmpeg');
+      if (ffmpegRes.origin === 'system' && ffmpegRes.path) {
+        pairedSystemDir = path.dirname(ffmpegRes.path);
+      }
     }
 
-    // The system PATH, plus where Homebrew and Linux packages put things that
-    // a GUI app's inherited PATH leaves out (see `extraSearchDirs`).
-    const pathDirs = [
+    const candidates = orderBinaryCandidates({
+      name,
+      preferBundled,
+      bundledDirs: this.bundledDirs(),
+      binDir: this.binDir,
+      cwdBinDir: path.join(process.cwd(), 'bin'),
+      systemDirs: systemSearchDirs(),
+      pairedSystemDir,
+    });
+
+    return resolveBinaryCandidate(
+      candidates,
+      (file) => fs.existsSync(file),
+      (candidate) => probeManagedBinarySync(name, candidate.exePath, getSharedProbeCache())
+    );
+  }
+
+  public resolveBinary(name: string): string | null {
+    if (MANAGED_TOOLS.has(name)) {
+      return this.resolveBinaryWithOrigin(name as ManagedToolName).path;
+    }
+
+    const exe = process.platform === 'win32' ? `${name}.exe` : name;
+    const systemDirs = [
       ...(process.env.PATH || '').split(path.delimiter),
       ...extraSearchDirs(process.platform, os.homedir()),
     ];
-    for (const dir of pathDirs) {
+    const fallbackDirs = [...this.bundledDirs(), this.binDir, path.join(process.cwd(), 'bin')];
+    const orderedDirs = isPreferBundled() ? [...fallbackDirs, ...systemDirs] : [...systemDirs, ...fallbackDirs];
+
+    for (const dir of orderedDirs) {
       if (!dir) continue;
       const candidate = path.join(dir, exe);
       if (fs.existsSync(candidate)) return candidate;
     }
-
     return null;
   }
 
-  /** True when this tool came out of the box rather than from a download. */
+  /**
+   * Pre-warms fingerprinted system binary probes off the main thread during
+   * background startup so cold launches do not block Electron's event loop.
+   */
+  public async warmSystemProbes(): Promise<void> {
+    if (isPreferBundled()) return;
+    const tools: ManagedToolName[] = ['ffmpeg', 'ffprobe', 'mpv', 'yt-dlp', 'aria2c'];
+    const sysDirs = systemSearchDirs();
+    await Promise.all(
+      tools.map(async (name) => {
+        const exe = process.platform === 'win32' ? `${name}.exe` : name;
+        for (const dir of sysDirs) {
+          if (!dir) continue;
+          const candidate = path.join(dir, exe);
+          if (!fs.existsSync(candidate)) continue;
+          const outcome = await probeManagedBinaryAsync(name, candidate, getSharedProbeCache());
+          if (outcome.ok) break;
+        }
+      })
+    );
+  }
+
+  /** True when this tool came out of the box rather than from the system or a download. */
   public isBundled(name: string): boolean {
+    if (MANAGED_TOOLS.has(name)) {
+      return this.resolveBinaryWithOrigin(name as ManagedToolName).origin === 'bundled';
+    }
     const resolved = this.resolveBinary(name);
     if (!resolved) return false;
     return this.bundledDirs().some((dir) => resolved.startsWith(dir + path.sep));
@@ -126,22 +183,34 @@ export class BinaryDownloader {
      * Which of these came out of the box.
      *
      * Carried separately so the UI can say "included" rather than "installed".
-     * The difference is not cosmetic: a card reporting "Installed" for something
-     * the user never installed teaches them that the status is decorative, and
-     * the same card is what they will look at when something really is missing.
      */
     bundled: { ffmpeg: boolean; ffprobe: boolean; mpv: boolean };
+    /** Per-tool origin, resolved path, version, and skipped-system diagnostics (PRD-57). */
+    origins: Record<ManagedToolName, ToolResolution>;
   } {
+    const aria2Res = this.resolveBinaryWithOrigin('aria2c');
+    const ytdlpRes = this.resolveBinaryWithOrigin('yt-dlp');
+    const ffmpegRes = this.resolveBinaryWithOrigin('ffmpeg');
+    const ffprobeRes = this.resolveBinaryWithOrigin('ffprobe');
+    const mpvRes = this.resolveBinaryWithOrigin('mpv');
+
     return {
-      aria2: this.resolveBinary('aria2c') !== null,
-      ytdlp: this.resolveBinary('yt-dlp') !== null,
-      ffmpeg: this.resolveBinary('ffmpeg') !== null,
-      ffprobe: this.resolveBinary('ffprobe') !== null,
-      mpv: this.resolveBinary('mpv') !== null,
+      aria2: aria2Res.path !== null,
+      ytdlp: ytdlpRes.path !== null,
+      ffmpeg: ffmpegRes.path !== null,
+      ffprobe: ffprobeRes.path !== null,
+      mpv: mpvRes.path !== null,
       bundled: {
-        ffmpeg: this.isBundled('ffmpeg'),
-        ffprobe: this.isBundled('ffprobe'),
-        mpv: this.isBundled('mpv'),
+        ffmpeg: ffmpegRes.origin === 'bundled',
+        ffprobe: ffprobeRes.origin === 'bundled',
+        mpv: mpvRes.origin === 'bundled',
+      },
+      origins: {
+        aria2c: aria2Res,
+        'yt-dlp': ytdlpRes,
+        ffmpeg: ffmpegRes,
+        ffprobe: ffprobeRes,
+        mpv: mpvRes,
       },
     };
   }
@@ -157,11 +226,20 @@ export class BinaryDownloader {
       return { ok: false, error: `${name} is not installed` };
     }
 
+    // Refresh the cached probe verdict on explicit test.
+    getSharedProbeCache().delete(`bin:${name}:${binPath}`);
+
     const flag =
       name === 'yt-dlp' || name === 'mpv' ? '--version' : name === 'aria2c' ? '-v' : '-version';
+    // On Windows, `mpv.com` beside `mpv.exe` prints stdout where `mpv.exe` does not.
+    let probePath = binPath;
+    if (process.platform === 'win32' && name === 'mpv' && binPath.toLowerCase().endsWith('.exe')) {
+      const comPath = binPath.slice(0, -4) + '.com';
+      if (fs.existsSync(comPath)) probePath = comPath;
+    }
 
     return new Promise((resolve) => {
-      child_process.execFile(binPath, [flag], { timeout: 8000, windowsHide: true }, (err, stdout, stderr) => {
+      child_process.execFile(probePath, [flag], { timeout: 8000, windowsHide: true }, (err, stdout, stderr) => {
         if (err && !stdout && !stderr) {
           resolve({ ok: false, path: binPath, error: err.message });
           return;
@@ -303,11 +381,17 @@ export class BinaryDownloader {
     if (this.inFlightFfmpeg) return this.inFlightFfmpeg;
 
     this.inFlightFfmpeg = (async () => {
-      // Test before downloading if binaries already exist
+      // Test before downloading if binaries already exist (system-native or bundled/managed)
+      const ffmpegOrigin = this.resolveBinaryWithOrigin('ffmpeg').origin;
+      const ffprobeOrigin = this.resolveBinaryWithOrigin('ffprobe').origin;
       const test = await this.testBinary('ffmpeg');
       const testProbe = await this.testBinary('ffprobe');
       if (test.ok && testProbe.ok) {
-        if (onStatus) onStatus('Media components verified and ready.', 100);
+        const msg =
+          ffmpegOrigin === 'system' && ffprobeOrigin === 'system'
+            ? `Using system-installed FFmpeg & FFprobe (${test.version || 'verified'}).`
+            : 'Media components verified and ready.';
+        if (onStatus) onStatus(msg, 100);
         return true;
       }
 
@@ -391,9 +475,17 @@ export class BinaryDownloader {
     if (this.inFlightAria2) return this.inFlightAria2;
 
     this.inFlightAria2 = (async () => {
+      const origin = this.resolveBinaryWithOrigin('aria2c').origin;
       const test = await this.testBinary('aria2c');
       if (test.ok) {
-        if (onStatus) onStatus('aria2c verified and ready.', 100);
+        if (onStatus) {
+          onStatus(
+            origin === 'system'
+              ? `Using system-installed aria2c (${test.version || 'verified'}).`
+              : 'aria2c verified and ready.',
+            100
+          );
+        }
         return true;
       }
 
@@ -488,9 +580,17 @@ export class BinaryDownloader {
     if (this.inFlightYtDlp) return this.inFlightYtDlp;
 
     this.inFlightYtDlp = (async () => {
+      const origin = this.resolveBinaryWithOrigin('yt-dlp').origin;
       const test = await this.testBinary('yt-dlp');
       if (test.ok) {
-        if (onStatus) onStatus('yt-dlp verified and ready.', 100);
+        if (onStatus) {
+          onStatus(
+            origin === 'system'
+              ? `Using system-installed yt-dlp (${test.version || 'verified'}).`
+              : 'yt-dlp verified and ready.',
+            100
+          );
+        }
         return true;
       }
 
@@ -620,9 +720,17 @@ export class BinaryDownloader {
     if (this.inFlightMpv) return this.inFlightMpv;
 
     this.inFlightMpv = (async () => {
+      const origin = this.resolveBinaryWithOrigin('mpv').origin;
       const existing = await this.testBinary('mpv');
       if (existing.ok) {
-        if (onStatus) onStatus(`Native engine ready (${existing.version || 'mpv'}).`, 100);
+        if (onStatus) {
+          onStatus(
+            origin === 'system'
+              ? `Using system-installed mpv (${existing.version || 'mpv'}).`
+              : `Native engine ready (${existing.version || 'mpv'}).`,
+            100
+          );
+        }
         return true;
       }
 

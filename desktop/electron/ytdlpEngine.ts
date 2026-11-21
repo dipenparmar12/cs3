@@ -5,6 +5,13 @@ import { app } from 'electron';
 import type { YtDlpInfo } from './ytdlpSources.ts';
 import { describeError } from '../src/utils/errors.ts';
 import { appStorage } from './storage/appStorage.ts';
+import {
+  isPreferBundled,
+  orderBinaryCandidates,
+  probeManagedBinarySync,
+  resolveBinaryCandidate,
+  systemSearchDirs,
+} from './platform/toolResolver.ts';
 
 /** How long one page resolve may take before it is abandoned. */
 const RESOLVE_TIMEOUT_MS = 45_000;
@@ -69,26 +76,24 @@ export class YtDlpEngine {
   }
 
   public getBinaryPath(): string | null {
-    const binaryName = process.platform === 'win32' ? 'yt-dlp.exe' : 'yt-dlp';
     const appDir = app ? app.getPath('userData') : process.cwd();
-    const candidates = [
-      path.join(appDir, 'bin', binaryName),
-      path.join(process.cwd(), 'media-runtime', binaryName),
-      path.join(process.cwd(), 'bin', binaryName),
+    const bundledDirs = [
+      ...(app?.isPackaged ? [path.join(process.resourcesPath, 'media')] : []),
+      path.join(process.cwd(), 'media-runtime'),
     ];
-    if (app?.isPackaged) {
-      candidates.splice(1, 0, path.join(process.resourcesPath, 'media', binaryName));
-    }
-    for (const cand of candidates) {
-      if (fs.existsSync(cand)) return cand;
-    }
-    const pathDirs = (process.env.PATH || '').split(path.delimiter);
-    for (const dir of pathDirs) {
-      if (!dir) continue;
-      const cand = path.join(dir, binaryName);
-      if (fs.existsSync(cand)) return cand;
-    }
-    return null;
+    const candidates = orderBinaryCandidates({
+      name: 'yt-dlp',
+      preferBundled: isPreferBundled(),
+      bundledDirs,
+      binDir: path.join(appDir, 'bin'),
+      cwdBinDir: path.join(process.cwd(), 'bin'),
+      systemDirs: systemSearchDirs(),
+    });
+    return resolveBinaryCandidate(
+      candidates,
+      (file) => fs.existsSync(file),
+      (candidate) => probeManagedBinarySync('yt-dlp', candidate.exePath)
+    ).path;
   }
 
   public isAvailable(): boolean {
