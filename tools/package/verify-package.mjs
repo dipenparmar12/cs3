@@ -37,6 +37,7 @@ const argv = process.argv.slice(2);
 const platform = process.platform;
 const arch = flag(argv, '--arch', process.arch);
 const version = flag(argv, '--version');
+const slim = argv.includes('--slim');
 const exe = (name) => (platform === 'win32' ? `${name}.exe` : name);
 
 const appRoot = unpackedDir(platform, arch);
@@ -78,13 +79,15 @@ function expectFile(file, what) {
 expectBinary(executable(appRoot, platform), 'the app executable');
 expectFile(path.join(resources, 'app.asar'), 'the app bundle (app.asar)');
 
-// The extension runtime: sidecar, its classpath, and a JRE for this machine.
+// The extension runtime: sidecar, its classpath, and (unless --slim) a JRE for this machine.
 const sidecar = path.join(resources, 'sidecar');
 expectFile(path.join(sidecar, 'cs3-sidecar.jar'), 'the extension sidecar');
-expectBinary(path.join(sidecar, 'jre', 'bin', exe('java')), 'the bundled Java runtime');
-// The JVM forks processes through jspawnhelper on macOS and Linux; without its
-// exec bit every ProcessBuilder call fails with "error=13".
-if (platform !== 'win32') expectBinary(path.join(sidecar, 'jre', 'lib', 'jspawnhelper'), 'the JRE process helper');
+if (!slim) {
+  expectBinary(path.join(sidecar, 'jre', 'bin', exe('java')), 'the bundled Java runtime');
+  // The JVM forks processes through jspawnhelper on macOS and Linux; without its
+  // exec bit every ProcessBuilder call fails with "error=13".
+  if (platform !== 'win32') expectBinary(path.join(sidecar, 'jre', 'lib', 'jspawnhelper'), 'the JRE process helper');
+}
 const runtimeDir = path.join(sidecar, 'runtime');
 const jars = fs.existsSync(runtimeDir) ? fs.readdirSync(runtimeDir).filter((f) => f.endsWith('.jar')).length : 0;
 if (jars < 50) problems.push(`the extension classpath has ${jars} jars in sidecar/runtime, expected 50+`);
@@ -95,17 +98,19 @@ for (const required of ['library-jvm', 'cs3-provider-bridge']) {
   }
 }
 
-// The media runtime, where this target bundles one.
+// The media runtime, where this target bundles one (omitted in --slim packages).
 const tools = bundledTools(platform, arch);
 const media = path.join(resources, 'media');
-if (tools.ffmpeg) {
-  expectBinary(path.join(media, exe('ffmpeg')), 'ffmpeg');
-  expectBinary(path.join(media, exe('ffprobe')), 'ffprobe');
-}
-if (tools.mpv) {
-  expectBinary(path.join(media, 'mpv.exe'), 'mpv');
-  // The console front-end: without it every mpv diagnostic comes back empty.
-  expectFile(path.join(media, 'mpv.com'), 'mpv.com');
+if (!slim) {
+  if (tools.ffmpeg) {
+    expectBinary(path.join(media, exe('ffmpeg')), 'ffmpeg');
+    expectBinary(path.join(media, exe('ffprobe')), 'ffprobe');
+  }
+  if (tools.mpv) {
+    expectBinary(path.join(media, 'mpv.exe'), 'mpv');
+    // The console front-end: without it every mpv diagnostic comes back empty.
+    expectFile(path.join(media, 'mpv.com'), 'mpv.com');
+  }
 }
 // A stray binary from another platform's staging run is shipped dead weight
 // at best, and the one `resolveBinary` finds first at worst.

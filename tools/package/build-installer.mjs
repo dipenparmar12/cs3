@@ -56,6 +56,7 @@ if (has('--help') || has('-h')) {
   --version x.y.z       the version artifacts are named for (default: package.json)
   --skip-jvm            do not build the sidecar (the package will run no extensions)
   --skip-media          do not bundle ffmpeg/mpv (they are then fetched on first use)
+  --slim                system-native package: ships sidecar JARs, omits bundled JRE & media binaries
   --allow-missing-media stage whatever media binaries are present instead of failing
   --skip-typecheck      skip \`tsc -b\`
   --yes                 download a missing JDK or Maven into tools/toolchain without asking
@@ -66,8 +67,9 @@ if (has('--help') || has('-h')) {
 const FAST = has('--fast');
 const CLEAN = has('--clean');
 const QUICK = has('--quick');
+const SLIM = has('--slim');
 const SKIP_JVM = has('--skip-jvm');
-const SKIP_MEDIA = has('--skip-media');
+const SKIP_MEDIA = has('--skip-media') || SLIM;
 const SKIP_TYPECHECK = has('--skip-typecheck');
 const ALLOW_MISSING_MEDIA = has('--allow-missing-media');
 /**
@@ -130,34 +132,10 @@ function die(message, hint) {
   process.exit(1);
 }
 
-/**
- * Windows has no `mvn`; it has `mvn.cmd`, and spawnSync without a shell will
- * not find it. That exact ENOENT was once reported as "is mvn on PATH?" when
- * it was. Resolve the spellings explicitly, and prefer the checked-in
- * toolchain for the same reason SidecarSupervisor prefers the checked-in JDK:
- * an ordinary machine's JAVA_HOME is very often Java 17.
- */
-function resolveTool(name, prefix) {
-  if (!fs.existsSync(toolchain)) return null;
-  const dirs = fs.readdirSync(toolchain).filter((e) => e.startsWith(prefix)).sort().reverse();
-  const exts = isWindows ? ['.cmd', '.bat', '.exe', ''] : [''];
-  for (const dir of dirs) {
-    for (const ext of exts) {
-      const candidate = path.join(toolchain, dir, 'bin', name + ext);
-      if (fs.existsSync(candidate)) return candidate;
-    }
-  }
-  return null;
-}
-
-// Re-resolved after the preflight, which may have just installed either one.
-let MVN = resolveTool('mvn', 'apache-maven') ?? (isWindows ? 'mvn.cmd' : 'mvn');
-function resolveToolchainJdk() {
-  if (!fs.existsSync(toolchain)) return null;
-  const jdk = fs.readdirSync(toolchain).filter((e) => e.startsWith('jdk-')).sort().reverse()[0];
-  return jdk ? path.join(toolchain, jdk) : null;
-}
-let JAVA_HOME_DIR = resolveToolchainJdk() ?? process.env.JAVA_HOME;
+// Resolved by `runDoctor` in System-First order (PRD-57): system JAVA_HOME /
+// MAVEN_HOME / PATH first, falling back to tools/toolchain/ only if missing.
+let MVN = isWindows ? 'mvn.cmd' : 'mvn';
+let JAVA_HOME_DIR = process.env.JAVA_HOME;
 
 /**
  * `shell: true` is needed for a .cmd/.bat shim and is actively harmful for
@@ -297,6 +275,7 @@ const environment = await runDoctor({
   assumeYes: has('--yes') || process.env.CS3_AUTO_INSTALL === '1',
   skipJvm: SKIP_JVM,
   skipMedia: SKIP_MEDIA,
+  slim: SLIM,
   log: info,
 });
 if (!environment.ok) {
@@ -307,8 +286,8 @@ if (!environment.ok) {
       'To package without extension support (no Java or Maven needed), pass --skip-jvm.',
   );
 }
-MVN = resolveTool('mvn', 'apache-maven') ?? environment.mvn ?? MVN;
-JAVA_HOME_DIR = resolveToolchainJdk() ?? environment.javaHome ?? JAVA_HOME_DIR;
+MVN = environment.mvn ?? MVN;
+JAVA_HOME_DIR = environment.javaHome ?? JAVA_HOME_DIR;
 if (!SKIP_JVM) info(`maven ${path.relative(root, MVN) || MVN}; JAVA_HOME ${JAVA_HOME_DIR ?? '(PATH)'}`);
 for (const tool of ['electron-builder', 'vite', 'tsc']) requireBin(tool);
 
@@ -376,7 +355,7 @@ if (SKIP_JVM) {
     if (!fs.existsSync(bridgeJar)) die('cs3-provider-bridge.jar was not produced.');
   }
 
-  heading('Staging sidecar/dist (sidecar + classpath + jlinked JRE)');
+  heading(SLIM ? 'Staging sidecar/dist (sidecar + classpath, no bundled JRE — --slim)' : 'Staging sidecar/dist (sidecar + classpath + jlinked JRE)');
   // build-runtime clears sidecar/dist before relinking. On Windows a java.exe
   // from a previous verification or dev session still running against sidecar/dist
   // holds jre/bin/java.dll locked; terminate it before unlinking.
@@ -398,34 +377,27 @@ if (SKIP_JVM) {
   }
 
   const staged = path.join(root, 'sidecar', 'dist');
-  /*
-   * Relinking a JRE takes the better part of a minute and produces the same
-   * ~90 MB tree whenever its inputs have not moved. The inputs are exactly the
-   * two things copied into it plus the module list in `build-runtime.mjs`
-   * itself — that list is curated, and a change to it (`jdk.crypto.ec` and
-   * friends) has to relink or the package ships a JRE missing a module nothing
-   * will notice until TLS fails site by site.
-   */
+  const stagedOutputs = [
+    path.join(staged, 'cs3-sidecar.jar'),
+    ...(SLIM ? [] : [path.join(staged, 'jre', 'bin', isWindows ? 'java.exe' : 'java')]),
+    path.join(staged, 'runtime'),
+  ];
+  const jrePresenceMatches = SLIM
+    ? !fs.existsSync(path.join(staged, 'jre'))
+    : fs.existsSync(path.join(staged, 'jre', 'bin', isWindows ? 'java.exe' : 'java'));
+
   if (
+    jrePresenceMatches &&
     upToDate(
       'sidecar/dist',
-      [
-        path.join(staged, 'cs3-sidecar.jar'),
-        path.join(staged, 'jre', 'bin', isWindows ? 'java.exe' : 'java'),
-        path.join(staged, 'runtime'),
-      ],
+      stagedOutputs,
       [sidecarJar, runtimeDir, path.join(root, 'tools', 'package', 'build-runtime.mjs')],
-      // Written last by build-runtime.mjs. The staged files themselves cannot
-      // answer this: `copyDir` deliberately leaves a jar whose bytes are
-      // already right untouched, so the oldest of them is older than the
-      // inputs after every successful run, and the stage would restage — while
-      // copying nothing — forever.
       path.join(staged, '.staged'),
     )
   ) {
     /* nothing to do */
   } else {
-    node(path.join(root, 'tools', 'package', 'build-runtime.mjs'), ['--verify'], {
+    node(path.join(root, 'tools', 'package', 'build-runtime.mjs'), ['--verify', ...(SLIM ? ['--no-jre'] : [])], {
       hint:
         'An EPERM on jre/bin/java.dll means a java.exe from a previous verification is\n' +
         'still running. Close it, or rerun with --fast to reuse the staged copy.',
@@ -435,8 +407,17 @@ if (SKIP_JVM) {
 
 // ── Media runtime ────────────────────────────────────────────────────────────
 if (SKIP_MEDIA) {
-  heading('Media runtime — skipped (--skip-media)');
-  info('ffmpeg and mpv will be fetched on first use, which is the worst configuration to ship');
+  heading(SLIM ? 'Media runtime — omitted (--slim; uses system ffmpeg/mpv)' : 'Media runtime — skipped (--skip-media)');
+  const mediaDir = path.join(app, 'media-runtime');
+  if (SLIM && fs.existsSync(mediaDir)) {
+    fs.rmSync(mediaDir, { recursive: true, force: true });
+  }
+  fs.mkdirSync(mediaDir, { recursive: true });
+  info(
+    SLIM
+      ? 'relying on system-installed ffmpeg, ffprobe and mpv (falls back to on-demand download if absent)'
+      : 'ffmpeg and mpv will be fetched on first use, which is the worst configuration to ship'
+  );
 } else {
   heading('Staging media runtime (ffmpeg, ffprobe, mpv)');
   // build-media-runtime re-fetches unconditionally, and its mirrors are the
@@ -653,6 +634,8 @@ if (SKIP_JVM) {
 if (QUICK) {
   console.log('[33mNote:[0m built with --quick — the payload is stored, not compressed.');
 }
-if (SKIP_MEDIA) {
+if (SLIM) {
+  console.log('\n\x1b[33mNote:\x1b[0m built with --slim — uses system Java 21+, ffmpeg and mpv (no bundled JRE or media binaries).');
+} else if (SKIP_MEDIA) {
   console.log('\x1b[33mNote:\x1b[0m built with --skip-media — ffmpeg and mpv are not bundled.');
 }

@@ -52,6 +52,7 @@ const platform = process.platform;
 const arch = flag(argv, '--arch', process.arch);
 const version = flag(argv, '--version');
 const DEEP = has('--deep');
+const SLIM = has('--slim');
 const LAUNCH_TIMEOUT_MS = Number(flag(argv, '--timeout', DEEP ? '1500' : '300')) * 1000;
 // `--work` names a directory CI can upload when a launch fails; it must not
 // contain spaces on Windows (NSIS takes its install path unquoted).
@@ -107,6 +108,10 @@ async function launch(subject, launchNumber, profile) {
     CS3_SMOKE_USER_DATA: profile,
     CS3_SMOKE_LAUNCH: String(launchNumber),
     CS3_SMOKE_NETWORK: has('--require-network') ? 'require' : 'report',
+    // A full release smoke test must prove the bundled JRE & media binaries work
+    // even on CI hosts that also have system Java/FFmpeg installed. Slim builds
+    // deliberately test System-First instead.
+    ...(SLIM ? { CS3_SMOKE_SLIM: '1' } : { CS3_PREFER_BUNDLED: '1' }),
     ...(DEEP ? { CS3_SMOKE_DEEP: '1' } : {}),
     ELECTRON_ENABLE_LOGGING: '1',
   };

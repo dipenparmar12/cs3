@@ -50,8 +50,21 @@ const isMac = process.platform === 'darwin';
 
 const REQUIRED_NODE = 20;
 const REQUIRED_JAVA = 21;
+const REQUIRED_MAVEN_MINOR = 8; // Maven 3.8+
 /** Pinned, and verified against Apache's published SHA-512 before unpacking. */
 const MAVEN_VERSION = '3.9.9';
+const REQUIRED_JAVA_MODULES = [
+  'java.base',
+  'java.desktop',
+  'java.net.http',
+  'java.sql',
+  'java.scripting',
+  'java.naming',
+  'jdk.crypto.ec',
+  'jdk.localedata',
+  'jdk.unsupported',
+  'jdk.zipfs',
+];
 
 // ── small helpers ────────────────────────────────────────────────────────────
 
@@ -107,7 +120,7 @@ function toolchainDirs(prefix) {
     .map((entry) => path.join(TOOLCHAIN, entry));
 }
 
-// ── Java and Maven, resolved the way the app and the packager resolve them ──
+// ── Java, Maven & utility resolution (System-First, Local-Fallback — PRD-57) ─
 
 function javaVersionOf(javaExe) {
   const probe = exec(javaExe, ['-version']);
@@ -124,57 +137,231 @@ function javaHomeOf(javaExe) {
   return home || null;
 }
 
+function missingJavaModulesOf(javaExe) {
+  const probe = exec(javaExe, ['--list-modules']);
+  if (probe.status !== 0) return [];
+  const present = new Set(
+    `${probe.stdout ?? ''}`
+      .split(/\r?\n/)
+      .map((line) => line.trim().split('@')[0]?.trim())
+      .filter(Boolean)
+  );
+  return REQUIRED_JAVA_MODULES.filter((mod) => !present.has(mod));
+}
+
+function mavenVersionOf(mvnExe) {
+  const probe = exec(mvnExe, ['-v']);
+  const out = `${probe.stdout ?? ''}${probe.stderr ?? ''}`;
+  const match = /Apache Maven\s+(\d+)\.(\d+)(?:\.(\d+))?/i.exec(out);
+  if (!match) return null;
+  return {
+    text: `${match[1]}.${match[2]}${match[3] ? `.${match[3]}` : ''}`,
+    major: Number(match[1]),
+    minor: Number(match[2]),
+  };
+}
+
 /**
- * Same order as `SidecarSupervisor.resolveJava` / `RuntimeProvisioner`:
- * `tools/toolchain/jdk-*` first (an ordinary machine's JAVA_HOME is very often
- * Java 17, which used to break everything silently), then JAVA_HOME, then PATH.
- * A JDK is required here, not a JRE — the sidecar is compiled — so `javac` must
- * sit beside `java`.
+ * System-First JDK resolution (PRD-57):
+ *   1. CS3_JAVA_HOME (explicit override)
+ *   2. System JAVA_HOME
+ *   3. System PATH (`java` → real `java.home`)
+ *   4. Local fallback `tools/toolchain/jdk-*`
+ *
+ * A system JDK is accepted only when it passes every required criterion
+ * (Java 21+, `javac`, required JPMS modules, and `jlink` when packaging).
+ * Incompatible system installs (e.g. JAVA_HOME=17) are recorded in `seen`
+ * with the rejection reason and cleanly fall through without failing silently.
  */
-export function findJdk() {
+export function findJdk({ requireJlink = false } = {}) {
   const exe = isWindows ? 'java.exe' : 'java';
-  const javac = isWindows ? 'javac.exe' : 'javac';
-  const candidates = [
-    ...toolchainDirs('jdk').map((home) => ({ home, source: path.relative(ROOT, home) })),
-    ...(process.env.JAVA_HOME ? [{ home: process.env.JAVA_HOME, source: 'JAVA_HOME' }] : []),
-  ];
-  const seen = [];
-  for (const candidate of candidates) {
-    const java = path.join(candidate.home, 'bin', exe);
-    if (!fs.existsSync(java)) continue;
-    const version = javaVersionOf(java);
-    seen.push({ ...candidate, version, java });
-    if (version && version >= REQUIRED_JAVA && fs.existsSync(path.join(candidate.home, 'bin', javac))) {
-      return { javaHome: candidate.home, java, version, source: candidate.source, seen };
-    }
+  const javacName = isWindows ? 'javac.exe' : 'javac';
+  const jlinkName = isWindows ? 'jlink.exe' : 'jlink';
+
+  const systemCandidates = [];
+  if (process.env.CS3_JAVA_HOME) {
+    systemCandidates.push({ home: process.env.CS3_JAVA_HOME, source: 'system: CS3_JAVA_HOME', origin: 'system' });
+  }
+  if (process.env.JAVA_HOME) {
+    systemCandidates.push({ home: process.env.JAVA_HOME, source: 'system: JAVA_HOME', origin: 'system' });
   }
   const onPathJava = onPath('java');
   if (onPathJava) {
-    const version = javaVersionOf(onPathJava);
-    seen.push({ home: null, source: 'PATH', version, java: onPathJava });
-    if (version && version >= REQUIRED_JAVA && onPath('javac')) {
-      return { javaHome: javaHomeOf(onPathJava), java: onPathJava, version, source: 'PATH', seen };
+    const resolvedHome = javaHomeOf(onPathJava);
+    systemCandidates.push({
+      home: resolvedHome,
+      javaOverride: onPathJava,
+      source: 'system: PATH',
+      origin: 'system',
+    });
+  }
+
+  const localToolchain = toolchainDirs('jdk');
+  const candidates = [
+    ...systemCandidates,
+    ...localToolchain.map((home) => ({ home, source: path.relative(ROOT, home), origin: 'toolchain' })),
+  ];
+
+  const seen = [];
+  const checkedHomes = new Set();
+
+  for (const candidate of candidates) {
+    const java = candidate.home ? path.join(candidate.home, 'bin', exe) : candidate.javaOverride;
+    if (!java || !fs.existsSync(java)) continue;
+    const normKey = isWindows ? path.normalize(java).toLowerCase() : path.normalize(java);
+    if (checkedHomes.has(normKey)) continue;
+    checkedHomes.add(normKey);
+
+    const version = javaVersionOf(java);
+    const javac = candidate.home ? path.join(candidate.home, 'bin', javacName) : onPath('javac');
+    const jlink = candidate.home ? path.join(candidate.home, 'bin', jlinkName) : onPath('jlink');
+    const hasJavac = Boolean(javac && fs.existsSync(javac));
+    const hasJlink = Boolean(jlink && fs.existsSync(jlink));
+
+    let rejectReason = null;
+    if (!version || version < REQUIRED_JAVA) {
+      rejectReason = version ? `Java ${version} (requires ${REQUIRED_JAVA}+)` : 'unreadable Java version';
+    } else if (!hasJavac) {
+      rejectReason = 'JRE only (missing javac — JDK required to compile sidecar)';
+    } else if (requireJlink && !hasJlink) {
+      rejectReason = 'missing jlink (required for packaging)';
+    } else if (candidate.origin === 'system') {
+      const missingMods = missingJavaModulesOf(java);
+      if (missingMods.length > 0) {
+        rejectReason = `missing required modules: ${missingMods.join(', ')}`;
+      }
+    }
+
+    seen.push({ ...candidate, version, java, rejectReason });
+    if (!rejectReason) {
+      const activeNorm = candidate.home
+        ? (isWindows ? path.normalize(candidate.home).toLowerCase() : path.normalize(candidate.home))
+        : null;
+      const unusedLocal =
+        candidate.origin === 'system'
+          ? localToolchain.filter(
+              (dir) => (isWindows ? path.normalize(dir).toLowerCase() : path.normalize(dir)) !== activeNorm
+            )
+          : [];
+      return {
+        javaHome: candidate.home,
+        java,
+        jlink: hasJlink ? jlink : null,
+        version,
+        source: candidate.source,
+        origin: candidate.origin,
+        seen,
+        duplicates: unusedLocal,
+      };
     }
   }
-  return { javaHome: null, java: null, version: null, source: null, seen };
+
+  return {
+    javaHome: null,
+    java: null,
+    jlink: null,
+    version: null,
+    source: null,
+    origin: null,
+    seen,
+    duplicates: [],
+  };
 }
 
-/** `tools/toolchain/apache-maven-*` first, then PATH (`mvn.cmd` on Windows). */
+/**
+ * System-First Maven resolution (PRD-57):
+ *   1. MAVEN_HOME / M2_HOME
+ *   2. System PATH (`mvn.cmd`/`mvn.bat` on Windows, `mvn` on Unix)
+ *   3. Local fallback `tools/toolchain/apache-maven-*`
+ */
 export function findMaven() {
   const names = isWindows ? ['mvn.cmd', 'mvn.bat', 'mvn'] : ['mvn'];
-  for (const dir of toolchainDirs('apache-maven')) {
+  const pathNames = isWindows ? ['mvn.cmd', 'mvn.bat'] : ['mvn'];
+  const localToolchain = toolchainDirs('apache-maven');
+
+  const candidates = [];
+  for (const envVar of ['MAVEN_HOME', 'M2_HOME']) {
+    const home = process.env[envVar];
+    if (!home) continue;
     for (const name of names) {
-      const candidate = path.join(dir, 'bin', name);
-      if (fs.existsSync(candidate)) return { mvn: candidate, source: path.relative(ROOT, dir) };
+      const candidate = path.join(home, 'bin', name);
+      if (fs.existsSync(candidate)) {
+        candidates.push({ mvn: candidate, source: `system: ${envVar}`, origin: 'system' });
+        break;
+      }
     }
   }
   // Asked for by its full name: on Windows `where mvn` can answer with Maven's
   // extensionless shell script, which cannot be spawned there.
-  for (const name of isWindows ? ['mvn.cmd', 'mvn.bat'] : names) {
+  for (const name of pathNames) {
     const found = onPath(name);
-    if (found) return { mvn: found, source: 'PATH' };
+    if (found) {
+      candidates.push({ mvn: found, source: 'system: PATH', origin: 'system' });
+      break;
+    }
   }
-  return { mvn: null, source: null };
+  for (const dir of localToolchain) {
+    for (const name of names) {
+      const candidate = path.join(dir, 'bin', name);
+      if (fs.existsSync(candidate)) {
+        candidates.push({ mvn: candidate, source: path.relative(ROOT, dir), origin: 'toolchain' });
+        break;
+      }
+    }
+  }
+
+  const seen = [];
+  for (const candidate of candidates) {
+    const ver = mavenVersionOf(candidate.mvn);
+    const ok = !ver || ver.major > 3 || (ver.major === 3 && ver.minor >= REQUIRED_MAVEN_MINOR);
+    seen.push({ ...candidate, version: ver?.text ?? null, ok });
+    if (ok) {
+      const activeMvnNorm = isWindows
+        ? path.normalize(candidate.mvn).toLowerCase()
+        : path.normalize(candidate.mvn);
+      const unusedLocal =
+        candidate.origin === 'system'
+          ? localToolchain.filter((dir) => {
+              const normDir = isWindows ? path.normalize(dir).toLowerCase() : path.normalize(dir);
+              return !activeMvnNorm.startsWith(normDir + path.sep);
+            })
+          : [];
+      return {
+        mvn: candidate.mvn,
+        version: ver?.text ?? null,
+        source: candidate.source,
+        origin: candidate.origin,
+        seen,
+        duplicates: unusedLocal,
+      };
+    }
+  }
+
+  return { mvn: null, version: null, source: null, origin: null, seen, duplicates: [] };
+}
+
+function findUtilityTool(name) {
+  const exe = isWindows ? `${name}.exe` : name;
+  const foundOnPath = onPath(name);
+  if (foundOnPath) {
+    return { path: foundOnPath, origin: 'system', source: `system: ${foundOnPath}` };
+  }
+  const extraDirs = isMac
+    ? ['/opt/homebrew/bin', '/usr/local/bin', '/Applications/mpv.app/Contents/MacOS']
+    : process.platform === 'linux'
+      ? ['/usr/local/bin', '/usr/bin', '/snap/bin']
+      : [];
+  for (const dir of extraDirs) {
+    const candidate = path.join(dir, exe);
+    if (fs.existsSync(candidate)) {
+      return { path: candidate, origin: 'system', source: `system: ${candidate}` };
+    }
+  }
+  const staged = path.join(APP, 'media-runtime', exe);
+  if (fs.existsSync(staged)) {
+    return { path: staged, origin: 'local', source: 'local: desktop/media-runtime' };
+  }
+  return { path: null, origin: 'missing', source: null };
 }
 
 function mavenEnv(jdk) {
@@ -418,15 +605,19 @@ function buildChecks(ctx) {
       modes: ['check', 'setup', 'dev', 'dist'],
       needsJvm: true,
       inspect() {
-        const jdk = findJdk();
+        const jdk = findJdk({ requireJlink: ctx.mode === 'dist' && !ctx.slim });
         ctx.jdk = jdk;
-        if (jdk.java) return { ok: true, detail: `Java ${jdk.version} (${jdk.source})` };
-        const tooOld = jdk.seen.find((s) => s.version && s.version < REQUIRED_JAVA);
+        if (jdk.java) {
+          const skipped = jdk.seen.find((s) => s.origin === 'system' && s.rejectReason);
+          const skipNote = skipped ? `; skipped ${skipped.source} (${skipped.rejectReason})` : '';
+          return { ok: true, detail: `Java ${jdk.version} (${jdk.source}${skipNote})` };
+        }
+        const firstRejected = jdk.seen.find((s) => s.rejectReason);
         return {
           ok: false,
-          detail: tooOld
-            ? `found Java ${tooOld.version} at ${tooOld.source}; the sidecar needs ${REQUIRED_JAVA}+ (class file 65)`
-            : 'no JDK found in tools/toolchain, JAVA_HOME or PATH',
+          detail: firstRejected
+            ? `${firstRejected.source}: ${firstRejected.rejectReason}`
+            : 'no JDK 21+ found in JAVA_HOME, PATH or tools/toolchain',
         };
       },
       fix: {
@@ -444,7 +635,17 @@ function buildChecks(ctx) {
       inspect() {
         const maven = findMaven();
         ctx.maven = maven;
-        return maven.mvn ? { ok: true, detail: `${maven.source}` } : { ok: false, detail: 'mvn not found in tools/toolchain or PATH' };
+        if (maven.mvn) {
+          const ver = maven.version ? `Maven ${maven.version} ` : '';
+          return { ok: true, detail: `${ver}(${maven.source})` };
+        }
+        const tooOld = maven.seen.find((s) => !s.ok && s.version);
+        return {
+          ok: false,
+          detail: tooOld
+            ? `found Maven ${tooOld.version} at ${tooOld.source}; need 3.${REQUIRED_MAVEN_MINOR}+`
+            : 'mvn not found in MAVEN_HOME, PATH or tools/toolchain',
+        };
       },
       fix: {
         kind: 'confirm',
@@ -527,6 +728,68 @@ function buildChecks(ctx) {
       },
       hint: 'Windows 10 1803+ includes it; otherwise install 7-Zip and put 7z on PATH',
     },
+    // Advisory system-utility visibility (PRD-57): never blocks dev/setup, never downloads duplicates.
+    {
+      id: 'ffmpeg',
+      label: 'FFmpeg & FFprobe (media playback)',
+      modes: ['check', 'setup'],
+      advisory: true,
+      inspect() {
+        const ffmpeg = findUtilityTool('ffmpeg');
+        const ffprobe = findUtilityTool('ffprobe');
+        if (ffmpeg.origin === 'system' && ffprobe.origin === 'system') {
+          return { ok: true, detail: `${ffmpeg.source}` };
+        }
+        if (ffmpeg.path && ffprobe.path) {
+          return { ok: true, detail: `${ffmpeg.source}` };
+        }
+        return { ok: false, detail: 'not installed system-wide (app uses bundled/on-demand fallback)' };
+      },
+      hint: isWindows
+        ? 'winget install Gyan.FFmpeg   (optional — app falls back to bundled/on-demand copy)'
+        : isMac
+          ? 'brew install ffmpeg'
+          : 'sudo apt install ffmpeg',
+    },
+    {
+      id: 'mpv',
+      label: 'mpv (native playback engine)',
+      modes: ['check', 'setup'],
+      advisory: true,
+      inspect() {
+        const mpv = findUtilityTool('mpv');
+        return mpv.path
+          ? { ok: true, detail: `${mpv.source}` }
+          : { ok: false, detail: 'not installed system-wide (optional; app uses bundled/on-demand fallback)' };
+      },
+      hint: isWindows
+        ? 'winget install mpv.net   (or let the app use its bundled mpv)'
+        : isMac
+          ? 'brew install mpv'
+          : 'sudo apt install mpv',
+    },
+    {
+      id: 'download-tools',
+      label: 'Download helpers (yt-dlp, aria2c)',
+      modes: ['check', 'setup'],
+      advisory: true,
+      inspect() {
+        const ytdlp = findUtilityTool('yt-dlp');
+        const aria2 = findUtilityTool('aria2c');
+        const parts = [
+          `yt-dlp: ${ytdlp.path ? ytdlp.origin : 'missing'}`,
+          `aria2c: ${aria2.path ? aria2.origin : 'missing'}`,
+        ];
+        return ytdlp.path && aria2.path
+          ? { ok: true, detail: parts.join(', ') }
+          : { ok: false, detail: `${parts.join(', ')} (optional; app fetches on demand if needed)` };
+      },
+      hint: isWindows
+        ? 'winget install yt-dlp.yt-dlp aria2.aria2   (optional)'
+        : isMac
+          ? 'brew install yt-dlp aria2'
+          : 'sudo apt install yt-dlp aria2',
+    },
   ];
 }
 
@@ -551,14 +814,22 @@ async function ask(question) {
  * @param {(line: string, meta?: { routine?: boolean }) => void} [options.log]
  * @returns {Promise<{ ok: boolean, javaHome: string|null, mvn: string|null, problems: string[] }>}
  */
-export async function runDoctor({ mode = 'check', assumeYes = false, skipJvm = false, skipMedia = false, log = (line) => console.log(`    ${line}`) } = {}) {
-  const ctx = { jdk: null, maven: null };
+export async function runDoctor({
+  mode = 'check',
+  assumeYes = false,
+  skipJvm = false,
+  skipMedia = false,
+  slim = false,
+  pruneDuplicates = false,
+  log = (line) => console.log(`    ${line}`),
+} = {}) {
+  const ctx = { jdk: null, maven: null, mode, slim };
   const fixing = mode !== 'check';
   // `dev` never stops for a question: it runs on every `bun run dev`, and a
   // prompt there is a prompt every time someone says no.
   const interactive = mode !== 'dev' && process.stdin.isTTY && process.stdout.isTTY;
-  // In dev the app still runs without extensions, so JVM gaps warn rather than block.
-  const blocking = (check) => !(mode === 'dev' && check.needsJvm);
+  // Advisory checks never fail the run; in dev, JVM gaps warn rather than block.
+  const blocking = (check) => !check.advisory && !(mode === 'dev' && check.needsJvm);
 
   let checks = buildChecks(ctx).filter(
     (check) =>
@@ -616,14 +887,38 @@ export async function runDoctor({ mode = 'check', assumeYes = false, skipJvm = f
     }
 
     const isBlocking = blocking(check);
-    log(`${isBlocking ? red('✗') : yellow('!')} ${check.label} — ${result.detail}`);
-    const fixLine =
-      check.fix && check.fix.kind === 'confirm'
-        ? `Fix: cd desktop && bun run setup   (${check.fix.describe()})`
-        : null;
-    if (fixLine) log(`    ${fixLine}`);
-    log(`    ${fixLine ? 'Or: ' : 'Fix: '}${check.hint}`);
-    (isBlocking ? problems : warnings).push(`${check.label}: ${result.detail}`);
+    const glyph = isBlocking ? red('✗') : check.advisory ? dim('·') : yellow('!');
+    log(`${glyph} ${check.label} — ${result.detail}`, { routine: Boolean(check.advisory) });
+    if (!check.advisory) {
+      const fixLine =
+        check.fix && check.fix.kind === 'confirm'
+          ? `Fix: cd desktop && bun run setup   (${check.fix.describe()})`
+          : null;
+      if (fixLine) log(`    ${fixLine}`);
+      log(`    ${fixLine ? 'Or: ' : 'Fix: '}${check.hint}`);
+      (isBlocking ? problems : warnings).push(`${check.label}: ${result.detail}`);
+    }
+  }
+
+  // Report or prune redundant local toolchain copies when system tools already pass (PRD-57).
+  const duplicateDirs = [
+    ...(ctx.jdk?.duplicates ?? []),
+    ...(ctx.maven?.duplicates ?? []),
+  ];
+  if (duplicateDirs.length > 0) {
+    if (pruneDuplicates) {
+      for (const dir of duplicateDirs) {
+        try {
+          fs.rmSync(dir, { recursive: true, force: true });
+          log(green(`✓ Removed unused local duplicate ${path.relative(ROOT, dir)} (system installation is active)`));
+        } catch (err) {
+          log(yellow(`! Could not remove ${path.relative(ROOT, dir)}: ${err instanceof Error ? err.message : String(err)}`));
+        }
+      }
+    } else if (mode === 'check' || mode === 'setup') {
+      const names = duplicateDirs.map((d) => path.relative(ROOT, d)).join(', ');
+      log(dim(`note: unused local toolchain copy detected (${names}) — system tool is active. Run with --prune-duplicates to remove.`));
+    }
   }
 
   if (mode === 'dev' && warnings.length > 0) {
@@ -646,14 +941,16 @@ if (invokedDirectly) {
   const argv = process.argv.slice(2);
   if (argv.includes('--help') || argv.includes('-h')) {
     console.log(`Check (and with --fix, prepare) the environment CS3 is developed and built in.
+System-native Java 21+, Maven, and media utilities are always preferred when they meet criteria.
 
-  (no flag)    report what is missing; change nothing
-  --fix        install dependencies, build the sidecar, and offer to download a JDK/Maven
-  --dev        what \`bun run dev\` needs; JVM gaps warn instead of failing
-  --build      what \`bun run build\` needs
-  --dist       what packaging needs
-  --yes        download a JDK/Maven without asking (for scripts and CI)
-  --skip-jvm   ignore Java, Maven and the sidecar
+  (no flag)            report what is missing; change nothing
+  --fix                install dependencies, build the sidecar, and offer to download missing JDK/Maven
+  --dev                what \`bun run dev\` needs; JVM gaps warn instead of failing
+  --build              what \`bun run build\` needs
+  --dist               what packaging needs
+  --yes                download a missing JDK/Maven without asking (for scripts and CI)
+  --skip-jvm           ignore Java, Maven and the sidecar
+  --prune-duplicates   remove unused local JDK/Maven copies in tools/toolchain/ when system copies are active
 `);
     process.exit(0);
   }
@@ -675,6 +972,7 @@ if (invokedDirectly) {
     mode,
     assumeYes: argv.includes('--yes') || process.env.CS3_AUTO_INSTALL === '1',
     skipJvm: argv.includes('--skip-jvm'),
+    pruneDuplicates: argv.includes('--prune-duplicates'),
     log: (line, meta) => {
       if (quiet && meta?.routine) return;
       if (!headed) {
