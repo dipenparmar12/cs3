@@ -916,6 +916,9 @@ export class PlaybackSessionManager {
         }
       }
       session.sourceStates.set(result.handle.infoHash, { state: 'played' });
+      // A source that failed earlier and has now played is no longer unplayable:
+      // keeping it there excluded it from failover and counted it as tried.
+      session.unplayable.delete(result.handle.infoHash);
       session.phase = 'playing';
       session.retryingElsewhere = false;
       this.emit(session);
