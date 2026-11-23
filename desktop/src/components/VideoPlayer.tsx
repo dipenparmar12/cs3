@@ -1144,7 +1144,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
       },
     });
     if (response?.ok) {
-      notify(playbackSaved ? 'Saved playback updated with new source' : 'Playback saved — Library › Saved pages', 'good');
+      notify(playbackSaved ? 'Saved this source too — the earlier one is kept' : 'Playback saved — Library › Saved pages', 'good');
       setPlaybackSaved(true);
       setSavedSourceId(currentSrcId || null);
     } else {

@@ -14,7 +14,7 @@ import { Button, Dialog, DialogActions, Select, SelectionToolbar, SelectMark } f
 import { useListSelection } from '../utils/listSelection';
 import { useFlash } from '../utils/useFlash';
 import { matchesScreenQuery } from '../utils/screenSearch';
-import type { PlayedSource } from '../types/library';
+import type { PlayedSource, SavedPlayback } from '../types/library';
 import type { TorrentResult } from '../types/torrent';
 import {
   Trash2,
@@ -504,8 +504,8 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
           onRemove={removeBookmark}
           onResumePlayback={
             onResume
-              ? (bookmark) => {
-                  const playback = bookmark.playback!;
+              ? (bookmark, chosen) => {
+                  const playback = chosen ?? bookmark.playback!;
                   onResume({
                     title: bookmark.title,
                     year: bookmark.year,
@@ -872,6 +872,14 @@ function savedPlaybackLabel(bookmark: Bookmark): string {
   return `Resume ${h > 0 ? `${h}:${String(m).padStart(2, '0')}` : m}:${String(s).padStart(2, '0')}`;
 }
 
+/** A kept source's button: provider and resolution, the two things that tell saved sources apart. */
+function savedSourceName(playback: SavedPlayback): string {
+  const source = playback.source;
+  const episode = playback.episode !== undefined ? `S${playback.season ?? 1}·E${playback.episode} ` : '';
+  const name = source?.providerName ?? source?.indexerName ?? source?.title ?? 'Saved source';
+  return `${episode}${name}${source?.resolution ? ` ${source.resolution}p` : ''}`;
+}
+
 function savedPlaybackHint(bookmark: Bookmark): string {
   const source = bookmark.playback?.source;
   const parts = [
@@ -896,7 +904,8 @@ const SavedPages: React.FC<{
   onRemove: (bookmark: Bookmark) => void;
   onSearch?: (query: string) => void;
   /** Plays a saved playback back exactly: episode, place, source, tracks. */
-  onResumePlayback?: (bookmark: Bookmark) => void;
+  /** `playback` picks one of `previousPlaybacks`; omitted means the latest save. */
+  onResumePlayback?: (bookmark: Bookmark, playback?: SavedPlayback) => void;
 }> = ({ bookmarks, isAdult, query, onClearQuery, providers, providerFilter, onProviderFilter, onOpen, onRemove, onSearch, onResumePlayback }) => {
   if (bookmarks.length === 0 && !providerFilter && !query) {
     return (
@@ -990,6 +999,22 @@ const SavedPages: React.FC<{
                       ))}
                     </div>
                   )}
+
+                  {bookmark.previousPlaybacks?.length && onResumePlayback ? (
+                    <div className="saved-row__tags" aria-label="Other saved sources">
+                      {bookmark.previousPlaybacks.map((playback) => (
+                        <Button
+                          key={`${playback.savedAt}-${playback.source?.id ?? ''}`}
+                          size="compact"
+                          variant="ambient"
+                          onClick={() => onResumePlayback(bookmark, playback)}
+                          title={savedPlaybackHint({ ...bookmark, playback })}
+                        >
+                          <Play size={12} /> {savedSourceName(playback)}
+                        </Button>
+                      ))}
+                    </div>
+                  ) : null}
                 </div>
 
                 <div className="saved-row__actions">

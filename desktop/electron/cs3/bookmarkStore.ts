@@ -89,12 +89,40 @@ export interface Bookmark {
   note?: string;
   /** Saved from the player: the exact playback to come back to. */
   playback?: SavedPlayback;
+  /** Earlier playbacks saved with a different source, newest first; kept when Update saves another source. */
+  previousPlaybacks?: SavedPlayback[];
   savedAt: number;
   /** Last time it was saved again (a new place, a new source). Orders the list. */
   updatedAt?: number;
   /** Last time the page was reopened from here, for ordering by usefulness. */
   lastOpenedAt?: number;
   openCount: number;
+}
+
+const MAX_PREVIOUS_PLAYBACKS = 20;
+
+/** Which source a playback used, per episode. A refreshed link of the same release keeps its key. */
+export function playbackSourceKey(playback: SavedPlayback | undefined): string | null {
+  const source = playback?.source;
+  if (!source) return null;
+  const release = source.infoHash || `${source.providerName ?? source.indexerName ?? ''}|${source.title}`;
+  return `${playback.season ?? ''}:${playback.episode ?? ''}:${release}`;
+}
+
+/**
+ * Saving another source keeps the one it replaces; saving the same source again
+ * (a refreshed link, a new position) replaces it in place, so nothing is duplicated.
+ */
+export function mergePlaybacks(
+  existing: Pick<Bookmark, 'playback' | 'previousPlaybacks'>,
+  next: SavedPlayback | undefined,
+): Pick<Bookmark, 'playback' | 'previousPlaybacks'> {
+  if (!next) return { playback: existing.playback, previousPlaybacks: existing.previousPlaybacks };
+  const nextKey = playbackSourceKey(next);
+  const kept = [existing.playback, ...(existing.previousPlaybacks ?? [])].filter(
+    (entry): entry is SavedPlayback => Boolean(entry) && playbackSourceKey(entry) !== nextKey,
+  );
+  return { playback: next, previousPlaybacks: kept.length ? kept.slice(0, MAX_PREVIOUS_PLAYBACKS) : undefined };
 }
 
 function lastSaved(bookmark: Bookmark): number {
@@ -172,6 +200,7 @@ export class BookmarkStore {
         posterUrl: input.posterUrl ?? existing.posterUrl,
         plot: input.plot ?? existing.plot,
         genres: input.genres ?? existing.genres,
+        ...mergePlaybacks(existing, input.playback),
         // Saving again is activity: it moves the page to the top of the list.
         updatedAt: Date.now(),
       });
