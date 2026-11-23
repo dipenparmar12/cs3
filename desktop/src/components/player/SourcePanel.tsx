@@ -19,6 +19,7 @@ import {
   type SourceFilterState,
 } from '../../utils/sourceFilter';
 import { formatReleaseSize } from '../../utils/format';
+import { foldNewGroups } from './sourceGroupFold';
 import { verdictLabel, type SourceVerdict } from '../../utils/sourceVerdict';
 
 /**
@@ -175,18 +176,32 @@ export const SourcePanel: React.FC<SourcePanelProps> = ({
   const groups = useMemo(() => groupSourcesByOrigin(displayedSources), [displayedSources]);
   const rankOf = useMemo(() => new Map(displayedSources.map((source, index) => [source, index])), [displayedSources]);
   const [collapsedOrigins, setCollapsedOrigins] = useState<Set<string>>(() => new Set());
-  const foldedFor = React.useRef<string | null>(null);
+  const playingOrigin = activeInfoHash
+    ? groups.find((g) => g.sources.some((s) => s.infoHash === activeInfoHash))?.origin
+    : undefined;
+  const seenOrigins = React.useRef<Set<string>>(new Set());
   useEffect(() => {
-    const signature = groups.map((g) => g.origin).join('|');
-    if (foldedFor.current === signature) return;
-    foldedFor.current = signature;
-    if (displayedSources.length <= 30) {
-      setCollapsedOrigins(new Set());
-      return;
+    const origins = groups.map((g) => g.origin);
+    if (origins.every((origin) => seenOrigins.current.has(origin))) return;
+    setCollapsedOrigins((now) =>
+      foldNewGroups(now, seenOrigins.current, origins, displayedSources.length, playingOrigin)
+    );
+    origins.forEach((origin) => seenOrigins.current.add(origin));
+  }, [groups, displayedSources.length, playingOrigin]);
+
+  /** Opens the playing source's group and brings its row into view, wherever the panel was scrolled. */
+  const jumpToPlaying = () => {
+    if (playingOrigin) {
+      setCollapsedOrigins((now) => {
+        const next = new Set(now);
+        next.delete(playingOrigin);
+        return next;
+      });
     }
-    const playing = groups.find((g) => g.sources.some((s) => s.infoHash === activeInfoHash))?.origin;
-    setCollapsedOrigins(new Set(groups.slice(1).map((g) => g.origin).filter((origin) => origin !== playing)));
-  }, [groups, displayedSources.length, activeInfoHash]);
+    requestAnimationFrame(() =>
+      document.querySelector('.player-panel__source-row--current')?.scrollIntoView({ block: 'center' })
+    );
+  };
 
   const renderSourceRow = (source: TorrentResult, rowIndex: number) => {
     /**
@@ -488,6 +503,11 @@ export const SourcePanel: React.FC<SourcePanelProps> = ({
       */}
       {groups.length > 1 && (
         <nav className="source-picker__groups player-panel__groups" aria-label="Jump to a source">
+          {playingOrigin && (
+            <button type="button" className="chip source-picker__group-chip" onClick={jumpToPlaying} title="Show the source that is playing">
+              <Play size={11} /> Playing
+            </button>
+          )}
           {groups.map((group) => (
             <button
               key={group.origin}
@@ -539,6 +559,7 @@ export const SourcePanel: React.FC<SourcePanelProps> = ({
                 {folded ? <ChevronRight size={14} /> : <ChevronDown size={14} />}
                 {group.origin}
                 <span className="source-group__count">{group.sources.length}</span>
+                {folded && group.origin === playingOrigin && <span className="player-panel__now">Playing</span>}
               </button>
               {!folded && (
                 <ul className="player-panel__sources">
