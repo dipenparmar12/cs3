@@ -1,5 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useFlash } from '../utils/useFlash';
+import { useOnline } from '../utils/useOnline';
 import { usePrivacy } from '../utils/usePrivacy';
 import { Download, EyeOff } from 'lucide-react';
 import { historyEventForTask } from '../utils/historyEvent';
@@ -1229,7 +1230,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
   const stallSkippedFor = useRef<string | null>(null);
   useEffect(() => {
     if (!stats || !streamUrl || stallSkippedFor.current === streamUrl) return;
-    if (isDeveloper || !sourceSession?.onSourceUnplayable) return;
+    if (isDeveloper || !sourceSession?.onSourceUnplayable || !navigator.onLine) return;
     const reason = shouldSkipStalledTorrent({
       startedPlayback: hasStartedPlayback,
       stalledMs: stats.stalledMs,
@@ -3690,16 +3691,39 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
     attachAt,
   ]);
 
+  /*
+   * Offline is not a source failure. Skipping while the connection is down
+   * marked every source failed in turn and ended the walk with "nothing
+   * plays"; instead the player holds the source, says so, and the viewer
+   * presses play once the connection is back.
+   */
+  const online = useOnline();
+  const wasOffline = useRef(false);
+  useEffect(() => {
+    if (!online) {
+      wasOffline.current = true;
+      notify('You are offline — playback continues from what is buffered. Sources will not be skipped.', 'bad');
+    } else if (wasOffline.current) {
+      wasOffline.current = false;
+      notify('Back online — press play to continue', 'good');
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [online]);
+
   useEffect(() => {
     const skip = sourceSession?.onSourceUnplayable;
     skipRef.current = skip
       ? (reason: string, verdict?: SourceVerdict) => {
+          if (!navigator.onLine) {
+            notify('Connection lost — staying on this source until you are back online', 'info');
+            return;
+          }
           if (skippedFor.current === streamUrl) return;
           skippedFor.current = streamUrl;
           skip(reason, verdict);
         }
       : null;
-  }, [sourceSession?.onSourceUnplayable, streamUrl]);
+  }, [sourceSession?.onSourceUnplayable, streamUrl, notify]);
 
   /**
    * "The browser could not play this" — one meaning, one consequence.
