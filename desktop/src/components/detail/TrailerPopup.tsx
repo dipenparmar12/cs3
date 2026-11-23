@@ -632,7 +632,7 @@ export const TrailerPopup: React.FC<{
             {mini && onExpand && (
               <button
                 type="button"
-                className="btn btn-secondary btn-icon"
+                className="trailer-popup__btn"
                 onClick={onExpand}
                 title="Expand"
                 aria-label="Expand trailer"
@@ -643,7 +643,7 @@ export const TrailerPopup: React.FC<{
             {!mini && onMinimize && (
               <button
                 type="button"
-                className="btn btn-secondary btn-icon"
+                className="trailer-popup__btn"
                 onClick={onMinimize}
                 title="Minimise — keep playing while you browse (Esc)"
                 aria-label="Minimise trailer"
@@ -654,7 +654,7 @@ export const TrailerPopup: React.FC<{
             {!mini && (
             <button
               type="button"
-              className="btn btn-secondary btn-icon"
+              className="trailer-popup__btn"
               onClick={() => void window.cloudstream?.openExternalLink?.(video.url)}
               title={`Open video in external browser (${video.url})`}
               aria-label={`Open video in external browser: ${video.url}`}
@@ -664,7 +664,7 @@ export const TrailerPopup: React.FC<{
             )}
             <button
               type="button"
-              className="btn btn-secondary btn-icon"
+              className="trailer-popup__btn"
               onClick={onClose}
               title="Close"
               aria-label="Close trailer"
@@ -723,7 +723,7 @@ export const TrailerPopup: React.FC<{
               </div>
               <button
                 type="button"
-                className="btn btn-secondary btn-icon"
+                className="trailer-popup__btn"
                 onClick={toggleFullscreen}
                 title="Exit Fullscreen (F)"
                 aria-label="Exit Fullscreen"

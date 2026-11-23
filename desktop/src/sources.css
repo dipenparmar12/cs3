@@ -11049,15 +11049,17 @@ video::cue {
  */
 .trailer-popup__backdrop { padding: 1.5rem; }
 
+/* The trailer modal is the app's player in a window: the same black surface,
+   plain icon buttons and gradient bar as `.player__controls`, not a card. */
 .trailer-popup {
-  width: min(880px, 100%);
-  max-height: 90vh;
+  width: min(1100px, 94vw);
+  max-height: 92vh;
   display: flex;
   flex-direction: column;
-  background: var(--bg-card);
-  border: 1px solid rgba(255, 255, 255, 0.08);
-  border-radius: 12px;
+  background: #000;
+  border-radius: 10px;
   overflow: hidden;
+  box-shadow: 0 24px 64px rgba(0, 0, 0, 0.6);
 }
 
 .trailer-popup__head {
@@ -11065,8 +11067,8 @@ video::cue {
   align-items: center;
   justify-content: space-between;
   gap: 1rem;
-  padding: 0.7rem 0.85rem;
-  border-bottom: 1px solid var(--border-color);
+  padding: 0.6rem 0.75rem 0.6rem 1.1rem;
+  background: #000;
 }
 .trailer-popup__titles { display: flex; flex-direction: column; gap: 0.1rem; min-width: 0; }
 .trailer-popup__actions-group { display: flex; align-items: center; gap: 0.5rem; }
@@ -11130,8 +11132,8 @@ video::cue {
   bottom: 0;
   left: 0;
   right: 0;
-  padding: 0.5rem 0.85rem 0.6rem;
-  background: linear-gradient(to top, rgba(0, 0, 0, 0.88) 0%, rgba(0, 0, 0, 0.45) 60%, transparent 100%);
+  padding: 0.8rem 1.25rem 1rem;
+  background: linear-gradient(to top, rgba(0, 0, 0, 0.85), transparent);
   display: flex;
   flex-direction: column;
   gap: 0.4rem;
@@ -11221,8 +11223,8 @@ video::cue {
   background: none;
   border: none;
   color: #e5e7eb;
-  padding: 0.3rem;
-  border-radius: 4px;
+  padding: 0.4rem;
+  border-radius: 6px;
   cursor: pointer;
   display: flex;
   align-items: center;
@@ -11313,8 +11315,9 @@ video::cue {
   justify-content: space-between;
   gap: 1rem;
   flex-wrap: wrap;
-  padding: 0.6rem 0.85rem;
-  border-top: 1px solid var(--border-color);
+  padding: 0.6rem 1.1rem;
+  background: #000;
+  color: var(--text-subtle);
 }
 .trailer-popup__steps { display: flex; gap: 0.4rem; }
 .trailer-popup__autoplay {
